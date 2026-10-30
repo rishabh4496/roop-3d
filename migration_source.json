@@ -1,0 +1,273 @@
+{
+  "source_commit": "9a0f5d55741da78a3b3668218936c325286c5bb6",
+  "source_project": "roop-ultimate",
+  "standalone_project": "roop-3d",
+  "copied_source_files": [
+    {
+      "source_path": "roop_3d/.gitattributes",
+      "destination": "app/roop_3d/.gitattributes",
+      "source_sha256": "dad46ca536e2db5ab06795b95862f7f03e23c89c8046860f162d0296ddb0743d"
+    },
+    {
+      "source_path": "roop_3d/.gitignore",
+      "destination": "app/roop_3d/.gitignore",
+      "source_sha256": "e81cd3ee68b3094a70163d10980c9b712aa35671df9ff80f7011ddfca20da2d3"
+    },
+    {
+      "source_path": "roop_3d/CONTRIBUTING.md",
+      "destination": "app/roop_3d/CONTRIBUTING.md",
+      "source_sha256": "76759c8fc862711bb4bf7c372656a951a85ba60066d8ec4f695498d272c6c50b"
+    },
+    {
+      "source_path": "roop_3d/README.md",
+      "destination": "app/roop_3d/README.md",
+      "source_sha256": "4570463c7eeefce311818dd15c38d67431dec45f1fc6ecf489ead16080af9adc"
+    },
+    {
+      "source_path": "roop_3d/__init__.py",
+      "destination": "app/roop_3d/__init__.py",
+      "source_sha256": "b4de40929fdc47838889af413924d8acccd7bab2e71e44a0f3d1b30e69f8926d"
+    },
+    {
+      "source_path": "roop_3d/audit/STAGE00_REPORT.md",
+      "destination": "app/roop_3d/audit/STAGE00_REPORT.md",
+      "source_sha256": "3bb166e11d03beb8367aa8651a6e12af78eb2b00d39192f526ba12dce8dcb5ac"
+    },
+    {
+      "source_path": "roop_3d/audit/STAGE01_REPORT.md",
+      "destination": "app/roop_3d/audit/STAGE01_REPORT.md",
+      "source_sha256": "e0ea750c0e3e1c972393dbdceafebd583251b5bbb4ff4b6be1888a441658bb6d"
+    },
+    {
+      "source_path": "roop_3d/audit/STAGE01_VALIDATION.json",
+      "destination": "app/roop_3d/audit/STAGE01_VALIDATION.json",
+      "source_sha256": "a3c4b273c4dde7d08ca5cc64bf8c3c4f12b24cb94641b12acdd3a10580370aba"
+    },
+    {
+      "source_path": "roop_3d/audit/__init__.py",
+      "destination": "app/roop_3d/audit/__init__.py",
+      "source_sha256": "125309df4123698781c6baa5129b055b5a5ad01d7cb846c88bcc62450e6df90f"
+    },
+    {
+      "source_path": "roop_3d/audit/git_boundary.json",
+      "destination": "app/roop_3d/audit/git_boundary.json",
+      "source_sha256": "4dc2e4e957f7d964668589e55c710e23e5a3ca2fd4772ee8b98f22cc1f6db427"
+    },
+    {
+      "source_path": "roop_3d/audit/inventory.md",
+      "destination": "app/roop_3d/audit/inventory.md",
+      "source_sha256": "2518a47d3cc488997102d252231055a65e26d65a471b571452ec26c7b6a31ce9"
+    },
+    {
+      "source_path": "roop_3d/audit/isolation.py",
+      "destination": "app/roop_3d/audit/isolation.py",
+      "source_sha256": "58935a8494c6cdfdcd160d753f01e56ee62b24ff294994045ecfdc5faa0f60f2"
+    },
+    {
+      "source_path": "roop_3d/audit/local_models.py",
+      "destination": "app/roop_3d/audit/local_models.py",
+      "source_sha256": "3790accd41445632ff2e92a9b1d4bfde244ec7dafc96f61d1b4117866bb3763b"
+    },
+    {
+      "source_path": "roop_3d/audit/local_models_discovered.json",
+      "destination": "app/roop_3d/audit/local_models_discovered.json",
+      "source_sha256": "df9efa6f3aa927c15bc319cf1d003b9fc9a094fdfadb593d71e1c21c54c10f51"
+    },
+    {
+      "source_path": "roop_3d/audit/model_and_license_register.csv",
+      "destination": "app/roop_3d/audit/model_and_license_register.csv",
+      "source_sha256": "8ea2bbbf96fec945aacccd51693bdb0902d9886fd559d6e67523d50ee24f713a"
+    },
+    {
+      "source_path": "roop_3d/audit/protected_paths.json",
+      "destination": "app/roop_3d/audit/protected_paths.json",
+      "source_sha256": "035e9d2cd27c25df01a0cd02906e4fbdd661da9b0aa2d9b2a60afb584eaf8707"
+    },
+    {
+      "source_path": "roop_3d/audit/requirements.lock",
+      "destination": "app/roop_3d/audit/requirements.lock",
+      "source_sha256": "16e2958c744c7028386612ed3d40c5b4433464957b8d4f92d3fb45e5a65a577e"
+    },
+    {
+      "source_path": "roop_3d/audit/risks.md",
+      "destination": "app/roop_3d/audit/risks.md",
+      "source_sha256": "8330aea330495acd32a5470dee6196d23b79ee41b0a454bd3fd221201b8ca5c2"
+    },
+    {
+      "source_path": "roop_3d/audit/runtime_policy.py",
+      "destination": "app/roop_3d/audit/runtime_policy.py",
+      "source_sha256": "db9a741c04a7b1522d94526140d7693574804ebdd7783160f85149e05ea0864f"
+    },
+    {
+      "source_path": "roop_3d/audit/stage00.py",
+      "destination": "app/roop_3d/audit/stage00.py",
+      "source_sha256": "5c51dfa07529907b0f48d6d912f4e638e8db58247f6599bfbd1dfb6e953c8aae"
+    },
+    {
+      "source_path": "roop_3d/audit/verified_local_models.json",
+      "destination": "app/roop_3d/audit/verified_local_models.json",
+      "source_sha256": "e93a90f86aa9d3b0e12bc8f3e39d3bca9db722de4875a4ebc2833a40d0141841"
+    },
+    {
+      "source_path": "roop_3d/audit/verify_isolation.py",
+      "destination": "app/roop_3d/audit/verify_isolation.py",
+      "source_sha256": "3a38d22f8cc6c9ff194a206dead5426636cd05725a1273780ecbb658e9d499ea"
+    },
+    {
+      "source_path": "roop_3d/bridges/__init__.py",
+      "destination": "app/roop_3d/bridges/__init__.py",
+      "source_sha256": "97f9e78d48d07fa4e5737909de5913fce51ee6c42d9ffe5e2ce857c20d1707f0"
+    },
+    {
+      "source_path": "roop_3d/compositor/__init__.py",
+      "destination": "app/roop_3d/compositor/__init__.py",
+      "source_sha256": "37bb12bba8af5d46674b5bc8d6ff13afcc836c59cfb4e8a4a072ece4d695a1ba"
+    },
+    {
+      "source_path": "roop_3d/core/__init__.py",
+      "destination": "app/roop_3d/core/__init__.py",
+      "source_sha256": "45b97f2fb582c1b6e890b05549ec9086204fb6f4df01a149392f50ad43859a94"
+    },
+    {
+      "source_path": "roop_3d/core/hardware.py",
+      "destination": "app/roop_3d/core/hardware.py",
+      "source_sha256": "74d04148b2b8281335fee6f1c671086da7e05dbd3f20a58a14dd5eda39bd75e0"
+    },
+    {
+      "source_path": "roop_3d/core/integrity.py",
+      "destination": "app/roop_3d/core/integrity.py",
+      "source_sha256": "4f9e3babc3a186af4f212e963e0d68b2386a3a85a9957289cec6c8fdbfdc851a"
+    },
+    {
+      "source_path": "roop_3d/core/settings.py",
+      "destination": "app/roop_3d/core/settings.py",
+      "source_sha256": "60d1f33aa7e2c819508b34b8fe81530cfde5a84426efbd086c3c67e771e50cf4"
+    },
+    {
+      "source_path": "roop_3d/engine/__init__.py",
+      "destination": "app/roop_3d/engine/__init__.py",
+      "source_sha256": "2215a443a3536961f5aedc3a3e1137695316d9946bd5f09f4140f651be36c108"
+    },
+    {
+      "source_path": "roop_3d/engine/audio_sync/__init__.py",
+      "destination": "app/roop_3d/engine/audio_sync/__init__.py",
+      "source_sha256": "ac5598629ba1043dce53cd47af6ef4cbbaa5127500693b5a6ce80745e1fd809a"
+    },
+    {
+      "source_path": "roop_3d/engine/detection/__init__.py",
+      "destination": "app/roop_3d/engine/detection/__init__.py",
+      "source_sha256": "b7afea6920c2b26d0eed466d5e1e4da53d8a3bb641b933f4cc8358d4a06b2717"
+    },
+    {
+      "source_path": "roop_3d/engine/diffusion/__init__.py",
+      "destination": "app/roop_3d/engine/diffusion/__init__.py",
+      "source_sha256": "c8531c03a8c5a48e783a2891d48b3d5c92cd23dc458bc2d764aa4f66ade1d58b"
+    },
+    {
+      "source_path": "roop_3d/engine/volumetric/__init__.py",
+      "destination": "app/roop_3d/engine/volumetric/__init__.py",
+      "source_sha256": "e1620507db50f07419bea5ee06e04c4bf98b5cea0bd2aeb441298f6ae10c1a5f"
+    },
+    {
+      "source_path": "roop_3d/faceset/__init__.py",
+      "destination": "app/roop_3d/faceset/__init__.py",
+      "source_sha256": "f8ae3a806be09f78966d076f726ff9624f7f8a9c4782bf79176e2cdd18fcb395"
+    },
+    {
+      "source_path": "roop_3d/jobs/__init__.py",
+      "destination": "app/roop_3d/jobs/__init__.py",
+      "source_sha256": "690b4fc10c826ed898e5899a945fd79b3f51381baf1bbcbb5434e6d409dc74ca"
+    },
+    {
+      "source_path": "roop_3d/media/__init__.py",
+      "destination": "app/roop_3d/media/__init__.py",
+      "source_sha256": "d4b1bb00a9342a464ba659c37134c215bccc9d7c778f84b676eeab65a0888fd1"
+    },
+    {
+      "source_path": "roop_3d/py.typed",
+      "destination": "app/roop_3d/py.typed",
+      "source_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source_path": "roop_3d/pyproject.toml",
+      "destination": "app/roop_3d/pyproject.toml",
+      "source_sha256": "8288153cf8bed2dba8875711aba1df18c5d02bbb0291b066819d1f56a87a0ab9"
+    },
+    {
+      "source_path": "roop_3d/reconstruction/__init__.py",
+      "destination": "app/roop_3d/reconstruction/__init__.py",
+      "source_sha256": "c4c863efcb48b3fe46f443ea521aea12c1d8fd94e1aead477377a6d6c8013502"
+    },
+    {
+      "source_path": "roop_3d/requirements.lock",
+      "destination": "app/roop_3d/requirements.lock",
+      "source_sha256": "b6de04f7a996210f9c60987315c52482683d8bb2798e56a7f1f7ae0d7ebb2fbe"
+    },
+    {
+      "source_path": "roop_3d/server/__init__.py",
+      "destination": "app/roop_3d/server/__init__.py",
+      "source_sha256": "b3cff7bfa84cde5d331cc3f0dedcdf935e9b5299b784e3bb569eda7e5e2c5916"
+    },
+    {
+      "source_path": "roop_3d/server/__main__.py",
+      "destination": "app/roop_3d/server/__main__.py",
+      "source_sha256": "5438c7d068056afdc33a23a4f333af540c25ba1ca1928164c0b50255cff446f9"
+    },
+    {
+      "source_path": "roop_3d/server/app.py",
+      "destination": "app/roop_3d/server/app.py",
+      "source_sha256": "b191d560df87bf36fde8e2b8259bb6eb19b6c1ba53869a622423dfb506a01569"
+    },
+    {
+      "source_path": "roop_3d/server/middleware.py",
+      "destination": "app/roop_3d/server/middleware.py",
+      "source_sha256": "464b4112fbbabb3278c0e7500245318779202b83e7ceb563946ce99598d40f08"
+    },
+    {
+      "source_path": "roop_3d/tests/test_git_boundary.py",
+      "destination": "app/roop_3d/tests/test_git_boundary.py",
+      "source_sha256": "cce208d5e43f892e6f06e53732da116dc9395e66b14bf9dcb21fbf25b43fafda"
+    },
+    {
+      "source_path": "roop_3d/tests/test_local_models.py",
+      "destination": "app/roop_3d/tests/test_local_models.py",
+      "source_sha256": "41362b270ba54dd01b3d8f8f54fce95dde32370329dad23e5274a76491ef4645"
+    },
+    {
+      "source_path": "roop_3d/tests/test_runtime_policy.py",
+      "destination": "app/roop_3d/tests/test_runtime_policy.py",
+      "source_sha256": "9f2703d7809851ec37173f155a1fd64b7caec898b98cb86e3aa3f82370c84716"
+    },
+    {
+      "source_path": "roop_3d/tests/test_stage00.py",
+      "destination": "app/roop_3d/tests/test_stage00.py",
+      "source_sha256": "61148ed72c468b0034bd0f050119350339943236fe9266d36ab1bf80b1f8c5e7"
+    },
+    {
+      "source_path": "roop_3d/tests/test_stage01_scaffold.py",
+      "destination": "app/roop_3d/tests/test_stage01_scaffold.py",
+      "source_sha256": "dfe42037bc2894a58f898ea09f0ca96809b7e10e940cf478379a77be2f6964eb"
+    },
+    {
+      "source_path": "roop_3d/tools/__init__.py",
+      "destination": "app/roop_3d/tools/__init__.py",
+      "source_sha256": "b3722c52ca55f4a79695240690cf431640da0a98700d8f8a3fbeb39eb79b7f98"
+    },
+    {
+      "source_path": "roop_3d/tools/git_guard.py",
+      "destination": "app/roop_3d/tools/git_guard.py",
+      "source_sha256": "1070a4fe65bcdcdfdc6d61962c11971ba9d267b49d82432847d4a240c5b5db2e"
+    },
+    {
+      "source_path": "roop_3d/tools/install_git_guard.py",
+      "destination": "app/roop_3d/tools/install_git_guard.py",
+      "source_sha256": "116ad45d0a52bb4f2abcc87b2bc396fd24fb371f977a4c3dda3521717e9645b1"
+    },
+    {
+      "source_path": "roop_3d_ui/.gitignore",
+      "destination": "app/roop_3d_ui/.gitignore",
+      "source_sha256": "946468343cd265c60057ad651e2a6d1153a3262f385db6a9018263283cd97874"
+    }
+  ],
+  "legacy_checkout_modified": false
+}

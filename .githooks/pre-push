@@ -1,0 +1,9 @@
+#!/bin/sh
+set -eu
+root="$(git rev-parse --show-toplevel)"
+if [ -x "$root/app/roop_3d/.venv/Scripts/python.exe" ]; then
+  py="$root/app/roop_3d/.venv/Scripts/python.exe"
+else
+  py="$root/app/roop_3d/.venv/bin/python"
+fi
+"$py" -B "$root/app/roop_3d/tools/git_guard.py" --pre-push "$@"

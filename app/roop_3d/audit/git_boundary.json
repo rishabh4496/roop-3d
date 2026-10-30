@@ -1,0 +1,6 @@
+{
+  "app_id": "roop-3d",
+  "repository": "rishabh4496/roop-3d",
+  "allowed_source": ["app/roop_3d/**", "app/roop_3d_ui/**", "app/serve.py", "own root launchers, docs and tooling"],
+  "policy": "Independent Git root with no worktree/alternate object store; reject all pushes to Roop Ultimate"
+}

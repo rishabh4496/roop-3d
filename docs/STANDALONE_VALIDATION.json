@@ -1,0 +1,29 @@
+{
+  "app_id": "roop-3d",
+  "separate_repository": true,
+  "shared_git_objects": false,
+  "environment": "app/roop_3d/.venv",
+  "legacy_access": "read-only",
+  "tests": {
+    "passed": 59,
+    "skipped": 0,
+    "exit_code": 0
+  },
+  "model_hashes": {
+    "verified": 95,
+    "exit_code": 0
+  },
+  "immutable_files": {
+    "verified": 68392,
+    "violations": [],
+    "exit_code": 0
+  },
+  "pinokio": {
+    "distinct_app_discovered": true,
+    "ready": true,
+    "health_http": 200,
+    "project_page_http": 200,
+    "legacy_api_http": 200
+  },
+  "live_stop_reinstall_check": "not executed: automatic review blocked combined command"
+}

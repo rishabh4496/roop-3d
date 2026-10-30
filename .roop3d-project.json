@@ -1,0 +1,8 @@
+{
+  "app_id": "roop-3d",
+  "repository": "rishabh4496/roop-3d",
+  "application_root": "app",
+  "environment": "app/roop_3d/.venv",
+  "legacy_code_imports_allowed": false,
+  "external_model_inputs": "read-only"
+}
