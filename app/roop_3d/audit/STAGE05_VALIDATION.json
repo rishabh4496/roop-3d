@@ -1,0 +1,268 @@
+{
+  "stage": "05_video_audio_io_timestamps_keyframes",
+  "status": "passed",
+  "standalone_app": "roop-3d",
+  "timestamp": "2026-10-30T14:04:11.940617+00:00",
+  "cwd": "app",
+  "files_changed": [
+    "app/roop_3d/media/audio.py",
+    "app/roop_3d/media/frame_map.py",
+    "app/roop_3d/media/probe.py",
+    "app/roop_3d/media/timestamps.py",
+    "app/roop_3d/media/video_reader.py",
+    "app/roop_3d/media/video_writer.py",
+    "app/roop_3d/media/schema.py",
+    "app/roop_3d/media/service.py",
+    "app/roop_3d/tests/test_stage05_media.py",
+    "app/roop_3d/audit/STAGE05_REPORT.md",
+    "app/roop_3d/audit/STAGE05_VALIDATION.json"
+  ],
+  "ignored_audit_output": "app/roop_3d/audit/stage00_verification.json",
+  "test_runs": [
+    {
+      "command": "roop_3d/.venv/Scripts/python.exe -B -m pytest -c roop_3d/pyproject.toml --confcutdir=roop_3d roop_3d/tests/test_stage02_media.py -q",
+      "exit_code": 0,
+      "passed": 10,
+      "failed": 0,
+      "skipped": 0
+    },
+    {
+      "command": "roop_3d/.venv/Scripts/python.exe -B -m pytest -c roop_3d/pyproject.toml --confcutdir=roop_3d roop_3d/tests/test_stage05_media.py -q",
+      "exit_code": 1,
+      "passed": 18,
+      "failed": 1,
+      "skipped": 0,
+      "note": "Silent-fixture audio hash helper corrected; production codec tests passed."
+    },
+    {
+      "command": "roop_3d/.venv/Scripts/python.exe -B -m pytest -c roop_3d/pyproject.toml --confcutdir=roop_3d roop_3d/tests/test_stage05_media.py roop_3d/tests/test_stage02_media.py roop_3d/tests/test_stage02_api.py -q",
+      "exit_code": 0,
+      "passed": 41,
+      "failed": 0,
+      "skipped": 0
+    },
+    {
+      "command": "roop_3d/.venv/Scripts/python.exe -B -m pytest -c roop_3d/pyproject.toml --confcutdir=roop_3d roop_3d/tests/test_stage05_media.py -q",
+      "exit_code": 1,
+      "passed": 18,
+      "failed": 1,
+      "skipped": 0,
+      "note": "Cancellation exposed misplaced iterator initialization; corrected."
+    },
+    {
+      "command": "roop_3d/.venv/Scripts/python.exe -B -m pytest -c roop_3d/pyproject.toml --confcutdir=roop_3d roop_3d/tests/test_stage05_media.py -q",
+      "exit_code": 0,
+      "passed": 19,
+      "failed": 0,
+      "skipped": 0
+    },
+    {
+      "command": "roop_3d/.venv/Scripts/python.exe -B -m pytest -c roop_3d/pyproject.toml --confcutdir=roop_3d roop_3d/tests/test_stage05_media.py -q",
+      "exit_code": 1,
+      "passed": 24,
+      "failed": 2,
+      "skipped": 0,
+      "note": "Added tests exposed MOV edit-list rounding and CUDA rotation metadata loss; both corrected."
+    },
+    {
+      "command": "roop_3d/.venv/Scripts/python.exe -B -m pytest -c roop_3d/pyproject.toml --confcutdir=roop_3d roop_3d/tests/test_stage05_media.py -q",
+      "exit_code": 0,
+      "passed": 26,
+      "failed": 0,
+      "skipped": 0
+    },
+    {
+      "command": "roop_3d/.venv/Scripts/python.exe -B -m pytest -c roop_3d/pyproject.toml --confcutdir=roop_3d roop_3d/tests/test_stage05_media.py -q",
+      "exit_code": 0,
+      "passed": 29,
+      "failed": 0,
+      "skipped": 0
+    },
+    {
+      "command": "roop_3d/.venv/Scripts/python.exe -B -m pytest -c roop_3d/pyproject.toml --confcutdir=roop_3d roop_3d/tests/test_stage05_media.py -q",
+      "exit_code": 0,
+      "passed": 31,
+      "failed": 0,
+      "skipped": 0
+    },
+    {
+      "command": "roop_3d/.venv/Scripts/python.exe -B -m pytest -c roop_3d/pyproject.toml --confcutdir=roop_3d roop_3d/tests/test_stage05_media.py roop_3d/tests/test_stage02_media.py -q",
+      "exit_code": 1,
+      "passed": 42,
+      "failed": 1,
+      "skipped": 0,
+      "note": "Inspector integration exposed CUDA keyframe metadata loss; restored from source packets."
+    },
+    {
+      "command": "roop_3d/.venv/Scripts/python.exe -B -m pytest -c roop_3d/pyproject.toml --confcutdir=roop_3d roop_3d/tests -q",
+      "exit_code": 1,
+      "passed": 239,
+      "failed": 1,
+      "skipped": 0,
+      "note": "Same inspector regression; subsequently corrected. 18 subtests passed."
+    },
+    {
+      "command": "roop_3d/.venv/Scripts/python.exe -B -m pytest -c roop_3d/pyproject.toml --confcutdir=roop_3d roop_3d/tests/test_stage05_media.py roop_3d/tests/test_stage02_media.py -q",
+      "exit_code": 0,
+      "passed": 43,
+      "failed": 0,
+      "skipped": 0
+    },
+    {
+      "command": "roop_3d/.venv/Scripts/python.exe -B -m pytest -c roop_3d/pyproject.toml --confcutdir=roop_3d roop_3d/tests/test_stage05_media.py roop_3d/tests/test_stage02_media.py -q",
+      "exit_code": 0,
+      "passed": 43,
+      "failed": 0,
+      "skipped": 0
+    },
+    {
+      "command": "roop_3d/.venv/Scripts/python.exe -B -m pytest -c roop_3d/pyproject.toml --confcutdir=roop_3d roop_3d/tests -q",
+      "exit_code": 0,
+      "passed": 240,
+      "failed": 0,
+      "skipped": 0,
+      "additional_subtests_passed": 18,
+      "warnings": 1,
+      "elapsed_seconds": 39.63
+    }
+  ],
+  "final_summary": {
+    "full_suite_passed": 240,
+    "additional_subtests_passed": 18,
+    "stage05_passed": 33,
+    "failed": 0,
+    "skipped": 0,
+    "blocked": 0,
+    "warnings": 1
+  },
+  "isolation_audit": {
+    "command": "roop_3d/.venv/Scripts/python.exe -B roop_3d/audit/verify_isolation.py --report",
+    "exit_code": 0,
+    "ok": true,
+    "timestamp": "2026-10-30T14:01:10.734728+00:00",
+    "historical_checked": 2647,
+    "comprehensive_checked": 68392,
+    "violations": [],
+    "runtime_activity_observed_files": 1456,
+    "runtime_activity_note": "Separately classified under the existing explicit audit policy; never claimed byte-identical.",
+    "elapsed_seconds": 278.765
+  },
+  "hardware_evidence": {
+    "scope": "Generated H.264 VFR MOV, coded 320x180, display rotation 90 degrees, two PCM audio tracks; no speed claim.",
+    "manifest": {
+      "schema_version": 1,
+      "input_sha256": "ff82fc41163e30f838e219e25a2dfcfac2cb495571fac1a4cc112ecb461ea3e0",
+      "output_sha256": "9c27c6c20346f520ddac554a86f3a0588635271b705fb4099b8119679601a855",
+      "encoder": "h264_nvenc",
+      "nvenc_state": "VERIFIED_LOCAL",
+      "decoder": "nvdec",
+      "width": 180,
+      "height": 320,
+      "pixel_format": "yuv420p",
+      "nvdec_state": "VERIFIED_LOCAL",
+      "source_frames_read": 8,
+      "encoded_frames": 8,
+      "verified_frames": 8,
+      "source_time_base": "1/16000",
+      "output_time_base": "1/16000",
+      "timing_policy": "preserve_source_timing",
+      "audio_policy": "copy",
+      "audio_tracks": [
+        {
+          "source_index": 1,
+          "source_codec": "pcm_s16le",
+          "codec": "pcm_s16le",
+          "action": "copy",
+          "reason": "codec and packet boundaries compatible"
+        },
+        {
+          "source_index": 2,
+          "source_codec": "pcm_s16le",
+          "codec": "pcm_s16le",
+          "action": "copy",
+          "reason": "codec and packet boundaries compatible"
+        }
+      ],
+      "trim": {
+        "start": null,
+        "end": null
+      },
+      "frame_map": [],
+      "provenance": {
+        "synthetic_media": true,
+        "processor": "Roop 3D",
+        "processing": "local",
+        "transformed": false,
+        "notice": "Synthetic media processed locally by Roop 3D"
+      }
+    },
+    "small_profile_fallback_manifest": {
+      "schema_version": 1,
+      "input_sha256": "b37ea179c73a5928e9a3b3ff083179b2ad133b333c31a26b7e72b89bcca88602",
+      "output_sha256": "7ae250692fb776c4cfca99290c423f386086e7f8818d611d90093f280279d9d6",
+      "encoder": "libx264",
+      "nvenc_state": "UNSUPPORTED",
+      "decoder": "nvdec",
+      "width": 96,
+      "height": 64,
+      "pixel_format": "yuv420p",
+      "nvdec_state": "VERIFIED_LOCAL",
+      "source_frames_read": 8,
+      "encoded_frames": 8,
+      "verified_frames": 8,
+      "source_time_base": "1/16000",
+      "output_time_base": "1/16000",
+      "timing_policy": "preserve_source_timing",
+      "audio_policy": "copy",
+      "audio_tracks": [],
+      "trim": {
+        "start": null,
+        "end": null
+      },
+      "frame_map": [],
+      "provenance": {
+        "synthetic_media": true,
+        "processor": "Roop 3D",
+        "processing": "local",
+        "transformed": false,
+        "notice": "Synthetic media processed locally by Roop 3D"
+      }
+    },
+    "unsupported_decode_codec": "ffv1: software fallback exercised by real codec test",
+    "qualification": "Per-input/profile validation only. This is not a 6 GB/12 GB inference acceptance campaign."
+  },
+  "timing_evidence": {
+    "preserve": "Every final decoded output PTS checked against exact source rational times, tolerance <= one source tick.",
+    "fractional_rate": "90-frame 30000/1001 preserve and CFR fixtures matched every PTS exactly.",
+    "cfr": "VFR duplication, 50-to-25 FPS drops, integer grid and complete source-index action mapping tested.",
+    "audio_copy": "All-track encoded payload SHA-256 equality, AAC priming timing, and sample counts tested.",
+    "audio_trim": "Exact PCM sample counts and AAC stream durations tested; compatible packet trims copied.",
+    "cancellation": "In-process PyAV; no FFmpeg child processes. Cancellation closes input handles and removes temporary files; retry succeeds.",
+    "atomic_output": "Final media verified before rename. Manifest publication failure rolls media back; retry succeeds."
+  },
+  "dependencies": {
+    "changed": false,
+    "av": "17.1.0",
+    "lockfile": "app/roop_3d/requirements.lock"
+  },
+  "limitations": [
+    "Output containers are MP4, MOV, and MKV; other containers are rejected explicitly.",
+    "YUV420 encoding requires even upright dimensions and right-angle source rotation; unsupported geometry raises ENCODE_DIMENSIONS.",
+    "Missing or non-increasing source PTS are rejected rather than guessed.",
+    "Final CFR frames require a known source duration.",
+    "MKV muxer precision can be coarser than source ticks. Output that exceeds the source-tick tolerance is rejected and cleaned up.",
+    "Probe sampling is bounded; a partial constant-rate sample reports VFR UNKNOWN rather than claiming CFR.",
+    "Probe/count work is bounded per video stream; container-declared frame counts can be unknown.",
+    "Seek iterator indices are local emission ordinals; seek results use exact PTS as identity.",
+    "Subtitles, attachments, and additional video streams are not copied by this single-video writer; every audio track is preserved."
+  ],
+  "next_gate": {
+    "stage": "06",
+    "status": "awaiting_stage_specification",
+    "implemented": false
+  },
+  "git": {
+    "committed": false,
+    "pushed": false
+  }
+}

@@ -2,7 +2,8 @@
 from __future__ import annotations
 
 import base64
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
+from fractions import Fraction
 import math
 from pathlib import Path
 import time
@@ -18,6 +19,9 @@ from roop_3d.core.errors import DomainError
 from roop_3d.core.settings import Settings, runtime_path
 from roop_3d.core.storage import atomic_json
 from roop_3d.media.detector import Detector, iou
+from roop_3d.media.probe import open_media, probe
+from roop_3d.media.timestamps import Timestamp
+from roop_3d.media.video_reader import VideoReader
 from roop_3d.media.schema import AudioTrack, BoundingBox, FaceInspection, FaceTrack, InspectRequest, MediaProbe, PoseRange
 from roop_3d.models.catalog import ModelCatalog
 
@@ -45,50 +49,26 @@ class MediaService:
     @contextmanager
     def open(self, value: str) -> Iterator[av.container.InputContainer]:
         path = self.path(value)
-        try:
-            with path.open("rb") as handle, av.open(handle, mode="r", options={
-                "protocol_whitelist": "", "enable_drefs": "0", "use_absolute_path": "0",
-                "format_whitelist": "mov,mp4,m4a,3gp,3g2,mj2,matroska,webm,avi,mpegts",
-            }) as container:
-                if not container.streams.video:
-                    raise DomainError("VIDEO_STREAM_MISSING", "Container has no video stream", 422)
-                stream = container.streams.video[0]
-                if stream.width <= 0 or stream.height <= 0 or stream.width * stream.height > 16777216:
-                    raise DomainError("VIDEO_DIMENSIONS_DENIED", "Video dimensions exceed the decode budget", 422)
-                yield container
-        except (av.FFmpegError, OSError):
-            raise DomainError("MEDIA_DECODE_FAILED", "Local video could not be decoded", 422) from None
+        with open_media(path) as container:
+            yield container
 
     def probe(self, value: str) -> MediaProbe:
-        with self.open(value) as container:
-            stream = container.streams.video[0]
-            rate = stream.average_rate
-            duration = float(stream.duration * stream.time_base) if stream.duration is not None else (
-                container.duration / av.time_base if container.duration is not None else None)
-            audio = tuple(AudioTrack(stream_index=item.index, codec=item.codec_context.name,
-                                     sample_rate=item.codec_context.sample_rate or None,
-                                     channels=len(item.codec_context.layout.channels),
-                                     language=item.metadata.get("language")) for item in container.streams.audio)
-            timestamps = []
-            complete = True
-            started = time.monotonic()
-            for frame in container.decode(stream):
-                if frame.pts is not None:
-                    timestamps.append(float(frame.pts * frame.time_base))
-                if len(timestamps) >= 300 or time.monotonic() - started > 10:
-                    complete = False
-                    break
-            differences = np.diff(timestamps)
-            # Constant rates can alternate adjacent ticks in coarse time bases.
-            tolerance = max(0.0005, 1.5 * float(stream.time_base))
-            varying = len(differences) > 1 and float(np.ptp(differences)) > tolerance
-            vfr = bool(varying) if varying or (complete and len(differences) > 1) else None
-            return MediaProbe(container=container.format.name, duration_seconds=duration,
-                              fps=float(rate) if rate else None, fps_rational=str(rate) if rate else None,
-                              width=stream.width, height=stream.height, video_stream_index=stream.index,
-                              video_codec=stream.codec_context.name, declared_frame_count=stream.frames or None,
-                              vfr=vfr, vfr_state="VERIFIED_LOCAL" if vfr is not None else "UNKNOWN",
-                              timing_sample_frames=len(timestamps), timing_sample_complete=complete, audio_tracks=audio)
+        info = probe(self.path(value))
+        video = info.videos[0]
+        rate = video.average_rate
+        duration = video.duration * video.time_base if video.duration is not None else info.duration
+        audio = tuple(AudioTrack(stream_index=item.index, codec=item.codec, sample_rate=item.sample_rate,
+                                 channels=item.channels, language=item.language, time_base=str(item.time_base),
+                                 channel_layout=item.layout) for item in info.audio)
+        return MediaProbe(container=info.container, duration_seconds=float(duration) if duration is not None else None,
+                          fps=float(rate) if rate else None, fps_rational=str(rate) if rate else None,
+                          width=video.width, height=video.height, video_stream_index=video.index,
+                          video_codec=video.codec, declared_frame_count=video.frame_count,
+                          vfr=video.vfr, vfr_state="VERIFIED_LOCAL" if video.vfr is not None else "UNKNOWN",
+                          timing_sample_frames=video.sampled_frames, timing_sample_complete=video.sample_complete,
+                          audio_tracks=audio, time_base=str(video.time_base), nominal_frame_rate=str(video.nominal_rate) if video.nominal_rate else None,
+                          pixel_format=video.pixel_format, color_space=video.color_space_name,
+                          color_range=video.color_range, rotation_degrees=video.rotation)
 
     def frame(self, value: str, timestamp: float | None, frame_index: int | None) -> np.ndarray:
         if (timestamp is None) == (frame_index is None):
@@ -97,20 +77,23 @@ class MediaService:
             raise DomainError("FRAME_SELECTOR_INVALID", "Timestamp must be finite and within one day", 422)
         if frame_index is not None and not 0 <= frame_index < 10000:
             raise DomainError("FRAME_SELECTOR_INVALID", "Frame index must be between 0 and 9999", 422)
-        with self.open(value) as container:
-            stream = container.streams.video[0]
-            start = float((stream.start_time or 0) * stream.time_base)
-            if timestamp is not None:
-                container.seek(int((timestamp + start) / stream.time_base), stream=stream, backward=True)
-            began = time.monotonic()
-            for index, frame in enumerate(container.decode(stream)):
-                if index >= 10000 or time.monotonic() - began > 15:
+        path = self.path(value)
+        reader = VideoReader(path)
+        if timestamp is not None:
+            with self.open(value) as container:
+                stream = container.streams.video[0]
+                at = Fraction(str(timestamp)) + (stream.start_time or 0) * Fraction(stream.time_base)
+            return reader.at(Timestamp(at.numerator, Fraction(1, at.denominator))).image
+        began = time.monotonic()
+        iterator = reader.frames()
+        try:
+            for frame in iterator:
+                if time.monotonic() - began > 15:
                     raise DomainError("DECODE_BUDGET_EXCEEDED", "Requested frame exceeds the decode budget", 422)
-                at = float(frame.pts * frame.time_base) - start if frame.pts is not None else None
-                if (frame_index is not None and index == frame_index) or (
-                    timestamp is not None and at is not None and at + 1e-6 >= timestamp
-                ):
-                    return frame.to_ndarray(format="bgr24")
+                if frame.index == frame_index:
+                    return frame.image
+        finally:
+            iterator.close()
         raise DomainError("FRAME_OUT_OF_RANGE", "Requested frame is beyond the video", 416)
 
     def preview(self, value: str, timestamp: float | None, frame_index: int | None,
@@ -139,13 +122,14 @@ class MediaService:
         record = self.detector.catalog.detector()
         with self.open(request.path) as container:
             stream = container.streams.video[0]
-            origin = float((stream.start_time or 0) * stream.time_base)
-            for index, frame in enumerate(container.decode(stream)):
+            origin = (stream.start_time or 0) * Fraction(stream.time_base)
+        with closing(VideoReader(path).frames()) as frames:
+            for index, frame in enumerate(frames):
                 decoded = index + 1
                 if frame.key_frame or index == 0:
-                    image = frame.to_ndarray(format="bgr24")
+                    image = frame.image
                     detections, record = self.detector.detect(image, request.detection_threshold)
-                    at = max(0.0, float(frame.pts * frame.time_base) - origin) if frame.pts is not None else 0.0
+                    at = max(0.0, float(frame.timestamp.seconds - origin))
                     unused = {i for i, track in enumerate(tracks) if samples - track["last_sample"] <= 2}
                     for box, landmarks in detections:
                         match = max(unused, key=lambda i: iou(tracks[i]["last_box"], box), default=None)

@@ -22,6 +22,8 @@ class AudioTrack(Contract):
     sample_rate: int | None
     channels: int
     language: str | None = None
+    time_base: str | None = None
+    channel_layout: str | None = None
 
 
 class MediaProbe(Contract):
@@ -39,6 +41,12 @@ class MediaProbe(Contract):
     timing_sample_frames: int
     timing_sample_complete: bool
     audio_tracks: tuple[AudioTrack, ...]
+    time_base: str | None = None
+    nominal_frame_rate: str | None = None
+    pixel_format: str | None = None
+    color_space: str = "UNKNOWN"
+    color_range: int | None = None
+    rotation_degrees: int = 0
 
 
 class BoundingBox(Contract):
