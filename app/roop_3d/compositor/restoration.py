@@ -1,0 +1,87 @@
+"""Optional ROI restoration, blended only through the face alpha."""
+from __future__ import annotations
+
+import cv2
+import numpy as np
+
+from roop_3d.core.errors import DomainError
+
+
+def blend_restored_roi(image: np.ndarray, restored: np.ndarray, face_mask: np.ndarray, blend: float) -> np.ndarray:
+    """Blend an enhancer result inside the facial mask, preserving outside pixels."""
+    source = np.asarray(image)
+    enhanced = np.asarray(restored)
+    mask = np.asarray(face_mask, dtype=np.float32)
+    if (source.ndim != 3 or source.shape[2] != 3 or enhanced.shape != source.shape
+            or mask.shape != source.shape[:2] or not np.isfinite(source).all()
+            or not np.isfinite(enhanced).all() or not np.isfinite(mask).all()):
+        raise DomainError("RESTORATION_INPUT_INVALID", "Restoration image and face mask dimensions are invalid", 422)
+    if not np.isfinite(blend) or not 0.0 <= blend <= 1.0:
+        raise ValueError("Restoration blend must be finite and within 0..1")
+    if blend == 0:
+        return source.copy()
+    result = source.astype(np.float32, copy=True)
+    active = mask > 0
+    weight = np.clip(mask, 0.0, 1.0) * float(blend)
+    result[active] = (source.astype(np.float32)[active] * (1.0 - weight[active, None])
+                      + enhanced.astype(np.float32)[active] * weight[active, None])
+    if np.issubdtype(source.dtype, np.integer):
+        limits = np.iinfo(source.dtype)
+        return np.clip(np.nan_to_num(result), limits.min, limits.max).round().astype(source.dtype)
+    return np.nan_to_num(result).astype(source.dtype)
+
+
+class GpenRestorer:
+    """Lazy local GPEN adapter. Model bytes are hash checked by the Stage 03 catalog."""
+
+    def __init__(self, catalog=None, config=None, *, model_name: str = "gpen_bfr_512.onnx",
+                 normalization: str = "minus_one_one"):
+        from roop_3d.engine.runtime import RuntimeConfig
+        from roop_3d.models.catalog import ModelCatalog
+
+        if normalization not in {"zero_one", "minus_one_one"}:
+            raise ValueError("Unsupported GPEN normalization")
+        self.catalog = catalog or ModelCatalog()
+        self.config = config or RuntimeConfig()
+        self.model_name = model_name
+        self.normalization = normalization
+        self.model = None
+        self.inference_verified = False
+
+    def _load(self):
+        if self.model is None:
+            from roop_3d.engine.runtime import OrtModel
+            self.model = OrtModel(self.catalog, self.model_name, self.config)
+        return self.model
+
+    def restore(self, image: np.ndarray) -> np.ndarray:
+        from roop_3d.engine.runtime import image_bgr as validate_image
+
+        validate_image(image)
+        shape = (512, 512)
+        rgb = cv2.resize(image, shape, interpolation=cv2.INTER_AREA)[:, :, ::-1].astype(np.float32) / 255.0
+        if self.normalization == "minus_one_one":
+            rgb = rgb * 2.0 - 1.0
+        values = np.ascontiguousarray(rgb.transpose(2, 0, 1)[None], dtype=np.float32)
+        output = self._load().run({"input": values})
+        if "output" not in output:
+            raise DomainError("RESTORATION_OUTPUT_INVALID", "GPEN output tensor is unavailable", 503)
+        result = np.asarray(output["output"], dtype=np.float32)
+        if result.shape != (1, 3, 512, 512) or not np.isfinite(result).all():
+            raise DomainError("RESTORATION_OUTPUT_INVALID", "GPEN output tensor has an unsupported contract", 503)
+        result = result[0].transpose(1, 2, 0)
+        if self.normalization == "minus_one_one":
+            result = (result + 1.0) * 0.5
+        bgr = np.clip(result[:, :, ::-1] * 255.0, 0, 255).astype(np.uint8)
+        self.inference_verified = True
+        return cv2.resize(bgr, (image.shape[1], image.shape[0]), interpolation=cv2.INTER_CUBIC)
+
+    def capability(self) -> dict[str, str]:
+        return {"weights": "VERIFIED_LOCAL", "provenance": "UNKNOWN", "license": "UNKNOWN",
+                "inference": "VERIFIED_LOCAL" if self.inference_verified else "UNKNOWN",
+                "preprocessing": "CANDIDATE"}
+
+    def release(self) -> None:
+        if self.model is not None:
+            self.model.release()
+        self.model = None

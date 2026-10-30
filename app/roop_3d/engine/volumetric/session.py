@@ -21,6 +21,7 @@ from roop_3d.engine.volumetric.reference_adapter import LivePortraitAdapter
 from roop_3d.faceset.schemas import FaceSetDocument
 from roop_3d.models.catalog import ModelCatalog
 from roop_3d.engine.resources import guarded, register
+from roop_3d.compositor.pipeline import CompositeOptions, FrameCompositor
 
 
 @dataclass(frozen=True)
@@ -68,6 +69,9 @@ class ReferencePipeline:
         self.tracker: FaceTracker | None = None
         self.swapper = IdentitySwapper(self.catalog, config)
         self.portrait = LivePortraitAdapter(self.catalog, config)
+        # The compositor and its parser/restorer adapters are lazy; session creation
+        # does not activate any additional inference model.
+        self.compositor = FrameCompositor(self.catalog, config)
         self.selected_ids: frozenset[int] | None = None
         self.prepared = False
         self.lock = threading.RLock()
@@ -144,7 +148,18 @@ class ReferencePipeline:
                 "portrait": self.portrait.capability(), "profile": self.config.hardware_profile,
                 "selected_track_ids": sorted(self.selected_ids) if self.selected_ids is not None else None,
                 "pose_method": "five_point_geometric_estimate", "dense_landmarks": (106, 203),
-                "full_frame_compositor": "Stage 09 pending"}
+                "full_frame_compositor": self.compositor.capability()}
+
+    def composite_frame(self, image: np.ndarray, result: FrameResult, *,
+                        options: CompositeOptions = CompositeOptions(),
+                        occluder_masks: dict[int, np.ndarray] | None = None) -> np.ndarray:
+        """Fuse this frame's replacements back into its original full-resolution image."""
+        with self.lock:
+            landmarks = {item.track_id: item.observation.landmarks106 for item in result.observations}
+            return self.compositor.compose(image, result.replacements, landmarks,
+                                           scene_cut=result.scene_cut,
+                                           frame_index=max(0, self.frames_processed - 1),
+                                           occluder_masks=occluder_masks, options=options)
 
     @guarded
     def release_session(self) -> None:
@@ -154,6 +169,7 @@ class ReferencePipeline:
             self.tracker = None
             self.swapper.release_session()
             self.portrait.release_session()
+            self.compositor.release()
             self.selected_ids = None
             self.prepared = False
             self.last_latency = None
