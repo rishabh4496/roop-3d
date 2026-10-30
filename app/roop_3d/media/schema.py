@@ -66,12 +66,15 @@ class PoseRange(Contract):
     yaw_degrees: tuple[float, float] | None = None
     pitch_degrees: tuple[float, float] | None = None
     roll_degrees: tuple[float, float] | None = None
-    method: Literal["eye_line_roll_only"] = "eye_line_roll_only"
-    yaw_pitch_state: Literal["UNKNOWN"] = "UNKNOWN"
+    method: Literal["eye_line_roll_only", "five_point_geometric_estimate"] = "eye_line_roll_only"
+    yaw_pitch_state: Literal["UNKNOWN", "CANDIDATE"] = "UNKNOWN"
 
 
 class FaceTrack(Contract):
     track_id: str = Field(pattern=r"^track_[0-9]{4}$")
+    persistent_id: int | None = Field(default=None, ge=0)
+    scene_id: int = Field(default=0, ge=0)
+    landmark_count: int = Field(default=5, ge=5, le=203)
     first_frame: int = Field(ge=0)
     last_frame: int = Field(ge=0)
     first_timestamp_seconds: float = Field(ge=0)
@@ -92,9 +95,12 @@ class FaceInspection(Contract):
     decoded_frames: int
     sampled_frames: int
     truncated: bool
-    tracking_method: Literal["sampled_spatial_iou"] = "sampled_spatial_iou"
+    tracking_method: Literal["sampled_spatial_iou", "iou_arcface_hungarian"] = "sampled_spatial_iou"
     identity_continuity_verified: Literal[False] = False
     warnings: tuple[str, ...] = ()
+    scene_cut_frames: tuple[int, ...] = ()
+    recognizer_model_id: str | None = None
+    recognizer_sha256: str | None = None
 
 
 class TrackToFaceSetMap(Contract):

@@ -18,7 +18,8 @@ from roop_3d.audit.isolation import sha256_file
 from roop_3d.core.errors import DomainError
 from roop_3d.core.settings import Settings, runtime_path
 from roop_3d.core.storage import atomic_json
-from roop_3d.media.detector import Detector, iou
+from roop_3d.media.detector import Detector
+from roop_3d.engine.detection.face_tracker import FaceTracker
 from roop_3d.media.probe import open_media, probe
 from roop_3d.media.timestamps import Timestamp
 from roop_3d.media.video_reader import VideoReader
@@ -115,62 +116,74 @@ class MediaService:
     def inspect(self, request: InspectRequest) -> FaceInspection:
         path = self.path(request.path)
         _, digest = sha256_file(path)
-        tracks: list[dict] = []
+        records: dict[int, dict] = {}
         samples = decoded = 0
         complete = True
         began = time.monotonic()
-        record = self.detector.catalog.detector()
+        detector_record = self.detector.catalog.detector()
+        recognizer_record = self.detector.catalog.recognizer()
+        tracker = FaceTracker(self.detector.catalog, threshold=request.detection_threshold, detector=self.detector)
+        cuts: list[int] = []
         with self.open(request.path) as container:
             stream = container.streams.video[0]
             origin = (stream.start_time or 0) * Fraction(stream.time_base)
-        with closing(VideoReader(path).frames()) as frames:
-            for index, frame in enumerate(frames):
-                decoded = index + 1
-                if frame.key_frame or index == 0:
+        try:
+            with closing(VideoReader(path).frames()) as frames:
+                for index, frame in enumerate(frames):
+                    decoded = index + 1
                     image = frame.image
-                    detections, record = self.detector.detect(image, request.detection_threshold)
+                    tracked = tracker.process(image)
+                    if tracker.scene_cut and len(cuts) < 64:
+                        cuts.append(index)
                     at = max(0.0, float(frame.timestamp.seconds - origin))
-                    unused = {i for i, track in enumerate(tracks) if samples - track["last_sample"] <= 2}
-                    for box, landmarks in detections:
-                        match = max(unused, key=lambda i: iou(tracks[i]["last_box"], box), default=None)
-                        if match is not None and iou(tracks[match]["last_box"], box) < 0.2:
-                            match = None
-                        roll = math.degrees(math.atan2(*(landmarks[1] - landmarks[0])[::-1]))
-                        if match is None:
-                            if len(tracks) >= 64:
-                                continue
+                    for face in tracked:
+                        observation = face.observation
+                        box = observation.box
+                        yaw, pitch, roll = observation.pose
+                        if face.track_id not in records:
+                            if len(records) >= 64:
+                                complete = False
+                                break
                             x1, y1, x2, y2 = box.astype(int)
-                            crop = image[y1:max(y1 + 1, y2), x1:max(x1 + 1, x2)]
-                            crop = cv2.resize(crop, (128, 128))
+                            crop = cv2.resize(image[y1:max(y1 + 1, y2), x1:max(x1 + 1, x2)], (128, 128))
                             success, jpg = cv2.imencode(".jpg", crop)
                             if not success:
-                                continue
-                            tracks.append(dict(first=index, last=index, first_at=at, last_at=at,
-                                               box=box, last_box=box, rolls=[roll], count=1, last_sample=samples,
-                                               thumbnail=base64.b64encode(jpg).decode("ascii")))
+                                raise DomainError("PREVIEW_ENCODE_FAILED", "Face thumbnail could not be encoded", 422)
+                            records[face.track_id] = dict(first=index, last=index, first_at=at, last_at=at,
+                                box=box, pose_min=[yaw, pitch, roll], pose_max=[yaw, pitch, roll], count=1,
+                                scene_id=face.scene_id, thumbnail=base64.b64encode(jpg).decode("ascii"))
                         else:
-                            unused.remove(match)
-                            track = tracks[match]
-                            track.update(last=index, last_at=at, last_box=box, last_sample=samples, count=track["count"] + 1)
-                            track["rolls"].append(roll)
-                    samples += 1
-                if decoded >= request.max_decoded_frames or samples >= request.max_samples or time.monotonic() - began > 30:
-                    complete = False
-                    break
-        # Refuse to bind observations to a file which changed during inspection.
+                            item = records[face.track_id]
+                            item.update(last=index, last_at=at, count=item["count"] + 1)
+                            item["pose_min"] = np.minimum(item["pose_min"], observation.pose).tolist()
+                            item["pose_max"] = np.maximum(item["pose_max"], observation.pose).tolist()
+                    if frame.key_frame or index == 0:
+                        samples += 1
+                    if (not complete or decoded >= request.max_decoded_frames or samples >= request.max_samples
+                            or time.monotonic() - began > 30):
+                        complete = False
+                        break
+        finally:
+            tracker.release()
         if sha256_file(path)[1] != digest:
             raise DomainError("MEDIA_CHANGED", "Video changed during inspection")
         result = FaceInspection(inspection_id=uuid.uuid4().hex, target_sha256=digest,
-                                detector_model_id=record["model_id"], detector_sha256=record["sha256"],
-                                decoded_frames=decoded, sampled_frames=samples, truncated=not complete,
-                                tracks=tuple(FaceTrack(track_id=f"track_{index:04d}", first_frame=item["first"],
-                                                       last_frame=item["last"], first_timestamp_seconds=item["first_at"],
-                                                       last_timestamp_seconds=item["last_at"],
-                                                       bounding_box=BoundingBox(**dict(zip(("x1", "y1", "x2", "y2"), item["box"]))),
-                                                       pose_range=PoseRange(roll_degrees=(min(item["rolls"]), max(item["rolls"]))),
-                                                       sampled_detections=item["count"], thumbnail_base64=item["thumbnail"])
-                                             for index, item in enumerate(tracks)),
-                                warnings=("Spatial tracks can split or merge at motion, crossings or cuts; review mappings.",
-                                          "Yaw and pitch are unknown; only eye-line roll is measured."))
+            detector_model_id=detector_record["model_id"], detector_sha256=detector_record["sha256"],
+            recognizer_model_id=recognizer_record["model_id"], recognizer_sha256=recognizer_record["sha256"],
+            decoded_frames=decoded, sampled_frames=samples, truncated=not complete,
+            tracking_method="iou_arcface_hungarian", scene_cut_frames=tuple(cuts),
+            tracks=tuple(FaceTrack(track_id=f"track_{identity:04d}", persistent_id=identity,
+                scene_id=item["scene_id"], landmark_count=106, first_frame=item["first"], last_frame=item["last"],
+                first_timestamp_seconds=item["first_at"], last_timestamp_seconds=item["last_at"],
+                bounding_box=BoundingBox(**dict(zip(("x1", "y1", "x2", "y2"), item["box"]))),
+                pose_range=PoseRange(yaw_degrees=(item["pose_min"][0], item["pose_max"][0]),
+                    pitch_degrees=(item["pose_min"][1], item["pose_max"][1]),
+                    roll_degrees=(item["pose_min"][2], item["pose_max"][2]),
+                    method="five_point_geometric_estimate", yaw_pitch_state="CANDIDATE"),
+                sampled_detections=item["count"], thumbnail_base64=item["thumbnail"])
+                for identity, item in records.items()),
+            warnings=("IoU and ArcFace assignment can still split or merge tracks; review mappings.",
+                      "Yaw and pitch are uncalibrated geometric estimates, not reconstructed 3D pose.",
+                      "persistent_id is the integer engine track ID; track_id retains the job mapping label."))
         atomic_json(self.root, f"roop_3d/.runtime/inspections/{result.inspection_id}.json", result.model_dump(mode="json"))
         return result

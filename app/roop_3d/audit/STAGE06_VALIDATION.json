@@ -1,0 +1,608 @@
+{
+  "stage": "06_tracker_identity_liveportrait",
+  "status": "passed",
+  "timestamp": "2026-10-30T15:20:19.621429+00:00",
+  "cwd": "app",
+  "files_changed": [
+    "app/roop_3d/engine/runtime.py",
+    "app/roop_3d/engine/detection/dense_landmarks.py",
+    "app/roop_3d/engine/detection/face_tracker.py",
+    "app/roop_3d/engine/volumetric/preprocess.py",
+    "app/roop_3d/engine/volumetric/identity_swapper.py",
+    "app/roop_3d/engine/volumetric/reference_adapter.py",
+    "app/roop_3d/engine/volumetric/session.py",
+    "app/roop_3d/media/service.py",
+    "app/roop_3d/media/schema.py",
+    "app/roop_3d/tests/test_stage06_pipeline.py",
+    "app/roop_3d/tests/manual_stage06_acceptance.py",
+    "app/roop_3d/audit/STAGE06_REPORT.md",
+    "app/roop_3d/audit/STAGE06_VALIDATION.json",
+    "app/roop_3d/audit/runtime_policy.py",
+    "app/roop_3d/tests/test_runtime_policy.py"
+  ],
+  "final_summary": {
+    "full_suite_passed": 253,
+    "additional_subtests_passed": 18,
+    "stage06_targeted_passed": 12,
+    "failed": 0,
+    "skipped": 0,
+    "blocked": 0,
+    "warnings": 1,
+    "reference_campaign_frames": 100
+  },
+  "test_runs": [
+    {
+      "command": "roop_3d/.venv/Scripts/python.exe -B -m pytest -c roop_3d/pyproject.toml --confcutdir=roop_3d roop_3d/tests/test_stage02_media.py roop_3d/tests/test_stage02_api.py -q",
+      "exit_code": 0,
+      "passed": 22,
+      "failed": 0,
+      "skipped": 0,
+      "elapsed_seconds": 7.5
+    },
+    {
+      "command": "roop_3d/.venv/Scripts/python.exe -B -m pytest -c roop_3d/pyproject.toml --confcutdir=roop_3d roop_3d/tests/test_stage06_pipeline.py -q",
+      "exit_code": 0,
+      "passed": 11,
+      "failed": 0,
+      "skipped": 0,
+      "elapsed_seconds": 42.31
+    },
+    {
+      "command": "roop_3d/.venv/Scripts/python.exe -B -m pytest -c roop_3d/pyproject.toml --confcutdir=roop_3d roop_3d/tests/test_stage06_pipeline.py -q",
+      "exit_code": 0,
+      "passed": 11,
+      "failed": 0,
+      "skipped": 0,
+      "elapsed_seconds": 48.61
+    },
+    {
+      "command": "roop_3d/.venv/Scripts/python.exe -B -m pytest -c roop_3d/pyproject.toml --confcutdir=roop_3d roop_3d/tests/test_stage06_pipeline.py -q",
+      "exit_code": 0,
+      "passed": 11,
+      "failed": 0,
+      "skipped": 0,
+      "elapsed_seconds": 63.2
+    },
+    {
+      "command": "roop_3d/.venv/Scripts/python.exe -B -m pytest -c roop_3d/pyproject.toml --confcutdir=roop_3d roop_3d/tests -q",
+      "exit_code": 1,
+      "status": "INTERRUPTED_BY_INTEGRITY_GATE",
+      "counts": "No completed summary; not claimed passing"
+    },
+    {
+      "command": "roop_3d/.venv/Scripts/python.exe -B -m pytest -c roop_3d/pyproject.toml --confcutdir=roop_3d roop_3d/tests/test_runtime_policy.py -q",
+      "exit_code": 0,
+      "passed": 6,
+      "failed": 0,
+      "skipped": 0,
+      "elapsed_seconds": 0.08
+    },
+    {
+      "command": "roop_3d/.venv/Scripts/python.exe -B -m pytest -c roop_3d/pyproject.toml --confcutdir=roop_3d roop_3d/tests -q",
+      "exit_code": 0,
+      "passed": 252,
+      "additional_subtests_passed": 18,
+      "failed": 0,
+      "skipped": 0,
+      "elapsed_seconds": 101.11
+    },
+    {
+      "command": "roop_3d/.venv/Scripts/python.exe -B -m pytest -c roop_3d/pyproject.toml --confcutdir=roop_3d roop_3d/tests/test_stage06_pipeline.py -q",
+      "exit_code": 0,
+      "passed": 12,
+      "failed": 0,
+      "skipped": 0,
+      "elapsed_seconds": 63.56
+    },
+    {
+      "command": "roop_3d/.venv/Scripts/python.exe -B -m pytest -c roop_3d/pyproject.toml --confcutdir=roop_3d roop_3d/tests -q",
+      "exit_code": 0,
+      "passed": 253,
+      "additional_subtests_passed": 18,
+      "failed": 0,
+      "skipped": 0,
+      "elapsed_seconds": 105.5,
+      "warnings": 1
+    }
+  ],
+  "acceptance": {
+    "frames": 100,
+    "warmup_frames": 3,
+    "provider": "cuda",
+    "profile": "6gb",
+    "cpu_threads": 4,
+    "gpu_budget_bytes": 3285188608,
+    "source_sha256": "aecfade7b170decb7da242c83a79f09d97647bbaddec9ed08f29aa85fe075680",
+    "target_sha256": "a85c976b937362e870f8a6e858b79563226d296601d677b9ebfc6b30fbc7fee5",
+    "source_cosine_before": 0.07649837255076156,
+    "source_cosine_after": 0.8870245851134553,
+    "private_memory_growth_bytes": 10618880,
+    "python_live_growth_bytes": 524910,
+    "private_plateau_gate_bytes": 33554432,
+    "python_live_gate_bytes": 2097152,
+    "memory_comparison_windows": {
+      "start_frames": [
+        20,
+        39
+      ],
+      "end_frames": [
+        80,
+        99
+      ]
+    },
+    "capabilities": {
+      "prepared": true,
+      "frames_processed": 103,
+      "identity_swapper": {
+        "model_id": "4387a15d1f7fd7d8741d6d9d",
+        "sha256": "e4a3f08c753cb72d04e10aa0f7dbe3deebbf39567d4ead6dce08e98aa49e16af",
+        "artifact_state": "VERIFIED_LOCAL",
+        "inference_state": "VERIFIED_LOCAL",
+        "provider": "CUDAExecutionProvider",
+        "executions": 103,
+        "requested_provider": "CUDAExecutionProvider",
+        "fallback_reason": null,
+        "license_state": "UNKNOWN",
+        "commercial_permission": "UNKNOWN"
+      },
+      "portrait": {
+        "liveportrait": "VERIFIED_LOCAL",
+        "available": true,
+        "fallback_reason": null,
+        "models": {
+          "appearance": {
+            "model_id": "98116e7c72cff8d2131d7b33",
+            "sha256": "d070afccca7f528ffb0ef5052b21588b42225a996661833f7bdede562d1ab921",
+            "artifact_state": "VERIFIED_LOCAL",
+            "inference_state": "VERIFIED_LOCAL",
+            "provider": "CPUExecutionProvider",
+            "executions": 1,
+            "requested_provider": "CUDAExecutionProvider",
+            "fallback_reason": "CUDA allocation exceeded the available model budget; CPU reference selected",
+            "license_state": "UNKNOWN",
+            "commercial_permission": "UNKNOWN"
+          },
+          "motion": {
+            "model_id": "b9e27bfca5bbd6b991e3cd4a",
+            "sha256": "219a46174297b2b411bb3c5dce48d3a8c8e07a9d82120a0da21f49f58b67fca6",
+            "artifact_state": "VERIFIED_LOCAL",
+            "inference_state": "VERIFIED_LOCAL",
+            "provider": "CUDAExecutionProvider",
+            "executions": 105,
+            "requested_provider": "CUDAExecutionProvider",
+            "fallback_reason": null,
+            "license_state": "UNKNOWN",
+            "commercial_permission": "UNKNOWN"
+          },
+          "warp_spade": {
+            "model_id": "4b583cf7d4667da7ed3b843e",
+            "sha256": "b0e7a566db8fba690c23523bcd2faa4f0d13f05418db84a779397a851062ad69",
+            "artifact_state": "VERIFIED_LOCAL",
+            "inference_state": "VERIFIED_LOCAL",
+            "provider": "CPUExecutionProvider",
+            "executions": 103,
+            "requested_provider": "CUDAExecutionProvider",
+            "fallback_reason": "CUDA GridSample cannot execute the verified 5-D reference graph; CPU reference selected",
+            "license_state": "UNKNOWN",
+            "commercial_permission": "UNKNOWN"
+          },
+          "stitch": {
+            "model_id": "3bafec2b580cdf85d942454d",
+            "sha256": "8e33658425e3f1014dc35b28f60ca7459189e8f78f20540262a2fe5ac1dc6ec7",
+            "artifact_state": "VERIFIED_LOCAL",
+            "inference_state": "VERIFIED_LOCAL",
+            "provider": "CUDAExecutionProvider",
+            "executions": 103,
+            "requested_provider": "CUDAExecutionProvider",
+            "fallback_reason": null,
+            "license_state": "UNKNOWN",
+            "commercial_permission": "UNKNOWN"
+          },
+          "eye": {
+            "model_id": "d00fb627bc633a6b976c6f18",
+            "sha256": "b9a2086c4d757c9be71b9b290d020678406da6a33c6247252c4bb0aeeff48afc",
+            "artifact_state": "VERIFIED_LOCAL",
+            "inference_state": "VERIFIED_LOCAL",
+            "provider": "CUDAExecutionProvider",
+            "executions": 206,
+            "requested_provider": "CUDAExecutionProvider",
+            "fallback_reason": null,
+            "license_state": "UNKNOWN",
+            "commercial_permission": "UNKNOWN"
+          }
+        },
+        "learned_eye_retargeting": "VERIFIED_LOCAL",
+        "learned_lip_retargeting": "UNKNOWN",
+        "lip_note": "Mouth motion is driven by motion-extractor expression deltas; a separate lip network is used only when verified weights exist",
+        "cached_tracks": 1,
+        "max_tracks": 32
+      },
+      "profile": "6gb",
+      "selected_track_ids": null,
+      "pose_method": "five_point_geometric_estimate",
+      "dense_landmarks": [
+        106,
+        203
+      ],
+      "full_frame_compositor": "Stage 09 pending"
+    },
+    "elapsed_seconds": 832.0400512999622,
+    "note": "No growth beyond defined bounds across this 100-frame campaign; not a proof for arbitrary inputs or durations",
+    "command": "roop_3d/.venv/Scripts/python.exe -B -u -m roop_3d.tests.manual_stage06_acceptance --provider cuda --profile 6gb",
+    "exit_code": 0,
+    "status": "passed",
+    "output": "roop_3d/outputs/stage06-cuda-6gb-aligned-preview-1793372204625447000.mov",
+    "comparison": "roop_3d/.runtime/acceptance/stage06-cuda-6gb-comparison.jpg",
+    "output_manifest": {
+      "schema_version": 1,
+      "input_sha256": "281dd60417ee82d36d2734f5e0d540bc53e2fc7a17b4abe1eb8352195c75ce4f",
+      "output_sha256": "8212af40ac4114db27a23bd5801880e7c79bc27407f1f9a78f9ad1a0154f86bb",
+      "encoder": "libx264",
+      "nvenc_state": "UNKNOWN",
+      "decoder": "software",
+      "width": 512,
+      "height": 512,
+      "pixel_format": "yuv420p",
+      "nvdec_state": "UNKNOWN",
+      "source_frames_read": 100,
+      "encoded_frames": 100,
+      "verified_frames": 100,
+      "source_time_base": "1/1000",
+      "output_time_base": "1/1000",
+      "timing_policy": "preserve_source_timing",
+      "audio_policy": "copy",
+      "audio_tracks": [
+        {
+          "source_index": 1,
+          "source_codec": "pcm_s16le",
+          "codec": "pcm_s16le",
+          "action": "copy",
+          "reason": "codec and packet boundaries compatible"
+        }
+      ],
+      "trim": {
+        "start": null,
+        "end": null
+      },
+      "frame_map": [],
+      "provenance": {
+        "synthetic_media": true,
+        "processor": "Roop 3D",
+        "processing": "local",
+        "transformed": true,
+        "notice": "Synthetic media processed locally by Roop 3D"
+      }
+    },
+    "latency_medians_ms": {
+      "detection_ms": 791.3055999961216,
+      "swap_ms": 34.656699979677796,
+      "retarget_ms": 7027.931749995332,
+      "total_ms": 7873.998850031057
+    },
+    "latency_scope": "Observed campaign only, including shared machine activity; no general speed claim"
+  },
+  "profile12_functional_check": {
+    "status": "passed",
+    "scope": "one-frame functional check; not a 100-frame or physical-capacity qualification",
+    "profile": "12gb",
+    "gpu_budget_bytes": 3382706176,
+    "frames": 1,
+    "source_cosine_before": 0.07649837255076156,
+    "source_cosine_after": 0.8868313755706769,
+    "capabilities": {
+      "prepared": true,
+      "frames_processed": 1,
+      "identity_swapper": {
+        "model_id": "4387a15d1f7fd7d8741d6d9d",
+        "sha256": "e4a3f08c753cb72d04e10aa0f7dbe3deebbf39567d4ead6dce08e98aa49e16af",
+        "artifact_state": "VERIFIED_LOCAL",
+        "inference_state": "VERIFIED_LOCAL",
+        "provider": "CUDAExecutionProvider",
+        "executions": 1,
+        "requested_provider": "CUDAExecutionProvider",
+        "fallback_reason": null,
+        "license_state": "UNKNOWN",
+        "commercial_permission": "UNKNOWN"
+      },
+      "portrait": {
+        "liveportrait": "VERIFIED_LOCAL",
+        "available": true,
+        "fallback_reason": null,
+        "models": {
+          "appearance": {
+            "model_id": "98116e7c72cff8d2131d7b33",
+            "sha256": "d070afccca7f528ffb0ef5052b21588b42225a996661833f7bdede562d1ab921",
+            "artifact_state": "VERIFIED_LOCAL",
+            "inference_state": "VERIFIED_LOCAL",
+            "provider": "CPUExecutionProvider",
+            "executions": 1,
+            "requested_provider": "CUDAExecutionProvider",
+            "fallback_reason": "CUDA allocation exceeded the available model budget; CPU reference selected",
+            "license_state": "UNKNOWN",
+            "commercial_permission": "UNKNOWN"
+          },
+          "motion": {
+            "model_id": "b9e27bfca5bbd6b991e3cd4a",
+            "sha256": "219a46174297b2b411bb3c5dce48d3a8c8e07a9d82120a0da21f49f58b67fca6",
+            "artifact_state": "VERIFIED_LOCAL",
+            "inference_state": "VERIFIED_LOCAL",
+            "provider": "CUDAExecutionProvider",
+            "executions": 3,
+            "requested_provider": "CUDAExecutionProvider",
+            "fallback_reason": null,
+            "license_state": "UNKNOWN",
+            "commercial_permission": "UNKNOWN"
+          },
+          "warp_spade": {
+            "model_id": "4b583cf7d4667da7ed3b843e",
+            "sha256": "b0e7a566db8fba690c23523bcd2faa4f0d13f05418db84a779397a851062ad69",
+            "artifact_state": "VERIFIED_LOCAL",
+            "inference_state": "VERIFIED_LOCAL",
+            "provider": "CPUExecutionProvider",
+            "executions": 1,
+            "requested_provider": "CUDAExecutionProvider",
+            "fallback_reason": "CUDA GridSample cannot execute the verified 5-D reference graph; CPU reference selected",
+            "license_state": "UNKNOWN",
+            "commercial_permission": "UNKNOWN"
+          },
+          "stitch": {
+            "model_id": "3bafec2b580cdf85d942454d",
+            "sha256": "8e33658425e3f1014dc35b28f60ca7459189e8f78f20540262a2fe5ac1dc6ec7",
+            "artifact_state": "VERIFIED_LOCAL",
+            "inference_state": "VERIFIED_LOCAL",
+            "provider": "CUDAExecutionProvider",
+            "executions": 1,
+            "requested_provider": "CUDAExecutionProvider",
+            "fallback_reason": null,
+            "license_state": "UNKNOWN",
+            "commercial_permission": "UNKNOWN"
+          },
+          "eye": {
+            "model_id": "d00fb627bc633a6b976c6f18",
+            "sha256": "b9a2086c4d757c9be71b9b290d020678406da6a33c6247252c4bb0aeeff48afc",
+            "artifact_state": "VERIFIED_LOCAL",
+            "inference_state": "VERIFIED_LOCAL",
+            "provider": "CUDAExecutionProvider",
+            "executions": 2,
+            "requested_provider": "CUDAExecutionProvider",
+            "fallback_reason": null,
+            "license_state": "UNKNOWN",
+            "commercial_permission": "UNKNOWN"
+          }
+        },
+        "learned_eye_retargeting": "VERIFIED_LOCAL",
+        "learned_lip_retargeting": "UNKNOWN",
+        "lip_note": "Mouth motion is driven by motion-extractor expression deltas; a separate lip network is used only when verified weights exist",
+        "cached_tracks": 1,
+        "max_tracks": 32
+      },
+      "profile": "12gb",
+      "selected_track_ids": null,
+      "pose_method": "five_point_geometric_estimate",
+      "dense_landmarks": [
+        106,
+        203
+      ],
+      "full_frame_compositor": "Stage 09 pending"
+    },
+    "latency": {
+      "detection_ms": 2053.956500021741,
+      "swap_ms": 66.27619999926537,
+      "retarget_ms": 8665.601499960758,
+      "total_ms": 10785.874399996828
+    },
+    "command": "PowerShell literal stdin script | roop_3d/.venv/Scripts/python.exe -B -u -",
+    "stdin_script": "from dataclasses import asdict\nimport cv2\nimport numpy as np\nfrom roop_3d.audit.project_paths import application_root,legacy_root\nfrom roop_3d.core.storage import atomic_json\nfrom roop_3d.engine.runtime import RuntimeConfig\nfrom roop_3d.engine.volumetric.session import ReferencePipeline\nfrom roop_3d.engine.volumetric.preprocess import transform_points\nfrom roop_3d.faceset.faceset_reader import FaceSetReader\nreader=FaceSetReader()\nsource=reader.read(legacy_root()/'app/facesets/akansha.fsz')\ntarget=reader.read(legacy_root()/'app/facesets/anushree.fsz')\nview=min(target.views,key=lambda item:abs(item.yaw))\nimage=cv2.imdecode(np.frombuffer(view.image_bytes,np.uint8),cv2.IMREAD_COLOR)\nconfig=RuntimeConfig(provider='CUDAExecutionProvider',hardware_profile='12gb',cpu_threads=4)\nsession=ReferencePipeline(config=config)\ntry:\n    session.prepare_session(source,retarget='required')\n    result=session.infer_frame(image)\n    assert len(result.replacements)==1 and result.replacements[0].image.shape==(512,512,3)\n    replacement=result.replacements[0]\n    points=result.observations[0].observation.landmarks5\n    before=session.tracker.recognizer.embed(image,points)\n    mapped=transform_points(points,cv2.invertAffineTransform(replacement.inverse)).astype(np.float32)\n    after=session.tracker.recognizer.embed(replacement.image,mapped)\n    before_cos=float(np.dot(before,source.canonical_embedding))\n    after_cos=float(np.dot(after,source.canonical_embedding))\n    assert after_cos>before_cos+0.2\n    assert 0<config.gpu_budget_bytes<=((12288-config.reserve_mib)*1048576)\n    report={'status':'passed','scope':'one-frame functional check; not a 100-frame or physical-capacity qualification',\n            'profile':'12gb','gpu_budget_bytes':config.gpu_budget_bytes,'frames':1,\n            'source_cosine_before':before_cos,'source_cosine_after':after_cos,\n            'capabilities':session.capability(),'latency':asdict(result.latency)}\n    atomic_json(application_root(),'roop_3d/.runtime/acceptance/stage06-cuda-12gb-functional.json',report)\n    print({'status':report['status'],'profile':report['profile'],'frames':1,'gpu_budget_mib':config.gpu_budget_bytes//1048576,\n           'source_cosine_before':before_cos,'source_cosine_after':after_cos},flush=True)\nfinally:\n    session.release_session()\n    assert not session.prepared and not session.portrait.models\n",
+    "exit_code": 0
+  },
+  "integrity": {
+    "command": "roop_3d/.venv/Scripts/python.exe -B roop_3d/audit/verify_isolation.py --report",
+    "exit_code": 0,
+    "ok": true,
+    "timestamp": "2026-10-30T15:10:05.225085+00:00",
+    "historical_checked": 2646,
+    "comprehensive_checked": 68391,
+    "violations": [],
+    "runtime_activity_observed_files": 1480,
+    "elapsed_seconds": 324.031,
+    "baseline_modified": false,
+    "baseline_manifest_sha256": {
+      "protected_paths.json": "035e9d2cd27c25df01a0cd02906e4fbdd661da9b0aa2d9b2a60afb584eaf8707",
+      "protected_all_paths.json": "2c1c95d4fd120fd2f96137938a71eec52bf25c4822c05afbf3b3e0b6cc188b96"
+    },
+    "runtime_policy_change": {
+      "authorized": true,
+      "user_instruction": "do what you feel best",
+      "added_exact_path": "app/queue.json",
+      "other_exceptions_added": false,
+      "reason": "Observed legacy jobs-queue activity; source/model baselines remain immutable",
+      "policy_tests_passed": 6
+    }
+  },
+  "model_evidence": [
+    {
+      "model_id": "df98ccc0044455678ade9cbd",
+      "name": "scrfd_10g_bnkps.onnx",
+      "sha256": "5838f7fe053675b1c7a08b633df49e7af5495cee0493c7dcf6697200b85b5b91",
+      "size_bytes": 16923827,
+      "license_state": "UNKNOWN",
+      "commercial_permission": "UNKNOWN",
+      "artifact_state": "VERIFIED_LOCAL",
+      "inference_state": "VERIFIED_LOCAL",
+      "inference_scope": "Executed by targeted tests and/or the completed local campaign"
+    },
+    {
+      "model_id": "d9235365b06d994596a8ef35",
+      "name": "w600k_r50.onnx",
+      "sha256": "4c06341c33c2ca1f86781dab0e829f88ad5b64be9fba56e56bc9ebdefc619e43",
+      "size_bytes": 174383860,
+      "license_state": "UNKNOWN",
+      "commercial_permission": "UNKNOWN",
+      "artifact_state": "VERIFIED_LOCAL",
+      "inference_state": "VERIFIED_LOCAL",
+      "inference_scope": "Executed by targeted tests and/or the completed local campaign"
+    },
+    {
+      "model_id": "4387a15d1f7fd7d8741d6d9d",
+      "name": "inswapper_128.onnx",
+      "sha256": "e4a3f08c753cb72d04e10aa0f7dbe3deebbf39567d4ead6dce08e98aa49e16af",
+      "size_bytes": 554253681,
+      "license_state": "UNKNOWN",
+      "commercial_permission": "UNKNOWN",
+      "artifact_state": "VERIFIED_LOCAL",
+      "inference_state": "VERIFIED_LOCAL",
+      "inference_scope": "Executed by targeted tests and/or the completed local campaign"
+    },
+    {
+      "model_id": "7515daa40c84ce8be15c8a3c",
+      "name": "2d106det.onnx",
+      "sha256": "f001b856447c413801ef5c42091ed0cd516fcd21f2d6b79635b1e733a7109dbf",
+      "size_bytes": 5030888,
+      "license_state": "UNKNOWN",
+      "commercial_permission": "UNKNOWN",
+      "artifact_state": "VERIFIED_LOCAL",
+      "inference_state": "VERIFIED_LOCAL",
+      "inference_scope": "Executed by targeted tests and/or the completed local campaign"
+    },
+    {
+      "model_id": "19afcbd3028e1b64abec0686",
+      "name": "liveportrait_landmark.onnx",
+      "sha256": "31d22a5041326c31f19b78886939a634a5aedcaa5ab8b9b951a1167595d147db",
+      "size_bytes": 114666491,
+      "license_state": "UNKNOWN",
+      "commercial_permission": "UNKNOWN",
+      "artifact_state": "VERIFIED_LOCAL",
+      "inference_state": "VERIFIED_LOCAL",
+      "inference_scope": "Executed by targeted tests and/or the completed local campaign"
+    },
+    {
+      "model_id": "98116e7c72cff8d2131d7b33",
+      "name": "liveportrait_appearance_feature_extractor.onnx",
+      "sha256": "d070afccca7f528ffb0ef5052b21588b42225a996661833f7bdede562d1ab921",
+      "size_bytes": 3355896,
+      "license_state": "UNKNOWN",
+      "commercial_permission": "UNKNOWN",
+      "artifact_state": "VERIFIED_LOCAL",
+      "inference_state": "VERIFIED_LOCAL",
+      "inference_scope": "Executed by targeted tests and/or the completed local campaign"
+    },
+    {
+      "model_id": "b9e27bfca5bbd6b991e3cd4a",
+      "name": "liveportrait_motion_extractor.onnx",
+      "sha256": "219a46174297b2b411bb3c5dce48d3a8c8e07a9d82120a0da21f49f58b67fca6",
+      "size_bytes": 112648514,
+      "license_state": "UNKNOWN",
+      "commercial_permission": "UNKNOWN",
+      "artifact_state": "VERIFIED_LOCAL",
+      "inference_state": "VERIFIED_LOCAL",
+      "inference_scope": "Executed by targeted tests and/or the completed local campaign"
+    },
+    {
+      "model_id": "3bafec2b580cdf85d942454d",
+      "name": "liveportrait_stitching.onnx",
+      "sha256": "8e33658425e3f1014dc35b28f60ca7459189e8f78f20540262a2fe5ac1dc6ec7",
+      "size_bytes": 182363,
+      "license_state": "UNKNOWN",
+      "commercial_permission": "UNKNOWN",
+      "artifact_state": "VERIFIED_LOCAL",
+      "inference_state": "VERIFIED_LOCAL",
+      "inference_scope": "Executed by targeted tests and/or the completed local campaign"
+    },
+    {
+      "model_id": "d00fb627bc633a6b976c6f18",
+      "name": "liveportrait_stitching_eye.onnx",
+      "sha256": "b9a2086c4d757c9be71b9b290d020678406da6a33c6247252c4bb0aeeff48afc",
+      "size_bytes": 580926,
+      "license_state": "UNKNOWN",
+      "commercial_permission": "UNKNOWN",
+      "artifact_state": "VERIFIED_LOCAL",
+      "inference_state": "VERIFIED_LOCAL",
+      "inference_scope": "Executed by targeted tests and/or the completed local campaign"
+    },
+    {
+      "model_id": "4b583cf7d4667da7ed3b843e",
+      "name": "liveportrait_warping_spade.onnx",
+      "sha256": "b0e7a566db8fba690c23523bcd2faa4f0d13f05418db84a779397a851062ad69",
+      "size_bytes": 421233096,
+      "license_state": "UNKNOWN",
+      "commercial_permission": "UNKNOWN",
+      "artifact_state": "VERIFIED_LOCAL",
+      "inference_state": "VERIFIED_LOCAL",
+      "inference_scope": "Executed by targeted tests and/or the completed local campaign"
+    }
+  ],
+  "development_history": {
+    "initial_audit": {
+      "command": "roop_3d/.venv/Scripts/python.exe -B roop_3d/audit/verify_isolation.py",
+      "exit_code": 0,
+      "historical_checked": 2647,
+      "comprehensive_checked": 68392,
+      "violations": 0,
+      "elapsed_seconds": 234.562
+    },
+    "pre_authorization_integrity_failure": {
+      "command": "roop_3d/.venv/Scripts/python.exe -B roop_3d/audit/verify_isolation.py --report",
+      "exit_code": 1,
+      "historical_checked": 2646,
+      "historical_expected": 2647,
+      "comprehensive": "NOT RUN: historical gate failed",
+      "violations": [
+        {
+          "path": "app/queue.json",
+          "status": "HASH_MISMATCH",
+          "expected_sha256": "2158728fe6af08939f12e857c9231e77c4a847f08520c0e96bbbf61b1703c5a8",
+          "expected_size_bytes": 132248,
+          "observed_sha256": "14505446dc3d1563641129a233e02be231a98ee85f18d51ac0094ea5f42fcf77",
+          "observed_size_bytes": 56610
+        }
+      ]
+    },
+    "interrupted_campaign": {
+      "command": "roop_3d/.venv/Scripts/python.exe -B -u -m roop_3d.tests.manual_stage06_acceptance --provider cuda --profile 6gb",
+      "exit_code": 1,
+      "status": "INTERRUPTED_BY_INTEGRITY_GATE",
+      "last_confirmed_completed_frames": 50,
+      "required_frames": 100,
+      "warmup_frames": 3,
+      "memory_gate": "NOT COMPLETED",
+      "last_observed_private_mib": 5543,
+      "note": "No final campaign JSON or validated output video was produced; partial media header removed"
+    },
+    "resource_trial": {
+      "command": "roop_3d/.venv/Scripts/python.exe -B -u -m roop_3d.tests.manual_stage06_acceptance --provider cuda --profile 6gb",
+      "exit_code": 1,
+      "phase": "warmup",
+      "reason": "Appearance extraction exceeded its CUDA arena budget; explicit CPU resource fallback subsequently implemented and the full campaign rerun successfully"
+    },
+    "memory_measurement": "Both host/private and Python growth compare medians at the same in-flight encode phase: frames 20..39 versus 80..99. Thresholds remained 32 MiB and 2 MiB."
+  },
+  "capability_limits": [
+    "Separate learned lip-retarget weights are absent: UNKNOWN; mouth articulation uses motion-extractor expression deltas.",
+    "Pinned ORT CUDA GridSample rejects 5-D reference tensors; unchanged warp/SPADE graph executes on CPU.",
+    "Recognized CUDA allocation errors switch only the affected model to its verified CPU reference; other inference errors remain failures.",
+    "6gb budget campaign ran on a physical 12 GB RTX 4070 with a free-memory-aware arena limit; no physical 6 GB qualification is claimed.",
+    "12gb profile has a one-frame functional check; it has no separate 100-frame qualification.",
+    "NVIDIA WDDM reports per-process GPU memory as N/A. Measured leak gates cover process-private host memory, retained Python objects, and bounded application state; dedicated VRAM leak/peak measurements remain UNKNOWN.",
+    "Yaw/pitch are uncalibrated five-point geometric estimates; 106/203 landmarks are actual neural predictions.",
+    "At most 32 concurrent face/appearance tracks; inspection has explicit frame/time/track budgets and can be truncated.",
+    "Appearance features are prepared from the initial swapped portrait per track and cached; driving motion is inferred per frame.",
+    "Output is an aligned replacement crop with its exact inverse matrix. Full-frame segmentation/occlusion/paste-back compositor remains Stage 09.",
+    "Python session API and inspection REST backend are implemented. Persistent queue rendering worker and frontend are not claimed.",
+    "Artifact presence and successful inference do not establish model provenance or commercial rights; those remain UNKNOWN."
+  ],
+  "dependencies": {
+    "changed": false,
+    "optional_torch_required": false,
+    "model_downloads": 0,
+    "model_weight_copies": 0
+  },
+  "next_gate": {
+    "stage": "07",
+    "status": "awaiting_numbered_specification",
+    "implemented": false
+  },
+  "git": {
+    "committed": false,
+    "pushed": false
+  }
+}

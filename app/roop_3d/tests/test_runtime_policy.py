@@ -1,4 +1,5 @@
 from pathlib import Path
+import copy
 import sys
 import unittest
 import tempfile
@@ -45,6 +46,19 @@ class RuntimePolicyTests(unittest.TestCase):
         assert verify_policy(self.root, self.baseline)["ok"]
         (self.root / "app/config.yaml").write_bytes(b"protected")
         assert not verify_policy(self.root, self.baseline)["ok"]
+
+    def test_queue_activity_is_an_exact_exception_and_preserves_baseline(self) -> None:
+        queue = self.root / "app/queue.json"
+        queue.write_bytes(b'{"jobs": []}')
+        baseline = inventory(self.root)
+        preserved = copy.deepcopy(baseline)
+        queue.write_bytes(b'{"jobs": [{"status": "running"}]}')
+        result = verify_policy(self.root, baseline)
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(baseline, preserved)
+        self.assertEqual([entry["path"] for entry in result["runtime_activity"]["files"]], ["app/queue.json"])
+        (self.root / "app/queue.json.bak").write_bytes(b"unclassified")
+        self.assertFalse(verify_policy(self.root, baseline)["ok"])
 
     def test_profile_json_is_runtime_but_model_weights_remain_protected(self) -> None:
         profiles = self.root / "app/models/runtime_profiles"
