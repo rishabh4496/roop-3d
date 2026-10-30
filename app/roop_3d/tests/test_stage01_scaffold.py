@@ -132,8 +132,15 @@ def test_hardware_is_probed_without_claiming_inference_or_inventing_cpu_count() 
         assert response.status_code == 200
         value = Hardware.model_validate(response.json())
         assert value.logical_cpu_count == os.cpu_count()
-        assert value.physical_cpu_count is None
-        assert value.cuda_runtime_version is None
+        if value.physical_cpu_count_state == "VERIFIED_LOCAL":
+            assert value.physical_cpu_count is not None
+            assert 0 < value.physical_cpu_count <= value.logical_cpu_count
+        else:
+            assert value.physical_cpu_count is None
+        if value.cuda_runtime_state == "VERIFIED_LOCAL":
+            assert value.cuda_runtime_version
+        else:
+            assert value.cuda_runtime_version is None
         assert value.provider_execution_verified is False
         if value.gpu_probe_state == "VERIFIED_LOCAL":
             assert value.gpus

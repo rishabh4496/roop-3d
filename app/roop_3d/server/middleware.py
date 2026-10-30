@@ -20,7 +20,7 @@ class IntakeMiddleware:
         self.app, self.settings = app, settings
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if scope["type"] != "http":
+        if scope["type"] not in {"http", "websocket"}:
             await self.app(scope, receive, send)
             return
         request_id = uuid.uuid4().hex
@@ -29,13 +29,24 @@ class IntakeMiddleware:
         headers = {k.lower(): v for k, v in scope.get("headers", [])}
 
         async def reject(code: str, message: str, status: int) -> None:
+            if scope["type"] == "websocket":
+                await send({"type": "websocket.close", "code": 1008, "reason": code})
+                return
             response = JSONResponse({"error": {"code": code, "message": message, "request_id": request_id}},
                                     status_code=status, headers={"X-Request-ID": request_id})
             await response(scope, receive, send)
 
+        for name in (b"host", b"origin", b"content-length"):
+            if sum(key.lower() == name for key, _ in scope.get("headers", [])) > 1:
+                await reject("AMBIGUOUS_HEADERS", "Repeated security-sensitive headers are forbidden", 400)
+                return
+
         origin = headers.get(b"origin", b"").decode("latin1")
-        host = headers.get(b"host", b"").decode("latin1").split(":", 1)[0]
-        if host and host not in {"127.0.0.1", "localhost"}:
+        host = headers.get(b"host", b"").decode("latin1")
+        allowed_hosts = {f"127.0.0.1:{self.settings.port}", f"localhost:{self.settings.port}"}
+        if self.settings.port == 80:
+            allowed_hosts.update({"127.0.0.1", "localhost"})
+        if host and host not in allowed_hosts:
             await reject("HOST_DENIED", "Host must identify the local service", 400)
             return
         allowed = {f"http://127.0.0.1:{self.settings.port}"}
@@ -43,6 +54,9 @@ class IntakeMiddleware:
             allowed.add("http://127.0.0.1:5174")
         if origin and origin not in allowed:
             await reject("ORIGIN_DENIED", "Origin is not enabled for this local service", 403)
+            return
+        if scope["type"] == "websocket":
+            await self.app(scope, receive, send)
             return
         try:
             length = int(headers[b"content-length"]) if b"content-length" in headers else None

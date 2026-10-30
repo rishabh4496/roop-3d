@@ -2,6 +2,9 @@
 from __future__ import annotations
 
 from pathlib import Path
+import asyncio
+from contextlib import asynccontextmanager
+import threading
 import time
 from typing import Any
 
@@ -11,20 +14,57 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 from starlette.exceptions import HTTPException
 from starlette.staticfiles import StaticFiles
+from starlette.concurrency import run_in_threadpool
 
 from roop_3d import __version__
 from roop_3d.core.hardware import Hardware, probe_hardware
 from roop_3d.core.integrity import isolation_status
-from roop_3d.core.settings import Settings
+from roop_3d.audit.isolation import AuditError
+from roop_3d.core.errors import DomainError
+from roop_3d.core.settings import ConfigStore, Settings
+from roop_3d.jobs.store import JobStore
+from roop_3d.media.service import MediaService
+from roop_3d.models.catalog import ModelCatalog
 from roop_3d.server.middleware import IntakeMiddleware
+from roop_3d.server.contracts import ErrorEnvelope, Health
+from roop_3d.server.routes import router
+from roop_3d.server.ws import EventBroker
 
 
 def create_app(settings: Settings | None = None, *, repo_root: Path | None = None) -> FastAPI:
-    settings = settings or Settings.from_env()
     root = repo_root or Path(__file__).absolute().parents[2]
+    settings = settings or Settings.from_env(ConfigStore(root).load() or Settings())
     started = time.monotonic()
-    app = FastAPI(title="Roop 3D", version=__version__, docs_url=None, redoc_url=None)
+    events = EventBroker()
+    jobs = JobStore(root, events.publish)
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        await run_in_threadpool(jobs.recover_interrupted)
+
+        async def telemetry() -> None:
+            while True:
+                if events.subscriber_count:
+                    value = await run_in_threadpool(probe_hardware, app.state.settings)
+                    events.publish({"type": "system.telemetry", "hardware": value})
+                await asyncio.sleep(2)
+
+        task = asyncio.create_task(telemetry())
+        try:
+            yield
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    app = FastAPI(title="Roop 3D", version=__version__, docs_url=None, redoc_url=None, lifespan=lifespan,
+                  responses={status: {"model": ErrorEnvelope} for status in (400, 403, 404, 409, 413, 416, 422, 500)})
     app.state.settings = settings
+    app.state.root = root
+    app.state.events = events
+    app.state.jobs = jobs
+    app.state.models = ModelCatalog()
+    app.state.media = MediaService(root, app.state.models, lambda: app.state.settings)
+    app.state.config_lock = threading.Lock()
 
     def envelope(request: Request, code: str, message: str, status: int) -> JSONResponse:
         return JSONResponse({"error": {"code": code, "message": message,
@@ -42,7 +82,15 @@ def create_app(settings: Settings | None = None, *, repo_root: Path | None = Non
     async def internal_error(request: Request, error: Exception) -> JSONResponse:
         return envelope(request, "INTERNAL_ERROR", "The local service could not complete the request", 500)
 
-    @app.get("/api/v1/health")
+    @app.exception_handler(DomainError)
+    async def domain_error(request: Request, error: DomainError) -> JSONResponse:
+        return envelope(request, error.code, error.message, error.status)
+
+    @app.exception_handler(AuditError)
+    async def boundary_error(request: Request, error: AuditError) -> JSONResponse:
+        return envelope(request, error.code, "Filesystem boundary or integrity check failed", 409)
+
+    @app.get("/api/v1/health", response_model=Health)
     def health() -> dict[str, Any]:
         return {"status": "ok", "application": "roop_3d", "version": __version__,
                 "pinokio_app_id": "roop-3d", "standalone": True,
@@ -50,14 +98,16 @@ def create_app(settings: Settings | None = None, *, repo_root: Path | None = Non
 
     @app.get("/api/v1/system/hardware", response_model=Hardware)
     def hardware() -> Hardware:
-        return probe_hardware()
+        return probe_hardware(app.state.settings)
+
+    app.include_router(router)
 
     @app.get("/", response_class=HTMLResponse)
     def landing() -> str:
         return f"""<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width">
 <title>Roop 3D</title><style>body{{background:#10141c;color:#edf2fa;font:17px system-ui;max-width:760px;margin:12vh auto;padding:24px}}a{{color:#80d3ff}}small{{color:#aab6c8}}</style>
 <h1>Roop 3D</h1><p>Local development service · v{__version__}</p>
-<p>Stage 01 is ready for the next implementation stage. Face replacement is not available yet.</p>
+<p>Local media inspection, persistent jobs and API contracts are ready. The rendering worker is not installed yet.</p>
 <p><a href="/api/v1/health">Health &amp; isolation</a> · <a href="/api/v1/system/hardware">Live hardware</a> · <a href="/openapi.json">API schema</a></p>
 <small>API: 127.0.0.1:{settings.port} · Vite development port: 5174 · Local processing by default</small></html>"""
 
@@ -68,7 +118,7 @@ def create_app(settings: Settings | None = None, *, repo_root: Path | None = Non
         # API routes remain earlier in the route table. Static assets share the API origin.
         app.mount("/ui", StaticFiles(directory=str(ui), html=True), name="ui")
     if settings.dev_cors:
-        app.add_middleware(CORSMiddleware, allow_origins=["http://127.0.0.1:5174"], allow_methods=["GET"],
-                           allow_headers=["Content-Type"])
+        app.add_middleware(CORSMiddleware, allow_origins=["http://127.0.0.1:5174"], allow_methods=["GET", "PUT", "POST"],
+                           allow_headers=["Content-Type", "Idempotency-Key"])
     app.add_middleware(IntakeMiddleware, settings=settings)
     return app

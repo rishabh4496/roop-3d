@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "Isolated local Roop 3D service"
 requires-python = ">=3.10,<3.13"
 dependencies = [
-  "fastapi==0.142.2", "uvicorn==0.54.0", "pydantic==2.10.6",
+  "fastapi==0.142.2", "uvicorn==0.54.0", "pydantic==2.10.6", "websockets==15.0.1",
   "av==17.1.0", "numpy==1.26.4", "opencv-python-headless==4.11.0.86",
   "onnxruntime-gpu==1.23.2; platform_system != 'Darwin'",
   "onnxruntime==1.23.2; platform_system == 'Darwin'",

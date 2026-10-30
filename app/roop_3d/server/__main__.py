@@ -6,10 +6,11 @@ import logging
 import socket
 import sys
 
-from pydantic import ValidationError
 import uvicorn
 
 from roop_3d.core.settings import Settings
+from roop_3d.core.redaction import redact
+from roop_3d.audit.isolation import AuditError
 from roop_3d.server.app import create_app
 
 
@@ -38,7 +39,7 @@ class JsonFormatter(logging.Formatter):
         try:
             value = json.loads(message)
             if isinstance(value, dict):
-                return message
+                return json.dumps(redact(value))
         except (ValueError, TypeError):
             pass
         return json.dumps({"level": record.levelname.lower(), "logger": record.name, "message": message})
@@ -59,13 +60,14 @@ def main() -> int:
     try:
         settings = Settings.from_env()
         listener = reserve_socket(settings)
-    except (ValidationError, PortCollisionError) as error:
+    except (ValueError, OSError, AuditError, PortCollisionError) as error:
         message = str(error) if isinstance(error, PortCollisionError) else "Invalid ROOP3D settings; host must be 127.0.0.1 and API port must not be 5174"
         print(json.dumps({"error": {"code": "PORT_IN_USE" if isinstance(error, PortCollisionError) else "INVALID_SETTINGS", "message": message}}), flush=True)
         return 2
     try:
         config = uvicorn.Config(create_app(settings), host=settings.host, port=settings.port, log_config=None,
-                                access_log=False, proxy_headers=False, timeout_graceful_shutdown=10)
+                                access_log=False, proxy_headers=False, timeout_graceful_shutdown=10,
+                                ws="websockets-sansio", ws_max_size=16384, ws_max_queue=16)
         server = ReadyServer(config)
         server.run(sockets=[listener])
         return 0
