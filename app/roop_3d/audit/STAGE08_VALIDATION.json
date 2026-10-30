@@ -1,0 +1,75 @@
+{
+  "stage": "08_flame_3d_reconstruction_uv_synthesis_tps_fallback",
+  "status": "passed",
+  "timestamp": "2026-10-30T19:36:20.866928+00:00",
+  "cwd": "G:\\pinokio\\api\\roop-3d\\app",
+  "base_commit": "de750caf9a319c7dcea7f39ed3cd2c4edb779b37",
+  "files_changed": [
+    "app/roop_3d/reconstruction/geometry_types.py",
+    "app/roop_3d/reconstruction/tps_fallback.py",
+    "app/roop_3d/reconstruction/flame_fitter.py",
+    "app/roop_3d/reconstruction/uv_synthesizer.py",
+    "app/roop_3d/reconstruction/mesh_io.py",
+    "app/roop_3d/reconstruction/__init__.py",
+    "app/roop_3d/tests/test_stage08_geometry.py",
+    "app/roop_3d/tests/test_stage08_tps.py",
+    "app/roop_3d/tests/test_stage08_flame.py",
+    "app/roop_3d/tests/test_stage08_uv.py",
+    "app/roop_3d/tests/test_stage08_mesh_io.py",
+    "app/roop_3d/audit/STAGE08_REPORT.md",
+    "app/roop_3d/audit/STAGE08_VALIDATION.json"
+  ],
+  "verification": {
+    "total_tests": 305,
+    "passed": 305,
+    "subtests_passed": 18,
+    "failed": 0,
+    "skipped": 0,
+    "exit_code": 0
+  },
+  "isolation_audit": {
+    "ok": true,
+    "checked_immutable": 68391,
+    "violations": 0,
+    "historical_checked": 2646,
+    "historical_violations": 0,
+    "exit_code": 0
+  },
+  "contracts": {
+    "geometry_conventions": {
+      "camera_frame": "right-handed (OpenCV primary, OpenGL/Three.js convertible)",
+      "metric_scale": "meters (1.0 = 1m)",
+      "rotation_representations": ["rodrigues", "rotation_matrix", "quaternion", "euler_ypr"],
+      "pinhole_intrinsics": "fx, fy, cx, cy, project, unproject",
+      "mesh_winding": "counter-clockwise (CCW) front-facing",
+      "uv_origin": "bottom-left (OBJ/GLTF) and top-left (raster array) supported"
+    },
+    "tps_fallback": {
+      "pnp_solver": "dependency-free, 5/68/106/203 landmarks, sub-pixel reprojection error",
+      "canonical_mesh": "Delaunay face surface with UVs and normals for Stage 14 Three.js viewport",
+      "thin_plate_spline": "biharmonic radial basis function, backward image remap, point transform",
+      "piecewise_affine": "Delaunay triangle affine warp"
+    },
+    "flame_fitter": {
+      "license_gate": "enforced via Stage 03 registry; blocks unverified/unlicensed loads (403)",
+      "losses": ["huber", "geman_mcclure"],
+      "staged_optimization": ["rigid_pnp", "shape_beta_l2", "expr_psi_jaw", "joint_finetune"],
+      "clean_room_synthetic": "SyntheticFLAMEModel provides functional test coverage without restricted assets"
+    },
+    "uv_synthesizer": {
+      "visibility_weighting": "surface normal dot product with camera view ray",
+      "sharpness_weighting": "view quality sharpness",
+      "confidence_mask": {
+        "OBSERVED": 2,
+        "INTERPOLATED": 1,
+        "UNSEEN": 0
+      },
+      "unseen_back_of_head_policy": "strictly masked out, never blended into skin texture"
+    },
+    "mesh_export": {
+      "destination": "roop_3d/outputs/meshes/",
+      "formats": ["obj+mtl+png", "glb (glTF 2.0 binary)"],
+      "atomic_commit": true
+    }
+  }
+}
