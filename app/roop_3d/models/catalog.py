@@ -1,63 +1,80 @@
-"""Keep artifact identity, recorded integrity, inference and legal evidence separate."""
+"""Compatibility summaries backed by the authoritative Stage 03 registry."""
 from __future__ import annotations
 
 import hashlib
-import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
-from roop_3d.audit.isolation import safe_path, sha256_file
-from roop_3d.audit.project_paths import application_root, legacy_root
+from roop_3d.audit.project_paths import application_root
 from roop_3d.core.errors import DomainError
+from roop_3d.models.downloader import Downloader, DownloadResult
+from roop_3d.models.local_provider import LocalWeightProvider
+from roop_3d.models.registry import ModelRecord, ModelRegistry, authorize, license_info
 
 
 class ModelCatalog:
-    def __init__(self, root: Path | None = None):
+    def __init__(self, root: Path | None = None, *, cache_root: Path | None = None,
+                 search_paths: Callable[[], tuple[str, ...]] | None = None,
+                 registry: ModelRegistry | None = None):
         self.root = root or application_root()
+        self.registry = registry or ModelRegistry(self.root)
+        self.provider = LocalWeightProvider(self.registry, root=cache_root or self.root, search_paths=search_paths)
+        self.downloader = Downloader(cache_root or self.root)
+
+    @staticmethod
+    def _legacy(record: ModelRecord) -> dict[str, Any]:
+        return {"model_id": record.model_id, "name": record.name, "sha256": record.expected_sha256,
+                "size_bytes": record.byte_size, "state": record.status.upper(), "family_hint": record.family_hint,
+                "verified_at": record.verified_at, "license_state": "UNKNOWN" if record.license_id == "UNKNOWN" else "VERIFIED_REMOTE",
+                "provenance_state": record.provenance_state, "inference_state": "UNKNOWN",
+                "commercial_permission": "UNKNOWN", "graph": record.input_output_contract,
+                "locator": record.locator.model_dump() if record.locator else None,
+                "role": record.role, "license_id": record.license_id, "commercial_use": record.commercial_use,
+                "license_notice": record.license_notice, "manual_acceptance_required": record.manual_acceptance_required}
 
     def records(self) -> list[dict[str, Any]]:
-        path = safe_path(self.root, "roop_3d/audit/verified_local_models.json")
-        if not path.exists():
-            return []
-        registry = json.loads(path.read_text("utf-8"))
-        return [{**item, "model_id": hashlib.sha256(
-            f"{item['locator']['scope']}:{item['locator']['path']}".encode()).hexdigest()[:24],
-                 "verified_at": registry["timestamp"]} for item in registry["models"]]
+        return [self._legacy(record) for record in self.registry.records() if record.status == "verified_local"]
 
     def public(self) -> list[dict[str, Any]]:
-        keys = {"model_id", "name", "sha256", "size_bytes", "state", "family_hint", "verified_at",
-                "license_state", "provenance_state", "inference_state", "commercial_permission"}
-        return [{key: value for key, value in record.items() if key in keys} for record in self.records()]
+        return [{key: value for key, value in record.items() if key not in {"graph", "locator"}}
+                for record in self.records()]
 
     def get(self, model_id: str) -> dict[str, Any]:
-        for record in self.records():
-            if record["model_id"] == model_id:
-                return record
-        raise DomainError("MODEL_NOT_FOUND", "Model is not in the local registry", 404)
+        return self._legacy(self.registry.get(model_id))
 
     def _path(self, record: dict[str, Any]) -> Path:
-        if record["state"] != "VERIFIED_LOCAL":
-            raise DomainError("MODEL_UNSUPPORTED", "Model has no verified local artifact")
-        locator = record["locator"]
-        home = Path.home()
-        scopes = {"repository": legacy_root(self.root), "user_cache": home / ".cache",
-                  "insightface_cache": home / ".insightface", "torch_cache": home / ".torch"}
-        return safe_path(scopes[locator["scope"]], locator["path"])
+        return self.provider.resolve(record["model_id"])
 
     def verify(self, record: dict[str, Any]) -> None:
-        size, digest = sha256_file(self._path(record))
-        if size != record["size_bytes"] or digest != record["sha256"]:
-            raise DomainError("MODEL_DRIFT", "Model integrity differs from the preserved registry")
+        self.provider.resolve(record["model_id"])
 
     def verified_bytes(self, record: dict[str, Any]) -> bytes:
-        if record.get("graph", {}).get("external_data"):
+        model = self.registry.get(record["model_id"])
+        if model.input_output_contract.get("external_data"):
             raise DomainError("MODEL_UNSUPPORTED", "Detector cannot load external tensor files")
-        path = self._path(record)
-        with path.open("rb") as stream:
+        with self.provider.open(model) as stream:
             data = stream.read()
-        if len(data) != record["size_bytes"] or hashlib.sha256(data).hexdigest() != record["sha256"]:
+        if len(data) != model.byte_size or hashlib.sha256(data).hexdigest() != model.expected_sha256:
             raise DomainError("MODEL_DRIFT", "Model integrity differs from the preserved registry")
         return data
+
+    def ensure_available(self, model_id: str, *, accepted_license: bool = False,
+                         commercial: bool = False) -> DownloadResult:
+        model = self.registry.get(model_id)
+        authorize(model, action="activate", accepted_license=accepted_license, commercial=commercial)
+        if model.expected_sha256 and model.byte_size:
+            try:
+                return DownloadResult(self.provider.resolve(model), False, False)
+            except DomainError as error:
+                if error.code != "MODEL_NOT_INSTALLED":
+                    raise
+            cached = self.downloader.cached(model)
+            if cached:
+                return DownloadResult(cached, False, False)
+        return self.downloader.download(model, accepted_license=accepted_license, commercial=commercial)
+
+    def license(self, model_id: str) -> dict[str, Any]:
+        return license_info(self.registry.get(model_id))
 
     def detector(self) -> dict[str, Any]:
         for record in self.records():

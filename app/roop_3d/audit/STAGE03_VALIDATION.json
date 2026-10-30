@@ -1,0 +1,243 @@
+{
+  "stage": "03_models_registry_local_provider_downloader",
+  "standalone_app": "roop-3d",
+  "status": "passed",
+  "timestamp": "2026-10-30T12:38:38.076613+00:00",
+  "cwd": "app",
+  "files_changed": [
+    "app/roop_3d/audit/STAGE03_REPORT.md",
+    "app/roop_3d/audit/STAGE03_VALIDATION.json",
+    "app/roop_3d/models/__init__.py",
+    "app/roop_3d/models/catalog.py",
+    "app/roop_3d/models/downloader.py",
+    "app/roop_3d/models/engine_cache.py",
+    "app/roop_3d/models/local_provider.py",
+    "app/roop_3d/models/model_manifest.json",
+    "app/roop_3d/models/registry.py",
+    "app/roop_3d/models/verifier.py",
+    "app/roop_3d/server/app.py",
+    "app/roop_3d/server/contracts.py",
+    "app/roop_3d/server/routes.py",
+    "app/roop_3d/tests/manual_stage03_acceptance.py",
+    "app/roop_3d/tests/test_stage03_api.py",
+    "app/roop_3d/tests/test_stage03_downloader.py",
+    "app/roop_3d/tests/test_stage03_engine_cache.py",
+    "app/roop_3d/tests/test_stage03_registry.py"
+  ],
+  "full_suite": {
+    "command": "roop_3d/.venv/Scripts/python.exe -B -m pytest -c roop_3d/pyproject.toml --confcutdir=roop_3d roop_3d/tests -q",
+    "exit_code": 0,
+    "passed": 177,
+    "failed": 0,
+    "skipped": 0,
+    "blocked": 0,
+    "additional_subtests_passed": 18,
+    "warnings": 1,
+    "elapsed_seconds": 18.13
+  },
+  "validation_runs": [
+    {
+      "command": "roop_3d/.venv/Scripts/python.exe -B -m pytest -c roop_3d/pyproject.toml --confcutdir=roop_3d roop_3d/tests/test_stage03_registry.py -q",
+      "exit_code": 0,
+      "passed": 16
+    },
+    {
+      "command": "roop_3d/.venv/Scripts/python.exe -B -m pytest -c roop_3d/pyproject.toml --confcutdir=roop_3d roop_3d/tests/test_stage03_registry.py roop_3d/tests/test_stage03_downloader.py -q",
+      "exit_code": 1,
+      "passed": 36,
+      "failed": 15,
+      "errors": 4,
+      "note": "Initial observed summary: Windows read-only fsync failure and oversized pytest fixture IDs; assertions retained."
+    },
+    {
+      "command": "roop_3d/.venv/Scripts/python.exe -B -m pytest -c roop_3d/pyproject.toml --confcutdir=roop_3d roop_3d/tests/test_stage03_downloader.py -q -x --tb=short",
+      "exit_code": 1,
+      "failed": 1,
+      "passed": 0,
+      "note": "Isolated Windows fsync failure."
+    },
+    {
+      "command": "roop_3d/.venv/Scripts/python.exe -B -m pytest -c roop_3d/pyproject.toml --confcutdir=roop_3d roop_3d/tests/test_stage03_registry.py roop_3d/tests/test_stage03_downloader.py -q --tb=short",
+      "exit_code": 0,
+      "passed": 53
+    },
+    {
+      "command": "roop_3d/.venv/Scripts/python.exe -B -m pytest -c roop_3d/pyproject.toml --confcutdir=roop_3d roop_3d/tests/test_stage03_registry.py roop_3d/tests/test_stage03_downloader.py roop_3d/tests/test_stage02_api.py roop_3d/tests/test_stage02_media.py -q --tb=short",
+      "exit_code": 0,
+      "passed": 75,
+      "warnings": 1
+    },
+    {
+      "command": "roop_3d/.venv/Scripts/python.exe -B -m pytest -c roop_3d/pyproject.toml --confcutdir=roop_3d roop_3d/tests/test_stage03_registry.py roop_3d/tests/test_stage03_downloader.py roop_3d/tests/test_stage03_engine_cache.py roop_3d/tests/test_stage03_api.py -q --tb=short",
+      "exit_code": 0,
+      "passed": 68,
+      "warnings": 1
+    },
+    {
+      "command": "roop_3d/.venv/Scripts/python.exe -B -m pytest -c roop_3d/pyproject.toml --confcutdir=roop_3d roop_3d/tests -q",
+      "exit_code": 0,
+      "passed": 176,
+      "additional_subtests_passed": 18,
+      "warnings": 1,
+      "elapsed_seconds": 19.2,
+      "note": "Before missing-source fallback regression and strict acceptance Boolean checks."
+    },
+    {
+      "command": "roop_3d/.venv/Scripts/python.exe -B -m pytest -c roop_3d/pyproject.toml --confcutdir=roop_3d roop_3d/tests/test_stage03_registry.py roop_3d/tests/test_stage03_api.py -q --tb=short",
+      "exit_code": 0,
+      "passed": 20,
+      "warnings": 1
+    },
+    {
+      "command": "roop_3d/.venv/Scripts/python.exe -B -m pytest -c roop_3d/pyproject.toml --confcutdir=roop_3d roop_3d/tests -q",
+      "exit_code": 0,
+      "passed": 177,
+      "failed": 0,
+      "skipped": 0,
+      "additional_subtests_passed": 18,
+      "warnings": 1,
+      "elapsed_seconds": 18.13
+    }
+  ],
+  "local_provider_acceptance": {
+    "command": "roop_3d/.venv/Scripts/python.exe -B -m roop_3d.tests.manual_stage03_acceptance",
+    "exit_code": 0,
+    "status": "passed",
+    "timestamp": "2026-10-30T12:33:58.794901+00:00",
+    "checked": 95,
+    "historical_discovery_entries_preserved": 94,
+    "total_bytes_hashed": 15876007985,
+    "models_copied": 0,
+    "models_downloaded": 0,
+    "inference_executed": false,
+    "roles": {
+      "recognizer": 9,
+      "face_parser": 2,
+      "face_restorer": 13,
+      "identity_swapper": 15,
+      "liveportrait_appearance": 2,
+      "unclassified_auxiliary": 29,
+      "liveportrait_motion": 2,
+      "liveportrait_stitch": 4,
+      "liveportrait_warp": 2,
+      "detector": 11,
+      "occlusion_mask": 6
+    },
+    "inference_state": "UNKNOWN: this campaign verifies bytes and resolution only",
+    "elapsed_seconds": 12.813
+  },
+  "real_scrfd_regression": {
+    "command": "roop_3d/.venv/Scripts/python.exe -B -m roop_3d.tests.manual_stage02_acceptance",
+    "exit_code": 0,
+    "status": "passed",
+    "assertions": "Real SCRFD -> 2 spatial tracks -> 2 FaceSet mappings -> durable job controls",
+    "fixture_source": "https://raw.githubusercontent.com/opencv/opencv/4.x/samples/data/lena.jpg",
+    "fixture_sha256": "7de7ed51a1594fff247f4cae2301eceacf5313d6011e37b4a4c8733f7bb72c07",
+    "detector_sha256": "5838f7fe053675b1c7a08b633df49e7af5495cee0493c7dcf6697200b85b5b91",
+    "track_count": 2,
+    "sampled_frames": 5,
+    "preview_shape": [
+      512,
+      2048,
+      3
+    ],
+    "rendering_worker_available": false,
+    "gpu_performance_qualified": false
+  },
+  "dependency_validation": {
+    "command": "uv pip check --python roop_3d/.venv/Scripts/python.exe",
+    "exit_code": 0,
+    "distributions": 39,
+    "dependency_changes": false,
+    "lockfile_changed": false
+  },
+  "initial_isolation": {
+    "command": "roop_3d/.venv/Scripts/python.exe -B roop_3d/audit/verify_isolation.py",
+    "exit_code": 0,
+    "historical_checked": 2647,
+    "comprehensive_immutable_checked": 68392,
+    "violations": [],
+    "elapsed_seconds": 215.406
+  },
+  "final_isolation": {
+    "command": "roop_3d/.venv/Scripts/python.exe -B roop_3d/audit/verify_isolation.py",
+    "exit_code": 0,
+    "result": {
+      "ok": true,
+      "historical": {
+        "ok": true,
+        "checked": 2647,
+        "expected": 2647,
+        "violations": [],
+        "detect_additions": false
+      },
+      "comprehensive": {
+        "ok": true,
+        "checked": 68392,
+        "expected": 68392,
+        "violations": [],
+        "detect_additions": true,
+        "policy": "Immutable legacy files strict; output/project/log activity reported separately",
+        "runtime_activity": {
+          "roots": [
+            "app/output",
+            "app/projects",
+            "app/temp",
+            "logs"
+          ],
+          "json_profile_records": "app/models/runtime_profiles",
+          "individual_files": [
+            "app/run_history.json",
+            "app/runtime_calibration.json",
+            "app/vram_calibration.json"
+          ],
+          "observed_files": 1427,
+          "note": "Runtime files are not claimed byte-identical"
+        }
+      },
+      "timestamp": "2026-10-30T12:38:28.694553+00:00",
+      "standalone_app": "roop-3d",
+      "legacy_access": "read-only",
+      "elapsed_seconds": 283.016
+    },
+    "baseline_replaced": false,
+    "runtime_policy_changed": false
+  },
+  "registry_counts": {
+    "verified_local": 95,
+    "verified_remote": 0,
+    "candidate": 5,
+    "blocked": 1,
+    "unclassified_auxiliary_roles": 29,
+    "download_eligible_upstream_identities": 0
+  },
+  "http_test_policy": "Mock HTTP transports only; actual registry/provider/verifier/downloader/locks/API/cache code executed. No live model downloads.",
+  "git_checks": {
+    "diff_check_exit_code": 0,
+    "nested_ignore_checks_exit_code": 0,
+    "files_outside_authorized_app_package": [],
+    "origin": "https://github.com/rishabh4496/roop-3d.git",
+    "commit_performed": false,
+    "push_performed": false
+  },
+  "privacy": {
+    "media_transmitted": false,
+    "biometrics_transmitted": false,
+    "secrets_added": false,
+    "legacy_modules_imported": false,
+    "weights_copied": 0,
+    "legacy_api_calls": 0
+  },
+  "known_limits": [
+    "Local licensing and upstream provenance remain UNKNOWN; integrity is not rights evidence.",
+    "No live external download campaign; real manifest upstream downloads are gated pending reviewed evidence.",
+    "No TensorRT compilation, rendering worker, volumetric output or GPU performance qualification.",
+    "Existing FastAPI/Starlette TestClient HTTPX deprecation warning."
+  ],
+  "next_gate": "NEXT_NUMBERED_STAGE_CONTRACT_REQUIRED; rendering/inference remains a later stage",
+  "official_sources": [
+    "https://flame.is.tue.mpg.de/modellicense.html",
+    "https://github.com/deepinsight/insightface/blob/master/python-package/docs/model_zoo.md",
+    "https://www.rfc-editor.org/rfc/rfc9110.html"
+  ]
+}

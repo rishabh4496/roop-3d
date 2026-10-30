@@ -4,14 +4,16 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Annotated
 
-from fastapi import APIRouter, Header, Query, Request, Response
+from fastapi import APIRouter, Body, Header, Query, Request, Response
 
 from roop_3d.audit.isolation import safe_path, sha256_file
 from roop_3d.core.errors import DomainError
 from roop_3d.core.settings import ConfigStore, Settings
 from roop_3d.jobs.schema import FaceSetSummary, JobRecord, JobRequest
 from roop_3d.media.schema import FaceInspection, InspectRequest, MediaProbe, MediaRequest
-from roop_3d.server.contracts import Capabilities, ModelAvailability, ModelSummary
+from roop_3d.models.registry import ModelRecord
+from roop_3d.server.contracts import (Capabilities, ModelAvailability, ModelSummary,
+                                     ModelDownloadRequest, ModelLicenseNotice)
 from roop_3d.server.ws import EVENT_ADAPTER, event_stream
 
 router = APIRouter(prefix="/api/v1")
@@ -65,12 +67,24 @@ def models(request: Request) -> list[dict]:
     return request.app.state.models.public()
 
 
+@router.get("/models/registry", response_model=list[ModelRecord])
+def model_registry(request: Request) -> tuple[ModelRecord, ...]:
+    return request.app.state.models.registry.records()
+
+
+@router.get("/models/{model_id}/license", response_model=ModelLicenseNotice)
+def model_license(model_id: str, request: Request) -> dict:
+    return request.app.state.models.license(model_id)
+
+
 @router.post("/models/{model_id}/download", response_model=ModelAvailability)
-def download(model_id: str, request: Request) -> ModelAvailability:
-    record = request.app.state.models.get(model_id)
-    # Local reuse satisfies availability without any media transfer or duplicate weights.
-    request.app.state.models.verify(record)
-    return ModelAvailability(model_id=model_id, state="VERIFIED_LOCAL")
+def download(model_id: str, request: Request,
+             value: Annotated[ModelDownloadRequest | None, Body()] = None) -> ModelAvailability:
+    value = value or ModelDownloadRequest()
+    result = request.app.state.models.ensure_available(model_id, accepted_license=value.accepted_license,
+                                                       commercial=value.commercial)
+    return ModelAvailability(model_id=model_id, state="VERIFIED_LOCAL", downloaded=result.downloaded,
+                             resumed=result.resumed)
 
 
 @router.get("/facesets", response_model=list[FaceSetSummary])

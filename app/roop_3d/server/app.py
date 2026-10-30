@@ -62,7 +62,7 @@ def create_app(settings: Settings | None = None, *, repo_root: Path | None = Non
     app.state.root = root
     app.state.events = events
     app.state.jobs = jobs
-    app.state.models = ModelCatalog()
+    app.state.models = ModelCatalog(cache_root=root, search_paths=lambda: app.state.settings.model_search_paths)
     app.state.media = MediaService(root, app.state.models, lambda: app.state.settings)
     app.state.config_lock = threading.Lock()
 

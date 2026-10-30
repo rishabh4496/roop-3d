@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 from typing import Any, Literal
+from pydantic import Field
 from roop_3d.core.settings import Contract
+from roop_3d.models.registry import Role
 
 Evidence = Literal["VERIFIED_LOCAL", "VERIFIED_REMOTE", "CANDIDATE", "UNKNOWN", "BLOCKED", "UNSUPPORTED"]
 
@@ -47,6 +49,11 @@ class ModelSummary(Contract):
     provenance_state: Evidence
     inference_state: Evidence
     commercial_permission: Evidence
+    role: Role | None = None
+    license_id: str = "UNKNOWN"
+    commercial_use: Literal["allow", "deny", "unknown"] = "unknown"
+    license_notice: str = ""
+    manual_acceptance_required: bool = False
 
 
 class Capabilities(Contract):
@@ -54,7 +61,7 @@ class Capabilities(Contract):
     enabled_modes: tuple[str, ...]
     rendering_worker_available: Literal[False] = False
     remote_adapter_state: Literal["UNSUPPORTED"] = "UNSUPPORTED"
-    automatic_model_download_state: Literal["UNSUPPORTED"] = "UNSUPPORTED"
+    automatic_model_download_state: Literal["GATED"] = "GATED"
     models: tuple[ModelSummary, ...]
     model_evidence_scope: str = "Recorded artifact hashes; exact bytes reverified before detector inference"
     legal_parameter_bounds: dict[str, Any]
@@ -63,10 +70,29 @@ class Capabilities(Contract):
     event_schema: dict[str, Any]
     websocket_delivery: str = "Process-local, bounded, no replay; stream.ready/gap requires GET jobs refresh"
     model_search_policy: str = "Custom search roots are runtime-only; external models use exact read-only registry locators"
+    model_registry_endpoint: str = "/api/v1/models/registry"
+    model_download_policy: str = "Reviewed HTTPS identity and license required; installed verified local bytes are reused first"
 
 
 class ModelAvailability(Contract):
     model_id: str
     state: Literal["VERIFIED_LOCAL"]
-    downloaded: Literal[False] = False
+    downloaded: bool = False
     bytes_verified: Literal[True] = True
+    resumed: bool = False
+
+
+class ModelDownloadRequest(Contract):
+    accepted_license: bool = Field(default=False, strict=True)
+    commercial: bool = Field(default=False, strict=True)
+
+
+class ModelLicenseNotice(Contract):
+    model_id: str
+    license_id: str
+    commercial_use: Literal["allow", "deny", "unknown"]
+    notice: str
+    license_url: str | None
+    manual_acceptance_required: bool
+    automatic_download_allowed: bool
+    download_gate: str | None

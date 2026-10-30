@@ -1,1 +1,1 @@
-"""Read-only, hash-verified local model catalog; no automatic downloads."""
+"""Authoritative model identities, read-only local reuse and gated HTTPS downloads."""
