@@ -11,6 +11,7 @@ from pydantic import Field, model_validator
 from roop_3d.core.errors import DomainError
 from roop_3d.core.settings import Contract
 from roop_3d.media.schema import TrackToFaceSetMap
+from roop_3d.models.diagnostics import JobDiagnostics
 
 
 def now() -> datetime:
@@ -86,6 +87,7 @@ class JobRecord(Contract):
     created_at: datetime = Field(default_factory=now)
     updated_at: datetime = Field(default_factory=now)
     progress: JobProgress = Field(default_factory=JobProgress)
+    diagnostics: JobDiagnostics = Field(default_factory=JobDiagnostics)
 
 
 class FaceSetSummary(Contract):

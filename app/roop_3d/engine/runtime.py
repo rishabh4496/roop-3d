@@ -1,7 +1,7 @@
 """Lazy, read-only ONNX sessions with observed graph contracts and bounded threads."""
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import cached_property
 from typing import Any
 
@@ -10,6 +10,7 @@ import numpy as np
 from roop_3d.core.errors import DomainError
 from roop_3d.models.catalog import ModelCatalog
 from roop_3d.models.registry import authorize
+from roop_3d.engine.resources import guarded, register
 
 
 @dataclass(frozen=True)
@@ -18,6 +19,7 @@ class RuntimeConfig:
     hardware_profile: str = "cpu"
     reserve_mib: int = 768
     cpu_threads: int = 2
+    model_factory: Any = field(default=None, compare=False, repr=False)
 
     def __post_init__(self) -> None:
         if self.provider not in ("CPUExecutionProvider", "CUDAExecutionProvider"):
@@ -44,6 +46,14 @@ def tensor(value: np.ndarray, shape: tuple[int, ...], *, dtype: np.dtype = np.dt
     if not isinstance(value, np.ndarray) or value.shape != shape or value.dtype != dtype or not np.isfinite(value).all():
         raise DomainError("INFERENCE_TENSOR_INVALID", "Tensor shape, dtype or finite-value contract failed", 422)
     return np.ascontiguousarray(value)
+
+
+def contract_array(value: np.ndarray, declared, *, dtype=np.dtype("float32"), batch_one: bool = False) -> np.ndarray:
+    if (not isinstance(value, np.ndarray) or value.ndim != len(declared) or value.nbytes > 64 * 1048576
+            or any(d <= 0 for d in value.shape) or batch_one and value.shape[0] != 1):
+        raise DomainError("INFERENCE_TENSOR_INVALID", "Tensor rank, batch or memory budget failed", 422)
+    shape = tuple(d if isinstance(d, int) else value.shape[i] for i, d in enumerate(declared))
+    return tensor(value, shape, dtype=dtype)
 
 
 def image_bgr(value: np.ndarray) -> np.ndarray:
@@ -78,6 +88,12 @@ class OrtModel:
     fractions for this reference chain sum to at most one, including optional lip.
     """
 
+    def __new__(cls, catalog: ModelCatalog, name: str, config: RuntimeConfig = RuntimeConfig()):
+        if config.model_factory is not None:
+            return config.model_factory(catalog, name, config)
+        return super().__new__(cls)
+
+    @guarded
     def __init__(self, catalog: ModelCatalog, name: str, config: RuntimeConfig = RuntimeConfig()):
         import onnxruntime as ort
 
@@ -120,6 +136,7 @@ class OrtModel:
             raise DomainError("PROVIDER_UNAVAILABLE", "Runtime did not activate the requested provider", 503)
         catalog.verify(self.record)
         self._check_graph()
+        register(self, "release")
 
     def _switch_to_cpu(self, reason: str) -> None:
         import onnxruntime as ort
@@ -151,6 +168,7 @@ class OrtModel:
                 if node.type != expected_type:
                     raise DomainError("MODEL_GRAPH_DRIFT", "Runtime tensor dtype differs from verified graph", 503)
 
+    @guarded
     def run(self, values: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
         if self.session is None:
             raise DomainError("SESSION_RELEASED", "Inference session has been released", 409)
@@ -166,8 +184,8 @@ class OrtModel:
             raise DomainError("INFERENCE_INPUT_NAMES", "Input names do not match the verified graph", 422)
         for node in nodes:
             value = values[node.name]
-            shape = tuple(d if isinstance(d, int) else 1 for d in node.shape)
-            tensor(value, shape, dtype=np.dtype("float16" if node.type == "tensor(float16)" else "float32"))
+            contract_array(value, node.shape, batch_one=True,
+                           dtype=np.dtype("float16" if node.type == "tensor(float16)" else "float32"))
         retry_reason = None
         try:
             arrays = self.session.run(None, values)
@@ -185,11 +203,12 @@ class OrtModel:
                 raise DomainError("MODEL_INFERENCE_FAILED", "CPU reference execution failed", 503) from None
         outputs = {}
         for node, value in zip(self.session.get_outputs(), arrays):
-            shape = tuple(d if isinstance(d, int) else 1 for d in node.shape)
-            outputs[node.name] = tensor(value, shape, dtype=np.dtype("float16" if node.type == "tensor(float16)" else "float32"))
+            outputs[node.name] = contract_array(value, node.shape,
+                dtype=np.dtype("float16" if node.type == "tensor(float16)" else "float32"))
         self.executions += 1
         return outputs
 
+    @guarded
     def release(self) -> None:
         self.session = None
 
@@ -199,3 +218,31 @@ class OrtModel:
                 "provider": self.provider, "executions": self.executions,
                 "requested_provider": self.requested_provider, "fallback_reason": self.fallback_reason,
                 "license_state": self.record["license_state"], "commercial_permission": self.record["commercial_permission"]}
+
+
+class SessionFacade:
+    """Keep legacy detector/recognizer preprocessing unchanged with a factory model."""
+    def __init__(self, model):
+        self.model = model
+
+    def get_inputs(self):
+        nodes = {node.name: node for node in self.model.session.get_inputs()}
+        return [nodes[node["name"]] for node in self.model.record["graph"]["inputs"]]
+
+    def get_outputs(self):
+        nodes = {node.name: node for node in self.model.session.get_outputs()}
+        return [nodes[node["name"]] for node in self.model.record["graph"]["outputs"]]
+
+    def get_providers(self):
+        return self.model.session.get_providers()
+
+    def run(self, output_names, values):
+        output = self.model.run(values)
+        names = output_names if output_names is not None else [node.name for node in self.get_outputs()]
+        return [output[name] for name in names]
+
+
+def session_factory(catalog: ModelCatalog, config: RuntimeConfig):
+    if config.model_factory is None:
+        return None
+    return lambda record: SessionFacade(config.model_factory(catalog, record["name"], config))

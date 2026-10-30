@@ -12,6 +12,7 @@ from roop_3d.core.errors import DomainError
 from roop_3d.core.settings import Contract
 from roop_3d.core.storage import atomic_json, exclusive, owned
 from roop_3d.jobs.schema import JobProgress, JobRecord, JobRequest, JobState, now, require_transition
+from roop_3d.models.diagnostics import JobDiagnostics
 
 
 class IdempotencyEntry(Contract):
@@ -109,6 +110,21 @@ class JobStore:
             data.jobs[job_id] = record
             self._save(data)
         self.notify({"type": "job.progress", "job_id": job_id, "revision": record.revision, **value.model_dump(mode="json")})
+        return record
+
+    def record_diagnostics(self, job_id: str, value: JobDiagnostics) -> JobRecord:
+        """Worker hook: persist active providers for the existing job GET API."""
+        value = JobDiagnostics.model_validate(value.model_dump())
+        with exclusive(self.root, self.relative + ".lock"):
+            data = self._read()
+            before = data.jobs.get(job_id)
+            if before is None:
+                raise DomainError("JOB_NOT_FOUND", "Job does not exist", 404)
+            if before.state not in {JobState.preparing, JobState.running}:
+                raise DomainError("JOB_NOT_ACTIVE", "Only an active job may update inference diagnostics", 409)
+            record = before.model_copy(update={"diagnostics": value, "revision": before.revision + 1, "updated_at": now()})
+            data.jobs[job_id] = record
+            self._save(data)
         return record
 
     def control(self, job_id: str, action: str) -> JobRecord:

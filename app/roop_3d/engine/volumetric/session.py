@@ -20,6 +20,7 @@ from roop_3d.engine.volumetric.preprocess import AlignedCrop, landmark_crop, tra
 from roop_3d.engine.volumetric.reference_adapter import LivePortraitAdapter
 from roop_3d.faceset.schemas import FaceSetDocument
 from roop_3d.models.catalog import ModelCatalog
+from roop_3d.engine.resources import guarded, register
 
 
 @dataclass(frozen=True)
@@ -72,7 +73,9 @@ class ReferencePipeline:
         self.lock = threading.RLock()
         self.last_latency: StageLatency | None = None
         self.frames_processed = 0
+        register(self, "release_session")
 
+    @guarded
     def prepare_session(self, source: FaceSetDocument, *, track_ids: set[int] | None = None,
                         retarget: Literal["auto", "off", "required"] = "auto") -> dict:
         with self.lock:
@@ -94,6 +97,7 @@ class ReferencePipeline:
                 self.release_session()
                 raise
 
+    @guarded
     def infer_frame(self, image: np.ndarray, *, strength: float = 0.35) -> FrameResult:
         with self.lock:
             if not self.prepared or self.tracker is None:
@@ -142,6 +146,7 @@ class ReferencePipeline:
                 "pose_method": "five_point_geometric_estimate", "dense_landmarks": (106, 203),
                 "full_frame_compositor": "Stage 09 pending"}
 
+    @guarded
     def release_session(self) -> None:
         with self.lock:
             if self.tracker is not None:

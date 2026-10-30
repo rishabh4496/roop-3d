@@ -12,15 +12,19 @@ import numpy as np
 
 from roop_3d.core.errors import DomainError
 from roop_3d.models.catalog import ModelCatalog
+from roop_3d.engine.resources import guarded, register
 
 
 class Detector:
-    def __init__(self, catalog: ModelCatalog):
+    def __init__(self, catalog: ModelCatalog, session_factory=None):
         self.catalog = catalog
         self._lock = threading.Lock()
         self._session: Any = None
         self._session_sha: str | None = None
+        self._session_factory = session_factory
+        register(self, "release_for_build")
 
+    @guarded
     def detect(self, image: np.ndarray, threshold: float) -> tuple[list[tuple[np.ndarray, np.ndarray]], dict]:
         record = self.catalog.detector()
         # Rehash cached model inputs; never continue inference after artifact drift.
@@ -30,7 +34,8 @@ class Detector:
                 import onnxruntime as ort
                 options = ort.SessionOptions()
                 options.intra_op_num_threads = 2
-                self._session = ort.InferenceSession(data, sess_options=options, providers=["CPUExecutionProvider"])
+                self._session = (self._session_factory(record) if self._session_factory is not None else
+                                 ort.InferenceSession(data, sess_options=options, providers=["CPUExecutionProvider"]))
                 self._session_sha = record["sha256"]
             session = self._session
         height, width = image.shape[:2]
@@ -72,6 +77,12 @@ class Detector:
             retained.append((box, points[index]))
             order = [other for other in order if iou(box, boxes[other]) < 0.4]
         return retained, record
+
+    @guarded
+    def release_for_build(self) -> None:
+        with self._lock:
+            self._session = None
+            self._session_sha = None
 
 
 def iou(left: np.ndarray, right: np.ndarray) -> float:

@@ -7,7 +7,7 @@ import numpy as np
 
 from roop_3d.core.errors import DomainError
 from roop_3d.engine.detection.dense_landmarks import DenseLandmarks, geometric_pose
-from roop_3d.engine.runtime import RuntimeConfig, image_bgr, tensor
+from roop_3d.engine.runtime import RuntimeConfig, image_bgr, tensor, session_factory
 from roop_3d.faceset.recognizer import Recognizer
 from roop_3d.media.detector import Detector, iou
 from roop_3d.models.catalog import ModelCatalog
@@ -84,7 +84,8 @@ class FaceTracker:
         if not 1 <= max_tracks <= 32 or not 0 <= max_missed <= 120 or not 0.1 <= threshold <= 0.99:
             raise ValueError("Invalid tracker bounds")
         self.catalog = catalog or ModelCatalog()
-        self.detector, self.recognizer = detector or Detector(self.catalog), Recognizer(self.catalog)
+        factory = session_factory(self.catalog, config)
+        self.detector, self.recognizer = detector or Detector(self.catalog, factory), Recognizer(self.catalog, factory)
         self._owns_detector = detector is None
         self.dense = DenseLandmarks(self.catalog, config)
         self.max_tracks, self.max_missed, self.threshold = max_tracks, max_missed, threshold

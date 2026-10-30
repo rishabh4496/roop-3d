@@ -13,6 +13,7 @@ import numpy as np
 
 from roop_3d.core.errors import DomainError
 from roop_3d.models.catalog import ModelCatalog
+from roop_3d.engine.resources import guarded, register
 
 ARCFACE_REFERENCE_5PTS = np.array([
     [38.2946, 51.6963],  # left eye
@@ -24,14 +25,17 @@ ARCFACE_REFERENCE_5PTS = np.array([
 
 
 class Recognizer:
-    def __init__(self, catalog: ModelCatalog):
+    def __init__(self, catalog: ModelCatalog, session_factory=None):
         self.catalog = catalog
         self._lock = threading.Lock()
         self._session: Any = None
         self._session_sha: str | None = None
         self._input_name: str | None = None
         self._output_name: str | None = None
+        self._session_factory = session_factory
+        register(self, "release_for_build")
 
+    @guarded
     def embed(self, image: np.ndarray, landmarks: np.ndarray | None = None) -> np.ndarray:
         record = self.catalog.recognizer()
         with self._lock:
@@ -40,7 +44,8 @@ class Recognizer:
                 import onnxruntime as ort
                 options = ort.SessionOptions()
                 options.intra_op_num_threads = 2
-                self._session = ort.InferenceSession(data, sess_options=options, providers=["CPUExecutionProvider"])
+                self._session = (self._session_factory(record) if self._session_factory is not None else
+                                 ort.InferenceSession(data, sess_options=options, providers=["CPUExecutionProvider"]))
                 self._session_sha = record["sha256"]
                 self._input_name = self._session.get_inputs()[0].name
                 self._output_name = self._session.get_outputs()[0].name
@@ -72,6 +77,13 @@ class Recognizer:
         if norm > 1e-9:
             embedding /= norm
         return embedding
+
+    @guarded
+    def release_for_build(self) -> None:
+        with self._lock:
+            self._session = None
+            self._session_sha = None
+            self._input_name = self._output_name = None
 
     @staticmethod
     def align_face(image: np.ndarray, landmarks: np.ndarray | None) -> np.ndarray:
