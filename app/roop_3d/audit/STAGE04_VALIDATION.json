@@ -1,0 +1,87 @@
+{
+  "stage": "04_faceset_reader_pose_selector_v2_schema",
+  "standalone_app": "roop-3d",
+  "status": "passed",
+  "timestamp": "2026-10-30T13:28:30.000000+00:00",
+  "cwd": "app",
+  "files_changed": [
+    "app/roop_3d/audit/STAGE04_REPORT.md",
+    "app/roop_3d/audit/STAGE04_VALIDATION.json",
+    "app/roop_3d/faceset/__init__.py",
+    "app/roop_3d/faceset/faceset_reader.py",
+    "app/roop_3d/faceset/pose_selector.py",
+    "app/roop_3d/faceset/recognizer.py",
+    "app/roop_3d/faceset/schemas.py",
+    "app/roop_3d/faceset/validator.py",
+    "app/roop_3d/models/catalog.py",
+    "app/roop_3d/tests/manual_stage04_acceptance.py",
+    "app/roop_3d/tests/test_stage04_faceset_reader.py",
+    "app/roop_3d/tests/test_stage04_pose_selector.py",
+    "app/roop_3d/tests/test_stage04_schemas.py",
+    "app/roop_3d/tests/test_stage04_validator.py"
+  ],
+  "full_suite": {
+    "command": "roop_3d/.venv/Scripts/python.exe -B -m pytest -c roop_3d/pyproject.toml --confcutdir=roop_3d roop_3d/tests -q",
+    "exit_code": 0,
+    "passed": 207,
+    "failed": 0,
+    "skipped": 0,
+    "blocked": 0,
+    "additional_subtests_passed": 18,
+    "warnings": 1,
+    "elapsed_seconds": 19.30
+  },
+  "acceptance_campaign": {
+    "command": "roop_3d/.venv/Scripts/python.exe -B -m roop_3d.tests.manual_stage04_acceptance",
+    "exit_code": 0,
+    "verified_archives_count": 2,
+    "verified_archives": [
+      {
+        "path": "G:\\pinokio\\api\\roop-ultimate\\output\\faceset.fsz",
+        "sha256": "bb7cbf5c4bb7c67447ae3fca9d84b8f2d0cd7393e807208dd6789f2e8baedd47",
+        "byte_size": 19395,
+        "format": "legacy_v2",
+        "view_count": 3,
+        "pose_bins": ["center_center"],
+        "canonical_embedding_dim": 512,
+        "medoid_embedding_dim": 512,
+        "sample_query_center_confidence": 0.7729,
+        "sample_query_side_confidence": 0.6427,
+        "mutation_detected": false
+      },
+      {
+        "path": "G:\\pinokio\\api\\roop-ultimate\\app\\facesets\\akansha.fsz",
+        "sha256": "aecfade7b170decb7da242c83a79f09d97647bbaddec9ed08f29aa85fe075680",
+        "byte_size": 1088832,
+        "format": "legacy_v1",
+        "view_count": 5,
+        "pose_bins": ["left_center", "center_center"],
+        "canonical_embedding_dim": 512,
+        "medoid_embedding_dim": 512,
+        "sample_query_center_confidence": 0.7556,
+        "sample_query_side_confidence": 0.7895,
+        "mutation_detected": false
+      }
+    ],
+    "v2_export_roundtrip_verified": true,
+    "zip_bomb_and_traversal_defense_verified": true,
+    "zero_mutations": true,
+    "synthetic_views_fabricated": false
+  },
+  "isolation_audit": {
+    "command": "roop_3d/.venv/Scripts/python.exe -B roop_3d/audit/verify_isolation.py --report",
+    "exit_code": 0,
+    "ok": true,
+    "historical_checked": 2647,
+    "comprehensive_checked": 68392,
+    "violations": []
+  },
+  "model_registry_verification": {
+    "command": "roop_3d/.venv/Scripts/python.exe -B roop_3d/audit/local_models.py --verify",
+    "exit_code": 0,
+    "ok": true,
+    "checked": 95,
+    "expected": 95,
+    "violations": []
+  }
+}

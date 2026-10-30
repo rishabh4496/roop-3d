@@ -81,3 +81,13 @@ class ModelCatalog:
             if record["name"] in {"scrfd_10g_bnkps.onnx", "det_10g.onnx"} and len(record["graph"].get("outputs", [])) == 9:
                 return record
         raise DomainError("DETECTOR_UNAVAILABLE", "No supported local SCRFD model is registered", 503)
+
+    def recognizer(self) -> dict[str, Any]:
+        for preferred in ("w600k_r50.onnx", "arcface_w600k_r50.onnx", "w600k_mbf.onnx"):
+            for record in self.records():
+                if record["name"] == preferred and record.get("role") == "recognizer":
+                    return record
+        for record in self.records():
+            if record.get("role") == "recognizer":
+                return record
+        raise DomainError("RECOGNIZER_UNAVAILABLE", "No supported local recognizer model is registered", 503)
