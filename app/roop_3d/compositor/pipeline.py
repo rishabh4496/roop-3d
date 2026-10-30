@@ -11,6 +11,7 @@ from roop_3d.compositor.boundary_fusion import BlendMode, fuse_crop
 from roop_3d.compositor.color_match import ColorStats, apply_lab_stats, estimate_lab_stats, masked_histogram_match
 from roop_3d.compositor.lighting import relight_spherical_harmonics
 from roop_3d.compositor.masks import BisenetFaceParser, FaceParser, build_face_mask, landmark_hull_mask
+from roop_3d.compositor.mouth import composite_mouth_region, lower_face_soft_mask
 from roop_3d.compositor.occlusion import combine_occluders, semantic_occluder_mask, subtract_occluders
 from roop_3d.compositor.restoration import GpenRestorer, blend_restored_roi
 from roop_3d.compositor.temporal import TemporalSmoother
@@ -84,10 +85,12 @@ class FrameCompositor:
     def compose(self, frame: np.ndarray, replacements, landmarks_by_track: Mapping[int, np.ndarray] | None = None,
                 *, scene_cut: bool = False, frame_index: int | None = None,
                 occluder_masks: Mapping[int, np.ndarray] | None = None,
+                lip_sync_results: Mapping[int, object] | None = None,
                 options: CompositeOptions = CompositeOptions()) -> np.ndarray:
         image_bgr(frame)
         landmarks_by_track = landmarks_by_track or {}
         occluder_masks = occluder_masks or {}
+        lip_sync_results = lip_sync_results or {}
         active_tracks = set(landmarks_by_track) | {item.track_id for item in replacements}
         self.temporal.begin_frame(frame_index, active_track_ids=active_tracks, scene_cut=scene_cut)
         output = frame.copy()
@@ -122,6 +125,15 @@ class FrameCompositor:
                     raise DomainError("RESTORER_UNAVAILABLE", "A positive restoration blend requires an explicit local restorer", 503)
                 restored = self.restorer.restore(crop)
                 enhanced = blend_restored_roi(crop, restored, alpha, options.restoration_blend)
+
+            lip_result = lip_sync_results.get(replacement.track_id)
+            if lip_result is not None and bool(getattr(lip_result, "applied", False)):
+                lip_image = np.asarray(getattr(lip_result, "image", None))
+                lip_blend = float(getattr(lip_result, "blend", 0.0))
+                mouth_mask = getattr(lip_result, "mouth_mask", None)
+                if mouth_mask is None:
+                    mouth_mask = lower_face_soft_mask(crop.shape, probabilities, feather_px=options.feather_px)
+                enhanced = composite_mouth_region(enhanced, lip_image, mouth_mask, lip_blend)
 
             harmonized, color_stats = self._color_process(enhanced, target_crop, alpha,
                                                            options.color_method, options.color_strength)

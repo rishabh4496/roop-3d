@@ -8,6 +8,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import threading
 import time
+from collections.abc import Mapping
 from typing import Literal
 import cv2
 import numpy as np
@@ -22,6 +23,7 @@ from roop_3d.faceset.schemas import FaceSetDocument
 from roop_3d.models.catalog import ModelCatalog
 from roop_3d.engine.resources import guarded, register
 from roop_3d.compositor.pipeline import CompositeOptions, FrameCompositor
+from roop_3d.engine.audio_sync.lip_sync_adapter import LipSyncAdapter, LipSyncFrameInput
 
 
 @dataclass(frozen=True)
@@ -72,6 +74,7 @@ class ReferencePipeline:
         # The compositor and its parser/restorer adapters are lazy; session creation
         # does not activate any additional inference model.
         self.compositor = FrameCompositor(self.catalog, config)
+        self.lip_sync = LipSyncAdapter(self.catalog)
         self.selected_ids: frozenset[int] | None = None
         self.prepared = False
         self.lock = threading.RLock()
@@ -148,18 +151,34 @@ class ReferencePipeline:
                 "portrait": self.portrait.capability(), "profile": self.config.hardware_profile,
                 "selected_track_ids": sorted(self.selected_ids) if self.selected_ids is not None else None,
                 "pose_method": "five_point_geometric_estimate", "dense_landmarks": (106, 203),
-                "full_frame_compositor": self.compositor.capability()}
+                "full_frame_compositor": self.compositor.capability(),
+                "lip_sync": self.lip_sync.capability()}
 
     def composite_frame(self, image: np.ndarray, result: FrameResult, *,
                         options: CompositeOptions = CompositeOptions(),
-                        occluder_masks: dict[int, np.ndarray] | None = None) -> np.ndarray:
-        """Fuse this frame's replacements back into its original full-resolution image."""
+                        occluder_masks: dict[int, np.ndarray] | None = None,
+                        lip_sync_enabled: bool = False,
+                        lip_sync_inputs: Mapping[int, LipSyncFrameInput] | None = None) -> np.ndarray:
+        """Run optional post-swap lip sync, then fuse mouth/face regions into the frame."""
         with self.lock:
             landmarks = {item.track_id: item.observation.landmarks106 for item in result.observations}
+            lip_results = {}
+            active_tracks = {item.track_id for item in result.replacements}
+            self.lip_sync.gate.begin_frame(active_track_ids=active_tracks if lip_sync_enabled else set(),
+                                           scene_cut=result.scene_cut)
+            if lip_sync_enabled:
+                supplied = lip_sync_inputs or {}
+                for replacement in result.replacements:
+                    frame_input = supplied.get(replacement.track_id)
+                    if frame_input is None:
+                        frame_input = LipSyncFrameInput(np.zeros((80, 1), np.float32), 0.0, 0.0)
+                    lip_results[replacement.track_id] = self.lip_sync.process_frame(
+                        replacement.image, replacement.track_id, frame_input, scene_cut=result.scene_cut)
             return self.compositor.compose(image, result.replacements, landmarks,
                                            scene_cut=result.scene_cut,
                                            frame_index=max(0, self.frames_processed - 1),
-                                           occluder_masks=occluder_masks, options=options)
+                                           occluder_masks=occluder_masks, lip_sync_results=lip_results,
+                                           options=options)
 
     @guarded
     def release_session(self) -> None:
@@ -170,6 +189,7 @@ class ReferencePipeline:
             self.swapper.release_session()
             self.portrait.release_session()
             self.compositor.release()
+            self.lip_sync.release()
             self.selected_ids = None
             self.prepared = False
             self.last_latency = None
