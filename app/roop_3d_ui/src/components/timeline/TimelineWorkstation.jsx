@@ -260,27 +260,6 @@ export default function TimelineWorkstation({
     onTrimChange(0, null);
   };
 
-  // Keyboard shortcuts (when hovering timeline area)
-  const handleKeyDown = (e) => {
-    if (disabled) return;
-    if (e.key === ' ' || e.code === 'Space') {
-      e.preventDefault();
-      onTogglePlay?.();
-    } else if (e.key === 'ArrowLeft') {
-      e.preventDefault();
-      handleStepFrame(-1);
-    } else if (e.key === 'ArrowRight') {
-      e.preventDefault();
-      handleStepFrame(1);
-    } else if (e.key === 'i' || e.key === 'I') {
-      e.preventDefault();
-      handleMarkIn();
-    } else if (e.key === 'o' || e.key === 'O') {
-      e.preventDefault();
-      handleMarkOut();
-    }
-  };
-
   // Timecode Ruler Major and Minor Ticks
   const rulerTicks = useMemo(() => {
     if (effectiveDuration <= 0) return [];
@@ -375,7 +354,6 @@ export default function TimelineWorkstation({
       className="timeline-workstation"
       ref={containerRef}
       tabIndex={0}
-      onKeyDown={handleKeyDown}
       role="region"
       aria-label="Video Editor Workstation Timeline"
     >

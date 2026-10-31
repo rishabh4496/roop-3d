@@ -1,3 +1,4 @@
+import NumericInput from '../controls/NumericInput';
 import React, { useRef, useState, useEffect, useCallback, useMemo } from 'react';
 import { calculateLetterbox } from './FaceOverlayCanvas';
 import { useFaceSelectionStore } from '../../useFaceSelectionStore';
@@ -472,43 +473,11 @@ export default function MaskBrushOverlay({
 
         {/* Brush Settings */}
         <div className="toolbar-section settings">
-          <label className="brush-setting">
-            <span>Size:</span>
-            <input
-              type="range"
-              min="2"
-              max="100"
-              value={brushSize}
-              onChange={e => setBrushSize(parseInt(e.target.value, 10))}
-            />
-            <strong>{brushSize}px</strong>
-          </label>
+          <div className="brush-setting"><NumericInput label="Size:" value={brushSize} min={2} max={100} step={1} onChange={setBrushSize} /></div>
 
-          <label className="brush-setting">
-            <span>Hardness:</span>
-            <input
-              type="range"
-              min="0"
-              max="1"
-              step="0.05"
-              value={hardness}
-              onChange={e => setHardness(parseFloat(e.target.value))}
-            />
-            <strong>{Math.round(hardness * 100)}%</strong>
-          </label>
+          <div className="brush-setting"><NumericInput label="Hardness:" value={hardness} min={0} max={1} step={0.01} onChange={setHardness} /></div>
 
-          <label className="brush-setting">
-            <span>Opacity:</span>
-            <input
-              type="range"
-              min="0.1"
-              max="1"
-              step="0.05"
-              value={opacity}
-              onChange={e => setOpacity(parseFloat(e.target.value))}
-            />
-            <strong>{Math.round(opacity * 100)}%</strong>
-          </label>
+          <div className="brush-setting"><NumericInput label="Opacity:" value={opacity} min={0.1} max={1} step={0.01} onChange={setOpacity} /></div>
         </div>
 
         <div className="toolbar-divider" />

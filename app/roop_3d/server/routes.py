@@ -211,3 +211,4 @@ def resume(job_id: str, request: Request) -> JobRecord:
 
 
 router.add_api_websocket_route("/ws/events", event_stream)
+router.add_api_websocket_route("/ws/telemetry", event_stream)

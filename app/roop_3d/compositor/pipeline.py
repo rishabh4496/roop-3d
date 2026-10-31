@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Mapping
+from collections.abc import Callable
 
 import cv2
 import numpy as np
@@ -86,7 +87,8 @@ class FrameCompositor:
                 *, scene_cut: bool = False, frame_index: int | None = None,
                 occluder_masks: Mapping[int, np.ndarray] | None = None,
                 lip_sync_results: Mapping[int, object] | None = None,
-                options: CompositeOptions = CompositeOptions()) -> np.ndarray:
+                options: CompositeOptions = CompositeOptions(),
+                observer: Callable | None = None) -> np.ndarray:
         image_bgr(frame)
         landmarks_by_track = landmarks_by_track or {}
         occluder_masks = occluder_masks or {}
@@ -116,6 +118,9 @@ class FrameCompositor:
             explicit_front = occluder_masks.get(replacement.track_id)
             front = combine_occluders(semantic_front, explicit_front)
             alpha = subtract_occluders(face_mask.alpha, front)
+            if observer is not None:
+                observer('swapper', crop, replacement.inverse, alpha)
+                observer('matte', (alpha * 255).round().astype(np.uint8), replacement.inverse, alpha)
             if not alpha.any():
                 continue
 
@@ -127,6 +132,8 @@ class FrameCompositor:
                 enhanced = blend_restored_roi(crop, restored, alpha, options.restoration_blend)
 
             lip_result = lip_sync_results.get(replacement.track_id)
+            if observer is not None:
+                observer('restorer', enhanced, replacement.inverse, alpha)
             if lip_result is not None and bool(getattr(lip_result, "applied", False)):
                 lip_image = np.asarray(getattr(lip_result, "image", None))
                 lip_blend = float(getattr(lip_result, "blend", 0.0))
@@ -142,6 +149,8 @@ class FrameCompositor:
                 harmonized = relight_spherical_harmonics(harmonized, target_crop, skin, alpha)
             temporal = self.temporal.update(replacement.track_id, replacement.inverse, alpha, color_stats,
                                             frame_index=frame_index, scene_cut=False)
+            if observer is not None:
+                observer('color', harmonized, replacement.inverse, alpha)
             output = fuse_crop(output, harmonized, temporal.inverse, temporal.alpha,
                                mode=options.mode, levels=options.pyramid_levels)
         self.frames_composited += 1

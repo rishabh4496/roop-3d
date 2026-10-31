@@ -139,6 +139,80 @@ def media_content(request: Request, path: str = Query(max_length=1024)):
     return FileResponse(request.app.state.media.path(path), headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"})
 
 
+class ConcatRequest(Contract):
+    segment_paths: list[str] = Field(min_length=2, max_length=128)
+    output_name: str = Field(default="concatenated.mp4", min_length=1, max_length=255)
+
+
+@router.post("/media/concat", status_code=201)
+def concat_media_segments(value: ConcatRequest, request: Request):
+    import shutil
+    import subprocess
+    import tempfile
+    import uuid
+
+    root = request.app.state.root
+    media_service = request.app.state.media
+
+    resolved_segments = []
+    for p in value.segment_paths:
+        resolved = media_service.path(p)
+        if not resolved.is_file():
+            raise DomainError("SEGMENT_NOT_FOUND", f"Segment file is missing: {p}", 404)
+        resolved_segments.append(resolved)
+
+    out_id = uuid.uuid4().hex[:12]
+    safe_out_name = f"concat_{out_id}.mp4"
+    dest = owned(root, f"roop_3d/outputs/media/{safe_out_name}")
+    dest.parent.mkdir(parents=True, exist_ok=True)
+
+    ffmpeg_bin = shutil.which("ffmpeg") or "ffmpeg"
+    with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False, encoding="utf-8") as f:
+        list_file = Path(f.name)
+        for seg in resolved_segments:
+            escaped_path = seg.as_posix().replace("'", "'\\''")
+            f.write(f"file '{escaped_path}'\n")
+
+    try:
+        cmd = [ffmpeg_bin, "-y", "-f", "concat", "-safe", "0", "-i", str(list_file), "-c", "copy", str(dest)]
+        process = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=60)
+        if process.returncode != 0 or not dest.is_file():
+            try:
+                import av
+                with av.open(str(dest), mode="w") as out_container:
+                    out_video = None
+                    out_audio = None
+                    for seg in resolved_segments:
+                        with av.open(str(seg)) as in_container:
+                            if out_video is None and in_container.streams.video:
+                                in_v = in_container.streams.video[0]
+                                out_video = out_container.add_stream(template=in_v)
+                            if out_audio is None and in_container.streams.audio:
+                                in_a = in_container.streams.audio[0]
+                                out_audio = out_container.add_stream(template=in_a)
+                            for packet in in_container.demux():
+                                if packet.dts is None:
+                                    continue
+                                if packet.stream.type == "video" and out_video:
+                                    packet.stream = out_video
+                                    out_container.mux(packet)
+                                elif packet.stream.type == "audio" and out_audio:
+                                    packet.stream = out_audio
+                                    out_container.mux(packet)
+            except Exception as av_err:
+                raise DomainError("CONCAT_FAILED", f"Concat stream copy failed: {process.stderr or str(av_err)}", 500)
+    finally:
+        if list_file.exists():
+            list_file.unlink(missing_ok=True)
+
+    relative_output = dest.relative_to(root).as_posix()
+    return {
+        "output_path": relative_output,
+        "segment_count": len(resolved_segments),
+        "size_bytes": dest.stat().st_size,
+    }
+
+
 @router.get("/media/keyframes")
 def keyframes(request: Request, path: str = Query(max_length=1024)):
     from roop_3d.media.probe import open_media

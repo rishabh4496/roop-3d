@@ -1,3 +1,4 @@
+import type { WorkstationParameters } from './components/workstation/pipeline';
 export type Schema = { type?: string; title?: string; description?: string; enum?: (string | number | boolean)[]; const?: unknown; minimum?: number; maximum?: number; properties?: Record<string, Schema> };
 export type Config = Record<string, string | number | boolean | string[]>;
 export type Feature = { enabled: boolean; reason: string | null };
@@ -11,7 +12,7 @@ export interface Capabilities {
 }
 export type JobState = 'queued' | 'preparing' | 'running' | 'pausing' | 'paused' | 'cancelling' | 'cancelled' | 'succeeded' | 'failed' | 'interrupted';
 export interface Mapping { track_id: string; faceset_id: string }
-export interface JobRequest { target_path: string; inspection_id: string; face_mappings: Mapping[]; processing: 'local'; remote_consent: false; trim_start_seconds: number | null; trim_end_seconds: number | null; mask_base64?: string | null }
+export interface JobRequest { target_path: string; inspection_id: string; face_mappings: Mapping[]; processing: 'local'; remote_consent: false; trim_start_seconds: number | null; trim_end_seconds: number | null; mask_base64?: string | null; workstation_parameters?: WorkstationParameters | null }
 export interface Job { job_id: string; state: JobState; request: JobRequest; progress: { frame: number; total_frames: number | null; fps: number; stage: string }; output: { output_path: string; frames: number } | null; failure: { message: string } | null }
 export interface Track { track_id: string; first_frame: number; last_frame: number; first_timestamp_seconds: number; last_timestamp_seconds: number; thumbnail_base64: string; thumbnail_mime: string; landmark_count: number; pose_range: { yaw_degrees: [number, number] | null; pitch_degrees: [number, number] | null; roll_degrees: [number, number] | null; method: string }; bounding_box?: { x1: number; y1: number; x2: number; y2: number }; sampled_detections?: number }
 export interface DetectedFace {

@@ -26,13 +26,14 @@ from roop_3d.jobs.store import JobStore
 from roop_3d.jobs.worker import JobWorker
 from roop_3d.jobs.project_store import ProjectStore
 from roop_3d.server.workstation import router as workstation_router
+from roop_3d.server.workstation_preview import PreviewService, router as preview_router
 from roop_3d.server.api import mount_workstation
 from roop_3d.media.service import MediaService
 from roop_3d.models.catalog import ModelCatalog
 from roop_3d.server.middleware import IntakeMiddleware
 from roop_3d.server.contracts import ErrorEnvelope, Health
 from roop_3d.server.routes import router
-from roop_3d.server.ws import EventBroker
+from roop_3d.server.ws import EventBroker, event_stream
 
 
 def create_app(settings: Settings | None = None, *, repo_root: Path | None = None,
@@ -84,6 +85,7 @@ def create_app(settings: Settings | None = None, *, repo_root: Path | None = Non
     app.state.projects = ProjectStore(root, media, catalog, jobs)
     app.state.worker = worker
     app.state.config_lock = threading.Lock()
+    app.state.previews = PreviewService(app.state)
 
     def envelope(request: Request, code: str, message: str, status: int) -> JSONResponse:
         return JSONResponse({"error": {"code": code, "message": message,
@@ -121,6 +123,9 @@ def create_app(settings: Settings | None = None, *, repo_root: Path | None = Non
 
     app.include_router(router)
     app.include_router(workstation_router)
+    app.include_router(preview_router)
+    app.add_api_websocket_route("/ws/telemetry", event_stream)
+    app.add_api_websocket_route("/ws/events", event_stream)
 
     mount_workstation(app, root)
     if settings.dev_cors:

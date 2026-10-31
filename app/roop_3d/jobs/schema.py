@@ -11,6 +11,7 @@ from pydantic import Field, field_validator, model_validator
 
 from roop_3d.core.errors import DomainError
 from roop_3d.core.settings import Contract
+from roop_3d.core.workstation import WorkstationParameters
 from roop_3d.media.schema import TrackToFaceSetMap
 from roop_3d.models.diagnostics import JobDiagnostics
 
@@ -58,10 +59,11 @@ class JobRequest(Contract):
     trim_start_seconds: float | None = Field(default=None, ge=0, le=86400)
     trim_end_seconds: float | None = Field(default=None, gt=0, le=86400)
     mask_base64: str | None = Field(default=None)
+    workstation_parameters: WorkstationParameters | None = None
 
     def identity_payload(self) -> dict:
         value = self.model_dump(mode="json")
-        for name in ("trim_start_seconds", "trim_end_seconds", "mask_base64"):
+        for name in ("trim_start_seconds", "trim_end_seconds", "mask_base64", "workstation_parameters"):
             if value.get(name) is None:
                 value.pop(name, None)
         return value

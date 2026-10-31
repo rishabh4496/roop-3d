@@ -7,6 +7,16 @@ import FaceSelectionTray from './components/tray/FaceSelectionTray';
 import WorkstationCanvas from './components/canvas/WorkstationCanvas';
 import MaskBrushOverlay from './components/canvas/MaskBrushOverlay';
 import TimelineWorkstation, { parseFps } from './components/timeline/TimelineWorkstation';
+import type { ReactNode } from 'react';
+import type { JobRequest } from './contracts';
+import { post } from './api';
+import PipelineNodeFlowBar from './components/workstation/PipelineNodeFlowBar';
+import ParameterSweepModal from './components/workstation/ParameterSweepModal';
+import { DEFAULT_PARAMETERS, PIPELINE_NODES, type WorkstationParameters, type PreviewResult } from './components/workstation/pipeline';
+import { DockArea, DockPanel, LayoutToolbar } from './components/workstation/WorkspaceLayouts';
+import { useFloatingPreview } from './components/workstation/FloatingPreview';
+import { useShortcutActions } from './components/controls/Hotkeys';
+import NumericInput from './components/controls/NumericInput';
 
 function usePreview(path: string, time: number, playing: boolean) {
   const [source, setSource] = useState('');
@@ -42,6 +52,8 @@ export function VideoViewport({
   trimStart = 0,
   trimEnd = null,
   onTrimChange,
+  active = true, parameters = DEFAULT_PARAMETERS, setParameters = () => {}, previewRequest = null,
+  inspector, posePanel, restorerAvailable = false, onPreviewLatency,
 }: {
   target: string;
   output: string;
@@ -57,6 +69,14 @@ export function VideoViewport({
   trimStart?: number;
   trimEnd?: number | null;
   onTrimChange?: (trimStart: number, trimEnd: number | null) => void;
+  active?: boolean;
+  parameters?: WorkstationParameters;
+  setParameters?: (parameters: WorkstationParameters) => void;
+  previewRequest?: JobRequest | null;
+  inspector?: ReactNode;
+  posePanel?: ReactNode;
+  restorerAvailable?: boolean;
+  onPreviewLatency?: (latency: Record<string, number>) => void;
 }) {
   const original = useRef<HTMLVideoElement>(null), processed = useRef<HTMLVideoElement>(null);
   const viewportRef = useRef<HTMLDivElement>(null);
@@ -68,9 +88,33 @@ export function VideoViewport({
   const [compMode, setCompMode] = useState<'wipe' | 'diff' | 'blend' | 'loupe'>('wipe');
   const [isMaskEditing, setIsMaskEditing] = useState(false);
   const [viewportSize, setViewportSize] = useState({ width: 0, height: 0 });
+  const [selectedNode, setSelectedNode] = useState('final'), [solo, setSolo] = useState<string | null>(null);
+  const [sweepOpen, setSweepOpen] = useState(false), [previewBusy, setPreviewBusy] = useState(false), [previewError, setPreviewError] = useState('');
+  const [preview, setPreview] = useState<{ key: string; result: PreviewResult } | null>(null);
+  const previewKey = JSON.stringify({ request: previewRequest, timestamp: time, parameters });
+  const result = preview?.key === previewKey ? preview.result : null;
+  const previewBody = useRef({ request: previewRequest, timestamp: time, parameters });
+  previewBody.current = { request: previewRequest, timestamp: time, parameters };
+  const latencyCallback = useRef(onPreviewLatency); latencyCallback.current = onPreviewLatency;
+  useEffect(() => {
+    if (!solo || !active || !previewBody.current.request || preview?.key === previewKey) { setPreviewBusy(false); return; }
+    const controller = new AbortController(); let live = true;
+    setPreviewBusy(true); setPreviewError(''); setPlaying(false); original.current?.pause(); processed.current?.pause();
+    const timer = setTimeout(() => {
+      void post<PreviewResult>('/workstation/preview', previewBody.current, { signal: controller.signal }).then(response => {
+        if (live) { setPreview({ key: previewKey, result: response }); if (response.latency) latencyCallback.current?.(response.latency); }
+      }).catch(error => { if (live && error.name !== 'AbortError') setPreviewError(error.message); }).finally(() => { if (live) setPreviewBusy(false); });
+    }, 180);
+    return () => { live = false; controller.abort(); clearTimeout(timer); };
+  }, [previewKey, solo, active, preview?.key]);
+  useEffect(() => { if (!active) { setPlaying(false); setSweepOpen(false); original.current?.pause(); processed.current?.pause(); } }, [active]);
+  const selectSolo = (node: string) => { if (PIPELINE_NODES.find(item => item.id === node)?.unavailable || !previewRequest) return; setSolo(previous => previous === node ? null : node); setIsMaskEditing(false); };
+  const bypassNode = (node: string) => { if (node !== 'restorer' && node !== 'color') return; setParameters({ ...parameters, bypass: parameters.bypass.includes(node) ? parameters.bypass.filter(item => item !== node) : [...parameters.bypass, node] }); setSolo('final'); setIsMaskEditing(false); };
 
-  const sourcePreview = usePreview(enabled ? target : '', time, playing);
-  const outputPreview = usePreview(enabled ? output : '', time, playing);
+  const sourcePreview = usePreview(enabled && active ? target : '', time, playing);
+  const outputPreview = usePreview(enabled && active ? output : '', time, playing);
+  const floatingImage = solo ? result?.buffers[solo] : outputPreview.source || sourcePreview.source;
+  const floating = useFloatingPreview(<><div className="floating-caption">{solo ? `SOLO · ${solo}` : output ? 'OUTPUT' : 'SOURCE'} · {formatTime(time)}</div>{floatingImage ? <img src={floatingImage} alt="Live workstation preview"/> : <p className="muted">Capture a frame or solo a pipeline buffer to preview it here.</p>}</>);
 
   const updateViewportSize = useCallback(() => {
     if (viewportRef.current) {
@@ -82,17 +126,22 @@ export function VideoViewport({
   useEffect(() => {
     updateViewportSize();
     window.addEventListener('resize', updateViewportSize);
-    return () => window.removeEventListener('resize', updateViewportSize);
+    const observer = new ResizeObserver(updateViewportSize);
+    if (viewportRef.current) observer.observe(viewportRef.current);
+    return () => { observer.disconnect(); window.removeEventListener('resize', updateViewportSize); };
   }, [updateViewportSize]);
 
   useEffect(() => { setPlaying(false); original.current?.pause(); processed.current?.pause(); setPlaybackError(''); }, [target, output]);
   useEffect(() => { for (const video of [original.current, processed.current]) if (video && Math.abs(video.currentTime - time) > .2) video.currentTime = time; }, [time]);
 
   const toggle = async () => {
+    if (solo) { setSolo(null); return; }
     if (playing) { original.current?.pause(); processed.current?.pause(); setPlaying(false); return; }
     try { await original.current?.play(); await processed.current?.play(); setPlaying(true); }
     catch { setPlaybackError('Browser playback is unavailable for this codec. Use frame previews to inspect it.'); }
   };
+  const seek = (value: number) => { original.current?.pause(); processed.current?.pause(); setPlaying(false); setTime(Math.max(0, Math.min(duration, value))); };
+  useShortcutActions({ play: target ? () => void toggle() : undefined, previous: () => seek(time - 1 / parseFps(probe?.fps_rational, 30)), next: () => seek(time + 1 / parseFps(probe?.fps_rational, 30)), markIn: () => onTrimChange?.(time, trimEnd !== null && trimEnd <= time ? null : trimEnd), markOut: () => { if (time > trimStart) onTrimChange?.(trimStart, time); }, solo: () => selectSolo(selectedNode), bypass: () => bypassNode(selectedNode), sweep: () => { if (previewRequest) setSweepOpen(true); }, floating: floating.open }, active && !sweepOpen);
 
   const mediaDims = probe ? { width: probe.width, height: probe.height } : { width: 1920, height: 1080 };
 
@@ -146,15 +195,19 @@ export function VideoViewport({
 
   return (
     <section className="viewport-section">
+      <LayoutToolbar onFloat={floating.open}/>
+      <PipelineNodeFlowBar selected={selectedNode} solo={solo} bypass={parameters.bypass} onSelect={setSelectedNode} onSolo={selectSolo} onBypass={bypassNode} busy={previewBusy} available={!!previewRequest}/>
       <div className="viewport-toolbar">
         <span className="eyebrow">WORKSTATION MEDIA INSPECTOR</span>
+        <button className="button small" disabled={!previewRequest} onClick={() => { setPlaying(false); original.current?.pause(); processed.current?.pause(); setSweepOpen(true); }}>Parameter Sweep</button>
+        {solo && <button className="button small" onClick={() => setSolo(null)}>Exit solo · {solo}</button>}
 
         {/* Mask Editing Mode Toggle */}
         <button
           type="button"
           className={`mask-toggle-btn ${isMaskEditing ? 'active' : ''}`}
           disabled={!target}
-          onClick={() => setIsMaskEditing(e => !e)}
+          onClick={() => { setSolo(null); setIsMaskEditing(e => !e); }}
           title="Manual & Occlusion Mask Editor (Paint keep-target areas & auto-detect occluders)"
         >
           <span>✎</span> {isMaskEditing ? 'Close Mask Editor' : 'Edit Mask'}
@@ -164,11 +217,15 @@ export function VideoViewport({
       </div>
 
       <div className="viewport dual" ref={viewportRef}>
+        {solo && <div className="solo-viewport" role="region" aria-label={`${solo} intermediate buffer`}>
+          {result?.buffers[solo] ? <img src={result.buffers[solo]} alt={`${solo} execution buffer at frame ${result.frame_index}`}/> : <p role="status">{previewError || (previewBusy ? 'Rendering real pipeline buffers…' : 'No buffer is available at this frame')}</p>}
+          <span className="pane-label">SOLO · {solo} · {result ? `frame ${result.frame_index}` : formatTime(time)}</span>
+        </div>}
         {pane(target, sourcePreview, false)}
         {pane(output, outputPreview, true)}
 
         {/* Workstation Comparison Canvas (Wipe, Diff Map, Alpha Blend, Magnifier Loupe) */}
-        {!isMaskEditing && (
+        {!isMaskEditing && !solo && (
           <WorkstationCanvas
             target={target}
             output={output}
@@ -197,16 +254,27 @@ export function VideoViewport({
       </div>
 
       {playbackError && <p className="inline-warning">{playbackError}</p>}
+      {previewError && <p className="inline-warning" role="alert">{previewError}<button className="button small" onClick={() => { setPreview(null); setSolo(null); setTimeout(() => setSolo(selectedNode), 0); }}>Retry preview</button></p>}
+      {solo && result?.notes.map(note => <p className="muted buffer-note" key={note}>{note}</p>)}
+      <div className="preview-parameters">
+        <NumericInput label="Restorer blend" value={parameters.restoration_blend} min={0} max={1} step={.01} disabled={!restorerAvailable} title={restorerAvailable ? 'Local GPEN' : 'GPEN weights unavailable'} onChange={value => setParameters({ ...parameters, restoration_blend: value ?? 0 })}/>
+        <NumericInput label="Mask feather (px)" value={parameters.feather_px} min={0} max={64} step={.1} onChange={value => setParameters({ ...parameters, feather_px: value ?? 0 })}/>
+        <NumericInput label="Color match strength" value={parameters.color_strength} min={0} max={1} step={.01} onChange={value => setParameters({ ...parameters, color_strength: value ?? 0 })}/>
+        <NumericInput label="3D pose alignment weight" value={parameters.pose_strength} min={0} max={1} step={.01} onChange={value => setParameters({ ...parameters, pose_strength: value ?? 0 })}/>
+      </div>
+      {floating.portal}
+      {sweepOpen && <ParameterSweepModal request={previewRequest} timestamp={time} parameters={parameters} onApply={setParameters} onClose={() => setSweepOpen(false)} restorerAvailable={restorerAvailable}/>}
+      <DockArea>
 
       {/* Video Editor-Grade Workstation Timeline */}
-      <TimelineWorkstation
+      <DockPanel id="timeline" title="Timeline"><TimelineWorkstation
         target={target}
         output={output}
         currentTime={time}
         duration={duration}
         fps={parseFps(probe?.fps_rational, 30)}
         playing={playing}
-        disabled={!target || !enabled}
+        disabled={!target || !enabled || !active}
         keys={keys}
         trimStart={trimStart}
         trimEnd={trimEnd}
@@ -220,15 +288,18 @@ export function VideoViewport({
           setTime(seekTime);
         }}
         onTrimChange={onTrimChange}
-      />
+      /></DockPanel>
 
       {/* Target Face Selection Tray */}
-      <FaceSelectionTray
+      <DockPanel id="tray" title="Face Tray"><FaceSelectionTray
         currentTime={time}
         sources={sources}
         onSeekTime={setTime}
         onAssignSource={onAssignSource}
-      />
+      /></DockPanel>
+      <DockPanel id="inspector" title="Inspector">{inspector ?? <p className="muted">Processing inspector</p>}</DockPanel>
+      <DockPanel id="pose" title="3D Pose & Geometry">{posePanel ?? <p className="muted">Select a source identity to inspect geometry.</p>}</DockPanel>
+      </DockArea>
     </section>
   );
 }

@@ -1,3 +1,4 @@
+import NumericInput from '../controls/NumericInput';
 import React, { useRef, useState, useEffect, useCallback, useMemo } from 'react';
 import { calculateLetterbox } from './FaceOverlayCanvas';
 
@@ -361,7 +362,7 @@ export default function WorkstationCanvas({
 
         {mode === 'diff' && (
           <div className="diff-controls">
-            <span className="control-label">Amp:</span>
+            <NumericInput label="Difference boost" value={diffBoost} min={1} max={8} step={.1} onChange={setDiffBoost} />
             <input
               type="range"
               min="1"
@@ -378,7 +379,7 @@ export default function WorkstationCanvas({
 
         {mode === 'blend' && (
           <div className="blend-controls">
-            <span className="control-label">Mix:</span>
+            <NumericInput label="Comparison mix" value={blendOpacity} min={0} max={1} step={.01} onChange={setBlendOpacity} />
             <input
               type="range"
               min="0"

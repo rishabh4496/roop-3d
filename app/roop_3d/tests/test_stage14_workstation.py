@@ -289,3 +289,14 @@ def test_build_and_download_faceset(tmp_path):
         assert dl_res.status_code == 200
         assert dl_res.headers["content-type"] == "application/zip"
         assert len(dl_res.content) > 0
+
+
+def test_concat_media_segments(tmp_path):
+    app, payload, _ = project_fixture(tmp_path)
+    seg1 = payload["target_path"]
+    with TestClient(app, base_url="http://127.0.0.1:8030") as client:
+        res = client.post("/api/v1/media/concat", json={"segment_paths": [seg1, seg1]})
+        assert res.status_code == 201, res.text
+        data = res.json()
+        assert data["segment_count"] == 2
+        assert "concat_" in data["output_path"]

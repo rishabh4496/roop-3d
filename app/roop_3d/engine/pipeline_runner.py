@@ -318,7 +318,7 @@ class MasterPipelineRunner:
                                     sources_by_track=source_by_track, retarget="auto")
             if settings.face_restoration_policy in {"gfpgan", "codeformer"}:
                 raise DomainError("RESTORER_UNAVAILABLE", "The selected restoration architecture has no verified local adapter", 503)
-            if settings.face_restoration_policy == "auto":
+            if settings.face_restoration_policy == "auto" or (record.request.workstation_parameters and record.request.workstation_parameters.composite_options().restoration_blend > 0):
                 try:
                     gpen = next((item for item in self.catalog.records()
                                  if item["name"] == "gpen_bfr_512.onnx" and item["state"] == "VERIFIED_LOCAL"), None)
@@ -340,10 +340,12 @@ class MasterPipelineRunner:
                     self._check_control(control, checkpoint, last_completed)
                     expected_shape = decoded.image.shape
                     frame_started = time.perf_counter()
-                    result = session.infer_frame(decoded.image)
+                    parameters = record.request.workstation_parameters
+                    result = (session.infer_frame(decoded.image, strength=parameters.pose_strength)
+                              if parameters else session.infer_frame(decoded.image))
                     output = session.composite_frame(
                         decoded.image, result,
-                        options=CompositeOptions(restoration_blend=(0.35 if session.compositor.restorer else 0.0)),
+                        options=parameters.composite_options() if parameters else CompositeOptions(restoration_blend=(0.35 if session.compositor.restorer else 0.0)),
                         lip_sync_enabled=settings.lip_sync_mode == "wav2lip")
                     mapped_seen.update(item.track_id for item in result.replacements if item.track_id in numeric_ids)
                     decoded_count += 1
