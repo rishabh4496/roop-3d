@@ -59,6 +59,7 @@ class ModelSummary(Contract):
 class Capabilities(Contract):
     schema_version: Literal[1] = 1
     enabled_modes: tuple[str, ...]
+    workstation: dict[str, Any] = Field(default_factory=dict)
     rendering_worker_available: bool = False
     remote_adapter_state: Literal["UNSUPPORTED"] = "UNSUPPORTED"
     automatic_model_download_state: Literal["GATED"] = "GATED"

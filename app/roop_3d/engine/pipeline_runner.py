@@ -39,6 +39,8 @@ class PipelineCheckpoint(Contract):
     job_id: str = Field(pattern=r"^[0-9a-f]{32}$")
     input_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     request_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    settings_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    faceset_sha256: dict[str, str] = Field(default_factory=dict)
     completed_frame: int = Field(default=-1, ge=-1, strict=True)
     total_frames: int | None = Field(default=None, ge=1, strict=True)
     runtime_profile: RuntimeProfile = "cpu"
@@ -100,7 +102,7 @@ class MasterPipelineRunner:
 
     @staticmethod
     def _request_digest(record: JobRecord) -> str:
-        payload = json.dumps(record.request.model_dump(mode="json"), sort_keys=True,
+        payload = json.dumps(record.request.identity_payload(), sort_keys=True,
                              separators=(",", ":"), allow_nan=False).encode("utf-8")
         return hashlib.sha256(payload).hexdigest()
 
@@ -233,6 +235,15 @@ class MasterPipelineRunner:
         request_digest = self._request_digest(record)
         checkpoint = self._read_checkpoint(record.job_id, digest, request_digest, total,
                                            "cpu")
+        from roop_3d.jobs.project_store import settings_digest
+        fingerprint = settings_digest(settings)
+        source_fingerprints = {document.faceset_id: document.source_sha256 for document in sources.values()}
+        if checkpoint.faceset_sha256 and checkpoint.faceset_sha256 != source_fingerprints:
+            raise DomainError("JOB_SOURCE_CHANGED", "A source FaceSet changed since the saved checkpoint", 409)
+        if checkpoint.settings_sha256 is not None and checkpoint.settings_sha256 != fingerprint:
+            raise DomainError("JOB_SETTINGS_CHANGED", "Restore the job's effective settings before resuming", 409)
+        checkpoint = checkpoint.model_copy(update={"settings_sha256": fingerprint, "faceset_sha256": source_fingerprints})
+        self._write_checkpoint(checkpoint)
         workdir = owned(self.root, f"roop_3d/.runtime/jobs/{record.job_id}/frames")
         workdir.mkdir(parents=True, exist_ok=True)
         numeric_ids = set(labels_to_ids.values())
@@ -408,6 +419,8 @@ class MasterPipelineRunner:
                 hardware="software" if admission.profile == "cpu" else "auto", timing=timing,
                 rate=output_rate, audio_policy=settings.audio_policy, transform=completed_frame,
                 output_dir=settings.output_root, manifest_metadata=metadata,
+                start=Fraction(str(record.request.trim_start_seconds)) if record.request.trim_start_seconds is not None else None,
+                end=Fraction(str(record.request.trim_end_seconds)) if record.request.trim_end_seconds is not None else None,
                 before_publish=lambda: self._check_control(control, checkpoint, last_completed))
         except BaseException as error:
             if is_cuda_oom(error):

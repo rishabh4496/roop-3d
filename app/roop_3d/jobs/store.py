@@ -60,7 +60,7 @@ class JobStore:
         if not 1 <= len(idempotency_key) <= 128 or not idempotency_key.isascii() or any(ord(c) < 33 or ord(c) > 126 for c in idempotency_key):
             raise DomainError("IDEMPOTENCY_KEY_INVALID", "Idempotency-Key must contain 1 to 128 printable ASCII characters", 422)
         key = hashlib.sha256(idempotency_key.encode()).hexdigest()
-        fingerprint = hashlib.sha256(json.dumps(request.model_dump(mode="json"), sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        fingerprint = hashlib.sha256(json.dumps(request.identity_payload(), sort_keys=True, separators=(",", ":")).encode()).hexdigest()
         with exclusive(self.root, self.relative + ".lock"):
             data = self._read()
             prior = data.idempotency.get(key)

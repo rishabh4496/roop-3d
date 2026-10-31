@@ -54,8 +54,35 @@ def save_config(value: Settings, request: Request) -> Settings:
 
 @router.get("/system/capabilities", response_model=Capabilities)
 def capabilities(request: Request) -> Capabilities:
+    from roop_3d.jobs.schema import JobState
+    from roop_3d.core.hardware import probe_hardware
+    from roop_3d.server.workstation import CHUNK_BYTES, MAX_ASSET_BYTES
+    state = request.app.state
+    hardware = probe_hardware(state.settings)
+    available = {item["name"] for item in state.models.public()}
+    gpu = bool(hardware.gpus) and "CUDAExecutionProvider" in hardware.advertised_providers
+    lp = all(name in available for name in ("liveportrait_appearance_feature_extractor.onnx", "liveportrait_motion_extractor.onnx", "liveportrait_warping_spade.onnx"))
+    options = {
+        "execution_mode": {"swap": None, "volumetric": None if lp else "LivePortrait weights are unavailable", "hybrid": "No verified diffusion loader is configured", "diffusion_vfx": "No verified diffusion loader is configured"},
+        "preferred_provider": {"auto": None, "CPUExecutionProvider": None, "CUDAExecutionProvider": None if gpu else "CUDA is unavailable", "TensorrtExecutionProvider": "Worker preserves the Stage 06 reference path"},
+        "hardware_profile": {"auto": None, "cpu": None, "6gb": None if gpu else "No CUDA GPU is available", "12gb": None if gpu and hardware.gpus[0].total_vram_mib >= 12288 else "A 12 GB CUDA GPU is required"},
+        "precision_policy": {"auto": None, "fp32": None, "fp16": "The reference session uses observed FP32 graph contracts"},
+        "face_restoration_policy": {"off": None, "auto": None, "gfpgan": "No verified GFPGAN adapter", "codeformer": "No verified CodeFormer adapter"},
+        "lip_sync_mode": {"off": None, "wav2lip": "No verified Wav2Lip inference adapter"},
+        "audio_policy": {"copy": None, "transcode": None, "drop": "The workstation preserves source audio; use copy or transcode"},
+    }
+    workstation = {"features": {key: {"enabled": True, "reason": None} for key in
+        ("uploads", "frame_preview", "face_inspection", "pose_inspection", "reconstruction_viewer", "projects", "trim", "video_playback")},
+        "controls": options, "read_only_parameters": {key: "Configure this infrastructure setting offline" for key in
+        ("schema_version", "host", "port", "dev_cors", "max_body_bytes", "cache_root", "output_root", "model_search_paths", "diagnostics_level")},
+        "disabled_parameters": {"remote_processing_enabled": "No remote adapter is configured", "synthetic_media_notice": "Synthetic media notice is required"},
+        "job_states": [item.value for item in JobState],
+        "job_controls": {"pause": ["queued", "preparing", "running"], "resume": ["paused", "interrupted"],
+                         "cancel": ["queued", "preparing", "running", "pausing", "paused", "interrupted"]},
+        "upload_chunk_bytes": min(CHUNK_BYTES, state.settings.max_body_bytes), "max_asset_bytes": MAX_ASSET_BYTES}
+    workstation["features"]["queue"] = {"enabled": state.worker is not None, "reason": None if state.worker is not None else "Background worker is disabled"}
     return Capabilities(enabled_modes=("media_probe", "frame_preview", "face_inspection", "persistent_job_queue",
-                                       "local_video_render"),
+                                       "local_video_render", "workstation", "projects"), workstation=workstation,
                         rendering_worker_available=request.app.state.worker is not None,
                         models=tuple(ModelSummary.model_validate(item) for item in request.app.state.models.public()),
                         legal_parameter_bounds=Settings.model_json_schema(),

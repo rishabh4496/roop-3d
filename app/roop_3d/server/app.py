@@ -24,6 +24,9 @@ from roop_3d.core.errors import DomainError
 from roop_3d.core.settings import ConfigStore, Settings
 from roop_3d.jobs.store import JobStore
 from roop_3d.jobs.worker import JobWorker
+from roop_3d.jobs.project_store import ProjectStore
+from roop_3d.server.workstation import router as workstation_router
+from roop_3d.server.api import mount_workstation
 from roop_3d.media.service import MediaService
 from roop_3d.models.catalog import ModelCatalog
 from roop_3d.server.middleware import IntakeMiddleware
@@ -78,6 +81,7 @@ def create_app(settings: Settings | None = None, *, repo_root: Path | None = Non
     app.state.jobs = jobs
     app.state.models = catalog
     app.state.media = media
+    app.state.projects = ProjectStore(root, media, catalog, jobs)
     app.state.worker = worker
     app.state.config_lock = threading.Lock()
 
@@ -116,24 +120,11 @@ def create_app(settings: Settings | None = None, *, repo_root: Path | None = Non
         return probe_hardware(app.state.settings)
 
     app.include_router(router)
+    app.include_router(workstation_router)
 
-    @app.get("/", response_class=HTMLResponse)
-    def landing() -> str:
-        return f"""<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width">
-<title>Roop 3D</title><style>body{{background:#10141c;color:#edf2fa;font:17px system-ui;max-width:760px;margin:12vh auto;padding:24px}}a{{color:#80d3ff}}small{{color:#aab6c8}}</style>
-<h1>Roop 3D</h1><p>Local development service · v{__version__}</p>
-<p>Local media inspection and persistent rendering jobs are available when the background worker is enabled.</p>
-<p><a href="/api/v1/health">Health &amp; isolation</a> · <a href="/api/v1/system/hardware">Live hardware</a> · <a href="/openapi.json">API schema</a></p>
-<small>API: 127.0.0.1:{settings.port} · Vite development port: 5174 · Local processing by default</small></html>"""
-
-    ui = root / "roop_3d_ui/dist"
-    if ui.is_dir():
-        from roop_3d.audit.isolation import safe_path
-        safe_path(root, "roop_3d_ui/dist")
-        # API routes remain earlier in the route table. Static assets share the API origin.
-        app.mount("/ui", StaticFiles(directory=str(ui), html=True), name="ui")
+    mount_workstation(app, root)
     if settings.dev_cors:
-        app.add_middleware(CORSMiddleware, allow_origins=["http://127.0.0.1:5174"], allow_methods=["GET", "PUT", "POST"],
+        app.add_middleware(CORSMiddleware, allow_origins=["http://127.0.0.1:5174"], allow_methods=["GET", "PUT", "POST", "DELETE"],
                            allow_headers=["Content-Type", "Idempotency-Key"])
     app.add_middleware(IntakeMiddleware, settings=settings)
     return app

@@ -55,9 +55,20 @@ class JobRequest(Contract):
     face_mappings: tuple[TrackToFaceSetMap, ...] = Field(min_length=1, max_length=64)
     processing: Literal["local", "remote"] = "local"
     remote_consent: bool = False
+    trim_start_seconds: float | None = Field(default=None, ge=0, le=86400)
+    trim_end_seconds: float | None = Field(default=None, gt=0, le=86400)
+
+    def identity_payload(self) -> dict:
+        value = self.model_dump(mode="json")
+        for name in ("trim_start_seconds", "trim_end_seconds"):
+            if value[name] is None:
+                value.pop(name)
+        return value
 
     @model_validator(mode="after")
     def mapping_contract(self) -> "JobRequest":
+        if self.trim_end_seconds is not None and self.trim_end_seconds <= (self.trim_start_seconds or 0):
+            raise ValueError("Trim end must exceed trim start")
         if len({item.track_id for item in self.face_mappings}) != len(self.face_mappings):
             raise ValueError("Each target track may have only one FaceSet mapping")
         if self.processing == "remote" and not self.remote_consent:

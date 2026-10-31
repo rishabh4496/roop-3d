@@ -1,0 +1,170 @@
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
+import { api, post, upload } from './api';
+import type { Capabilities, Config, Coverage, FaceSet, Inspection, Job, JobRequest, Probe, Project, Reconstruction, Telemetry, Track } from './contracts';
+import { EventConnection } from './events';
+import { featureReason, jobActions, mappings, optionReason } from './state';
+import { SettingsInspector } from './SettingsInspector';
+import { VideoViewport, formatTime } from './VideoViewport';
+const PoseCoverageInspector = lazy(() => import('./ThreeViewport').then(module => ({ default: module.PoseCoverageInspector })));
+
+export default function App() {
+  const [caps, setCaps] = useState<Capabilities | null>(null), [config, setConfig] = useState<Config | null>(null);
+  const [sources, setSources] = useState<FaceSet[]>([]), [jobs, setJobs] = useState<Job[]>([]), [telemetry, setTelemetry] = useState<Telemetry | null>(null);
+  const [target, setTarget] = useState(''), [probe, setProbe] = useState<Probe | null>(null), [time, setTime] = useState(0), [keys, setKeys] = useState<number[]>([]);
+  const [inspection, setInspection] = useState<Inspection | null>(null), [selectedTrack, setSelectedTrack] = useState<string>(''), [assigned, setAssigned] = useState<Record<string, string>>({});
+  const [sourceId, setSourceId] = useState(''), [coverage, setCoverage] = useState<Coverage | null>(null), [mesh, setMesh] = useState<Reconstruction | null>(null);
+  const [reconstructions, setReconstructions] = useState<{ reconstruction_id: string }[]>([]);
+  const [selectedJob, setSelectedJob] = useState(''), [queueOpen, setQueueOpen] = useState(true), [connection, setConnection] = useState('connecting');
+  const [project, setProject] = useState<Project | null>(null), [projectName, setProjectName] = useState('Untitled project'), [projects, setProjects] = useState<Pick<Project, 'project_id' | 'name' | 'saved_at' | 'last_completed_frame'>[]>([]), [projectsOpen, setProjectsOpen] = useState(false);
+  const [trimStart, setTrimStart] = useState(0), [trimEnd, setTrimEnd] = useState<number | null>(null), [includeCheckpoint, setIncludeCheckpoint] = useState(false);
+  const [busy, setBusy] = useState(''), [error, setError] = useState(''), [notice, setNotice] = useState(''), [uploadProgress, setUploadProgress] = useState(0);
+  const [theme, setTheme] = useState(() => localStorage.getItem('roop3d-theme') ?? 'dark');
+  const fileInput = useRef<HTMLInputElement>(null), sourceInput = useRef<HTMLInputElement>(null), projectInput = useRef<HTMLInputElement>(null);
+  const uploadAbort = useRef<AbortController | null>(null), queueKey = useRef({ fingerprint: '', key: '' });
+  const currentJob = jobs.find(job => job.job_id === selectedJob) ?? null;
+  const output = currentJob?.state === 'succeeded' && currentJob.request.target_path === target ? currentJob.output?.output_path ?? '' : '';
+  const currentTrack: Track | null = inspection?.tracks.find(track => track.track_id === selectedTrack) ?? null;
+  const projectDirty = !project || project.name !== projectName || project.request.target_path !== target
+    || project.request.inspection_id !== inspection?.inspection_id || (project.request.trim_start_seconds ?? 0) !== trimStart
+    || project.request.trim_end_seconds !== trimEnd
+    || JSON.stringify(project.request.face_mappings) !== JSON.stringify(mappings(assigned, inspection?.tracks ?? [], sources))
+    || JSON.stringify(project.effective_settings) !== JSON.stringify(config);
+  const reason = (name: string) => featureReason(caps, name);
+  const refreshJobs = useCallback(async () => setJobs(await api<Job[]>('/jobs')), []);
+  const refreshSources = useCallback(async () => setSources(await api<FaceSet[]>('/facesets')), []);
+  const refreshProjects = useCallback(async () => setProjects(await api<typeof projects>('/projects')), []);
+  const run = async (label: string, work: () => Promise<void>) => { setBusy(label); setError(''); setNotice(''); try { await work(); } catch (error) { if ((error as Error).name !== 'AbortError') setError((error as Error).message); } finally { setBusy(''); } };
+  const connect = useCallback(async () => {
+    try {
+      const [capabilities, settings, sourceList, queue, saved] = await Promise.all([api<Capabilities>('/system/capabilities'), api<Config>('/config'), api<FaceSet[]>('/facesets'), api<Job[]>('/jobs'), api<typeof projects>('/projects')]);
+      setCaps(capabilities); setConfig(settings); setSources(sourceList); setJobs(queue); setProjects(saved); setError('');
+    } catch (error) { setError((error as Error).message); }
+  }, []);
+  useEffect(() => { void connect(); }, [connect]);
+  useEffect(() => { document.documentElement.dataset.theme = theme; localStorage.setItem('roop3d-theme', theme); }, [theme]);
+  useEffect(() => {
+    let refresh: ReturnType<typeof setTimeout> | undefined;
+    const events = new EventConnection(`${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/api/v1/ws/events`, event => {
+      if (event.type === 'system.telemetry' && event.hardware) setTelemetry(event.hardware);
+      if (event.type.startsWith('job.') || event.type === 'stream.ready' || event.type === 'stream.gap') {
+        if (!refresh) refresh = setTimeout(() => { refresh = undefined; void refreshJobs().catch(error => setError(error.message)); }, 120);
+      }
+    }, setConnection);
+    events.start();
+    return () => { events.stop(); if (refresh) clearTimeout(refresh); };
+  }, [refreshJobs]);
+  useEffect(() => () => uploadAbort.current?.abort(), []);
+  useEffect(() => {
+    if (!projectsOpen) return;
+    const previous = document.activeElement as HTMLElement | null;
+    const dialog = document.querySelector<HTMLElement>('[role="dialog"]');
+    const focusables = () => [...(dialog?.querySelectorAll<HTMLElement>('button:not(:disabled), a[href], input:not(:disabled), select:not(:disabled)') ?? [])];
+    focusables()[0]?.focus();
+    const handle = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setProjectsOpen(false);
+      if (event.key === 'Tab') { const items = focusables(), first = items[0], last = items.at(-1); if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); } else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); } }
+    };
+    document.addEventListener('keydown', handle);
+    return () => { document.removeEventListener('keydown', handle); previous?.focus(); };
+  }, [projectsOpen]);
+  useEffect(() => {
+    if (!sourceId) { setCoverage(null); return; }
+    const controller = new AbortController(); setCoverage(null);
+    void api<Coverage>(`/facesets/${sourceId}/coverage`, { signal: controller.signal }).then(setCoverage).catch(error => { if (error.name !== 'AbortError') setError(error.message); });
+    return () => controller.abort();
+  }, [sourceId]);
+  const loadTarget = async (path: string) => {
+    const [info, frames, reconstructionList] = await Promise.all([post<Probe>('/media/probe', { path }), api<{ timestamps: number[] }>(`/media/keyframes?${new URLSearchParams({ path })}`), api<typeof reconstructions>('/reconstructions')]);
+    setTarget(path); setProbe(info); setTime(0); setKeys(frames.timestamps); setInspection(null); setAssigned({}); setSelectedTrack(''); setMesh(null); setTrimStart(0); setTrimEnd(null); setReconstructions(reconstructionList); setSelectedJob(''); setProject(null);
+  };
+  const importAsset = (file: File | undefined) => {
+    if (!file || !caps) return;
+    void run('Importing asset', async () => {
+      const controller = new AbortController(); uploadAbort.current = controller; setUploadProgress(0);
+      const result = await upload(file, caps, setUploadProgress, controller.signal);
+      if (result.kind === 'video' && result.path) await loadTarget(result.path);
+      else { await refreshSources(); setSourceId(result.faceset_id ?? ''); }
+      setNotice('Local asset imported and validated.');
+    });
+  };
+  const inspect = () => void run('Inspecting target faces', async () => {
+    const result = await post<Inspection>('/media/inspect-faces', { path: target });
+    setInspection(result); setAssigned({}); setSelectedTrack(result.tracks[0]?.track_id ?? '');
+    if (!result.tracks.length) setNotice('No faces were detected. Try a clearer target frame or another clip.');
+  });
+  const request = (): JobRequest => {
+    const selected = mappings(assigned, inspection?.tracks ?? [], sources);
+    if (!target || !inspection || !selected.length) throw new Error('Inspect a target and map at least one face track before continuing.');
+    return { target_path: target, inspection_id: inspection.inspection_id, face_mappings: selected, processing: 'local', remote_consent: false, trim_start_seconds: trimStart || null, trim_end_seconds: trimEnd };
+  };
+  const queue = () => void run('Queueing local render', async () => {
+    const value = request(), fingerprint = JSON.stringify(value);
+    if (queueKey.current.fingerprint !== fingerprint) queueKey.current = { fingerprint, key: crypto.randomUUID() };
+    const job = await post<Job>('/jobs', value, { headers: { 'Idempotency-Key': queueKey.current.key } });
+    queueKey.current = { fingerprint: '', key: '' }; setSelectedJob(job.job_id); setQueueOpen(true); await refreshJobs(); setNotice('Render added to the local queue.');
+  });
+  const saveSettings = (value: Config) => void run('Applying settings', async () => { const saved = await api<Config>('/config', { method: 'PUT', body: JSON.stringify(value) }); setConfig(saved); await connect(); setNotice('Effective settings saved. Existing paused jobs retain their original settings identity.'); });
+  const saveProject = () => void run('Saving project', async () => {
+    const checkpoint = includeCheckpoint && currentJob && jobActions(caps, currentJob.state).includes('resume') ? currentJob.job_id : null;
+    const saved = await post<Project>('/projects', { name: projectName, request: request(), checkpoint_job_id: checkpoint });
+    setProject(saved); await refreshProjects(); setNotice('Project saved with input and model hashes.');
+  });
+  const openProject = (id: string) => void run('Verifying project hashes', async () => {
+    const saved = await api<Project>(`/projects/${id}`);
+    for (const [field, value] of Object.entries(saved.effective_settings)) {
+      if (config?.[field] !== value && !caps?.workstation.read_only_parameters[field]) {
+        const blocked = optionReason(caps, field, String(value)); if (blocked) throw new Error(`Saved ${field} is unavailable: ${blocked}`);
+      }
+    }
+    const settings = await api<Config>('/config', { method: 'PUT', body: JSON.stringify(saved.effective_settings) });
+    await loadTarget(saved.request.target_path);
+    const loaded = await api<Inspection>(`/media/inspections/${saved.request.inspection_id}?${new URLSearchParams({ path: saved.request.target_path })}`);
+    setConfig(settings); setInspection(loaded); setAssigned(Object.fromEntries(saved.request.face_mappings.map(item => [item.track_id, item.faceset_id]))); setSelectedTrack(loaded.tracks[0]?.track_id ?? '');
+    setTrimStart(saved.request.trim_start_seconds ?? 0); setTrimEnd(saved.request.trim_end_seconds); setProject(saved); setProjectName(saved.name); setSelectedJob(saved.checkpoint_job_id ?? ''); setIncludeCheckpoint(!!saved.checkpoint_job_id); setProjectsOpen(false); setNotice('Project input and model hashes verified. Saved settings restored.');
+  });
+  const importProject = (file: File | undefined) => { if (!file) return; void run('Importing project manifest', async () => { if (file.size > 512 * 1024) throw new Error('Project manifest exceeds 512 KiB.'); const saved = await post<Project>('/projects/import', JSON.parse(await file.text())); await refreshProjects(); setNotice(`Imported ${saved.name}. Open it from the project library.`); }); };
+  const controlJob = (job: Job, action: string) => void run(`${action} job`, async () => {
+    const path = action === 'resume' && project?.checkpoint_job_id === job.job_id ? `/projects/${project.project_id}/resume` : `/jobs/${job.job_id}/${action}`;
+    await post(path, {}); await refreshJobs();
+  });
+  const showJob = (job: Job) => {
+    if (job.request.target_path === target) { setSelectedJob(job.job_id); return; }
+    void run('Opening job target', async () => {
+      await loadTarget(job.request.target_path);
+      const loaded = await api<Inspection>(`/media/inspections/${job.request.inspection_id}?${new URLSearchParams({ path: job.request.target_path })}`);
+      setInspection(loaded); setAssigned(Object.fromEntries(job.request.face_mappings.map(item => [item.track_id, item.faceset_id])));
+      setSelectedTrack(loaded.tracks[0]?.track_id ?? ''); setSelectedJob(job.job_id);
+      setTrimStart(job.request.trim_start_seconds ?? 0); setTrimEnd(job.request.trim_end_seconds);
+    });
+  };
+  const checkpointAllowed = !!currentJob && jobActions(caps, currentJob.state).includes('resume');
+  return <div className="workstation">
+    <header className="app-header"><a className="brand" href="/" aria-label="Roop 3D home"><span className="brand-mark">R<span>3</span></span><strong>roop<span>3D</span></strong></a><span className="header-divider"/><span className="workspace-label">VIDEO WORKSTATION</span>
+      <div className="project-name"><input aria-label="Project name" maxLength={128} value={projectName} onChange={event => setProjectName(event.target.value)} /><span>{projectDirty ? 'UNSAVED' : 'SAVED'}</span></div>
+      <span className="local-status"><i className={`dot ${connection === 'online' ? 'mint' : 'amber'}`}/>{connection === 'online' ? 'Local service' : connection}</span><button className="icon-button" aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} theme`} onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}>{theme === 'dark' ? '☀' : '◐'}</button>
+      <button className="button" disabled={!!reason('projects') || !!busy} title={reason('projects') ?? ''} onClick={() => { setProjectsOpen(true); void refreshProjects(); }}>Projects</button><button className="button" disabled={!!reason('projects') || !inspection || !!busy} onClick={saveProject}>Save project</button>
+    </header>
+    {(error || notice || busy) && <div className={`notification ${error ? 'error' : ''}`} role={error ? 'alert' : 'status'}><span>{error || busy || notice}</span>{busy === 'Importing asset' && <><progress value={uploadProgress} max={1}/><button onClick={() => uploadAbort.current?.abort()}>Cancel import</button></>}{error && <button onClick={() => void connect()}>Reconnect</button>}{!busy && <button aria-label="Dismiss message" onClick={() => { setError(''); setNotice(''); }}>×</button>}</div>}
+    <div className="workstation-body"><aside className="asset-sidebar"><div className="section-title"><span>ASSET LIBRARY</span><span className="muted">01</span></div><div className="asset-actions"><button className="button full primary-soft" disabled={!!reason('uploads') || !!busy} title={reason('uploads') ?? ''} onClick={() => fileInput.current?.click()}>＋ Import target video</button><input ref={fileInput} hidden type="file" accept=".mp4,.mov,.mkv,.avi,.webm,.m4v,.ts" onChange={event => { importAsset(event.target.files?.[0]); event.target.value = ''; }} /></div>
+      <div className={`target-asset ${target ? 'loaded' : ''}`}><span className="asset-symbol">▤</span><div><strong>{target ? target.split('/').at(-1) : 'No target loaded'}</strong><small>{probe ? `${probe.width} × ${probe.height} · ${probe.fps_rational ?? '?'} fps` : 'Your files stay on this machine'}</small></div></div>
+      <div className="section-title spaced"><span>SOURCE IDENTITIES</span><span>{sources.length.toString().padStart(2, '0')}</span></div><button className="button full" disabled={!!reason('uploads') || !!busy} onClick={() => sourceInput.current?.click()}>＋ Add .fsz FaceSet</button><input ref={sourceInput} hidden type="file" accept=".fsz" onChange={event => { importAsset(event.target.files?.[0]); event.target.value = ''; }} />
+      <div className="source-list">{sources.map((source, index) => <button className={`source-card ${sourceId === source.faceset_id ? 'selected' : ''}`} key={source.faceset_id} onClick={() => setSourceId(source.faceset_id)}><span className="source-avatar">{(index + 1).toString().padStart(2, '0')}</span><span><strong>{source.name}</strong><small>{source.item_count} observed views</small></span><span className="source-check">{sourceId === source.faceset_id ? '●' : '○'}</span></button>)}{!sources.length && <p className="muted empty-note">Load an observed FaceSet to assign an identity to a target track.</p>}</div>
+      <div className="library-footer"><span className="tiny-badge">LOCAL BY DEFAULT</span><p>Media, FaceSets, and identity embeddings stay in your local workspace.</p></div>
+    </aside>
+    <main className="main-workspace"><div className="workspace-heading"><div><span className="eyebrow">EDIT / INSPECT / RENDER</span><h1>Your scene. A new identity.</h1></div><button className="button accent" disabled={!!reason('queue') || !inspection || !mappings(assigned, inspection?.tracks ?? [], sources).length || !!busy} title={reason('queue') ?? 'Render mapped face tracks locally'} onClick={queue}>Queue render <span>↗</span></button></div>
+      <VideoViewport target={target} output={output} time={time} setTime={setTime} duration={probe?.duration_seconds ?? 0} enabled={!reason('frame_preview')} keys={keys}/>
+      <div className="trim-bar"><span className="eyebrow">EXPORT RANGE</span><label>In <input aria-label="Trim start seconds" type="number" min={0} max={probe?.duration_seconds ?? caps?.job_parameter_bounds.properties?.trim_start_seconds?.maximum ?? 86400} step="0.01" value={trimStart} disabled={!!reason('trim') || !target} onChange={event => setTrimStart(event.target.valueAsNumber || 0)} /></label><label>Out <input aria-label="Trim end seconds" type="number" min={trimStart + .01} max={probe?.duration_seconds ?? 86400} step="0.01" placeholder="Full clip" value={trimEnd ?? ''} disabled={!!reason('trim') || !target} onChange={event => setTrimEnd(event.target.value === '' ? null : event.target.valueAsNumber)} /></label><span className="muted">seconds · source timestamps</span></div>
+      <section className="face-inspector"><div className="panel-heading"><div><span className="eyebrow">TARGET FACE INSPECTOR</span><h2>Assign an identity</h2></div><button className="button" disabled={!target || !!reason('face_inspection') || !!busy} title={reason('face_inspection') ?? ''} onClick={inspect}>{inspection ? 'Reinspect faces' : 'Inspect target faces'}</button></div>
+        {!inspection ? <div className="mapping-empty"><span>◎</span><p>Inspect the target to find persistent face tracks.<small>Then map each track to an observed source FaceSet.</small></p></div> : <><div className="inspection-meta"><span>{inspection.tracks.length} detected tracks</span><span>Identity continuity is estimated</span>{inspection.truncated && <strong>Bounded sample — truncated</strong>}</div>{inspection.warnings.map(warning => <p key={warning} className="inline-warning">{warning}</p>)}
+          <div className="track-list">{inspection.tracks.map(track => <div className={`track-card ${selectedTrack === track.track_id ? 'active' : ''}`} key={track.track_id}>
+            <button className="track-select" aria-label={`Inspect ${track.track_id}`} onClick={() => { setSelectedTrack(track.track_id); setTime(track.first_timestamp_seconds); if (assigned[track.track_id]) setSourceId(assigned[track.track_id]); }}>{track.thumbnail_base64 ? <img src={`data:${track.thumbnail_mime};base64,${track.thumbnail_base64}`} alt={`${track.track_id} detected face`}/> : <span className="track-fallback">◎</span>}<span><strong>{track.track_id.replace('track_', 'Face ')}</strong><small>Frames {track.first_frame}–{track.last_frame}</small><small>{formatTime(track.first_timestamp_seconds)} → {formatTime(track.last_timestamp_seconds)}</small></span></button><span className="mapping-arrow">→</span><label className="mapping-choice"><span>Source identity</span><select aria-label={`Identity for ${track.track_id}`} value={assigned[track.track_id] ?? ''} disabled={!sources.length} onChange={event => { setAssigned(previous => ({ ...previous, [track.track_id]: event.target.value })); setSourceId(event.target.value); }}><option value="">Keep original</option>{sources.map(source => <option key={source.faceset_id} value={source.faceset_id}>{source.name}</option>)}</select></label></div>)}</div></>}
+      </section>
+      <section className="queue-panel"><button className="queue-heading" aria-expanded={queueOpen} onClick={() => setQueueOpen(!queueOpen)}><span><span className="eyebrow">RENDER QUEUE</span><strong>{jobs.length} local jobs</strong></span><span>{queueOpen ? '⌄' : '⌃'}</span></button>{queueOpen && <><div className="telemetry"><span><i className={`dot ${connection === 'online' ? 'mint' : 'amber'}`}/>{connection}</span>{telemetry?.gpus.length ? telemetry.gpus.map(gpu => <span key={gpu.name}>{gpu.name} <strong>{(gpu.free_vram_mib / 1024).toFixed(1)} / {(gpu.total_vram_mib / 1024).toFixed(1)} GB free</strong></span>) : <span>{telemetry ? 'CPU reference available' : 'Waiting for hardware telemetry'}</span>}{telemetry && <span>{telemetry.logical_cpu_count} logical CPU cores</span>}</div>
+        {!jobs.length && <p className="muted empty-note">Your queue is clear. Map a target face to begin a local render.</p>}{[...jobs].reverse().map(job => <div className={`job ${selectedJob === job.job_id ? 'selected' : ''}`} key={job.job_id}><button className="job-select" onClick={() => showJob(job)}><span className={`state-dot ${job.state}`}/><span><strong>{job.request.target_path.split('/').at(-1)}</strong><small>{job.job_id.slice(0, 8)} · {job.progress.stage}</small></span></button><div className="job-progress"><span className={`state-badge ${job.state}`}>{job.state}</span><span>{job.progress.frame}{job.progress.total_frames ? ` / ${job.progress.total_frames}` : ''} frames{job.progress.fps > 0 ? ` · ${job.progress.fps.toFixed(1)} fps` : ''}</span><progress max={job.progress.total_frames ?? 1} value={job.progress.total_frames ? job.progress.frame : undefined}/>{job.failure && <small className="inline-warning">{job.failure.message}</small>}</div><div className="job-actions">{jobActions(caps, job.state).map(action => <button className="button small" key={action} disabled={!!busy} onClick={() => controlJob(job, action)}>{action}</button>)}{job.output && <a className="button small" href={`/api/v1/media/content?${new URLSearchParams({ path: job.output.output_path })}`} download>Output ↗</a>}</div></div>)}
+        <label className="checkpoint-option"><input type="checkbox" checked={includeCheckpoint && checkpointAllowed} disabled={!checkpointAllowed} onChange={event => setIncludeCheckpoint(event.target.checked)}/>Include selected paused/interrupted checkpoint when saving a project</label>
+      </>}</section>
+    </main><aside className="inspector-sidebar"><SettingsInspector caps={caps} config={config} save={saveSettings} busy={!!busy}/><Suspense fallback={<p className="muted empty-note">Loading pose inspection…</p>}><PoseCoverageInspector coverage={coverage} track={currentTrack} mesh={mesh}/></Suspense><label className="reconstruction-choice">Reconstructed artifact<select value="" disabled={!target || !reconstructions.length || !!reason('reconstruction_viewer')} onChange={event => { const id = event.target.value; if (!id) { setMesh(null); return; } void run('Verifying reconstruction', async () => setMesh(await api<Reconstruction>(`/reconstructions/${id}?${new URLSearchParams({ target_path: target })}`))); }}><option value="">{mesh ? 'Choose another artifact' : 'No reconstruction loaded'}</option>{reconstructions.map(item => <option key={item.reconstruction_id} value={item.reconstruction_id}>{item.reconstruction_id.slice(0, 12)}</option>)}</select></label>{mesh && <button className="button small" onClick={() => setMesh(null)}>Show pose coverage</button>}</aside></div>
+    <footer className="app-footer"><span>ROOP 3D / LOCAL WORKSTATION</span><span>Observed identities. Explicit processing. Synthetic media.</span><span>API :{config?.port ?? '—'}</span></footer>
+    {projectsOpen && <div className="modal-backdrop" onClick={() => setProjectsOpen(false)}><section role="dialog" aria-modal="true" aria-labelledby="projects-title" className="project-modal" onClick={event => event.stopPropagation()}><div className="panel-heading"><div><span className="eyebrow">VERSIONED .R3DP MANIFESTS</span><h2 id="projects-title">Project library</h2></div><button aria-label="Close projects" className="icon-button" onClick={() => setProjectsOpen(false)}>×</button></div><p className="muted">Reopening verifies target, inspection, FaceSet, and model hashes. Project files contain references and settings, never raw media.</p><button className="button" disabled={!!busy} onClick={() => projectInput.current?.click()}>Import .r3dp</button><input ref={projectInput} hidden type="file" accept=".r3dp,application/json" onChange={event => { importProject(event.target.files?.[0]); event.target.value = ''; }}/>{!projects.length && <p className="empty-note muted">No saved projects yet.</p>}{projects.map(item => <div key={item.project_id} className="saved-project"><div><strong>{item.name}</strong><small>{new Date(item.saved_at).toLocaleString()} · checkpoint {item.last_completed_frame >= 0 ? item.last_completed_frame : 'none'}</small></div><button className="button small" disabled={!!busy} onClick={() => openProject(item.project_id)}>Verify & open</button><a className="button small" href={`/api/v1/projects/${item.project_id}/download`} download>Export</a></div>)}{project?.checkpoint_job_id && <button className="button accent" disabled={!!busy || !!reason('queue')} onClick={() => void run('Verifying checkpoint continuation', async () => { const resumed = await post<Job>(`/projects/${project.project_id}/resume`, {}); setSelectedJob(resumed.job_id); await refreshJobs(); setProjectsOpen(false); })}>Verify & resume {project.name}</button>}</section></div>}
+  </div>;
+}
