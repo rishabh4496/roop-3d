@@ -1,6 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
 import { mediaURL } from './api';
 import { PreviewURL } from './state';
+import type { FaceSet, Probe } from './contracts';
+import FaceOverlayCanvas from './components/canvas/FaceOverlayCanvas';
+import FaceSelectionTray from './components/tray/FaceSelectionTray';
+
 function usePreview(path: string, time: number, playing: boolean) {
   const [source, setSource] = useState('');
   const [error, setError] = useState('');
@@ -19,7 +23,30 @@ function usePreview(path: string, time: number, playing: boolean) {
   }, [path, time, playing]);
   return { source, error };
 }
-export function VideoViewport({ target, output, time, setTime, duration, enabled, keys }: { target: string; output: string; time: number; setTime: (time: number) => void; duration: number; enabled: boolean; keys: number[] }) {
+
+export function VideoViewport({
+  target,
+  output,
+  time,
+  setTime,
+  duration,
+  enabled,
+  keys,
+  probe = null,
+  sources = [],
+  onAssignSource,
+}: {
+  target: string;
+  output: string;
+  time: number;
+  setTime: (time: number) => void;
+  duration: number;
+  enabled: boolean;
+  keys: number[];
+  probe?: Probe | null;
+  sources?: FaceSet[];
+  onAssignSource?: (clusterId: string, sourceId: string | null) => void;
+}) {
   const original = useRef<HTMLVideoElement>(null), processed = useRef<HTMLVideoElement>(null);
   const [playing, setPlaying] = useState(false), [mode, setMode] = useState<'dual' | 'wipe'>('dual'), [wipe, setWipe] = useState(50);
   const [playbackError, setPlaybackError] = useState('');
@@ -32,7 +59,19 @@ export function VideoViewport({ target, output, time, setTime, duration, enabled
     catch { setPlaybackError('Browser playback is unavailable for this codec. Use frame previews to inspect it.'); }
   };
   const pane = (path: string, result: typeof sourcePreview, isOutput: boolean) => <div className={`video-pane ${isOutput ? 'processed' : 'original'}`} style={mode === 'wipe' && isOutput ? { clipPath: `inset(0 0 0 ${wipe}%)` } : undefined}>
-    {path ? <><video ref={isOutput ? processed : original} src={mediaURL(path)} preload="metadata" playsInline muted onEnded={() => setPlaying(false)} onError={() => setPlaybackError('Browser playback unavailable; frame previews can still be used.')} onTimeUpdate={!isOutput ? event => { if (playing) setTime(event.currentTarget.currentTime); } : undefined}/>{!playing && result.source && <img className="frame-preview" src={result.source} alt={`${isOutput ? 'Processed' : 'Source'} frame at ${time.toFixed(2)} seconds`} />}</> : <div className="viewport-empty"><span className="film-icon">{isOutput ? '◇' : '⊞'}</span><h2>{isOutput ? 'Your output starts here' : 'Bring a scene to life'}</h2><p>{isOutput ? 'Completed renders appear alongside your source.' : 'Import a local video, inspect its faces, and assign an identity.'}</p></div>}
+    {path ? <>
+      <video ref={isOutput ? processed : original} src={mediaURL(path)} preload="metadata" playsInline muted onEnded={() => setPlaying(false)} onError={() => setPlaybackError('Browser playback unavailable; frame previews can still be used.')} onTimeUpdate={!isOutput ? event => { if (playing) setTime(event.currentTarget.currentTime); } : undefined}/>
+      {!playing && result.source && <img className="frame-preview" src={result.source} alt={`${isOutput ? 'Processed' : 'Source'} frame at ${time.toFixed(2)} seconds`} />}
+      {!isOutput && (
+        <FaceOverlayCanvas
+          videoRef={original}
+          mediaDimensions={probe ? { width: probe.width, height: probe.height } : undefined}
+          currentTime={time}
+          sources={sources}
+          onAssignSource={onAssignSource}
+        />
+      )}
+    </> : <div className="viewport-empty"><span className="film-icon">{isOutput ? '◇' : '⊞'}</span><h2>{isOutput ? 'Your output starts here' : 'Bring a scene to life'}</h2><p>{isOutput ? 'Completed renders appear alongside your source.' : 'Import a local video, inspect its faces, and assign an identity.'}</p></div>}
     <span className="pane-label">{isOutput ? 'OUTPUT' : 'SOURCE'} <i className={`dot ${path ? 'mint' : 'dim'}`} /></span>
     {result.error && <span className="preview-error">{result.error}</span>}
   </div>;
@@ -45,6 +84,12 @@ export function VideoViewport({ target, output, time, setTime, duration, enabled
       <div className="timeline-clip"><span>{target ? target.split('/').at(-1) : 'No target video'}</span>{keys.filter(at => at >= 0 && at <= duration).map((at, index) => <button key={index} className="keyframe" style={{ left: `${duration ? at / duration * 100 : 0}%` }} title={`Keyframe ${formatTime(at)}`} aria-label={`Seek keyframe ${formatTime(at)}`} onClick={() => { setPlaying(false); original.current?.pause(); processed.current?.pause(); setTime(at); }}>◆</button>)}</div>
       <div className="timeline-foot"><span>◆ Sampled keyframes</span><span>Scrub for decoded frame preview</span></div>
     </div>
+    <FaceSelectionTray
+      currentTime={time}
+      sources={sources}
+      onSeekTime={setTime}
+      onAssignSource={onAssignSource}
+    />
   </section>;
 }
 export function formatTime(value: number) { return `${Math.floor(value / 60).toString().padStart(2, '0')}:${(value % 60).toFixed(2).padStart(5, '0')}`; }

@@ -5,6 +5,7 @@ import { EventConnection } from './events';
 import { featureReason, jobActions, mappings, optionReason } from './state';
 import { SettingsInspector } from './SettingsInspector';
 import { VideoViewport, formatTime } from './VideoViewport';
+import { useFaceSelectionStore } from './useFaceSelectionStore';
 const PoseCoverageInspector = lazy(() => import('./ThreeViewport').then(module => ({ default: module.PoseCoverageInspector })));
 
 export default function App() {
@@ -76,6 +77,7 @@ export default function App() {
   const loadTarget = async (path: string) => {
     const [info, frames, reconstructionList] = await Promise.all([post<Probe>('/media/probe', { path }), api<{ timestamps: number[] }>(`/media/keyframes?${new URLSearchParams({ path })}`), api<typeof reconstructions>('/reconstructions')]);
     setTarget(path); setProbe(info); setTime(0); setKeys(frames.timestamps); setInspection(null); setAssigned({}); setSelectedTrack(''); setMesh(null); setTrimStart(0); setTrimEnd(null); setReconstructions(reconstructionList); setSelectedJob(''); setProject(null);
+    useFaceSelectionStore.getState().reset();
   };
   const importAsset = (file: File | undefined) => {
     if (!file || !caps) return;
@@ -90,6 +92,7 @@ export default function App() {
   const inspect = () => void run('Inspecting target faces', async () => {
     const result = await post<Inspection>('/media/inspect-faces', { path: target });
     setInspection(result); setAssigned({}); setSelectedTrack(result.tracks[0]?.track_id ?? '');
+    useFaceSelectionStore.getState().populateFromInspection(result, probe, {});
     if (!result.tracks.length) setNotice('No faces were detected. Try a clearer target frame or another clip.');
   });
   const request = (): JobRequest => {
@@ -119,7 +122,9 @@ export default function App() {
     const settings = await api<Config>('/config', { method: 'PUT', body: JSON.stringify(saved.effective_settings) });
     await loadTarget(saved.request.target_path);
     const loaded = await api<Inspection>(`/media/inspections/${saved.request.inspection_id}?${new URLSearchParams({ path: saved.request.target_path })}`);
-    setConfig(settings); setInspection(loaded); setAssigned(Object.fromEntries(saved.request.face_mappings.map(item => [item.track_id, item.faceset_id]))); setSelectedTrack(loaded.tracks[0]?.track_id ?? '');
+    const restoredMappings = Object.fromEntries(saved.request.face_mappings.map(item => [item.track_id, item.faceset_id]));
+    setConfig(settings); setInspection(loaded); setAssigned(restoredMappings); setSelectedTrack(loaded.tracks[0]?.track_id ?? '');
+    useFaceSelectionStore.getState().populateFromInspection(loaded, null, restoredMappings);
     setTrimStart(saved.request.trim_start_seconds ?? 0); setTrimEnd(saved.request.trim_end_seconds); setProject(saved); setProjectName(saved.name); setSelectedJob(saved.checkpoint_job_id ?? ''); setIncludeCheckpoint(!!saved.checkpoint_job_id); setProjectsOpen(false); setNotice('Project input and model hashes verified. Saved settings restored.');
   });
   const importProject = (file: File | undefined) => { if (!file) return; void run('Importing project manifest', async () => { if (file.size > 512 * 1024) throw new Error('Project manifest exceeds 512 KiB.'); const saved = await post<Project>('/projects/import', JSON.parse(await file.text())); await refreshProjects(); setNotice(`Imported ${saved.name}. Open it from the project library.`); }); };
@@ -132,7 +137,9 @@ export default function App() {
     void run('Opening job target', async () => {
       await loadTarget(job.request.target_path);
       const loaded = await api<Inspection>(`/media/inspections/${job.request.inspection_id}?${new URLSearchParams({ path: job.request.target_path })}`);
-      setInspection(loaded); setAssigned(Object.fromEntries(job.request.face_mappings.map(item => [item.track_id, item.faceset_id])));
+      const restoredMappings = Object.fromEntries(job.request.face_mappings.map(item => [item.track_id, item.faceset_id]));
+      setInspection(loaded); setAssigned(restoredMappings);
+      useFaceSelectionStore.getState().populateFromInspection(loaded, null, restoredMappings);
       setSelectedTrack(loaded.tracks[0]?.track_id ?? ''); setSelectedJob(job.job_id);
       setTrimStart(job.request.trim_start_seconds ?? 0); setTrimEnd(job.request.trim_end_seconds);
     });
@@ -152,12 +159,20 @@ export default function App() {
       <div className="library-footer"><span className="tiny-badge">LOCAL BY DEFAULT</span><p>Media, FaceSets, and identity embeddings stay in your local workspace.</p></div>
     </aside>
     <main className="main-workspace"><div className="workspace-heading"><div><span className="eyebrow">EDIT / INSPECT / RENDER</span><h1>Your scene. A new identity.</h1></div><button className="button accent" disabled={!!reason('queue') || !inspection || !mappings(assigned, inspection?.tracks ?? [], sources).length || !!busy} title={reason('queue') ?? 'Render mapped face tracks locally'} onClick={queue}>Queue render <span>↗</span></button></div>
-      <VideoViewport target={target} output={output} time={time} setTime={setTime} duration={probe?.duration_seconds ?? 0} enabled={!reason('frame_preview')} keys={keys}/>
+      <VideoViewport target={target} output={output} time={time} setTime={setTime} duration={probe?.duration_seconds ?? 0} enabled={!reason('frame_preview')} keys={keys} probe={probe} sources={sources} onAssignSource={(clusterId, facesetId) => {
+        setAssigned(previous => {
+          const next = { ...previous };
+          if (facesetId) next[clusterId] = facesetId;
+          else delete next[clusterId];
+          return next;
+        });
+        if (facesetId) setSourceId(facesetId);
+      }}/>
       <div className="trim-bar"><span className="eyebrow">EXPORT RANGE</span><label>In <input aria-label="Trim start seconds" type="number" min={0} max={probe?.duration_seconds ?? caps?.job_parameter_bounds.properties?.trim_start_seconds?.maximum ?? 86400} step="0.01" value={trimStart} disabled={!!reason('trim') || !target} onChange={event => setTrimStart(event.target.valueAsNumber || 0)} /></label><label>Out <input aria-label="Trim end seconds" type="number" min={trimStart + .01} max={probe?.duration_seconds ?? 86400} step="0.01" placeholder="Full clip" value={trimEnd ?? ''} disabled={!!reason('trim') || !target} onChange={event => setTrimEnd(event.target.value === '' ? null : event.target.valueAsNumber)} /></label><span className="muted">seconds · source timestamps</span></div>
       <section className="face-inspector"><div className="panel-heading"><div><span className="eyebrow">TARGET FACE INSPECTOR</span><h2>Assign an identity</h2></div><button className="button" disabled={!target || !!reason('face_inspection') || !!busy} title={reason('face_inspection') ?? ''} onClick={inspect}>{inspection ? 'Reinspect faces' : 'Inspect target faces'}</button></div>
         {!inspection ? <div className="mapping-empty"><span>◎</span><p>Inspect the target to find persistent face tracks.<small>Then map each track to an observed source FaceSet.</small></p></div> : <><div className="inspection-meta"><span>{inspection.tracks.length} detected tracks</span><span>Identity continuity is estimated</span>{inspection.truncated && <strong>Bounded sample — truncated</strong>}</div>{inspection.warnings.map(warning => <p key={warning} className="inline-warning">{warning}</p>)}
           <div className="track-list">{inspection.tracks.map(track => <div className={`track-card ${selectedTrack === track.track_id ? 'active' : ''}`} key={track.track_id}>
-            <button className="track-select" aria-label={`Inspect ${track.track_id}`} onClick={() => { setSelectedTrack(track.track_id); setTime(track.first_timestamp_seconds); if (assigned[track.track_id]) setSourceId(assigned[track.track_id]); }}>{track.thumbnail_base64 ? <img src={`data:${track.thumbnail_mime};base64,${track.thumbnail_base64}`} alt={`${track.track_id} detected face`}/> : <span className="track-fallback">◎</span>}<span><strong>{track.track_id.replace('track_', 'Face ')}</strong><small>Frames {track.first_frame}–{track.last_frame}</small><small>{formatTime(track.first_timestamp_seconds)} → {formatTime(track.last_timestamp_seconds)}</small></span></button><span className="mapping-arrow">→</span><label className="mapping-choice"><span>Source identity</span><select aria-label={`Identity for ${track.track_id}`} value={assigned[track.track_id] ?? ''} disabled={!sources.length} onChange={event => { setAssigned(previous => ({ ...previous, [track.track_id]: event.target.value })); setSourceId(event.target.value); }}><option value="">Keep original</option>{sources.map(source => <option key={source.faceset_id} value={source.faceset_id}>{source.name}</option>)}</select></label></div>)}</div></>}
+            <button className="track-select" aria-label={`Inspect ${track.track_id}`} onClick={() => { setSelectedTrack(track.track_id); setTime(track.first_timestamp_seconds); if (assigned[track.track_id]) setSourceId(assigned[track.track_id]); }}>{track.thumbnail_base64 ? <img src={`data:${track.thumbnail_mime};base64,${track.thumbnail_base64}`} alt={`${track.track_id} detected face`}/> : <span className="track-fallback">◎</span>}<span><strong>{track.track_id.replace('track_', 'Face ')}</strong><small>Frames {track.first_frame}–{track.last_frame}</small><small>{formatTime(track.first_timestamp_seconds)} → {formatTime(track.last_timestamp_seconds)}</small></span></button><span className="mapping-arrow">→</span><label className="mapping-choice"><span>Source identity</span><select aria-label={`Identity for ${track.track_id}`} value={assigned[track.track_id] ?? ''} disabled={!sources.length} onChange={event => { const nextVal = event.target.value; setAssigned(previous => ({ ...previous, [track.track_id]: nextVal })); useFaceSelectionStore.getState().assignSource(track.track_id, nextVal || null); setSourceId(nextVal); }}><option value="">Keep original</option>{sources.map(source => <option key={source.faceset_id} value={source.faceset_id}>{source.name}</option>)}</select></label></div>)}</div></>}
       </section>
       <section className="queue-panel"><button className="queue-heading" aria-expanded={queueOpen} onClick={() => setQueueOpen(!queueOpen)}><span><span className="eyebrow">RENDER QUEUE</span><strong>{jobs.length} local jobs</strong></span><span>{queueOpen ? '⌄' : '⌃'}</span></button>{queueOpen && <><div className="telemetry"><span><i className={`dot ${connection === 'online' ? 'mint' : 'amber'}`}/>{connection}</span>{telemetry?.gpus.length ? telemetry.gpus.map(gpu => <span key={gpu.name}>{gpu.name} <strong>{(gpu.free_vram_mib / 1024).toFixed(1)} / {(gpu.total_vram_mib / 1024).toFixed(1)} GB free</strong></span>) : <span>{telemetry ? 'CPU reference available' : 'Waiting for hardware telemetry'}</span>}{telemetry && <span>{telemetry.logical_cpu_count} logical CPU cores</span>}</div>
         {!jobs.length && <p className="muted empty-note">Your queue is clear. Map a target face to begin a local render.</p>}{[...jobs].reverse().map(job => <div className={`job ${selectedJob === job.job_id ? 'selected' : ''}`} key={job.job_id}><button className="job-select" onClick={() => showJob(job)}><span className={`state-dot ${job.state}`}/><span><strong>{job.request.target_path.split('/').at(-1)}</strong><small>{job.job_id.slice(0, 8)} · {job.progress.stage}</small></span></button><div className="job-progress"><span className={`state-badge ${job.state}`}>{job.state}</span><span>{job.progress.frame}{job.progress.total_frames ? ` / ${job.progress.total_frames}` : ''} frames{job.progress.fps > 0 ? ` · ${job.progress.fps.toFixed(1)} fps` : ''}</span><progress max={job.progress.total_frames ?? 1} value={job.progress.total_frames ? job.progress.frame : undefined}/>{job.failure && <small className="inline-warning">{job.failure.message}</small>}</div><div className="job-actions">{jobActions(caps, job.state).map(action => <button className="button small" key={action} disabled={!!busy} onClick={() => controlJob(job, action)}>{action}</button>)}{job.output && <a className="button small" href={`/api/v1/media/content?${new URLSearchParams({ path: job.output.output_path })}`} download>Output ↗</a>}</div></div>)}

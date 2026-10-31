@@ -24,3 +24,5 @@ export class PreviewURL {
   replace(blob: Blob): string { this.clear(); this.value = this.create(blob); return this.value; }
   clear(): void { if (this.value) this.revoke(this.value); this.value = null; }
 }
+export { useFaceSelectionStore, cosineSimilarity, cosineDistance, clusterFaces } from './useFaceSelectionStore';
+export type { FaceSelectionStoreState } from './useFaceSelectionStore';
