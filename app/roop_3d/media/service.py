@@ -187,3 +187,115 @@ class MediaService:
                       "persistent_id is the integer engine track ID; track_id retains the job mapping label."))
         atomic_json(self.root, f"roop_3d/.runtime/inspections/{result.inspection_id}.json", result.model_dump(mode="json"))
         return result
+
+    def segment_boundaries(self, path_str: str, max_segment_duration: float = 15.0) -> list[dict]:
+        target = self.path(path_str)
+        probe_res = self.probe(path_str)
+        total_duration = probe_res.duration_seconds or 0.0
+        if total_duration <= 0.0:
+            return [{"segment_index": 0, "start_seconds": 0.0, "end_seconds": None, "duration": 0.0}]
+
+        if total_duration <= max_segment_duration:
+            return [{"segment_index": 0, "start_seconds": 0.0, "end_seconds": round(total_duration, 3), "duration": round(total_duration, 3)}]
+
+        keyframes: list[float] = [0.0]
+        try:
+            with self.open(path_str) as container:
+                stream = container.streams.video[0]
+                time_base = Fraction(stream.time_base)
+                start_pts = stream.start_time or 0
+                for packet in container.demux(stream):
+                    if packet.is_keyframe and packet.pts is not None:
+                        sec = float((packet.pts - start_pts) * time_base)
+                        if sec > 0.05 and (not keyframes or sec - keyframes[-1] >= 0.5):
+                            keyframes.append(sec)
+        except Exception:
+            pass
+
+        if len(keyframes) <= 1:
+            step = max_segment_duration
+            cuts = [i * step for i in range(int(math.ceil(total_duration / step)) + 1)]
+            cuts[-1] = total_duration
+        else:
+            cuts = [0.0]
+            current_target = max_segment_duration
+            while current_target < total_duration - 1.0:
+                candidates = [k for k in keyframes if k > cuts[-1] + 1.0 and k <= current_target + max_segment_duration * 0.5]
+                if candidates:
+                    best = min(candidates, key=lambda k: abs(k - current_target))
+                    cuts.append(best)
+                    current_target = best + max_segment_duration
+                else:
+                    after = [k for k in keyframes if k > cuts[-1] + 1.0]
+                    if after:
+                        cuts.append(after[0])
+                        current_target = after[0] + max_segment_duration
+                    else:
+                        break
+            if cuts[-1] < total_duration:
+                cuts.append(total_duration)
+
+        segments = []
+        for idx in range(len(cuts) - 1):
+            start_t = round(cuts[idx], 3)
+            end_t = round(cuts[idx + 1], 3)
+            segments.append({
+                "segment_index": idx,
+                "start_seconds": start_t,
+                "end_seconds": end_t,
+                "duration": round(end_t - start_t, 3)
+            })
+        return segments
+
+    def concat_segments(self, segment_paths: list[str], output_filename: str | None = None) -> dict:
+        import subprocess
+        import shutil
+        if not segment_paths:
+            raise DomainError("SEGMENTS_EMPTY", "No segment paths provided", 422)
+
+        resolved_paths = [self.path(p) for p in segment_paths]
+        for p in resolved_paths:
+            if not p.is_file():
+                raise DomainError("SEGMENT_FILE_MISSING", f"Segment file {p.name} does not exist", 404)
+
+        out_name = output_filename or f"roop3d_concat_{uuid.uuid4().hex[:12]}.mp4"
+        if not out_name.endswith(".mp4"):
+            out_name += ".mp4"
+
+        output_dir = runtime_path(self.settings().output_root, self.root)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        out_file = output_dir / out_name
+
+        token = uuid.uuid4().hex
+        temp_list = self.root / f"roop_3d/outputs/{token}_list.txt"
+        temp_list.parent.mkdir(parents=True, exist_ok=True)
+
+        lines = [f"file '{p.resolve().as_posix()}'\n" for p in resolved_paths]
+        temp_list.write_text("".join(lines), encoding="utf-8")
+
+        ffmpeg_exe = shutil.which("ffmpeg") or "ffmpeg"
+        try:
+            cmd = [
+                ffmpeg_exe, "-y", "-f", "concat", "-safe", "0",
+                "-i", str(temp_list), "-c", "copy", str(out_file)
+            ]
+            subprocess.run(cmd, capture_output=True, text=True, check=True)
+        except subprocess.CalledProcessError as err:
+            temp_list.unlink(missing_ok=True)
+            raise DomainError("CONCAT_FAILED", f"FFmpeg stream copy failed: {err.stderr[-200:] if err.stderr else 'unknown'}", 500)
+        finally:
+            temp_list.unlink(missing_ok=True)
+
+        try:
+            out_rel = out_file.relative_to(self.root).as_posix()
+            out_probe = self.probe(out_rel)
+            total_frames = out_probe.declared_frame_count or 0
+        except Exception:
+            out_rel = out_file.relative_to(self.root).as_posix()
+            total_frames = 0
+
+        return {
+            "output_path": out_rel,
+            "frames": total_frames,
+            "segments_concatenated": len(segment_paths)
+        }

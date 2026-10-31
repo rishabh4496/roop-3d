@@ -471,6 +471,11 @@ def open_project(project_id: str, request: Request):
     return request.app.state.projects.load(project_id)
 
 
+@router.get("/projects/{project_id}/validate")
+def validate_project(project_id: str, request: Request):
+    return request.app.state.projects.validate_project(project_id)
+
+
 @router.get("/projects/{project_id}/download")
 def download_project(project_id: str, request: Request):
     request.app.state.projects.load(project_id)

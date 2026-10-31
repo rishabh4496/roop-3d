@@ -5,10 +5,11 @@ from pathlib import Path
 from typing import Annotated
 
 from fastapi import APIRouter, Body, Header, Query, Request, Response
+from pydantic import Field
 
 from roop_3d.audit.isolation import safe_path, sha256_file
 from roop_3d.core.errors import DomainError
-from roop_3d.core.settings import ConfigStore, Settings
+from roop_3d.core.settings import ConfigStore, Contract, Settings
 from roop_3d.jobs.schema import FaceSetSummary, JobRecord, JobRequest
 from roop_3d.media.schema import FaceInspection, InspectRequest, MediaProbe, MediaRequest
 from roop_3d.models.registry import ModelRecord
@@ -139,6 +140,26 @@ def preview(request: Request, path: Annotated[str, Query(min_length=1, max_lengt
             comparison_path: Annotated[str | None, Query(max_length=1024)] = None) -> Response:
     image = request.app.state.media.preview(path, timestamp, frame_index, comparison_path)
     return Response(image, media_type="image/jpeg", headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"})
+
+
+class SplitBoundariesRequest(Contract):
+    target_path: str = Field(min_length=1, max_length=1024)
+    max_segment_duration: float = Field(default=15.0, gt=0, le=3600)
+
+
+class ConcatSegmentsRequest(Contract):
+    segment_paths: list[str] = Field(min_length=1, max_length=256)
+    output_filename: str | None = None
+
+
+@router.post("/media/split-boundaries")
+def split_boundaries(value: SplitBoundariesRequest, request: Request) -> list[dict]:
+    return request.app.state.media.segment_boundaries(value.target_path, value.max_segment_duration)
+
+
+@router.post("/media/concat-segments")
+def concat_segments(value: ConcatSegmentsRequest, request: Request) -> dict:
+    return request.app.state.media.concat_segments(value.segment_paths, value.output_filename)
 
 
 def validate_job(request: Request, value: JobRequest) -> None:

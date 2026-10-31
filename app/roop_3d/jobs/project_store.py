@@ -111,15 +111,104 @@ class ProjectStore:
         atomic_json(self.root, self.relative(manifest.project_id), manifest.model_dump(mode="json"))
         return manifest
 
+    def validate_project(self, project_id: str) -> dict:
+        item = self.load(project_id, verify=False)
+        verified = True
+        status = "Inputs Verified"
+        reason = None
+        missing_inputs: list[str] = []
+        try:
+            expected = self._inputs(item.request)
+            if expected != item.inputs:
+                verified = False
+                status = "Missing Source Media"
+                reason = "A target, inspection, or FaceSet hash changed"
+        except DomainError as err:
+            verified = False
+            status = "Missing Source Media"
+            reason = err.message
+            missing_inputs.append(err.message)
+        except Exception:
+            verified = False
+            status = "Missing Source Media"
+            reason = "Source media or inspection file is missing"
+            missing_inputs.append("Source file missing")
+
+        if verified:
+            for model_id, digest in item.model_digests.items():
+                try:
+                    record = self.catalog.get(model_id)
+                    if record["sha256"] != digest:
+                        verified = False
+                        status = "Missing Source Media"
+                        reason = f"Model {model_id} identity changed"
+                        break
+                except Exception:
+                    verified = False
+                    status = "Missing Source Media"
+                    reason = f"Model {model_id} is missing"
+                    break
+
+        checkpoint_data = None
+        if item.checkpoint_job_id:
+            cp_path = owned(self.root, f"roop_3d/.runtime/jobs/{item.checkpoint_job_id}/checkpoint.json")
+            bin_path = owned(self.root, f"roop_3d/.runtime/jobs/{item.checkpoint_job_id}/checkpoint.bin")
+            if cp_path.is_file():
+                try:
+                    from roop_3d.engine.pipeline_runner import PipelineCheckpoint
+                    cp = PipelineCheckpoint.model_validate_json(cp_path.read_text("utf-8"))
+                    checkpoint_data = cp.model_dump(mode="json")
+                    checkpoint_data["has_binary_checkpoint"] = bin_path.is_file()
+                except Exception:
+                    pass
+
+        return {
+            "project_id": item.project_id,
+            "name": item.name,
+            "saved_at": item.saved_at,
+            "last_completed_frame": item.last_completed_frame,
+            "inputs_verified": verified,
+            "status": status,
+            "verification_reason": reason,
+            "missing_inputs": missing_inputs,
+            "checkpoint_job_id": item.checkpoint_job_id,
+            "checkpoint": checkpoint_data,
+            "target_path": item.request.target_path,
+            "face_mappings": [m.model_dump(mode="json") for m in item.request.face_mappings],
+            "trim_start_seconds": item.request.trim_start_seconds,
+            "trim_end_seconds": item.request.trim_end_seconds,
+            "has_mask": bool(item.request.mask_base64),
+            "has_curves": bool(item.request.parameter_curves),
+        }
+
     def list(self) -> list[dict]:
         base = owned(self.root, "roop_3d/.runtime/projects")
         if not base.exists():
             return []
         result = []
         for path in sorted(base.glob("*.r3dp")):
-            item = self.load(path.stem, verify=False)
-            result.append({"project_id": item.project_id, "name": item.name, "saved_at": item.saved_at,
-                           "last_completed_frame": item.last_completed_frame})
+            try:
+                result.append(self.validate_project(path.stem))
+            except Exception:
+                item = self.load(path.stem, verify=False)
+                result.append({
+                    "project_id": item.project_id,
+                    "name": item.name,
+                    "saved_at": item.saved_at,
+                    "last_completed_frame": item.last_completed_frame,
+                    "inputs_verified": False,
+                    "status": "Missing Source Media",
+                    "verification_reason": "Failed to load project manifest",
+                    "missing_inputs": ["Corrupted or invalid project manifest"],
+                    "checkpoint_job_id": item.checkpoint_job_id,
+                    "checkpoint": None,
+                    "target_path": item.request.target_path,
+                    "face_mappings": [m.model_dump(mode="json") for m in item.request.face_mappings],
+                    "trim_start_seconds": item.request.trim_start_seconds,
+                    "trim_end_seconds": item.request.trim_end_seconds,
+                    "has_mask": bool(item.request.mask_base64),
+                    "has_curves": bool(item.request.parameter_curves),
+                })
         return result
 
     def load(self, project_id: str, *, verify: bool = True) -> ProjectManifest:

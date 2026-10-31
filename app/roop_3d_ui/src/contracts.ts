@@ -56,6 +56,37 @@ export interface FaceSet { faceset_id: string; name: string; item_count: number 
 export interface Probe { width: number; height: number; duration_seconds: number | null; fps_rational: string | null; declared_frame_count: number | null; audio_tracks: unknown[] }
 export interface Coverage { faceset_id: string; views: { yaw: number; pitch: number; roll: number; pose_bin: string }[]; bins: Record<string, number> }
 export interface Reconstruction { method: 'flame' | 'tps_2_5d'; coordinate_system: 'opencv' | 'opengl'; vertices: number[][]; faces: number[][]; uvs: number[][] | null; face_uvs?: number[][] | null; texture: string | null; provenance: string }
-export interface Project { project_id: string; name: string; request: JobRequest; effective_settings: Config; last_completed_frame: number; checkpoint_job_id: string | null; saved_at: string }
+export interface Project {
+  project_id: string;
+  name: string;
+  request: JobRequest;
+  effective_settings: Config;
+  last_completed_frame: number;
+  checkpoint_job_id: string | null;
+  saved_at: string;
+  inputs_verified?: boolean;
+  status?: string;
+  verification_reason?: string | null;
+  missing_inputs?: string[];
+  checkpoint?: {
+    job_id: string;
+    completed_frame: number;
+    completed_segment?: number;
+    total_segments?: number | null;
+    execution_provider?: string;
+    input_hashes?: Record<string, string>;
+    faceset_ids?: string[];
+    pose_cache?: Record<string, number[]>;
+    keyframe_curves?: Record<string, unknown>;
+    manual_mask?: string | null;
+    has_binary_checkpoint?: boolean;
+  } | null;
+  target_path?: string;
+  face_mappings?: Mapping[];
+  trim_start_seconds?: number | null;
+  trim_end_seconds?: number | null;
+  has_mask?: boolean;
+  has_curves?: boolean;
+}
 export interface Telemetry { gpus: { name: string; total_vram_mib: number; free_vram_mib: number }[]; logical_cpu_count: number }
 export interface Event { type: string; sequence?: number; hardware?: Telemetry }

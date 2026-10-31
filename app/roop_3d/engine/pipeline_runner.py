@@ -48,6 +48,14 @@ class PipelineCheckpoint(Contract):
     retry_profile: RuntimeProfile | None = None
     oom_retries: int = Field(default=0, ge=0, le=1, strict=True)
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    input_hashes: dict[str, str] = Field(default_factory=dict)
+    faceset_ids: tuple[str, ...] = Field(default_factory=tuple)
+    pose_cache: dict[str, list[float]] = Field(default_factory=dict)
+    keyframe_curves: dict = Field(default_factory=dict)
+    manual_mask: str | None = Field(default=None)
+    execution_provider: str = Field(default="CPUExecutionProvider")
+    completed_segment: int = Field(default=-1, ge=-1, strict=True)
+    total_segments: int | None = Field(default=None, ge=1, strict=True)
 
 
 class PipelinePaused(Exception):
@@ -153,17 +161,35 @@ class MasterPipelineRunner:
     def _write_checkpoint(self, checkpoint: PipelineCheckpoint) -> None:
         atomic_json(self.root, self._checkpoint_relative(checkpoint.job_id),
                     checkpoint.model_dump(mode="json"))
+        bin_rel = f"roop_3d/.runtime/jobs/{checkpoint.job_id}/checkpoint.bin"
+        json_bytes = checkpoint.model_dump_json().encode("utf-8")
+        binary_payload = bytearray(b"R3DCP001")
+        binary_payload.extend(len(json_bytes).to_bytes(4, "big"))
+        binary_payload.extend(json_bytes)
+        if checkpoint.manual_mask:
+            mask_bytes = checkpoint.manual_mask.encode("utf-8")
+            binary_payload.extend(len(mask_bytes).to_bytes(4, "big"))
+            binary_payload.extend(mask_bytes)
+        atomic_bytes(self.root, bin_rel, bytes(binary_payload))
 
     def _checkpoint(self, checkpoint: PipelineCheckpoint, *, completed_frame: int | None = None,
                     profile: RuntimeProfile | None = None, retry_profile: RuntimeProfile | None = None,
-                    oom_retries: int | None = None) -> PipelineCheckpoint:
-        value = checkpoint.model_copy(update={
+                    oom_retries: int | None = None, provider: str | None = None,
+                    completed_segment: int | None = None, pose_cache: dict | None = None) -> PipelineCheckpoint:
+        updates: dict = {
             "completed_frame": checkpoint.completed_frame if completed_frame is None else completed_frame,
             "runtime_profile": checkpoint.runtime_profile if profile is None else profile,
             "retry_profile": retry_profile if retry_profile is not None else checkpoint.retry_profile,
             "oom_retries": checkpoint.oom_retries if oom_retries is None else oom_retries,
             "updated_at": datetime.now(timezone.utc),
-        })
+        }
+        if provider is not None:
+            updates["execution_provider"] = provider
+        if completed_segment is not None:
+            updates["completed_segment"] = completed_segment
+        if pose_cache is not None:
+            updates["pose_cache"] = pose_cache
+        value = checkpoint.model_copy(update=updates)
         self._write_checkpoint(value)
         return value
 
@@ -246,7 +272,18 @@ class MasterPipelineRunner:
             raise DomainError("JOB_SOURCE_CHANGED", "A source FaceSet changed since the saved checkpoint", 409)
         if checkpoint.settings_sha256 is not None and checkpoint.settings_sha256 != fingerprint:
             raise DomainError("JOB_SETTINGS_CHANGED", "Restore the job's effective settings before resuming", 409)
-        checkpoint = checkpoint.model_copy(update={"settings_sha256": fingerprint, "faceset_sha256": source_fingerprints})
+        curves_dict = record.request.parameter_curves.model_dump(mode="json") if record.request.parameter_curves else {}
+        input_hashes_dict = {"target": digest, "target_path": record.request.target_path, "inspection_id": record.request.inspection_id}
+        input_hashes_dict.update(source_fingerprints)
+        checkpoint = checkpoint.model_copy(update={
+            "settings_sha256": fingerprint,
+            "faceset_sha256": source_fingerprints,
+            "input_hashes": input_hashes_dict,
+            "faceset_ids": tuple(faceset_ids),
+            "keyframe_curves": curves_dict,
+            "manual_mask": record.request.mask_base64,
+            "execution_provider": "CPUExecutionProvider",
+        })
         self._write_checkpoint(checkpoint)
         workdir = owned(self.root, f"roop_3d/.runtime/jobs/{record.job_id}/frames")
         workdir.mkdir(parents=True, exist_ok=True)
@@ -298,7 +335,7 @@ class MasterPipelineRunner:
         checkpoint = prepared.checkpoint
         if checkpoint.retry_profile == "cpu" and admission.profile != "cpu":
             raise DomainError("JOB_RETRY_PROFILE_MISMATCH", "OOM retry must be admitted on the CPU profile", 409)
-        checkpoint = self._checkpoint(checkpoint, profile=admission.profile)
+        checkpoint = self._checkpoint(checkpoint, profile=admission.profile, provider=admission.provider)
         workdir = owned(self.root, f"roop_3d/.runtime/jobs/{record.job_id}/frames")
         workdir.mkdir(parents=True, exist_ok=True)
         numeric_ids = set(labels_to_ids.values())
