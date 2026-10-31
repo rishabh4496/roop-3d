@@ -2,6 +2,7 @@ import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import TimelineWorkstation, {
   formatTimecode,
+  parseTimecodeString,
   parseFps,
   pointsToSplinePath,
   getClusterColor,
@@ -16,6 +17,18 @@ describe('Timeline Utility Functions', () => {
     expect(formatTimecode(3661.25, 24)).toBe('01:01:01:06');
     expect(formatTimecode(-5, 30)).toBe('00:00:00:00');
     expect(formatTimecode(NaN, 30)).toBe('00:00:00:00');
+  });
+
+  it('parses timecode strings and frame numbers into seconds', () => {
+    expect(parseTimecodeString('00:00:05:15', 30)).toBe(5.5);
+    expect(parseTimecodeString('01:05:15', 30)).toBe(65.5);
+    expect(parseTimecodeString('02:30', 30)).toBe(150);
+    expect(parseTimecodeString('f:120', 30)).toBe(4);
+    expect(parseTimecodeString('#90', 30)).toBe(3);
+    expect(parseTimecodeString('f60', 30)).toBe(2);
+    expect(parseTimecodeString('12.5', 30)).toBe(12.5);
+    expect(parseTimecodeString('', 30)).toBe(0);
+    expect(parseTimecodeString('invalid', 30)).toBe(0);
   });
 
   it('parses FPS rationals accurately with fallbacks', () => {
@@ -91,6 +104,25 @@ describe('TimelineWorkstation Component', () => {
     expect(html).toContain('1x');
     expect(html).toContain('2x');
     expect(html).toContain('4x');
+
+    // Extended transport jump buttons
+    expect(html).toContain('Jump to Start / In Point');
+    expect(html).toContain('Jump -1 Second');
+    expect(html).toContain('Jump +1 Second');
+    expect(html).toContain('Jump to End / Out Point');
+
+    // Snap and Loop toggles
+    expect(html).toContain('timeline-snap-btn');
+    expect(html).toContain('Snap');
+    expect(html).toContain('timeline-loop-btn');
+    expect(html).toContain('Loop');
+
+    // Timeline Zoom controller
+    expect(html).toContain('timeline-zoom-controller');
+    expect(html).toContain('ZOOM:');
+    expect(html).toContain('zoom-slider');
+    expect(html).toContain('zoom-step-btn');
+    expect(html).toContain('1.0x');
   });
 
   it('renders timecode ruler and filmstrip track with 120px-wide thumbnail frame cards', () => {
@@ -104,6 +136,8 @@ describe('TimelineWorkstation Component', () => {
     );
 
     // Timecode ruler track
+    expect(html).toContain('timeline-tracks-viewport');
+    expect(html).toContain('timeline-tracks-inner');
     expect(html).toContain('timecode-ruler-track');
     expect(html).toContain('ruler-tick');
 

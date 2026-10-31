@@ -77,6 +77,7 @@ export default function FaceOverlayCanvas({
   onAssignSource,
   onExtractFaces,
   detecting = false,
+  showOverlays = true,
 }) {
   const canvasRef = useRef(null);
   const containerRef = useRef(null);
@@ -417,6 +418,8 @@ export default function FaceOverlayCanvas({
       onAssignSource(clusterId, facesetId || null);
     }
   };
+
+  if (!showOverlays) return null;
 
   return (
     <div

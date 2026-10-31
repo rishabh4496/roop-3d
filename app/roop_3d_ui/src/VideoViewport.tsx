@@ -7,6 +7,7 @@ import FaceOverlayCanvas from './components/canvas/FaceOverlayCanvas';
 import FaceSelectionTray from './components/tray/FaceSelectionTray';
 import WorkstationCanvas from './components/canvas/WorkstationCanvas';
 import MaskBrushOverlay from './components/canvas/MaskBrushOverlay';
+import CompositionGridOverlay from './components/canvas/CompositionGridOverlay';
 import TimelineWorkstation, { parseFps } from './components/timeline/TimelineWorkstation';
 import type { ReactNode } from 'react';
 import type { JobRequest } from './contracts';
@@ -194,9 +195,9 @@ export function VideoViewport({
   useEffect(() => {
     updateViewportSize();
     window.addEventListener('resize', updateViewportSize);
-    const observer = new ResizeObserver(updateViewportSize);
-    if (viewportRef.current) observer.observe(viewportRef.current);
-    return () => { observer.disconnect(); window.removeEventListener('resize', updateViewportSize); };
+    const observer = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(updateViewportSize) : null;
+    if (observer && viewportRef.current) observer.observe(viewportRef.current);
+    return () => { observer?.disconnect(); window.removeEventListener('resize', updateViewportSize); };
   }, [updateViewportSize]);
 
   useEffect(() => { setPlaying(false); original.current?.pause(); processed.current?.pause(); setPlaybackError(''); }, [target, output]);
@@ -213,56 +214,197 @@ export function VideoViewport({
 
   const mediaDims = probe ? { width: probe.width, height: probe.height } : { width: 1920, height: 1080 };
 
-  const pane = (path: string, result: typeof sourcePreview, isOutput: boolean) => (
-    <div
-      className={`video-pane ${isOutput ? 'processed' : 'original'}`}
-      style={isOutput && output ? undefined : undefined}
-    >
-      {path ? (
-        <>
-          <video
-            ref={isOutput ? processed : original}
-            src={mediaURL(path)}
-            preload="metadata"
-            playsInline
-            muted
-            onEnded={() => setPlaying(false)}
-            onError={() => setPlaybackError('Browser playback unavailable; frame previews can still be used.')}
-            onTimeUpdate={!isOutput ? event => { if (playing) setTime(event.currentTarget.currentTime); } : undefined}
-          />
-          {!playing && result.source && (
-            <img
-              className="frame-preview"
-              src={result.source}
-              alt={`${isOutput ? 'Processed' : 'Source'} frame at ${time.toFixed(2)} seconds`}
+  // Preview Box zoom, pan, grid, peek, and display state
+  const [previewZoom, setPreviewZoom] = useState(1);
+  const [previewPan, setPreviewPan] = useState({ x: 0, y: 0 });
+  const [isPanning, setIsPanning] = useState(false);
+  const [panOrigin, setPanOrigin] = useState({ x: 0, y: 0 });
+  const [gridMode, setGridMode] = useState<'off' | 'thirds' | 'crosshair' | 'safe'>('off');
+  const [showSourcePeek, setShowSourcePeek] = useState(false);
+  const [showFaceOverlays, setShowFaceOverlays] = useState(true);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [snapshotNotice, setSnapshotNotice] = useState('');
+
+  // Fullscreen sync
+  const toggleFullscreen = useCallback(() => {
+    if (!document.fullscreenElement) {
+      viewportRef.current?.requestFullscreen?.().catch(() => {});
+    } else {
+      document.exitFullscreen?.().catch(() => {});
+    }
+  }, []);
+
+  useEffect(() => {
+    const handleFsChange = () => {
+      setIsFullscreen(!!document.fullscreenElement);
+    };
+    document.addEventListener('fullscreenchange', handleFsChange);
+    return () => document.removeEventListener('fullscreenchange', handleFsChange);
+  }, []);
+
+  // Frame snapshot download
+  const handleDownloadSnapshot = useCallback(() => {
+    try {
+      let dataUrl = '';
+      if (solo && result?.buffers[solo]) {
+        dataUrl = result.buffers[solo];
+      } else if (showSourcePeek && sourcePreview.source) {
+        dataUrl = sourcePreview.source;
+      } else if (output && outputPreview.source) {
+        dataUrl = outputPreview.source;
+      } else if (sourcePreview.source) {
+        dataUrl = sourcePreview.source;
+      } else {
+        const v = showSourcePeek ? original.current : (processed.current || original.current);
+        if (v && v.videoWidth > 0 && v.videoHeight > 0) {
+          const c = document.createElement('canvas');
+          c.width = v.videoWidth;
+          c.height = v.videoHeight;
+          const ctx = c.getContext('2d');
+          if (ctx) {
+            ctx.drawImage(v, 0, 0);
+            dataUrl = c.toDataURL('image/png');
+          }
+        }
+      }
+
+      if (!dataUrl) {
+        setSnapshotNotice('No frame buffer available to capture.');
+        setTimeout(() => setSnapshotNotice(''), 3000);
+        return;
+      }
+
+      const a = document.createElement('a');
+      a.href = dataUrl;
+      const timeMs = Math.round(time * 1000);
+      a.download = `roop3d_snapshot_${timeMs}ms.png`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+
+      setSnapshotNotice('Snapshot downloaded! 📸');
+      setTimeout(() => setSnapshotNotice(''), 3000);
+    } catch (err: any) {
+      setSnapshotNotice(err.message || 'Snapshot download failed');
+      setTimeout(() => setSnapshotNotice(''), 3000);
+    }
+  }, [solo, result, showSourcePeek, sourcePreview.source, outputPreview.source, output, time]);
+
+  // Viewport pan & zoom handlers
+  const handleViewportPointerDown = (e: React.PointerEvent) => {
+    if (previewZoom <= 1 || isMaskEditing) return;
+    const targetEl = e.target as HTMLElement;
+    if (targetEl.closest('button, input, select, .face-assignment-popover, .preview-hud-toolbar, .preview-face-selector-strip')) return;
+    setIsPanning(true);
+    setPanOrigin({ x: e.clientX - previewPan.x, y: e.clientY - previewPan.y });
+    try {
+      (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    } catch {}
+  };
+
+  const handleViewportPointerMove = (e: React.PointerEvent) => {
+    if (!isPanning || previewZoom <= 1) return;
+    setPreviewPan({
+      x: e.clientX - panOrigin.x,
+      y: e.clientY - panOrigin.y,
+    });
+  };
+
+  const handleViewportPointerUp = (e: React.PointerEvent) => {
+    if (isPanning) {
+      setIsPanning(false);
+      try {
+        (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
+      } catch {}
+    }
+  };
+
+  const handleWheelZoom = (e: React.WheelEvent) => {
+    if (e.ctrlKey || e.metaKey) {
+      e.preventDefault();
+      e.stopPropagation();
+      const delta = e.deltaY < 0 ? 0.25 : -0.25;
+      setPreviewZoom(current => {
+        const next = Math.max(1, Math.min(4, Math.round((current + delta) * 4) / 4));
+        if (next === 1) setPreviewPan({ x: 0, y: 0 });
+        return next;
+      });
+    }
+  };
+
+  const handleViewportDoubleClick = (e: React.MouseEvent) => {
+    const targetEl = e.target as HTMLElement;
+    if (targetEl.closest('button, input, select, .face-assignment-popover, .preview-hud-toolbar, .preview-face-selector-strip')) return;
+    if (previewZoom > 1) {
+      setPreviewZoom(1);
+      setPreviewPan({ x: 0, y: 0 });
+    } else {
+      setPreviewZoom(2);
+    }
+  };
+
+  const pane = (path: string, result: typeof sourcePreview, isOutput: boolean) => {
+    const isShowingSourcePeek = isOutput && showSourcePeek;
+    const activePath = isShowingSourcePeek ? target : path;
+    const activeResult = isShowingSourcePeek ? sourcePreview : result;
+
+    return (
+      <div
+        className={`video-pane ${isOutput ? 'processed' : 'original'} ${isShowingSourcePeek ? 'source-peek-active' : ''}`}
+        style={isOutput && output ? undefined : undefined}
+      >
+        {activePath ? (
+          <>
+            <video
+              ref={isOutput ? (isShowingSourcePeek ? undefined : processed) : original}
+              src={mediaURL(activePath)}
+              preload="metadata"
+              playsInline
+              muted
+              onEnded={() => setPlaying(false)}
+              onError={() => setPlaybackError('Browser playback unavailable; frame previews can still be used.')}
+              onTimeUpdate={!isOutput ? event => { if (playing) setTime(event.currentTarget.currentTime); } : undefined}
             />
-          )}
-          {!isOutput && !isMaskEditing && (
-            <FaceOverlayCanvas
-              videoRef={original}
-              mediaDimensions={mediaDims}
-              currentTime={time}
-              sources={sources}
-              onAssignSource={onAssignSource}
-            />
-          )}
-        </>
-      ) : (
-        <div className="viewport-empty">
-          <span className="film-icon">{isOutput ? '◇' : '⊞'}</span>
-          <h2>{isOutput ? 'Your output starts here' : 'Bring a scene to life'}</h2>
-          <p>{isOutput ? 'Completed renders appear alongside your source.' : 'Import a local video, inspect its faces, and assign an identity.'}</p>
-        </div>
-      )}
-      <span className="pane-label">
-        {isOutput ? 'OUTPUT' : 'SOURCE'} <i className={`dot ${path ? 'mint' : 'dim'}`} />
-      </span>
-      {result.error && <span className="preview-error">{result.error}</span>}
-    </div>
-  );
+            {!playing && activeResult.source && (
+              <img
+                className="frame-preview"
+                src={activeResult.source}
+                alt={`${isOutput ? (isShowingSourcePeek ? 'Source peek' : 'Processed') : 'Source'} frame at ${time.toFixed(2)} seconds`}
+              />
+            )}
+            {!isOutput && !isMaskEditing && showFaceOverlays && (
+              <FaceOverlayCanvas
+                videoRef={original}
+                mediaDimensions={mediaDims}
+                currentTime={time}
+                sources={sources}
+                onAssignSource={onAssignSource}
+                showOverlays={showFaceOverlays}
+              />
+            )}
+            {isShowingSourcePeek && (
+              <div className="source-peek-badge">
+                <span>👁</span> SOURCE PEEK (A/B)
+              </div>
+            )}
+          </>
+        ) : (
+          <div className="viewport-empty">
+            <span className="film-icon">{isOutput ? '◇' : '⊞'}</span>
+            <h2>{isOutput ? 'Your output starts here' : 'Bring a scene to life'}</h2>
+            <p>{isOutput ? 'Completed renders appear alongside your source.' : 'Import a local video, inspect its faces, and assign an identity.'}</p>
+          </div>
+        )}
+        <span className="pane-label">
+          {isOutput ? (isShowingSourcePeek ? 'SOURCE (PEEK)' : 'OUTPUT') : 'SOURCE'} <i className={`dot ${activePath ? 'mint' : 'dim'}`} />
+        </span>
+        {activeResult.error && <span className="preview-error">{activeResult.error}</span>}
+      </div>
+    );
+  };
 
   return (
-    <section className="viewport-section">
+    <section className={`viewport-section ${isFullscreen ? 'is-fullscreen' : ''}`}>
       <LayoutToolbar onFloat={floating.open}/>
       <SnapshotSlots onCapture={(slot: string) => void captureSlot(slot)} onRestore={restoreWorkspace} busy={captureBusy} captureAvailable={!!previewRequest}/>
       {captureError && <p role="alert" className="inline-warning">{captureError}</p>}
@@ -297,43 +439,190 @@ export function VideoViewport({
         <span className="muted">Source timing preserved</span>
       </div>
 
-      <div className={`viewport dual ${isMaskEditing ? 'mask-editing' : ''}`} ref={viewportRef}>
+      <div
+        className={`viewport dual ${isMaskEditing ? 'mask-editing' : ''} ${isFullscreen ? 'fullscreen-active' : ''}`}
+        ref={viewportRef}
+        onPointerDown={handleViewportPointerDown}
+        onPointerMove={handleViewportPointerMove}
+        onPointerUp={handleViewportPointerUp}
+        onPointerCancel={handleViewportPointerUp}
+        onDoubleClick={handleViewportDoubleClick}
+        onWheel={handleWheelZoom}
+      >
+        {/* Floating Preview Controls HUD */}
+        <div className="preview-hud-toolbar" role="toolbar" aria-label="Preview Controls">
+          {/* Zoom Controller */}
+          <div className="hud-group zoom-group" role="group" aria-label="Preview Zoom">
+            <button
+              type="button"
+              className="hud-btn zoom-step-btn"
+              disabled={previewZoom <= 1}
+              onClick={() => {
+                const next = Math.max(1, Math.round((previewZoom - 0.25) * 4) / 4);
+                setPreviewZoom(next);
+                if (next === 1) setPreviewPan({ x: 0, y: 0 });
+              }}
+              title="Zoom Out Preview [-]"
+            >
+              -
+            </button>
+            <button
+              type="button"
+              className="hud-btn zoom-level-btn"
+              onClick={() => {
+                if (previewZoom === 1) {
+                  setPreviewZoom(2);
+                } else {
+                  setPreviewZoom(1);
+                  setPreviewPan({ x: 0, y: 0 });
+                }
+              }}
+              title="Click to toggle Fit / 200% Zoom"
+            >
+              {previewZoom === 1 ? 'Fit' : `${Math.round(previewZoom * 100)}%`}
+            </button>
+            <button
+              type="button"
+              className="hud-btn zoom-step-btn"
+              disabled={previewZoom >= 4}
+              onClick={() => setPreviewZoom(z => Math.min(4, Math.round((z + 0.25) * 4) / 4))}
+              title="Zoom In Preview [+]"
+            >
+              +
+            </button>
+            {previewZoom > 1 && (
+              <button
+                type="button"
+                className="hud-btn hud-reset-btn"
+                onClick={() => {
+                  setPreviewZoom(1);
+                  setPreviewPan({ x: 0, y: 0 });
+                }}
+                title="Reset Zoom & Pan to Fit (Double-click viewport also resets)"
+              >
+                Fit
+              </button>
+            )}
+          </div>
+
+          {/* Composition Framing Guides Cycle */}
+          <button
+            type="button"
+            className={`hud-btn ${gridMode !== 'off' ? 'active' : ''}`}
+            onClick={() => {
+              const modes: Array<'off' | 'thirds' | 'crosshair' | 'safe'> = ['off', 'thirds', 'crosshair', 'safe'];
+              const nextIdx = (modes.indexOf(gridMode) + 1) % modes.length;
+              setGridMode(modes[nextIdx]);
+            }}
+            title={`Framing Guides: ${gridMode.toUpperCase()} (Cycle: Off → Thirds → Crosshair → Safe)`}
+          >
+            <span>#</span> {gridMode === 'off' ? 'Grid' : gridMode}
+          </button>
+
+          {/* Target Face Overlays Toggle */}
+          <button
+            type="button"
+            className={`hud-btn ${showFaceOverlays ? 'active' : ''}`}
+            onClick={() => setShowFaceOverlays(o => !o)}
+            title={`Target Face Overlays: ${showFaceOverlays ? 'ON' : 'OFF'}`}
+          >
+            <span>🎯</span> Overlays
+          </button>
+
+          {/* Hold-to-Compare Source (A/B Quick Peek) */}
+          {output && !solo && (
+            <button
+              type="button"
+              className={`hud-btn hud-peek-btn ${showSourcePeek ? 'peeking' : ''}`}
+              onMouseDown={() => setShowSourcePeek(true)}
+              onMouseUp={() => setShowSourcePeek(false)}
+              onMouseLeave={() => setShowSourcePeek(false)}
+              onTouchStart={() => setShowSourcePeek(true)}
+              onTouchEnd={() => setShowSourcePeek(false)}
+              title="Click & HOLD to temporarily view original source frame (A/B peek)"
+            >
+              <span>👁</span> Hold: Source
+            </button>
+          )}
+
+          {/* Instant Frame Snapshot Grab */}
+          <button
+            type="button"
+            className="hud-btn snapshot-btn"
+            onClick={handleDownloadSnapshot}
+            title="Download current frame preview as high-res PNG (📸)"
+          >
+            <span>📸</span> Snapshot
+          </button>
+
+          {/* Fullscreen Toggle */}
+          <button
+            type="button"
+            className={`hud-btn fullscreen-toggle-btn ${isFullscreen ? 'active' : ''}`}
+            onClick={toggleFullscreen}
+            title={isFullscreen ? 'Exit Fullscreen [Esc]' : 'Enter Fullscreen Preview [F]'}
+          >
+            <span>{isFullscreen ? '⤓' : '⛶'}</span>
+          </button>
+        </div>
+
+        {/* Framing & Composition Grid Overlays */}
+        <CompositionGridOverlay mode={gridMode} />
+
+        {/* Snapshot Download Notice */}
+        {snapshotNotice && <div className="snapshot-notice-toast">{snapshotNotice}</div>}
+
         <SnapshotViewport/>
         {solo && <div className="solo-viewport" role="region" aria-label={`${solo} intermediate buffer`}>
           {result?.buffers[solo] ? <img src={result.buffers[solo]} alt={`${solo} execution buffer at frame ${result.frame_index}`}/> : <p role="status">{previewError || (previewBusy ? 'Rendering real pipeline buffers…' : 'No buffer is available at this frame')}</p>}
           <span className="pane-label">SOLO · {solo} · {result ? `frame ${result.frame_index}` : formatTime(time)}</span>
         </div>}
-        {pane(target, sourcePreview, false)}
-        {!isMaskEditing && pane(output, outputPreview, true)}
 
-        {/* Workstation Comparison Canvas (Wipe, Diff Map, Alpha Blend, Magnifier Loupe) */}
-        {!isMaskEditing && !solo && (
-          <WorkstationCanvas
-            target={target}
-            output={output}
-            targetMediaRef={original}
-            outputMediaRef={processed}
-            sourcePreviewUrl={sourcePreview.source}
-            outputPreviewUrl={outputPreview.source}
-            mode={compMode}
-            onModeChange={setCompMode}
-            containerWidth={viewportSize.width}
-            containerHeight={viewportSize.height}
-            mediaDimensions={mediaDims}
-          />
-        )}
+        <div
+          className="viewport-stage"
+          style={{
+            transform: `translate(${previewPan.x}px, ${previewPan.y}px) scale(${previewZoom})`,
+            transformOrigin: 'center center',
+            width: '100%',
+            height: '100%',
+            display: 'grid',
+            gridTemplateColumns: isMaskEditing ? '1fr' : '1fr 1fr',
+            cursor: previewZoom > 1 ? (isPanning ? 'grabbing' : 'grab') : 'default',
+            transition: isPanning ? 'none' : 'transform 0.12s cubic-bezier(0.2, 0, 0, 1)',
+          }}
+        >
+          {pane(target, sourcePreview, false)}
+          {!isMaskEditing && pane(output, outputPreview, true)}
 
-        {/* Manual & Occlusion Mask Editor Overlay */}
-        {isMaskEditing && (
-          <MaskBrushOverlay
-            containerWidth={viewportSize.width}
-            containerHeight={viewportSize.height}
-            mediaDimensions={mediaDims}
-            onMaskChange={onMaskChange}
-            initialMask={maskBase64}
-            onClose={() => setIsMaskEditing(false)}
-          />
-        )}
+          {/* Workstation Comparison Canvas (Wipe, Diff Map, Alpha Blend, Magnifier Loupe) */}
+          {!isMaskEditing && !solo && (
+            <WorkstationCanvas
+              target={target}
+              output={output}
+              targetMediaRef={original}
+              outputMediaRef={processed}
+              sourcePreviewUrl={sourcePreview.source}
+              outputPreviewUrl={outputPreview.source}
+              mode={compMode}
+              onModeChange={setCompMode}
+              containerWidth={viewportSize.width}
+              containerHeight={viewportSize.height}
+              mediaDimensions={mediaDims}
+            />
+          )}
+
+          {/* Manual & Occlusion Mask Editor Overlay */}
+          {isMaskEditing && (
+            <MaskBrushOverlay
+              containerWidth={viewportSize.width}
+              containerHeight={viewportSize.height}
+              mediaDimensions={mediaDims}
+              onMaskChange={onMaskChange}
+              initialMask={maskBase64}
+              onClose={() => setIsMaskEditing(false)}
+            />
+          )}
+        </div>
       </div>
 
       {playbackError && <p className="inline-warning">{playbackError}</p>}

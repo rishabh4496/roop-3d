@@ -41,6 +41,41 @@ export function parseFps(rational, fallback = 30) {
 }
 
 /**
+ * Parse timecode or frame string into seconds.
+ * Supports:
+ * - HH:MM:SS:FF or MM:SS:FF
+ * - Frame count: 'f:120', 'f120', '#120'
+ * - Seconds: '12.5'
+ * @param {string} str
+ * @param {number} fps
+ * @returns {number}
+ */
+export function parseTimecodeString(str, fps = 30) {
+  if (!str) return 0;
+  const safeFps = Math.max(1, fps || 30);
+  const cleaned = String(str).trim();
+  if (/^[fF#][: ]*(\d+)$/.test(cleaned)) {
+    const f = parseInt(cleaned.replace(/^[fF#][: ]*/, ''), 10);
+    return f / safeFps;
+  }
+  const parts = cleaned.split(':');
+  if (parts.length === 4) {
+    const [hh, mm, ss, ff] = parts.map(p => parseFloat(p) || 0);
+    return hh * 3600 + mm * 60 + ss + (ff / safeFps);
+  }
+  if (parts.length === 3) {
+    const [mm, ss, ff] = parts.map(p => parseFloat(p) || 0);
+    return mm * 60 + ss + (ff / safeFps);
+  }
+  if (parts.length === 2) {
+    const [mm, ss] = parts.map(p => parseFloat(p) || 0);
+    return mm * 60 + ss;
+  }
+  const val = parseFloat(cleaned);
+  return !isNaN(val) && val >= 0 ? val : 0;
+}
+
+/**
  * Convert an array of 2D points into a smooth Catmull-Rom cubic Bézier SVG path string.
  * @param {Array<{ x: number; y: number }>} points
  * @returns {string}
@@ -140,12 +175,20 @@ export default function TimelineWorkstation({
 }) {
   const containerRef = useRef(null);
   const trackRef = useRef(null);
+  const trackInnerRef = useRef(null);
   const [trackWidth, setTrackWidth] = useState(1000);
   const [playbackRate, setPlaybackRate] = useState(1);
   const [isPoseTrackExpanded, setIsPoseTrackExpanded] = useState(true);
   const [activeDrag, setActiveDrag] = useState(null); // 'needle' | 'trim-in' | 'trim-out' | null
   const [hoverTime, setHoverTime] = useState(null);
   const [hoverFace, setHoverFace] = useState(null);
+
+  // Timeline zoom & navigation extensions
+  const [timelineZoom, setTimelineZoom] = useState(1); // 1x to 16x
+  const [snapToFrames, setSnapToFrames] = useState(true);
+  const [isLooping, setIsLooping] = useState(false);
+  const [isEditingTimecode, setIsEditingTimecode] = useState(false);
+  const [timecodeInput, setTimecodeInput] = useState('');
 
   // Background thumbnail generation
   const [customThumbnails, setCustomThumbnails] = useState(null);
@@ -160,20 +203,6 @@ export default function TimelineWorkstation({
   const effectiveDuration = Math.max(0.1, duration || 1);
   const effectiveTrimEnd = trimEnd !== null && trimEnd !== undefined ? trimEnd : effectiveDuration;
 
-  // Compute 120px-wide video thumbnail frames across the timeline
-  const defaultThumbnails = useMemo(() => {
-    if (!target || effectiveDuration <= 0) return [];
-    const thumbWidth = 120;
-    const count = Math.max(3, Math.min(32, Math.floor(Math.max(trackWidth, 360) / thumbWidth)));
-    return Array.from({ length: count }, (_, i) => ({
-      index: i,
-      timestamp: ((i + 0.5) / count) * effectiveDuration,
-      url: `/api/v1/media/preview-frame?${new URLSearchParams({ path: target, timestamp: String(((i + 0.5) / count) * effectiveDuration) })}`,
-    }));
-  }, [target, effectiveDuration, trackWidth]);
-
-  const thumbnails = customThumbnails || defaultThumbnails;
-
   // Track container width via ResizeObserver
   useEffect(() => {
     if (!trackRef.current) return;
@@ -187,6 +216,22 @@ export default function TimelineWorkstation({
     observer.observe(trackRef.current);
     return () => observer.disconnect();
   }, []);
+
+  const scaledTrackWidth = Math.max(trackWidth, Math.round(trackWidth * timelineZoom));
+
+  // Compute 120px-wide video thumbnail frames across the timeline
+  const defaultThumbnails = useMemo(() => {
+    if (!target || effectiveDuration <= 0) return [];
+    const thumbWidth = 120;
+    const count = Math.max(3, Math.min(128, Math.floor(Math.max(scaledTrackWidth, 360) / thumbWidth)));
+    return Array.from({ length: count }, (_, i) => ({
+      index: i,
+      timestamp: ((i + 0.5) / count) * effectiveDuration,
+      url: `/api/v1/media/preview-frame?${new URLSearchParams({ path: target, timestamp: String(((i + 0.5) / count) * effectiveDuration) })}`,
+    }));
+  }, [target, effectiveDuration, scaledTrackWidth]);
+
+  const thumbnails = customThumbnails || defaultThumbnails;
 
   // Update video playback rate
   const handleRateChange = useCallback((rate) => {
@@ -203,18 +248,43 @@ export default function TimelineWorkstation({
     onSeek(nextTime);
   }, [disabled, onSeek, effectiveFps, effectiveDuration, currentTime]);
 
+  // Second jumping controls (Jump -1s / +1s)
+  const handleJumpSeconds = useCallback((deltaSec) => {
+    if (disabled || !onSeek) return;
+    const nextTime = Math.max(0, Math.min(effectiveDuration, currentTime + deltaSec));
+    onSeek(nextTime);
+  }, [disabled, onSeek, effectiveDuration, currentTime]);
+
+  // Jump to Start / In Point
+  const handleJumpStart = useCallback(() => {
+    if (disabled || !onSeek) return;
+    onSeek(trimStart > 0 ? trimStart : 0);
+  }, [disabled, onSeek, trimStart]);
+
+  // Jump to End / Out Point
+  const handleJumpEnd = useCallback(() => {
+    if (disabled || !onSeek) return;
+    onSeek(effectiveTrimEnd < effectiveDuration ? effectiveTrimEnd : effectiveDuration);
+  }, [disabled, onSeek, effectiveTrimEnd, effectiveDuration]);
+
   // Reset custom thumbnails when target or duration changes
   useEffect(() => {
     setCustomThumbnails(null);
   }, [target, effectiveDuration]);
 
-  // Calculate time from clientX
+  // Calculate time from clientX with optional snapping
   const getTimeFromPointer = useCallback((clientX) => {
-    if (!trackRef.current) return 0;
-    const rect = trackRef.current.getBoundingClientRect();
+    const targetElement = trackInnerRef.current || trackRef.current;
+    if (!targetElement) return 0;
+    const rect = targetElement.getBoundingClientRect();
     const ratio = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
-    return ratio * effectiveDuration;
-  }, [effectiveDuration]);
+    const rawTime = ratio * effectiveDuration;
+    if (snapToFrames) {
+      const frameIdx = Math.round(rawTime * effectiveFps);
+      return Math.max(0, Math.min(effectiveDuration, frameIdx / effectiveFps));
+    }
+    return rawTime;
+  }, [effectiveDuration, snapToFrames, effectiveFps]);
 
   // Pointer drag scrubbing & trim dragging
   useEffect(() => {
@@ -245,6 +315,43 @@ export default function TimelineWorkstation({
     };
   }, [activeDrag, getTimeFromPointer, onSeek, onTrimChange, trimStart, trimEnd, effectiveTrimEnd, effectiveFps, effectiveDuration]);
 
+  // Auto-scroll track viewport to keep playhead in view when zoomed in
+  useEffect(() => {
+    if (timelineZoom <= 1 || !trackRef.current) return;
+    const viewport = trackRef.current;
+    const needleX = (currentTime / effectiveDuration) * scaledTrackWidth;
+    const viewLeft = viewport.scrollLeft;
+    const viewRight = viewLeft + viewport.clientWidth;
+    if (needleX < viewLeft + 60 || needleX > viewRight - 60) {
+      viewport.scrollLeft = Math.max(0, needleX - viewport.clientWidth / 2);
+    }
+  }, [currentTime, effectiveDuration, scaledTrackWidth, timelineZoom]);
+
+  // Range loop playback
+  useEffect(() => {
+    if (!playing || !isLooping) return;
+    if (currentTime >= effectiveTrimEnd - (1 / effectiveFps)) {
+      onSeek?.(trimStart);
+    }
+  }, [currentTime, playing, isLooping, effectiveTrimEnd, trimStart, effectiveFps, onSeek]);
+
+  // Ctrl+Wheel or Meta+Wheel to zoom timeline
+  const handleWheelZoom = useCallback((e) => {
+    if (e.ctrlKey || e.metaKey || e.altKey) {
+      e.preventDefault();
+      const delta = e.deltaY < 0 ? 0.5 : -0.5;
+      setTimelineZoom(z => Math.max(1, Math.min(16, Math.round((z + delta) * 2) / 2)));
+    }
+  }, []);
+
+  // Commit text timecode edit
+  const commitTimecodeInput = useCallback(() => {
+    if (!timecodeInput) return;
+    const parsed = parseTimecodeString(timecodeInput, effectiveFps);
+    const clamped = Math.max(0, Math.min(effectiveDuration, parsed));
+    onSeek?.(clamped);
+  }, [timecodeInput, effectiveFps, effectiveDuration, onSeek]);
+
   // Trim In / Out button shortcuts
   const handleMarkIn = () => {
     if (disabled || !onTrimChange) return;
@@ -267,11 +374,11 @@ export default function TimelineWorkstation({
   const rulerTicks = useMemo(() => {
     if (effectiveDuration <= 0) return [];
     // Adapt step: choose tick interval so ticks are spaced ~60px to 100px apart
-    const desiredTickCount = Math.max(4, Math.floor(trackWidth / 80));
+    const desiredTickCount = Math.max(4, Math.floor(scaledTrackWidth / 80));
     const rawStep = effectiveDuration / desiredTickCount;
 
-    // Standard time intervals: 0.1, 0.25, 0.5, 1, 2, 5, 10, 15, 30, 60
-    const intervals = [0.1, 0.25, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600];
+    // Standard time intervals: 0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 15, 30, 60
+    const intervals = [0.04, 0.08, 0.1, 0.25, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600];
     let chosenInterval = intervals[intervals.length - 1];
     for (const interval of intervals) {
       if (interval >= rawStep) {
@@ -306,7 +413,7 @@ export default function TimelineWorkstation({
       }
     }
     return ticks;
-  }, [effectiveDuration, trackWidth, effectiveFps]);
+  }, [effectiveDuration, scaledTrackWidth, effectiveFps]);
 
   // Head Yaw continuous spline data
   const yawSplineData = useMemo(() => {
@@ -321,7 +428,7 @@ export default function TimelineWorkstation({
     const maxDegree = 70; // Map ±70° to track height
 
     const points = sorted.map(face => {
-      const x = (face.timestamp / effectiveDuration) * Math.max(trackWidth, 100);
+      const x = (face.timestamp / effectiveDuration) * Math.max(scaledTrackWidth, 100);
       const yaw = face.pose?.yaw ?? 0;
       // Clamp mapped yaw to visible track
       const clampedYaw = Math.max(-maxDegree, Math.min(maxDegree, yaw));
@@ -337,7 +444,7 @@ export default function TimelineWorkstation({
 
     const path = pointsToSplinePath(points);
     return { path, points, hasFaces: true };
-  }, [detectedFaces, effectiveDuration, trackWidth]);
+  }, [detectedFaces, effectiveDuration, scaledTrackWidth]);
 
   // Click on a detected face marker: seek playhead and focus 3D viewer
   const handleFaceMarkerClick = (face, e) => {
@@ -374,8 +481,28 @@ export default function TimelineWorkstation({
           <span className="btn-icon">{playing ? '❚❚' : '▶'}</span>
         </button>
 
-        {/* Frame Stepping Controls */}
+        {/* Frame Stepping & Jump Transport Controls */}
         <div className="stepping-group">
+          <button
+            type="button"
+            className="stepping-btn jump-btn"
+            disabled={disabled || !target || currentTime <= 0}
+            onClick={handleJumpStart}
+            title="Jump to Start / In Point [Home]"
+            aria-label="Jump to Start"
+          >
+            |◀
+          </button>
+          <button
+            type="button"
+            className="stepping-btn jump-btn"
+            disabled={disabled || !target || currentTime <= 0}
+            onClick={() => handleJumpSeconds(-1)}
+            title="Jump -1 Second [Shift+Left]"
+            aria-label="Jump -1 Second"
+          >
+            ◀◀
+          </button>
           <button
             type="button"
             className="stepping-btn"
@@ -396,13 +523,64 @@ export default function TimelineWorkstation({
           >
             +1f |▶
           </button>
+          <button
+            type="button"
+            className="stepping-btn jump-btn"
+            disabled={disabled || !target || currentTime >= effectiveDuration}
+            onClick={() => handleJumpSeconds(1)}
+            title="Jump +1 Second [Shift+Right]"
+            aria-label="Jump +1 Second"
+          >
+            ▶▶
+          </button>
+          <button
+            type="button"
+            className="stepping-btn jump-btn"
+            disabled={disabled || !target || currentTime >= effectiveDuration}
+            onClick={handleJumpEnd}
+            title="Jump to End / Out Point [End]"
+            aria-label="Jump to End"
+          >
+            ▶|
+          </button>
         </div>
 
-        {/* Timecode Readout */}
-        <div className="timecode-readout-box">
-          <span className="current-tc" title="Current Playhead Timecode (HH:MM:SS:FF)">
-            {formatTimecode(currentTime, effectiveFps)}
-          </span>
+        {/* Timecode Readout Box (Click-to-Edit) */}
+        <div className="timecode-readout-box" title="Click to enter exact timecode or frame number">
+          {isEditingTimecode ? (
+            <input
+              type="text"
+              autoFocus
+              className="timecode-inline-input"
+              value={timecodeInput}
+              onChange={(e) => setTimecodeInput(e.target.value)}
+              onBlur={() => {
+                commitTimecodeInput();
+                setIsEditingTimecode(false);
+              }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  commitTimecodeInput();
+                  setIsEditingTimecode(false);
+                } else if (e.key === 'Escape') {
+                  setIsEditingTimecode(false);
+                }
+              }}
+            />
+          ) : (
+            <span
+              className="current-tc"
+              title="Click to jump to exact Timecode or Frame [HH:MM:SS:FF]"
+              onClick={() => {
+                if (!disabled) {
+                  setTimecodeInput(formatTimecode(currentTime, effectiveFps));
+                  setIsEditingTimecode(true);
+                }
+              }}
+            >
+              {formatTimecode(currentTime, effectiveFps)}
+            </span>
+          )}
           <span className="tc-separator">/</span>
           <span className="total-tc" title="Total Clip Duration (HH:MM:SS:FF)">
             {formatTimecode(effectiveDuration, effectiveFps)}
@@ -411,6 +589,26 @@ export default function TimelineWorkstation({
             [F: {Math.floor(currentTime * effectiveFps)} / {Math.floor(effectiveDuration * effectiveFps)}]
           </span>
         </div>
+
+        {/* Snap to Frames Toggle */}
+        <button
+          type="button"
+          className={`timeline-snap-btn ${snapToFrames ? 'active' : ''}`}
+          onClick={() => setSnapToFrames(s => !s)}
+          title={`Snap to Frame Boundaries: ${snapToFrames ? 'ON' : 'OFF'}`}
+        >
+          <span>🧲</span> Snap
+        </button>
+
+        {/* Loop Playback Toggle */}
+        <button
+          type="button"
+          className={`timeline-loop-btn ${isLooping ? 'active' : ''}`}
+          onClick={() => setIsLooping(l => !l)}
+          title={`Loop Range Playback: ${isLooping ? 'ON' : 'OFF'}`}
+        >
+          <span>🔁</span> Loop
+        </button>
 
         {/* Variable Speed Controller */}
         <div className="speed-controller" role="group" aria-label="Playback Speed">
@@ -464,6 +662,50 @@ export default function TimelineWorkstation({
           )}
         </div>
 
+        {/* Timeline Zoom Controller */}
+        <div className="timeline-zoom-controller" role="group" aria-label="Timeline Zoom">
+          <span className="zoom-label">ZOOM:</span>
+          <button
+            type="button"
+            className="zoom-step-btn"
+            disabled={disabled || timelineZoom <= 1}
+            onClick={() => setTimelineZoom(z => Math.max(1, Math.round((z - 0.5) * 2) / 2))}
+            title="Zoom Out Timeline [-]"
+          >
+            -
+          </button>
+          <input
+            type="range"
+            min="1"
+            max="16"
+            step="0.5"
+            value={timelineZoom}
+            onChange={(e) => setTimelineZoom(parseFloat(e.target.value))}
+            className="zoom-slider"
+            title={`Timeline Zoom: ${timelineZoom.toFixed(1)}x (Ctrl+Wheel to zoom)`}
+          />
+          <button
+            type="button"
+            className="zoom-step-btn"
+            disabled={disabled || timelineZoom >= 16}
+            onClick={() => setTimelineZoom(z => Math.min(16, Math.round((z + 0.5) * 2) / 2))}
+            title="Zoom In Timeline [+]"
+          >
+            +
+          </button>
+          {timelineZoom > 1 && (
+            <button
+              type="button"
+              className="zoom-fit-btn"
+              onClick={() => setTimelineZoom(1)}
+              title="Reset Timeline Zoom to Fit [1x]"
+            >
+              Fit
+            </button>
+          )}
+          <span className="zoom-tag">{timelineZoom.toFixed(1)}x</span>
+        </div>
+
         <div className="transport-flex-spacer" />
 
         {/* Sub-Track Collapse / Expand Toggle */}
@@ -483,6 +725,7 @@ export default function TimelineWorkstation({
       <div
         className="timeline-tracks-viewport"
         ref={trackRef}
+        onWheel={handleWheelZoom}
         onPointerDown={(e) => {
           if (disabled || !target) return;
           const time = getTimeFromPointer(e.clientX);
@@ -498,6 +741,11 @@ export default function TimelineWorkstation({
           setHoverFace(null);
         }}
       >
+        <div
+          className="timeline-tracks-inner"
+          ref={trackInnerRef}
+          style={{ width: `${scaledTrackWidth}px`, minWidth: '100%', position: 'relative' }}
+        >
         {/* Timecode Ruler */}
         <div className="timecode-ruler-track" aria-label="Timecode Ruler">
           {rulerTicks.map((tick, idx) => (
@@ -778,6 +1026,7 @@ export default function TimelineWorkstation({
             if (!disabled && onSeek) onSeek(+e.target.value);
           }}
         />
+        </div>
       </div>
 
       <CurveEditorTrack frame={Math.round(currentTime * effectiveFps)} totalFrames={Math.max(1, Math.round(duration * effectiveFps))} parameters={parameters} disabled={disabled || !target} onSeekFrame={frame => onSeek?.(frame / effectiveFps)}/>
