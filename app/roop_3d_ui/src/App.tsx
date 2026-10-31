@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useRef, useState, type ComponentType } from 'react';
 import { api, post, upload } from './api';
 import type { Capabilities, Config, Coverage, FaceSet, Inspection, Job, JobRequest, Probe, Project, Reconstruction, Telemetry, Track } from './contracts';
 import { EventConnection } from './events';
@@ -15,6 +15,8 @@ import { DEFAULT_PARAMETERS, type WorkstationParameters } from './components/wor
 import WorkstationScreens from './components/workstation/WorkstationScreens';
 import PipelinePill from './components/hud/PipelinePill';
 import QueueDrawer from './components/queue/QueueDrawer';
+import PreFlightLinterModalComponent from './components/diagnostics/PreFlightLinterModal';
+const PreFlightLinterModal = PreFlightLinterModalComponent as unknown as ComponentType<any>;
 const PoseCoverageInspector = lazy(() => import('./ThreeViewport').then(module => ({ default: module.PoseCoverageInspector })));
 
 export default function App() {
@@ -28,6 +30,7 @@ export default function App() {
   const [project, setProject] = useState<Project | null>(null), [projectName, setProjectName] = useState('Untitled project'), [projects, setProjects] = useState<Pick<Project, 'project_id' | 'name' | 'saved_at' | 'last_completed_frame'>[]>([]), [projectsOpen, setProjectsOpen] = useState(false);
   const [trimStart, setTrimStart] = useState(0), [trimEnd, setTrimEnd] = useState<number | null>(null), [includeCheckpoint, setIncludeCheckpoint] = useState(false);
   const [maskBase64, setMaskRaw] = useState<string | null>(null);
+  const [linterOpen, setLinterOpen] = useState(false);
   const [busy, setBusy] = useState(''), [error, setError] = useState(''), [notice, setNotice] = useState(''), [uploadProgress, setUploadProgress] = useState(0);
   const [theme, setTheme] = useState(() => localStorage.getItem('roop3d-theme') ?? 'dark');
   const route = useHashRoute();
@@ -126,12 +129,26 @@ export default function App() {
     if (!target || !inspection || !selected.length) throw new Error('Inspect a target and map at least one face track before continuing.');
     return { target_path: target, inspection_id: inspection.inspection_id, face_mappings: selected, processing: 'local', remote_consent: false, trim_start_seconds: trimStart || null, trim_end_seconds: trimEnd, mask_base64: maskBase64 || undefined, workstation_parameters: parameters, parameter_curves: { tracks: curves }, face_segments: buildFaceSegments(clusters, assigned) };
   };
-  const queue = () => void run('Queueing local render', async () => {
+  const executeQueue = () => void run('Queueing local render', async () => {
     const value = request(), fingerprint = JSON.stringify(value);
     if (queueKey.current.fingerprint !== fingerprint) queueKey.current = { fingerprint, key: crypto.randomUUID() };
     const job = await post<Job>('/jobs', value, { headers: { 'Idempotency-Key': queueKey.current.key } });
     queueKey.current = { fingerprint: '', key: '' }; setSelectedJob(job.job_id); setQueueOpen(true); await refreshJobs(); setNotice('Render added to the local queue.');
   });
+  const queue = () => {
+    try {
+      request();
+    } catch (e: any) {
+      setNotice(e.message);
+      return;
+    }
+    const skip = sessionStorage.getItem('roop3d_skip_linter') === 'true';
+    if (skip) {
+      executeQueue();
+    } else {
+      setLinterOpen(true);
+    }
+  };
   const saveSettings = (value: Config) => void run('Applying settings', async () => { const saved = await api<Config>('/config', { method: 'PUT', body: JSON.stringify(value) }); setConfig(saved); await connect(); setNotice('Effective settings saved. Existing paused jobs retain their original settings identity.'); });
   const saveProject = () => void run('Saving project', async () => {
     const checkpoint = includeCheckpoint && currentJob && jobActions(caps, currentJob.state).includes('resume') ? currentJob.job_id : null;
@@ -256,5 +273,16 @@ export default function App() {
     <WorkstationScreens route={route} caps={caps} config={config} sources={sources} jobs={jobs} projects={projects} busy={!!busy} telemetry={telemetry} connection={connection} openProject={openProject} showJob={showJob} controlJob={controlJob} saveSettings={saveSettings} refreshJobs={refreshJobs} openLibrary={() => { setProjectsOpen(true); void refreshProjects(); }} latency={previewLatency} target={target} probe={probe} inspection={inspection} refreshProjects={refreshProjects}/>
     <footer className="app-footer"><span>ROOP 3D / LOCAL WORKSTATION</span><span>Observed identities. Explicit processing. Synthetic media.</span><span>API :{config?.port ?? '—'}</span></footer>
     {projectsOpen && <div className="modal-backdrop" onClick={() => setProjectsOpen(false)}><section role="dialog" aria-modal="true" aria-labelledby="projects-title" className="project-modal" onClick={event => event.stopPropagation()}><div className="panel-heading"><div><span className="eyebrow">VERSIONED .R3DP MANIFESTS</span><h2 id="projects-title">Project library</h2></div><button aria-label="Close projects" className="icon-button" onClick={() => setProjectsOpen(false)}>×</button></div><p className="muted">Reopening verifies target, inspection, FaceSet, and model hashes. Project files contain references and settings, never raw media.</p><button className="button" disabled={!!busy} onClick={() => projectInput.current?.click()}>Import .r3dp</button><input ref={projectInput} hidden type="file" accept=".r3dp,application/json" onChange={event => { importProject(event.target.files?.[0]); event.target.value = ''; }}/>{!projects.length && <p className="empty-note muted">No saved projects yet.</p>}{projects.map(item => <div key={item.project_id} className="saved-project"><div><strong>{item.name}</strong><small>{new Date(item.saved_at).toLocaleString()} · checkpoint {item.last_completed_frame >= 0 ? item.last_completed_frame : 'none'}</small></div><button className="button small" disabled={!!busy} onClick={() => openProject(item.project_id)}>Verify & open</button><a className="button small" href={`/api/v1/projects/${item.project_id}/download`} download>Export</a></div>)}{project?.checkpoint_job_id && <button className="button accent" disabled={!!busy || !!reason('queue')} onClick={() => void run('Verifying checkpoint continuation', async () => { const resumed = await post<Job>(`/projects/${project.project_id}/resume`, {}); setSelectedJob(resumed.job_id); await refreshJobs(); setProjectsOpen(false); })}>Verify & resume {project.name}</button>}</section></div>}
+    <PreFlightLinterModal
+      isOpen={linterOpen}
+      onClose={() => setLinterOpen(false)}
+      onConfirmQueue={executeQueue}
+      targetPath={target}
+      inspectionId={inspection?.inspection_id || ''}
+      faceMappings={renderMappings()}
+      workstationParameters={parameters}
+      maskBase64={maskBase64}
+      hardware={caps}
+    />
   </div>;
 }

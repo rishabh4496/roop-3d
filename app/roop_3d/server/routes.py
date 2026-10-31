@@ -15,6 +15,7 @@ from roop_3d.media.schema import FaceInspection, InspectRequest, MediaProbe, Med
 from roop_3d.models.registry import ModelRecord
 from roop_3d.server.contracts import (Capabilities, ModelAvailability, ModelSummary,
                                      ModelDownloadRequest, ModelLicenseNotice)
+from roop_3d.server.diagnostics import BenchmarkRequest, PreFlightLintRequest
 from roop_3d.server.ws import EVENT_ADAPTER, event_stream
 
 router = APIRouter(prefix="/api/v1")
@@ -234,6 +235,26 @@ def resume(job_id: str, request: Request) -> JobRecord:
     if request.app.state.worker is not None:
         request.app.state.worker.wake()
     return record
+
+
+@router.post("/system/preflight-lint")
+def preflight_lint(request: Request, value: PreFlightLintRequest | None = None) -> dict:
+    from roop_3d.server.diagnostics import PreFlightLintRequest as PReq, run_preflight_lint
+    val = value or PReq(target_path="roop_3d/.runtime/media/default.mp4")
+    return run_preflight_lint(request.app.state.root, request.app.state, val)
+
+
+@router.post("/system/benchmark")
+def run_benchmark(request: Request, value: BenchmarkRequest | None = None) -> dict:
+    from roop_3d.server.diagnostics import BenchmarkRequest as BReq, run_synthetic_benchmark
+    val = value or BReq()
+    return run_synthetic_benchmark(request.app.state, val)
+
+
+@router.get("/system/diagnostics-report")
+def diagnostics_report(request: Request) -> dict:
+    from roop_3d.server.diagnostics import generate_14_section_report
+    return generate_14_section_report(request.app.state.root, request.app.state)
 
 
 router.add_api_websocket_route("/ws/events", event_stream)

@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { api, post } from '../../api';
+import BottleneckFlamegraph from '../diagnostics/BottleneckFlamegraph';
 
 /**
  * Normalized queue state definitions.
@@ -70,6 +71,7 @@ export default function QueueDrawer({
   const [isConcatenating, setIsConcatenating] = useState(false);
   const [concatResult, setConcatResult] = useState(null);
   const [actionNotice, setActionNotice] = useState('');
+  const [drawerTab, setDrawerTab] = useState('queue');
 
   // Persist jobs to localStorage so closing/refreshing tab does not lose rendering history
   useEffect(() => {
@@ -224,7 +226,32 @@ export default function QueueDrawer({
             </div>
           )}
 
-          {/* Concatenation Toolbar (Appears when 2+ completed jobs are checked) */}
+          <div className="drawer-subtabs">
+            <button
+              type="button"
+              className={`drawer-subtab ${drawerTab === 'queue' ? 'active' : ''}`}
+              onClick={() => setDrawerTab('queue')}
+            >
+              Queue Items ({localJobs.length})
+            </button>
+            <button
+              type="button"
+              className={`drawer-subtab ${drawerTab === 'telemetry' ? 'active' : ''}`}
+              onClick={() => setDrawerTab('telemetry')}
+            >
+              ⚡ Flamegraph & Telemetry
+            </button>
+          </div>
+
+          {drawerTab === 'telemetry' && (
+            <div className="drawer-flamegraph-wrap">
+              <BottleneckFlamegraph compact={true} activeJob={localJobs.find(j => j.state === 'running') || localJobs[0] || null} />
+            </div>
+          )}
+
+          {drawerTab === 'queue' && (
+            <>
+              {/* Concatenation Toolbar (Appears when 2+ completed jobs are checked) */}
           {selectedForConcat.length >= 2 && (
             <div className="concat-toolbar">
               <span>{selectedForConcat.length} video segments selected</span>
@@ -397,6 +424,8 @@ export default function QueueDrawer({
               </div>
             )}
           </div>
+          </>
+          )}
         </div>
       )}
     </aside>

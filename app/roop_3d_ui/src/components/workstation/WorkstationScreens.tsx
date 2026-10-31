@@ -7,9 +7,13 @@ import { SettingsInspector } from '../../SettingsInspector';
 import { HotkeyEditor } from '../controls/Hotkeys';
 import BatchMatrixScreen from '../../screens/BatchMatrixScreen';
 import HistoryScreen from '../../screens/HistoryScreen';
+import BottleneckFlamegraphComponent from '../diagnostics/BottleneckFlamegraph';
+import SettingsScreenComponent from '../../screens/SettingsScreen';
 
 const BatchMatrix = BatchMatrixScreen as unknown as React.ComponentType<any>;
 const History = HistoryScreen as unknown as React.ComponentType<any>;
+const BottleneckFlamegraph = BottleneckFlamegraphComponent as unknown as React.ComponentType<any>;
+const SettingsScreen = SettingsScreenComponent as unknown as React.ComponentType<any>;
 
 type ProjectSummary = Pick<Project, 'project_id' | 'name' | 'saved_at' | 'last_completed_frame'>;
 type Props = {
@@ -185,6 +189,7 @@ export default function WorkstationScreens(props: Props) {
               ))}
             </div>
           ))}
+          <BottleneckFlamegraph latency={latency} activeJob={renderJobs[0] || null} />
           <h2>Measured preview stage timings</h2>
           {latency ? (
             Object.entries(latency).map(([stage, ms]) => (
@@ -288,23 +293,14 @@ export default function WorkstationScreens(props: Props) {
       </AppRouter>
 
       <AppRouter route={route} screen="settings">
-        <main className="screen-page settings-screen">
-          <h1>Settings & offline health</h1>
-          <div className="settings-columns">
-            <SettingsInspector namespace="preferences-setting" caps={caps} config={config} save={saveSettings} busy={busy} />
-            <div>
-              <HotkeyEditor />
-              <section className="offline-health">
-                <h2>Offline health</h2>
-                {healthError && <p role="alert">{healthError}</p>}
-                <pre>{JSON.stringify(health, null, 2)}</pre>
-                <p className="muted">
-                  TensorRT follows the advertised provider availability. OpenVINO has no configured adapter. Model presence and hashes do not establish inference, licensing, or performance.
-                </p>
-              </section>
-            </div>
-          </div>
-        </main>
+        <SettingsScreen
+          caps={caps}
+          config={config}
+          saveSettings={saveSettings}
+          busy={busy}
+          telemetry={telemetry}
+          connection={connection}
+        />
       </AppRouter>
     </>
   );
