@@ -36,7 +36,7 @@ def runtime_path(value: str, root: Path | None = None) -> Path:
 
 class Settings(Contract):
     schema_version: Literal[2] = 2
-    execution_mode: Literal["swap", "volumetric", "hybrid"] = "swap"
+    execution_mode: Literal["swap", "volumetric", "hybrid", "diffusion_vfx"] = "swap"
     hardware_profile: Literal["auto", "cpu", "6gb", "12gb"] = "auto"
     preferred_provider: Literal["auto", "TensorrtExecutionProvider", "CUDAExecutionProvider", "CPUExecutionProvider"] = "auto"
     precision_policy: Literal["auto", "fp32", "fp16"] = "auto"
