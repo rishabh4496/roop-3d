@@ -57,12 +57,13 @@ class JobRequest(Contract):
     remote_consent: bool = False
     trim_start_seconds: float | None = Field(default=None, ge=0, le=86400)
     trim_end_seconds: float | None = Field(default=None, gt=0, le=86400)
+    mask_base64: str | None = Field(default=None)
 
     def identity_payload(self) -> dict:
         value = self.model_dump(mode="json")
-        for name in ("trim_start_seconds", "trim_end_seconds"):
-            if value[name] is None:
-                value.pop(name)
+        for name in ("trim_start_seconds", "trim_end_seconds", "mask_base64"):
+            if value.get(name) is None:
+                value.pop(name, None)
         return value
 
     @model_validator(mode="after")

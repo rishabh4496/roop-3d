@@ -18,6 +18,7 @@ export default function App() {
   const [selectedJob, setSelectedJob] = useState(''), [queueOpen, setQueueOpen] = useState(true), [connection, setConnection] = useState('connecting');
   const [project, setProject] = useState<Project | null>(null), [projectName, setProjectName] = useState('Untitled project'), [projects, setProjects] = useState<Pick<Project, 'project_id' | 'name' | 'saved_at' | 'last_completed_frame'>[]>([]), [projectsOpen, setProjectsOpen] = useState(false);
   const [trimStart, setTrimStart] = useState(0), [trimEnd, setTrimEnd] = useState<number | null>(null), [includeCheckpoint, setIncludeCheckpoint] = useState(false);
+  const [maskBase64, setMaskBase64] = useState<string | null>(null);
   const [busy, setBusy] = useState(''), [error, setError] = useState(''), [notice, setNotice] = useState(''), [uploadProgress, setUploadProgress] = useState(0);
   const [theme, setTheme] = useState(() => localStorage.getItem('roop3d-theme') ?? 'dark');
   const fileInput = useRef<HTMLInputElement>(null), sourceInput = useRef<HTMLInputElement>(null), projectInput = useRef<HTMLInputElement>(null);
@@ -98,7 +99,7 @@ export default function App() {
   const request = (): JobRequest => {
     const selected = mappings(assigned, inspection?.tracks ?? [], sources);
     if (!target || !inspection || !selected.length) throw new Error('Inspect a target and map at least one face track before continuing.');
-    return { target_path: target, inspection_id: inspection.inspection_id, face_mappings: selected, processing: 'local', remote_consent: false, trim_start_seconds: trimStart || null, trim_end_seconds: trimEnd };
+    return { target_path: target, inspection_id: inspection.inspection_id, face_mappings: selected, processing: 'local', remote_consent: false, trim_start_seconds: trimStart || null, trim_end_seconds: trimEnd, mask_base64: maskBase64 || undefined };
   };
   const queue = () => void run('Queueing local render', async () => {
     const value = request(), fingerprint = JSON.stringify(value);
@@ -159,7 +160,7 @@ export default function App() {
       <div className="library-footer"><span className="tiny-badge">LOCAL BY DEFAULT</span><p>Media, FaceSets, and identity embeddings stay in your local workspace.</p></div>
     </aside>
     <main className="main-workspace"><div className="workspace-heading"><div><span className="eyebrow">EDIT / INSPECT / RENDER</span><h1>Your scene. A new identity.</h1></div><button className="button accent" disabled={!!reason('queue') || !inspection || !mappings(assigned, inspection?.tracks ?? [], sources).length || !!busy} title={reason('queue') ?? 'Render mapped face tracks locally'} onClick={queue}>Queue render <span>↗</span></button></div>
-      <VideoViewport target={target} output={output} time={time} setTime={setTime} duration={probe?.duration_seconds ?? 0} enabled={!reason('frame_preview')} keys={keys} probe={probe} sources={sources} onAssignSource={(clusterId, facesetId) => {
+      <VideoViewport target={target} output={output} time={time} setTime={setTime} duration={probe?.duration_seconds ?? 0} enabled={!reason('frame_preview')} keys={keys} probe={probe} sources={sources} onMaskChange={setMaskBase64} onAssignSource={(clusterId, facesetId) => {
         setAssigned(previous => {
           const next = { ...previous };
           if (facesetId) next[clusterId] = facesetId;
