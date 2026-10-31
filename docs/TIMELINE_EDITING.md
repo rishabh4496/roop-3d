@@ -8,10 +8,11 @@ Ease-In-Out (cubic Bezier), or Step/Hold. Source frame indices remain absolute w
 export trim points change. Preview and rendering share the same bounded curve
 contract and easing formula.
 
-**Pose capability:** the pose curve controls the existing retarget strength. This
-change does not add a verified blend between 2.5D warping and 3D mesh projection.
-The editor identifies that missing adapter. No 3D projection fidelity or GPU
-performance acceptance is claimed.
+**Pose capability:** the pose curve now supports an actual TPS 2.5D / perspective
+3D mesh blend. New sessions select the estimated canonical-proxy mesh method;
+older requests retain the separate reference retarget mode. Endpoints, visibility,
+camera estimation and acceptance limits are described in `POSE_MESH_BLEND.md`.
+No personalized reconstruction fidelity or GPU performance acceptance is claimed.
 
 ## Non-destructive editing
 

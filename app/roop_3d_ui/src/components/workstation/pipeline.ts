@@ -1,9 +1,10 @@
-export type WorkstationParameters = { restoration_blend: number; feather_px: number; color_strength: number; pose_strength: number; swap_weight?: number; erosion_px?: number; bypass: ('restorer' | 'color')[] };
-export const DEFAULT_PARAMETERS: WorkstationParameters = { restoration_blend: 0, feather_px: 5, color_strength: .65, pose_strength: .35, swap_weight: 1, erosion_px: 0, bypass: [] };
+export type WorkstationParameters = { restoration_blend: number; feather_px: number; color_strength: number; pose_strength: number; pose_mode?: 'retarget' | 'mesh_blend'; swap_weight?: number; erosion_px?: number; bypass: ('restorer' | 'color')[] };
+export const DEFAULT_PARAMETERS: WorkstationParameters = { restoration_blend: 0, feather_px: 5, color_strength: .65, pose_strength: .35, pose_mode: 'mesh_blend', swap_weight: 1, erosion_px: 0, bypass: [] };
 export const SWEEP_PARAMETERS = {
   restoration_blend: { label: 'Restorer blend', min: 0, max: 1, values: [.25, .5, .75] },
   feather_px: { label: 'Mask feather (px)', min: 0, max: 64, values: [0, 5, 10] },
   color_strength: { label: 'Color match strength', min: 0, max: 1, values: [.25, .5, .75] },
+  pose_strength: { label: '2.5D → 3D pose blend', min: 0, max: 1, values: [0, .5, 1] },
 };
 export type AxisName = keyof typeof SWEEP_PARAMETERS;
 export function sweepAxis(parameter: AxisName, text: string) {
@@ -13,7 +14,7 @@ export function sweepAxis(parameter: AxisName, text: string) {
 }
 export const PIPELINE_NODES = [
   { id: 'source', label: 'Source FaceSet' }, { id: 'detector', label: 'Target Detector' },
-  { id: 'pose', label: '3D Pose & Landmarks', note: 'Estimated 2.5D landmarks; UV projection unavailable' },
+  { id: 'pose', label: '3D Pose & Landmarks', note: 'Observed landmarks; mesh mode overlays the fitted canonical 3D proxy' },
   { id: 'swapper', label: 'Face Swapper' }, { id: 'matte', label: 'XSeg / Occluder Matte', note: 'Reference BiSeNet / landmark hull matte; XSeg unavailable' },
   { id: 'restorer', label: 'Face Restorer', optional: true, note: 'Local GPEN adapter; UltraMax / CodeFormer unavailable' },
   { id: 'color', label: 'Color & Grain Match', optional: true, note: 'Reference LAB color match' },

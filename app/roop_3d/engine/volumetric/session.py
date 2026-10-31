@@ -24,6 +24,7 @@ from roop_3d.models.catalog import ModelCatalog
 from roop_3d.engine.resources import guarded, register
 from roop_3d.compositor.pipeline import CompositeOptions, FrameCompositor
 from roop_3d.engine.audio_sync.lip_sync_adapter import LipSyncAdapter, LipSyncFrameInput
+from roop_3d.reconstruction.pose_blend import PoseBlendProjector, PoseBlendResult
 
 
 @dataclass(frozen=True)
@@ -32,6 +33,7 @@ class StageLatency:
     swap_ms: float
     retarget_ms: float
     total_ms: float
+    projection_ms: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -41,6 +43,8 @@ class Replacement:
     inverse: np.ndarray
     reference_index: int
     method: str
+    coverage: np.ndarray | None = None
+    projection: PoseBlendResult | None = None
 
 
 @dataclass(frozen=True)
@@ -81,6 +85,7 @@ class ReferencePipeline:
         self.lock = threading.RLock()
         self.last_latency: StageLatency | None = None
         self.frames_processed = 0
+        self.pose_projector: PoseBlendProjector | None = None
         register(self, "release_session")
 
     @guarded
@@ -112,18 +117,20 @@ class ReferencePipeline:
                 raise
 
     @guarded
-    def infer_frame(self, image: np.ndarray, *, strength: float = 0.35) -> FrameResult:
+    def infer_frame(self, image: np.ndarray, *, strength: float = 0.35, pose_blend: float | None = None) -> FrameResult:
         with self.lock:
             if not self.prepared or self.tracker is None:
                 raise DomainError("SESSION_NOT_PREPARED", "Prepare a source before frame inference", 409)
             image_bgr(image)
             if not np.isfinite(strength) or not 0 <= strength <= 1:
                 raise ValueError("Retargeting strength must be within 0..1")
+            if pose_blend is not None and (not np.isfinite(pose_blend) or not 0 <= pose_blend <= 1):
+                raise ValueError('Mesh pose blend must be within 0..1')
             began = time.perf_counter()
-            faces = self.tracker.process(image, include203=self.portrait.available)
+            faces = self.tracker.process(image, include203=self.portrait.available and pose_blend is None)
             detection_end = time.perf_counter()
             self.portrait.retain_tracks(self.tracker.active_ids)
-            replacements, swap_seconds, retarget_seconds = [], 0.0, 0.0
+            replacements, swap_seconds, retarget_seconds, projection_seconds = [], 0.0, 0.0, 0.0
             for tracked in faces:
                 if self.selected_ids is not None and tracked.track_id not in self.selected_ids:
                     continue
@@ -132,7 +139,7 @@ class ReferencePipeline:
                 swap = self.swapper.infer_frame(image, face.landmarks5, pose=face.pose,
                                                 track_id=tracked.track_id)
                 swap_seconds += time.perf_counter() - at
-                if self.portrait.available:
+                if self.portrait.available and pose_blend is None:
                     at = time.perf_counter()
                     crop = landmark_crop(image, face.landmarks106, 512, expansion=2.3, vertical_shift=-0.15)
                     driving_points = transform_points(face.landmarks203, crop.matrix).astype(np.float32)
@@ -146,11 +153,21 @@ class ReferencePipeline:
                     retarget_seconds += time.perf_counter() - at
                 else:
                     generated, inverse, method = swap.image, swap.alignment.inverse, "identity_swap"
-                replacements.append(Replacement(tracked.track_id, generated, inverse.copy(), swap.reference_index, method))
+                projection = None
+                if pose_blend is not None:
+                    at = time.perf_counter()
+                    if self.pose_projector is None:
+                        self.pose_projector = PoseBlendProjector()
+                    observed = transform_points(face.landmarks5, cv2.invertAffineTransform(inverse))
+                    projection = self.pose_projector.render(generated, observed, pose_blend)
+                    generated, method = projection.image, 'identity_swap_tps_mesh_blend'
+                    projection_seconds += time.perf_counter() - at
+                replacements.append(Replacement(tracked.track_id, generated, inverse.copy(), swap.reference_index,
+                                                method, projection.coverage if projection else None, projection))
             ended = time.perf_counter()
             self.frames_processed += 1
             self.last_latency = StageLatency((detection_end - began) * 1000, swap_seconds * 1000,
-                                             retarget_seconds * 1000, (ended - began) * 1000)
+                                             retarget_seconds * 1000, (ended - began) * 1000, projection_seconds * 1000)
             return FrameResult(faces, tuple(replacements), self.last_latency, self.tracker.scene_cut)
 
     def capability(self) -> dict:
@@ -159,6 +176,8 @@ class ReferencePipeline:
                 "portrait": self.portrait.capability(), "profile": self.config.hardware_profile,
                 "selected_track_ids": sorted(self.selected_ids) if self.selected_ids is not None else None,
                 "pose_method": "five_point_geometric_estimate", "dense_landmarks": (106, 203),
+                "pose_projection": {"state": "AVAILABLE", "geometry": "ESTIMATED_CANONICAL_PROXY_68",
+                                    "camera": "ESTIMATED_CROP_PINHOLE", "active": self.pose_projector is not None},
                 "full_frame_compositor": self.compositor.capability(),
                 "lip_sync": self.lip_sync.capability()}
 
@@ -203,6 +222,7 @@ class ReferencePipeline:
             self.prepared = False
             self.last_latency = None
             self.frames_processed = 0
+            self.pose_projector = None
 
 
 def prepare_session(source: FaceSetDocument, *, catalog: ModelCatalog | None = None,

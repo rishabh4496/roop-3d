@@ -296,12 +296,13 @@ export function VideoViewport({
       {previewError && <p className="inline-warning" role="alert">{previewError}<button className="button small" onClick={() => { setPreview(null); setSolo(null); setTimeout(() => setSolo(selectedNode), 0); }}>Retry preview</button></p>}
       {solo && result?.notes.map(note => <p className="muted buffer-note" key={note}>{note}</p>)}
       <div className="preview-parameters">
+        <label className="numeric-control">Pose correction method<select aria-label="Pose correction method" value={parameters.pose_mode ?? 'retarget'} onChange={event => setParameters({ ...parameters, pose_mode: event.target.value as 'retarget' | 'mesh_blend' })}><option value="mesh_blend">2.5D / 3D mesh blend (canonical proxy)</option><option value="retarget">Reference LivePortrait retarget</option></select></label>
         <NumericInput label="Swap weight" value={effectiveParameters.swap_weight ?? 1} min={0} max={1} step={.01} onChange={value => editParameter('swap_weight', value ?? 1)}/>
         <NumericInput label="Mask erosion (px)" value={effectiveParameters.erosion_px ?? 0} min={-32} max={32} step={1} onChange={value => editParameter('erosion_px', value ?? 0)}/>
         <NumericInput label="Restorer blend" value={effectiveParameters.restoration_blend} min={0} max={1} step={.01} disabled={!restorerAvailable} title={restorerAvailable ? 'Local GPEN' : 'GPEN weights unavailable'} onChange={value => editParameter('restoration_blend', value ?? 0)}/>
         <NumericInput label="Mask feather (px)" value={effectiveParameters.feather_px} min={0} max={64} step={.1} onChange={value => editParameter('feather_px', value ?? 0)}/>
         <NumericInput label="Color match strength" value={effectiveParameters.color_strength} min={0} max={1} step={.01} onChange={value => editParameter('color_strength', value ?? 0)}/>
-        <NumericInput label="3D pose alignment weight" value={effectiveParameters.pose_strength} min={0} max={1} step={.01} onChange={value => editParameter('pose_strength', value ?? 0)}/>
+        <NumericInput label={parameters.pose_mode === 'mesh_blend' ? '2.5D → 3D pose blend' : 'Reference retarget strength'} value={effectiveParameters.pose_strength} min={0} max={1} step={.01} onChange={value => editParameter('pose_strength', value ?? 0)}/>
       </div>
       {floating.portal}
       {historyOpen && <HistoryDrawer onClose={() => setHistoryOpen(false)}/>}

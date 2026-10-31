@@ -72,7 +72,7 @@ def capabilities(request: Request) -> Capabilities:
         "audio_policy": {"copy": None, "transcode": None, "drop": "The workstation preserves source audio; use copy or transcode"},
     }
     workstation = {"features": {key: {"enabled": True, "reason": None} for key in
-        ("uploads", "frame_preview", "face_inspection", "pose_inspection", "reconstruction_viewer", "projects", "trim", "video_playback")},
+        ("uploads", "frame_preview", "face_inspection", "pose_inspection", "pose_mesh_blend", "reconstruction_viewer", "projects", "trim", "video_playback")},
         "controls": options, "read_only_parameters": {key: "Configure this infrastructure setting offline" for key in
         ("schema_version", "host", "port", "dev_cors", "max_body_bytes", "cache_root", "output_root", "model_search_paths", "diagnostics_level")},
         "disabled_parameters": {"remote_processing_enabled": "No remote adapter is configured", "synthetic_media_notice": "Synthetic media notice is required"},

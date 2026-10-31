@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act } from 'react';
+import { act, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { expect, it, vi } from 'vitest';
 import { VideoViewport } from './VideoViewport';
@@ -56,5 +56,20 @@ it('captures a rendered final composite and full settings into a snapshot slot',
     expect(fetch).toHaveBeenCalledOnce();
     expect(useHistoryStore.getState().slots.A).toMatchObject({ frame: 25, image: 'data:image/jpeg;base64,AQ==', workspace });
     expect(host.querySelector('[aria-label="Snapshot A"]')).toBeTruthy();
+  } finally { await act(async () => root.unmount()); host.remove(); vi.unstubAllGlobals(); vi.restoreAllMocks(); }
+});
+
+it('offers mesh blending and an explicitly separate reference retarget mode', async () => {
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true }); useHistoryStore.getState().reset();
+  vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
+  vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(() => {});
+  function Workstation() { const [parameters, setParameters] = useState(DEFAULT_PARAMETERS); return <VideoViewport target="" output="" time={0} setTime={() => {}} duration={0} enabled={false} keys={[]} parameters={parameters} setParameters={setParameters}/>; }
+  const host = document.createElement('div'); document.body.append(host); const root = createRoot(host);
+  try {
+    await act(async () => root.render(<Workstation/>));
+    expect(host.querySelector('[aria-label="2.5D → 3D pose blend"]')).toBeTruthy();
+    const select = host.querySelector<HTMLSelectElement>('[aria-label="Pose correction method"]')!;
+    await act(async () => { Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')!.set!.call(select, 'retarget'); select.dispatchEvent(new Event('change', { bubbles: true })); });
+    expect(host.querySelector('[aria-label="Reference retarget strength"]')).toBeTruthy();
   } finally { await act(async () => root.unmount()); host.remove(); vi.unstubAllGlobals(); vi.restoreAllMocks(); }
 });

@@ -45,8 +45,11 @@ Solo selects the source reference, detector overlay, observed dense landmarks,
 unrestored replacement, actual grayscale matte, restored replacement, color matched
 replacement, or final composite. Optional capture hooks do not change reference
 compositor output. The available matte is BiSeNet with its existing landmark-hull
-fallback. Pose is estimated 2.5D; the UI does not claim an aligned UV projection.
-The configured local restorer is GPEN. XSeg, UltraMax, CodeFormer, and grain adapters
+fallback. At the original Stage 07/08 checkpoint, pose was estimated 2.5D.
+The later `POSE_MESH_BLEND.md` implementation adds a perspective projection of an
+estimated canonical 3D proxy, a geometric 2.5D/3D blend, and its projected mesh
+overlay. Multi-view UV synthesis remains separate. The configured local restorer
+is GPEN. XSeg, UltraMax, CodeFormer, and grain adapters
 are not supplied by this UI stage. Unsupported stages show explicit reasons.
 
 Restorer and color bypasses affect the preview and render request parameters.

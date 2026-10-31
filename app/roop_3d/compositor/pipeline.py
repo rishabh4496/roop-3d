@@ -127,6 +127,12 @@ class FrameCompositor:
                 kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (radius * 2 + 1, radius * 2 + 1))
                 alpha = cv2.erode(alpha, kernel) if options.erosion_px > 0 else cv2.dilate(alpha, kernel)
             alpha = alpha * options.swap_weight
+            coverage = getattr(replacement, 'coverage', None)
+            if coverage is not None:
+                coverage = np.asarray(coverage, np.float32)
+                if coverage.shape != alpha.shape or not np.isfinite(coverage).all() or np.any((coverage < 0) | (coverage > 1)):
+                    raise DomainError('PROJECTION_COVERAGE_INVALID', 'Projected coverage must be finite crop-space values in 0..1', 422)
+                alpha *= coverage
             if observer is not None:
                 observer('swapper', crop, replacement.inverse, alpha)
                 observer('matte', (alpha * 255).round().astype(np.uint8), replacement.inverse, alpha)
@@ -161,6 +167,8 @@ class FrameCompositor:
             if observer is not None:
                 observer('color', harmonized, replacement.inverse, alpha)
             effective_alpha = temporal.alpha * options.swap_weight
+            if coverage is not None:
+                effective_alpha = np.minimum(effective_alpha, coverage)
             output = fuse_crop(output, harmonized, temporal.inverse, effective_alpha,
                                mode=options.mode, levels=options.pyramid_levels)
         self.frames_composited += 1

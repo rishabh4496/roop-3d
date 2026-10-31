@@ -52,7 +52,7 @@ export default function App() {
     || project.request.trim_end_seconds !== trimEnd
     || JSON.stringify(project.request.face_mappings) !== JSON.stringify(renderMappings())
     || JSON.stringify(project.effective_settings) !== JSON.stringify(config)
-    || JSON.stringify({ ...DEFAULT_PARAMETERS, ...project.request.workstation_parameters }) !== JSON.stringify(parameters)
+    || JSON.stringify({ ...DEFAULT_PARAMETERS, ...project.request.workstation_parameters, pose_mode: project.request.workstation_parameters?.pose_mode ?? 'retarget' }) !== JSON.stringify(parameters)
     || JSON.stringify(project.request.parameter_curves?.tracks ?? {}) !== JSON.stringify(curves)
     || (project.request.mask_base64 ?? null) !== maskBase64
     || !!project.request.face_segments && JSON.stringify(project.request.face_segments) !== JSON.stringify(buildFaceSegments(clusters, assigned));
@@ -153,7 +153,7 @@ export default function App() {
     useFaceSelectionStore.getState().populateFromInspection(loaded, null, restoredMappings);
     if (saved.request.face_segments) hydrateFaceSegments(saved.request.face_segments);
     replaceCurves(saved.request.parameter_curves?.tracks ?? {}); setMaskRaw(saved.request.mask_base64 ?? null);
-    setParametersRaw({ ...DEFAULT_PARAMETERS, ...saved.request.workstation_parameters });
+    setParametersRaw({ ...DEFAULT_PARAMETERS, ...saved.request.workstation_parameters, pose_mode: saved.request.workstation_parameters?.pose_mode ?? 'retarget' });
     location.hash = '#/faceswap';
     setTrimStart(saved.request.trim_start_seconds ?? 0); setTrimEnd(saved.request.trim_end_seconds); setProject(saved); setProjectName(saved.name); setSelectedJob(saved.checkpoint_job_id ?? ''); setIncludeCheckpoint(!!saved.checkpoint_job_id); setProjectsOpen(false); setNotice('Project input and model hashes verified. Saved settings restored.');
   });
@@ -173,7 +173,7 @@ export default function App() {
       setSelectedTrack(loaded.tracks[0]?.track_id ?? ''); setSelectedJob(job.job_id);
       if (job.request.face_segments) hydrateFaceSegments(job.request.face_segments);
       replaceCurves(job.request.parameter_curves?.tracks ?? {}); setMaskRaw(job.request.mask_base64 ?? null);
-      setParametersRaw({ ...DEFAULT_PARAMETERS, ...job.request.workstation_parameters });
+      setParametersRaw({ ...DEFAULT_PARAMETERS, ...job.request.workstation_parameters, pose_mode: job.request.workstation_parameters?.pose_mode ?? 'retarget' });
       setTrimStart(job.request.trim_start_seconds ?? 0); setTrimEnd(job.request.trim_end_seconds);
     });
   };

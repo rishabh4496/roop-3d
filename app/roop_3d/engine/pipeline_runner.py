@@ -319,7 +319,8 @@ class MasterPipelineRunner:
                 self._checkpoint(checkpoint, completed_frame=last_completed)
                 raise signal()
             session.prepare_session(base_source, track_ids=numeric_ids,
-                                    sources_by_track=source_by_track, retarget="auto")
+                                    sources_by_track=source_by_track,
+                                    retarget='off' if record.request.parameters_at(0).pose_mode == 'mesh_blend' else 'auto')
             if settings.face_restoration_policy in {"gfpgan", "codeformer"}:
                 raise DomainError("RESTORER_UNAVAILABLE", "The selected restoration architecture has no verified local adapter", 503)
             animated_restoration = bool(record.request.parameter_curves and any(key.value > 0 for key in record.request.parameter_curves.tracks.get('restorer_opacity', ())))
@@ -348,7 +349,7 @@ class MasterPipelineRunner:
                     if prepared.edit_plan:
                         prepared.edit_plan.apply(session, decoded.index)
                     parameters = record.request.parameters_at(decoded.index) if record.request.workstation_parameters or record.request.parameter_curves else None
-                    result = (session.infer_frame(decoded.image, strength=parameters.pose_strength)
+                    result = (session.infer_frame(decoded.image, **parameters.inference_options())
                               if parameters else session.infer_frame(decoded.image))
                     output = session.composite_frame(
                         decoded.image, result,
@@ -440,6 +441,8 @@ class MasterPipelineRunner:
             "identity_transfer": capability.get("identity_swapper", {}).get("inference_state", "UNKNOWN"),
             "liveportrait": capability.get("portrait", {}).get("state", "UNKNOWN"),
             "stage08_uv": "UNSUPPORTED" if settings.execution_mode in {"volumetric", "hybrid"} else "NOT_REQUESTED",
+            "pose_projection": capability.get('pose_projection', {}),
+            "pose_mode": record.request.parameters_at(0).pose_mode,
             "stage10_lip_sync": capability.get("lip_sync", {}).get("state", "UNKNOWN"),
             "stage11_diffusion_vfx": "UNSUPPORTED" if settings.execution_mode in {"hybrid", "diffusion_vfx"} else "NOT_REQUESTED",
             "face_mappings": [{"track_id": label, "faceset_id": source_id}
