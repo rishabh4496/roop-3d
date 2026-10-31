@@ -64,6 +64,8 @@ export function mapPointToPixels(point, letterbox) {
  *   sources?: import('../../contracts').FaceSet[];
  *   fps?: number;
  *   onAssignSource?: (clusterId: string, sourceId: string | null) => void;
+ *   onExtractFaces?: () => void;
+ *   detecting?: boolean;
  * }} props
  */
 export default function FaceOverlayCanvas({
@@ -73,6 +75,8 @@ export default function FaceOverlayCanvas({
   sources = [],
   fps = 30,
   onAssignSource,
+  onExtractFaces,
+  detecting = false,
 }) {
   const canvasRef = useRef(null);
   const containerRef = useRef(null);
@@ -442,6 +446,67 @@ export default function FaceOverlayCanvas({
           pointerEvents: 'auto',
         }}
       />
+
+      {/* Quick target face selector strip on top of preview box */}
+      {visibleFaces.length > 1 && (
+        <div className="preview-face-selector-strip" role="toolbar" aria-label="Select target face from preview">
+          <span className="strip-title">🎯 TARGET FACE:</span>
+          {visibleFaces.map((f, i) => {
+            const cluster = targetClusters.find(c => c.id === f.clusterId);
+            const isSel = activeSelection === f.id;
+            const assigned = sources.find(s => s.faceset_id === assignments[f.clusterId]);
+            return (
+              <button
+                key={f.id}
+                type="button"
+                className={`preview-face-pill ${isSel ? 'active' : ''}`}
+                onClick={e => {
+                  e.stopPropagation();
+                  setActiveSelection(f.id);
+                  const coords = mapBoxToPixels(f.bbox, letterbox);
+                  setPopover({
+                    x: coords.x,
+                    y: coords.y,
+                    w: coords.w,
+                    h: coords.h,
+                    face: f,
+                    cluster,
+                  });
+                  if (typeof document !== 'undefined') {
+                    const cardEl = document.querySelector(`[data-cluster-id="${f.clusterId}"]`);
+                    cardEl?.scrollIntoView?.({ behavior: 'smooth', block: 'nearest', inline: 'center' });
+                  }
+                }}
+                aria-pressed={isSel}
+              >
+                <span className="pill-status" />
+                <span className="pill-name">{cluster?.name || `Face ${i + 1}`}</span>
+                {assigned && <span className="pill-mapping">→ {assigned.name}</span>}
+                {isSel && <span className="pill-check">✓</span>}
+              </button>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Floating 1-click face detection prompt when no faces detected on current preview frame */}
+      {visibleFaces.length === 0 && onExtractFaces && (
+        <div className="preview-detect-prompt">
+          <button
+            type="button"
+            className={`preview-detect-btn ${detecting ? 'detecting' : ''}`}
+            onClick={e => {
+              e.stopPropagation();
+              onExtractFaces();
+            }}
+            disabled={detecting}
+            title="Extract and select target faces directly from this preview frame"
+          >
+            <span className="detect-icon">🎯</span>
+            <span>{detecting ? 'Detecting faces in frame…' : 'Use Face from this Frame'}</span>
+          </button>
+        </div>
+      )}
 
       {/* Context Action: Fast target-to-source face assignment popover */}
       {popover && (

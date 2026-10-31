@@ -13,6 +13,7 @@ import {
 } from './components/canvas/FaceOverlayCanvas';
 import TargetFaceCard from './components/tray/TargetFaceCard';
 import FaceSelectionTray from './components/tray/FaceSelectionTray';
+import FaceOverlayCanvas from './components/canvas/FaceOverlayCanvas';
 import type { DetectedFace, FaceSet, Inspection, Probe, TargetCluster } from './contracts';
 
 describe('useFaceSelectionStore state architecture and clustering', () => {
@@ -167,6 +168,54 @@ describe('useFaceSelectionStore state architecture and clustering', () => {
     expect(state.targetClusters[0].avgPose.yaw).toBe(0); // (-5 + 5) / 2
     expect(state.targetClusters[0].avgPose.pitch).toBe(1); // (-2 + 4) / 2
   });
+
+  it('keeps target faces selectable between sparse samples, within the inspected track', () => {
+    useFaceSelectionStore.getState().reset();
+    const inspection: Inspection = {
+      inspection_id: 'sparse-samples',
+      target_sha256: 'b'.repeat(64),
+      tracks: [
+        {
+          track_id: 'track_sparse',
+          first_frame: 0,
+          last_frame: 300,
+          first_timestamp_seconds: 0,
+          last_timestamp_seconds: 10,
+          thumbnail_base64: 'dGVzdA==',
+          thumbnail_mime: 'image/jpeg',
+          landmark_count: 5,
+          pose_range: { yaw_degrees: [0, 0], pitch_degrees: [0, 0], roll_degrees: [0, 0], method: 'test' },
+          bounding_box: { x1: 0.2, y1: 0.2, x2: 0.6, y2: 0.6 },
+          sampled_detections: 4,
+        },
+        {
+          track_id: 'track_nearby',
+          first_frame: 90,
+          last_frame: 110,
+          first_timestamp_seconds: 3,
+          last_timestamp_seconds: 11 / 3,
+          thumbnail_base64: 'dGVzdA==',
+          thumbnail_mime: 'image/jpeg',
+          landmark_count: 5,
+          pose_range: { yaw_degrees: [0, 0], pitch_degrees: [0, 0], roll_degrees: [0, 0], method: 'test' },
+          bounding_box: { x1: 0.4, y1: 0.2, x2: 0.8, y2: 0.6 },
+          sampled_detections: 3,
+        },
+      ],
+      warnings: [],
+      truncated: false,
+    };
+    const probe: Probe = { width: 640, height: 360, duration_seconds: 10, fps_rational: '30/1', declared_frame_count: 300, audio_tracks: [] };
+
+    useFaceSelectionStore.getState().populateFromInspection(inspection, probe);
+
+    const betweenSamples = useFaceSelectionStore.getState().getFacesAtTimestamp(5, 30);
+    expect(betweenSamples).toHaveLength(1);
+    expect(betweenSamples[0].clusterId).toBe('track_sparse');
+    const besideNearbyTrack = useFaceSelectionStore.getState().getFacesAtTimestamp(3.6, 30);
+    expect(besideNearbyTrack.map(face => face.clusterId).sort()).toEqual(['track_nearby', 'track_sparse']);
+    expect(useFaceSelectionStore.getState().getFacesAtTimestamp(11, 30)).toHaveLength(0);
+  });
 });
 
 describe('Sub-pixel letterbox coordinate mapping for FaceOverlayCanvas', () => {
@@ -300,5 +349,107 @@ describe('Face selection tray and target cards UI', () => {
     expect(html).toContain('1 detected');
     expect(html).toContain('1 visible in current frame');
     expect(html).toContain('cluster_hero');
+  });
+  it('extracts and selects target faces from frame using addFrameDetectedFaces', () => {
+    useFaceSelectionStore.getState().reset();
+    const faceItems = [
+      {
+        id: 'track_0001_15',
+        track_id: 'track_0001',
+        frame_index: 15,
+        timestamp: 0.5,
+        bbox: [0.2, 0.2, 0.5, 0.5] as [number, number, number, number],
+        landmarks5: [[0.3, 0.3], [0.4, 0.3], [0.35, 0.35], [0.32, 0.4], [0.38, 0.4]] as [number, number][],
+        confidence: 0.98,
+        pose: { yaw: 5.0, pitch: -2.0, roll: 0.5 },
+        thumbnail_base64: 'abc123thumb',
+      },
+      {
+        id: 'track_0002_15',
+        track_id: 'track_0002',
+        frame_index: 15,
+        timestamp: 0.5,
+        bbox: [0.6, 0.2, 0.85, 0.5] as [number, number, number, number],
+        landmarks5: [[0.68, 0.3], [0.78, 0.3], [0.73, 0.35], [0.7, 0.4], [0.76, 0.4]] as [number, number][],
+        confidence: 0.95,
+        pose: { yaw: -12.0, pitch: 4.0, roll: -1.0 },
+        thumbnail_base64: 'def456thumb',
+      },
+    ];
+
+    const selectedId = useFaceSelectionStore.getState().addFrameDetectedFaces(faceItems, true);
+    expect(selectedId).toBe('track_0001_15');
+    const store = useFaceSelectionStore.getState();
+    expect(store.activeSelection).toBe('track_0001_15');
+    expect(store.selectedClusterId).toBe('track_0001');
+    expect(store.detectedFaces.length).toBe(2);
+    expect(store.targetClusters.length).toBe(2);
+
+    // Verify clusters have startFrame 0 and endFrame null for frame detection
+    const c1 = store.targetClusters.find(c => c.id === 'track_0001');
+    expect(c1).toBeDefined();
+    expect(c1?.thumbnailUrl).toContain('data:image/jpeg;base64,abc123thumb');
+
+    // Retrieve faces at timestamp
+    const visible = store.getFacesAtTimestamp(0.5, 30);
+    expect(visible.length).toBe(2);
+  });
+
+  it('renders FaceOverlayCanvas preview target selector strip when multiple faces are visible', () => {
+    useFaceSelectionStore.getState().reset();
+    useFaceSelectionStore.getState().addFrameDetectedFaces([
+      {
+        id: 'f_p1',
+        track_id: 'track_0001',
+        frame_index: 10,
+        timestamp: 0.33,
+        bbox: [0.1, 0.1, 0.4, 0.4] as [number, number, number, number],
+        landmarks5: [[0.2, 0.2], [0.3, 0.2], [0.25, 0.25], [0.22, 0.3], [0.28, 0.3]] as [number, number][],
+        confidence: 0.99,
+        pose: { yaw: 0, pitch: 0, roll: 0 },
+        thumbnail_base64: 'p1',
+      },
+      {
+        id: 'f_p2',
+        track_id: 'track_0002',
+        frame_index: 10,
+        timestamp: 0.33,
+        bbox: [0.6, 0.1, 0.9, 0.4] as [number, number, number, number],
+        landmarks5: [[0.7, 0.2], [0.8, 0.2], [0.75, 0.25], [0.72, 0.3], [0.78, 0.3]] as [number, number][],
+        confidence: 0.97,
+        pose: { yaw: 0, pitch: 0, roll: 0 },
+        thumbnail_base64: 'p2',
+      },
+    ], true);
+
+    const html = renderToStaticMarkup(
+      <FaceOverlayCanvas
+        currentTime={0.33}
+        fps={30}
+        sources={sampleSources}
+        mediaDimensions={{ width: 1920, height: 1080 }}
+      />
+    );
+
+    expect(html).toContain('preview-face-selector-strip');
+    expect(html).toContain('TARGET FACE:');
+    expect(html).toContain('preview-face-pill');
+  });
+
+  it('renders FaceOverlayCanvas detection prompt when no faces detected and onExtractFaces provided', () => {
+    useFaceSelectionStore.getState().reset();
+
+    const html = renderToStaticMarkup(
+      <FaceOverlayCanvas
+        currentTime={2.5}
+        fps={30}
+        sources={sampleSources}
+        onExtractFaces={() => {}}
+        mediaDimensions={{ width: 1920, height: 1080 }}
+      />
+    );
+
+    expect(html).toContain('preview-detect-prompt');
+    expect(html).toContain('Use Face from this Frame');
   });
 });

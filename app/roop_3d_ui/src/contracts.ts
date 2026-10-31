@@ -91,3 +91,21 @@ export interface Project {
 }
 export interface Telemetry { gpus: { name: string; total_vram_mib: number; free_vram_mib: number }[]; logical_cpu_count: number }
 export interface Event { type: string; sequence?: number; hardware?: Telemetry }
+
+export interface DetectedFaceItem {
+  id: string;
+  track_id: string;
+  frame_index: number;
+  timestamp: number;
+  bbox: [number, number, number, number];
+  landmarks5: [number, number][];
+  confidence: number;
+  pose: { yaw: number; pitch: number; roll: number };
+  thumbnail_base64: string;
+}
+
+export interface FrameFaceDetectionResponse {
+  inspection_id: string;
+  faces: DetectedFaceItem[];
+  inspection: Inspection;
+}

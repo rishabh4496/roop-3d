@@ -133,6 +133,20 @@ def inspect(value: InspectRequest, request: Request) -> FaceInspection:
     return request.app.state.media.inspect(value)
 
 
+class FrameFaceDetectionRequest(Contract):
+    path: str = Field(min_length=1, max_length=1024)
+    timestamp: float | None = Field(default=None, ge=0, le=86400)
+    frame_index: int | None = Field(default=None, ge=0, le=9999)
+    threshold: float = Field(default=0.5, ge=0.1, le=0.99)
+
+
+@router.post("/media/detect-frame-faces")
+def detect_frame_faces(value: FrameFaceDetectionRequest, request: Request) -> dict:
+    return request.app.state.media.detect_frame_faces(
+        value.path, value.timestamp, value.frame_index, value.threshold
+    )
+
+
 @router.get("/media/preview-frame", response_class=Response,
             responses={200: {"content": {"image/jpeg": {"schema": {"type": "string", "format": "binary"}}}}})
 def preview(request: Request, path: Annotated[str, Query(min_length=1, max_length=1024)],

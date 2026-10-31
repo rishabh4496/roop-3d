@@ -4,6 +4,7 @@ from __future__ import annotations
 import base64
 from contextlib import closing, contextmanager
 from fractions import Fraction
+import json
 import math
 from pathlib import Path
 import time
@@ -14,7 +15,7 @@ import av
 import cv2
 import numpy as np
 
-from roop_3d.audit.isolation import sha256_file
+from roop_3d.audit.isolation import sha256_file, safe_path
 from roop_3d.core.errors import DomainError
 from roop_3d.core.settings import Settings, runtime_path
 from roop_3d.core.storage import atomic_json
@@ -187,6 +188,131 @@ class MediaService:
                       "persistent_id is the integer engine track ID; track_id retains the job mapping label."))
         atomic_json(self.root, f"roop_3d/.runtime/inspections/{result.inspection_id}.json", result.model_dump(mode="json"))
         return result
+
+    def detect_frame_faces(self, value: str, timestamp: float | None = None,
+                           frame_index: int | None = None, threshold: float = 0.5) -> dict:
+        path = self.path(value)
+        _, digest = sha256_file(path)
+
+        info = self.probe(value)
+        fps = info.fps or 30.0
+        width = info.width
+        height = info.height
+
+        if timestamp is None and frame_index is None:
+            timestamp = 0.0
+            frame_index = 0
+        elif timestamp is not None and frame_index is None:
+            frame_index = int(round(timestamp * fps))
+        elif frame_index is not None and timestamp is None:
+            timestamp = float(frame_index / fps)
+
+        image = self.frame(value, timestamp, None)
+        retained, detector_record = self.detector.detect(image, threshold=threshold)
+        recognizer_record = self.detector.catalog.recognizer()
+
+        from roop_3d.engine.detection.dense_landmarks import geometric_pose
+
+        inspections_dir = safe_path(self.root, "roop_3d/.runtime/inspections")
+        inspections_dir.mkdir(parents=True, exist_ok=True)
+
+        existing_inspection = None
+        for insp_path in inspections_dir.glob("*.json"):
+            try:
+                insp_data = json.loads(insp_path.read_text("utf-8"))
+                if insp_data.get("target_sha256") == digest:
+                    existing_inspection = FaceInspection.model_validate(insp_data)
+                    break
+            except Exception:
+                continue
+
+        if not retained:
+            return {
+                "inspection_id": existing_inspection.inspection_id if existing_inspection else "",
+                "faces": [],
+                "inspection": existing_inspection.model_dump(mode="json") if existing_inspection else None,
+            }
+
+        faces_output = []
+        new_tracks = list(existing_inspection.tracks) if existing_inspection else []
+        track_start_idx = len(new_tracks)
+
+        for idx, (box, points) in enumerate(retained):
+            x1, y1, x2, y2 = box.astype(int)
+            x1_cl = max(0, min(x1, width - 1))
+            y1_cl = max(0, min(y1, height - 1))
+            x2_cl = max(x1_cl + 1, min(x2, width))
+            y2_cl = max(y1_cl + 1, min(y2, height))
+
+            crop = cv2.resize(image[y1_cl:y2_cl, x1_cl:x2_cl], (128, 128))
+            success, jpg = cv2.imencode(".jpg", crop)
+            thumb_b64 = base64.b64encode(jpg).decode("ascii") if success else ""
+
+            yaw, pitch, roll = geometric_pose(points)
+
+            track_id = f"track_{track_start_idx + idx:04d}"
+            bbox_norm = [float(x1 / width), float(y1 / height), float(x2 / width), float(y2 / height)]
+            landmarks5_norm = [[float(p[0] / width), float(p[1] / height)] for p in points]
+
+            face_item = {
+                "id": f"{track_id}_{frame_index}",
+                "track_id": track_id,
+                "frame_index": frame_index,
+                "timestamp": timestamp,
+                "bbox": bbox_norm,
+                "landmarks5": landmarks5_norm,
+                "confidence": 0.98,
+                "pose": {"yaw": yaw, "pitch": pitch, "roll": roll},
+                "thumbnail_base64": thumb_b64,
+            }
+            faces_output.append(face_item)
+
+            track_obj = FaceTrack(
+                track_id=track_id,
+                persistent_id=track_start_idx + idx,
+                scene_id=0,
+                landmark_count=5,
+                first_frame=frame_index,
+                last_frame=frame_index,
+                first_timestamp_seconds=timestamp,
+                last_timestamp_seconds=timestamp,
+                bounding_box=BoundingBox(x1=float(x1_cl), y1=float(y1_cl), x2=float(x2_cl), y2=float(y2_cl)),
+                pose_range=PoseRange(
+                    yaw_degrees=(yaw, yaw),
+                    pitch_degrees=(pitch, pitch),
+                    roll_degrees=(roll, roll),
+                    method="five_point_geometric_estimate",
+                    yaw_pitch_state="CANDIDATE",
+                ),
+                thumbnail_base64=thumb_b64,
+                sampled_detections=1,
+            )
+            new_tracks.append(track_obj)
+
+        inspection_id = existing_inspection.inspection_id if existing_inspection else uuid.uuid4().hex
+        inspection_obj = FaceInspection(
+            inspection_id=inspection_id,
+            target_sha256=digest,
+            detector_model_id=detector_record["model_id"],
+            detector_sha256=detector_record["sha256"],
+            recognizer_model_id=recognizer_record["model_id"],
+            recognizer_sha256=recognizer_record["sha256"],
+            decoded_frames=max(1, frame_index + 1),
+            sampled_frames=1,
+            truncated=False,
+            tracking_method="iou_arcface_hungarian",
+            scene_cut_frames=(),
+            tracks=tuple(new_tracks),
+            warnings=("Target face selected directly from frame preview.",),
+        )
+        atomic_json(self.root, f"roop_3d/.runtime/inspections/{inspection_id}.json",
+                    inspection_obj.model_dump(mode="json"))
+
+        return {
+            "inspection_id": inspection_id,
+            "faces": faces_output,
+            "inspection": inspection_obj.model_dump(mode="json"),
+        }
 
     def segment_boundaries(self, path_str: str, max_segment_duration: float = 15.0) -> list[dict]:
         target = self.path(path_str)

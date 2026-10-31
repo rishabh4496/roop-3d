@@ -1,5 +1,5 @@
 import { useCallback, useSyncExternalStore } from 'react';
-import type { DetectedFace, FaceSelectionState, Inspection, Probe, TargetCluster } from './contracts';
+import type { DetectedFace, DetectedFaceItem, FaceSelectionState, Inspection, Probe, TargetCluster } from './contracts';
 import { executeCommand } from './stores/useHistoryStore';
 
 export interface FaceSelectionStoreState extends FaceSelectionState {
@@ -25,6 +25,7 @@ export interface FaceSelectionStoreState extends FaceSelectionState {
   replaceAssignments: (assignments: Record<string, string>) => void;
   focusPose: (faceId: string) => void;
   poseFocus: { faceId: string; serial: number } | null;
+  addFrameDetectedFaces: (faces: DetectedFaceItem[], autoSelect?: boolean) => string | null;
 }
 
 export function cosineSimilarity(a: number[], b: number[]): number {
@@ -374,17 +375,62 @@ let state: FaceSelectionStoreState = {
 
   getFacesAtTimestamp: (timestamp: number, fps = 30) => {
     const frameIndex = Math.round(timestamp * fps);
-    // Find exact or closest within 0.35 seconds
-    const exact = state.detectedFaces.filter(f => f.frameIndex === frameIndex);
-    if (exact.length > 0) return exact;
+    // Resolve each track independently so an exact or nearby detection from
+    // one face cannot hide another track whose detections are more sparse.
+    const nearestByCluster = new Map<string, DetectedFace>();
+    for (const cluster of state.targetClusters) {
+      if (frameIndex < (cluster.startFrame ?? 0) || (cluster.endFrame != null && frameIndex > cluster.endFrame)) continue;
+      const nearest = state.detectedFaces
+        .filter(face => face.clusterId === cluster.id)
+        .reduce<DetectedFace | null>((best, face) => !best || Math.abs(face.frameIndex - frameIndex) < Math.abs(best.frameIndex - frameIndex) ? face : best, null);
+      if (nearest) nearestByCluster.set(cluster.id, nearest);
+    }
+    if (nearestByCluster.size > 0) return [...nearestByCluster.values()];
 
-    // Fallback: check timestamp tolerance
-    return state.detectedFaces.filter(f => {
-      if (f.timestamp !== undefined) {
-        return Math.abs(f.timestamp - timestamp) <= 0.25;
-      }
-      return Math.abs(f.frameIndex - frameIndex) <= 2;
-    });
+    // Keep the low-level fallback for callers that provide detections without
+    // track metadata.
+    const exact = state.detectedFaces.filter(face => face.frameIndex === frameIndex);
+    if (exact.length > 0) return exact;
+    return state.detectedFaces.filter(face => face.timestamp !== undefined
+      ? Math.abs(face.timestamp - timestamp) <= 0.25
+      : Math.abs(face.frameIndex - frameIndex) <= 2);
+  },
+
+  addFrameDetectedFaces: (faces: DetectedFaceItem[], autoSelect = true) => {
+    if (!faces || faces.length === 0) return null;
+    const newFaces: DetectedFace[] = faces.map(f => ({
+      id: f.id,
+      clusterId: f.track_id,
+      frameIndex: f.frame_index,
+      timestamp: f.timestamp,
+      bbox: f.bbox,
+      landmarks5: f.landmarks5,
+      confidence: f.confidence,
+      pose: f.pose,
+      thumbnailUrl: f.thumbnail_base64 ? `data:image/jpeg;base64,${f.thumbnail_base64}` : undefined,
+    }));
+    const existingMap = new Map(state.detectedFaces.map(f => [f.id, f]));
+    for (const nf of newFaces) {
+      existingMap.set(nf.id, nf);
+    }
+    const combined = Array.from(existingMap.values());
+    const clustered = clusteredState(combined, 0.65, state.targetClusters, state.assignments);
+    for (const cluster of clustered.targetClusters) {
+      if (cluster.startFrame === undefined) cluster.startFrame = 0;
+      if (cluster.endFrame === undefined) cluster.endFrame = null;
+    }
+    const primaryId = autoSelect ? newFaces[0]?.id ?? null : state.activeSelection;
+    const primaryCluster = primaryId
+      ? clustered.detectedFaces.find(f => f.id === primaryId)?.clusterId ?? null
+      : state.selectedClusterId;
+    state = {
+      ...state,
+      ...clustered,
+      activeSelection: primaryId,
+      selectedClusterId: primaryCluster,
+    };
+    notify();
+    return primaryId;
   },
 
   reset: () => {

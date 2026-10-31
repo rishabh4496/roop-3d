@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { mediaURL } from './api';
 import { PreviewURL } from './state';
-import type { FaceSet, Probe } from './contracts';
+import type { FaceSet, Probe, Inspection, FrameFaceDetectionResponse } from './contracts';
+import { useFaceSelectionStore } from './useFaceSelectionStore';
 import FaceOverlayCanvas from './components/canvas/FaceOverlayCanvas';
 import FaceSelectionTray from './components/tray/FaceSelectionTray';
 import WorkstationCanvas from './components/canvas/WorkstationCanvas';
@@ -59,6 +60,7 @@ export function VideoViewport({
   active = true, parameters = DEFAULT_PARAMETERS, setParameters = () => {}, previewRequest = null,
   inspector, posePanel, restorerAvailable = false, onPreviewLatency,
   maskBase64 = null, captureWorkspace = () => ({}), restoreWorkspace = () => {},
+  onInspectionUpdate,
 }: {
   target: string;
   output: string;
@@ -85,7 +87,38 @@ export function VideoViewport({
   maskBase64?: string | null;
   captureWorkspace?: () => any;
   restoreWorkspace?: (value: any) => void;
+  onInspectionUpdate?: (inspection: Inspection) => void;
 }) {
+  const [detectingFaces, setDetectingFaces] = useState(false);
+  const [detectionNotice, setDetectionNotice] = useState('');
+
+  const handleUseFaceFromFrame = useCallback(async () => {
+    if (!target || detectingFaces) return;
+    setDetectingFaces(true);
+    setDetectionNotice('');
+    try {
+      const res = await post<FrameFaceDetectionResponse>('/media/detect-frame-faces', {
+        path: target,
+        timestamp: time,
+      });
+      if (res && res.faces && res.faces.length > 0) {
+        useFaceSelectionStore.getState().addFrameDetectedFaces(res.faces, true);
+        if (onInspectionUpdate && res.inspection) {
+          onInspectionUpdate(res.inspection);
+        }
+        setDetectionNotice(`Selected ${res.faces.length} target face(s) from current frame.`);
+        setTimeout(() => setDetectionNotice(''), 4000);
+      } else {
+        setDetectionNotice('No faces detected in this frame. Scrub to a frame with a clear face.');
+        setTimeout(() => setDetectionNotice(''), 4000);
+      }
+    } catch (err: any) {
+      setDetectionNotice(err.message || 'Face detection failed for current frame.');
+      setTimeout(() => setDetectionNotice(''), 4000);
+    } finally {
+      setDetectingFaces(false);
+    }
+  }, [target, time, detectingFaces, onInspectionUpdate]);
   const original = useRef<HTMLVideoElement>(null), processed = useRef<HTMLVideoElement>(null);
   const viewportRef = useRef<HTMLDivElement>(null);
 
@@ -238,6 +271,16 @@ export function VideoViewport({
         <span className="eyebrow">WORKSTATION MEDIA INSPECTOR</span>
         <button className="button small" disabled={!history.past.length} onClick={history.undo}>Undo</button><button className="button small" disabled={!history.future.length} onClick={history.redo}>Redo</button><button className="button small" onClick={() => setHistoryOpen(true)}>Edit history ({history.past.length})</button>
         <button className="button small" disabled={!previewRequest} onClick={() => { setPlaying(false); original.current?.pause(); processed.current?.pause(); setSweepOpen(true); }}>Parameter Sweep</button>
+        <button
+          type="button"
+          className={`button small use-face-frame-btn ${detectingFaces ? 'busy' : ''}`}
+          disabled={!target || detectingFaces}
+          onClick={handleUseFaceFromFrame}
+          title="Detect and select target faces directly from the currently displayed preview frame (like Roop Ultimate)"
+        >
+          <span>🎯</span> {detectingFaces ? 'Detecting Faces…' : 'Use Face from this Frame'}
+        </button>
+        {detectionNotice && <span className="detection-inline-notice">{detectionNotice}</span>}
         {solo && <button className="button small" onClick={() => setSolo(null)}>Exit solo · {solo}</button>}
 
         {/* Mask Editing Mode Toggle */}

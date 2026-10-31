@@ -47,6 +47,11 @@ def test_real_container_probe_and_precise_frame_preview(video) -> None:
     decoded = cv2.imdecode(np.frombuffer(jpeg, np.uint8), cv2.IMREAD_COLOR)
     assert decoded.shape == (120, 320, 3)
 
+    # Test detect_frame_faces directly from preview frame
+    res = service.detect_frame_faces(path, timestamp=0.2)
+    assert "inspection_id" in res and "faces" in res
+    assert isinstance(res["faces"], list)
+
 
 @pytest.mark.parametrize("path", ["../secret.mp4", "https://example.com/a.mp4", "roop_3d/core/settings.py",
                                  "roop_3d/.runtime/config.json", "roop_3d/.runtime/media/a.m3u8"])
