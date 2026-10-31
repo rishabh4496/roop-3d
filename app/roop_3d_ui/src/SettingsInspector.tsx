@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import type { Capabilities, Config } from './contracts';
 import { optionReason } from './state';
 import NumericInput from './components/controls/NumericInput';
-export function SettingsInspector({ caps, config, save, busy }: { caps: Capabilities | null; config: Config | null; save: (value: Config) => void; busy: boolean }) {
+export function SettingsInspector({ caps, config, save, busy, namespace = 'setting' }: { caps: Capabilities | null; config: Config | null; save: (value: Config) => void; busy: boolean; namespace?: string }) {
   const [draft, setDraft] = useState<Config>({});
   useEffect(() => { if (config) setDraft(config); }, [config]);
   const properties = caps?.legal_parameter_bounds.properties ?? {};
@@ -14,7 +14,7 @@ export function SettingsInspector({ caps, config, save, busy }: { caps: Capabili
         const reason = optionReason(caps, name);
         const value = draft[name];
         const label = name.replaceAll('_', ' ');
-        const common = { id: `setting-${name}`, disabled: !!reason || busy, title: reason ?? schema.description };
+        const common = { id: `${namespace}-${name}`, disabled: !!reason || busy, title: reason ?? schema.description };
         return <div className="setting" key={name}>{schema.type !== 'integer' && schema.type !== 'number' && <label htmlFor={common.id}>{label}</label>}
           {schema.enum ? <select {...common} value={String(value ?? '')} onChange={event => update(name, event.target.value)}>
             {schema.enum.map(option => { const unavailable = optionReason(caps, name, String(option)); return <option key={String(option)} value={String(option)} disabled={!!unavailable}>{String(option)}{unavailable ? ' · unavailable' : ''}</option>; })}

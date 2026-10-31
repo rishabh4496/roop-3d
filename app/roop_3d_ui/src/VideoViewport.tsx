@@ -14,7 +14,7 @@ import PipelineNodeFlowBar from './components/workstation/PipelineNodeFlowBar';
 import ParameterSweepModal from './components/workstation/ParameterSweepModal';
 import { DEFAULT_PARAMETERS, PIPELINE_NODES, type WorkstationParameters, type PreviewResult } from './components/workstation/pipeline';
 import { DockArea, DockPanel, LayoutToolbar } from './components/workstation/WorkspaceLayouts';
-import { useFloatingPreview } from './components/workstation/FloatingPreview';
+import { FloatingPreviewMedia, useFloatingPreview } from './components/workstation/FloatingPreview';
 import { useShortcutActions } from './components/controls/Hotkeys';
 import NumericInput from './components/controls/NumericInput';
 
@@ -114,7 +114,7 @@ export function VideoViewport({
   const sourcePreview = usePreview(enabled && active ? target : '', time, playing);
   const outputPreview = usePreview(enabled && active ? output : '', time, playing);
   const floatingImage = solo ? result?.buffers[solo] : outputPreview.source || sourcePreview.source;
-  const floating = useFloatingPreview(<><div className="floating-caption">{solo ? `SOLO · ${solo}` : output ? 'OUTPUT' : 'SOURCE'} · {formatTime(time)}</div>{floatingImage ? <img src={floatingImage} alt="Live workstation preview"/> : <p className="muted">Capture a frame or solo a pipeline buffer to preview it here.</p>}</>);
+  const floating = useFloatingPreview(<FloatingPreviewMedia image={floatingImage} path={solo ? '' : output || target} time={time} playing={playing && !solo} label={solo ? `SOLO · ${solo}` : output ? 'OUTPUT' : 'SOURCE'}/>);
 
   const updateViewportSize = useCallback(() => {
     if (viewportRef.current) {

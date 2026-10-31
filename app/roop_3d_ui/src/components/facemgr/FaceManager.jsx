@@ -1,3 +1,4 @@
+import NumericInput from '../controls/NumericInput';
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { Canvas } from '@react-three/fiber';
 import { OrbitControls } from '@react-three/drei';
@@ -438,18 +439,7 @@ export default function FaceManager({
 
           {/* DBSCAN Cosine Threshold Slider */}
           <div className="clustering-slider-box">
-            <label>
-              <span>Cluster Tolerance (DBSCAN ε: {dbscanEps.toFixed(2)})</span>
-              <input
-                type="range"
-                min="0.15"
-                max="0.65"
-                step="0.01"
-                value={dbscanEps}
-                onChange={e => setDbscanEps(+e.target.value)}
-                title="Adjust ArcFace cosine distance clustering tolerance"
-              />
-            </label>
+            <NumericInput id="faceset-cluster-tolerance" label={`Cluster Tolerance (DBSCAN ε: ${dbscanEps.toFixed(2)})`} value={dbscanEps} min={.15} max={.65} step={.01} onChange={setDbscanEps} title="Adjust ArcFace cosine distance clustering tolerance" />
           </div>
 
           {/* Identities List */}

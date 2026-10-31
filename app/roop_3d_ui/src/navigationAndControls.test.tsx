@@ -6,7 +6,7 @@ import AppRouter, { Navigation, SCREENS, normalizeRoute, useHashRoute } from './
 import NumericInput, { evaluateExpression, scrubDelta } from './components/controls/NumericInput';
 import { DEFAULT_KEYS, HotkeyEditor, HotkeyProvider, useShortcutActions, validKeys } from './components/controls/Hotkeys';
 import { DockArea, DockPanel, LayoutToolbar, PRESETS, WorkspaceLayoutProvider, validLayout } from './components/workstation/WorkspaceLayouts';
-import { useFloatingPreview } from './components/workstation/FloatingPreview';
+import { FloatingPreviewMedia, useFloatingPreview } from './components/workstation/FloatingPreview';
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 let host: HTMLDivElement, root: Root;
@@ -91,4 +91,23 @@ it('shares live preview content with a secondary window and closes it on teardow
   await mount(<Floating/>); await click(host.querySelector('button')); expect(childDocument.body.textContent).toContain('Frame 1');
   await click(host.querySelectorAll('button')[1]); expect(childDocument.body.textContent).toContain('Frame 2');
   await act(async () => root.unmount()); expect(close).toHaveBeenCalledOnce(); root = createRoot(host);
+});
+
+it('synchronizes playback and seeks in the floating video, and shows paused buffer images', async () => {
+  const play = vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue();
+  const pause = vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(() => {});
+  await mount(<FloatingPreviewMedia path="local.mp4" time={2} playing label="OUTPUT"/>);
+  expect(play).toHaveBeenCalledOnce(); expect(host.querySelector('video')!.currentTime).toBe(2);
+  await mount(<FloatingPreviewMedia path="local.mp4" time={3} playing={false} label="OUTPUT"/>);
+  expect(pause).toHaveBeenCalledOnce(); expect(host.querySelector('video')!.currentTime).toBe(3);
+  await mount(<FloatingPreviewMedia image="data:image/jpeg;base64,AQ==" path="" time={3} playing={false} label="SOLO"/>);
+  expect(host.querySelector('video')).toBeNull(); expect(host.querySelector('img')).toBeTruthy();
+});
+
+it('provides a keyboard-dismissable modal when popups are blocked', async () => {
+  vi.spyOn(window, 'open').mockReturnValue(null);
+  function Fallback() { const floating = useFloatingPreview(<span>Preview frame</span>); return <><button onClick={floating.open}>Detach</button>{floating.portal}</>; }
+  await mount(<Fallback/>); await click(host.querySelector('button'));
+  expect(host.querySelector('[role=dialog]')).toBeTruthy();
+  await key(document.activeElement!, 'Escape'); expect(host.querySelector('[role=dialog]')).toBeNull();
 });
