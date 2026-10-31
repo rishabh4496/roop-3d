@@ -26,6 +26,7 @@ from roop_3d.engine.volumetric.session import ReferencePipeline
 from roop_3d.compositor.restoration import GpenRestorer
 from roop_3d.jobs.schema import JobRecord, JobRequest
 from roop_3d.media.video_reader import VideoReader
+from roop_3d.engine.edit_plan import FrameEditPlan
 
 router = APIRouter(prefix='/api/v1/workstation')
 AxisParameter = Literal['restoration_blend', 'feather_px', 'color_strength']
@@ -71,7 +72,7 @@ def encode(image: np.ndarray, max_edge: int = 1920) -> str:
     return 'data:image/jpeg;base64,' + base64.b64encode(data).decode('ascii')
 
 
-def collect_composite(session, image, result, parameters, *, capture=True):
+def collect_composite(session, image, result, parameters, *, capture=True, occluder_masks=None):
     """Fresh temporal state per cell prevents cross-cell contamination."""
     session.compositor.temporal.clear()
     buffers = {}
@@ -89,7 +90,7 @@ def collect_composite(session, image, result, parameters, *, capture=True):
 
     landmarks = {item.track_id: item.observation.landmarks106 for item in result.observations}
     final = session.compositor.compose(image, result.replacements, landmarks, scene_cut=True,
-        options=parameters.composite_options(), observer=observe if capture else None)
+        options=parameters.composite_options(), observer=observe if capture else None, occluder_masks=occluder_masks)
     buffers['final'] = final
     return buffers
 
@@ -125,6 +126,7 @@ class PreviewService:
             runner = MasterPipelineRunner(self.state.root, self.state.models, self.state.media, lambda: settings)
             # Reuse target hashes, inspection identity and FaceSet validation without creating a job/checkpoint.
             target, _, _, sources, _, _ = runner._prepare_inputs(JobRecord(request=value.request), settings)
+            edit_plan = FrameEditPlan(runner, value.request, sources)
             runtime = RuntimeConfig(provider=admission.provider, hardware_profile=admission.profile,
                                     reserve_mib=settings.memory_safety_reserve_mb)
             session = ReferencePipeline(self.state.models, runtime)
@@ -133,6 +135,7 @@ class PreviewService:
             parameters = value.parameters
             needs_restorer = parameters.composite_options().restoration_blend > 0 or any(
                 axis and axis.parameter == 'restoration_blend' and max(axis.values) > 0 for axis in (value.x, value.y))
+            needs_restorer = needs_restorer or bool(value.request.parameter_curves and any(key.value > 0 for key in value.request.parameter_curves.tracks.get('restorer_opacity', ())))
             if needs_restorer:
                 if settings.face_restoration_policy in ('gfpgan', 'codeformer'):
                     raise DomainError('RESTORER_UNAVAILABLE', 'Selected restoration architecture has no verified local adapter', 503)
@@ -148,6 +151,8 @@ class PreviewService:
                     if frame.image.shape[0] * frame.image.shape[1] > 3840 * 2160:
                         raise DomainError('PREVIEW_SIZE_BUDGET', 'Preview input exceeds the 4K frame budget', 422)
                     origin = frame.timestamp.seconds if origin is None else origin
+                    edit_plan.apply(session, frame.index)
+                    parameters = value.request.parameter_curves.evaluate(frame.index, value.parameters) if value.request.parameter_curves else value.parameters
                     result = session.infer_frame(frame.image, strength=parameters.pose_strength)
                     selected = (frame, result, float(frame.timestamp.seconds - origin))
                     if frame.timestamp.seconds - origin >= Fraction(str(value.timestamp)):
@@ -157,7 +162,7 @@ class PreviewService:
             if selected is None:
                 raise DomainError('PREVIEW_FRAME_MISSING', 'Target has no decodable frames', 422)
             frame, result, timestamp = selected
-            if not result.replacements:
+            if not result.replacements and value.request.face_segments is None:
                 raise DomainError('PREVIEW_TRACK_MISSING', 'No mapped face is visible at this playhead frame', 422)
             response = {'frame_index': frame.index, 'timestamp': timestamp,
                         'width': frame.image.shape[1], 'height': frame.image.shape[0],
@@ -172,12 +177,12 @@ class PreviewService:
                         check()
                         coordinates = {value.x.parameter: x, value.y.parameter: y}
                         cell = WorkstationParameters.model_validate({**parameters.model_dump(), **coordinates})
-                        buffers = collect_composite(session, frame.image, result, cell, capture=False)
+                        buffers = collect_composite(session, frame.image, result, cell, capture=False, occluder_masks=edit_plan.occluders(frame.image, result))
                         cells.append({'row': row, 'column': column, 'coordinates': coordinates,
                                       'parameters': cell.model_dump(), 'image': encode(buffers['final'])})
                 return {**response, 'cells': cells}
             check()
-            buffers = collect_composite(session, frame.image, result, parameters)
+            buffers = collect_composite(session, frame.image, result, parameters, occluder_masks=edit_plan.occluders(frame.image, result))
             detection, pose = frame.image.copy(), frame.image.copy()
             for tracked in result.observations:
                 face = tracked.observation
@@ -188,8 +193,10 @@ class PreviewService:
                 cv2.putText(pose, 'Y/P/R ' + '/'.join(f'{p:.1f}' for p in face.pose),
                             (max(0, x1), max(20, y1)), cv2.FONT_HERSHEY_SIMPLEX, .6, (80, 245, 180), 2)
             buffers.update(detector=detection, pose=pose)
-            replacement = result.replacements[0]
-            source = sources[replacement.track_id]
+            replacement = result.replacements[0] if result.replacements else None
+            source = (session.swapper.sources_by_track.get(replacement.track_id, sources.get(replacement.track_id)) if value.request.face_segments and replacement else sources.get(replacement.track_id) if replacement else None)
+            if source is None:
+                return {**response, 'buffers': {key: encode(image) for key, image in buffers.items()}, 'parameters': parameters.model_dump(), 'latency': result.latency.__dict__}
             view = next((view for view in source.views if view.index == replacement.reference_index), source.views[0])
             source_image = cv2.imdecode(np.frombuffer(view.image_bytes, np.uint8), cv2.IMREAD_COLOR)
             if source_image is not None:

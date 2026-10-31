@@ -1,3 +1,4 @@
+import CurveEditorTrack from './CurveEditorTrack';
 import React, { useRef, useState, useEffect, useMemo, useCallback } from 'react';
 import { useFaceSelectionStore } from '../../useFaceSelectionStore';
 
@@ -101,6 +102,7 @@ export function getClusterColor(clusterId) {
  * Includes Filmstrip Track, Timecode Ruler, Draggable Trim In/Out, Playback Engine, and Landmark & Pose Sub-Track.
  *
  * @param {{
+ *   parameters?: any;
  *   target?: string;
  *   output?: string;
  *   currentTime?: number;
@@ -119,6 +121,7 @@ export function getClusterColor(clusterId) {
  * }} props
  */
 export default function TimelineWorkstation({
+  parameters = {},
   target = '',
   output = '',
   currentTime = 0,
@@ -777,6 +780,7 @@ export default function TimelineWorkstation({
         />
       </div>
 
+      <CurveEditorTrack frame={Math.round(currentTime * effectiveFps)} totalFrames={Math.max(1, Math.round(duration * effectiveFps))} parameters={parameters} disabled={disabled || !target} onSeekFrame={frame => onSeek?.(frame / effectiveFps)}/>
       {/* Timeline Footer Info */}
       <div className="timeline-workstation-foot">
         <span className="foot-left">

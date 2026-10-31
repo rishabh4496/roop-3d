@@ -1,5 +1,7 @@
 import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { useFaceSelectionStore } from '../../useFaceSelectionStore';
+import { api } from '../../api';
+export const FACE_ROLES = { swap: { label: 'Swap Target', color: '#91e6c9' }, ignore: { label: 'Reference Guide', color: '#60a5fa' }, exclude: { label: 'Exclude (Never Swap)', color: '#fb7185' } };
 
 /**
  * Calculates letterbox / contain coordinates for sub-pixel accuracy.
@@ -292,6 +294,13 @@ export default function FaceOverlayCanvas({
         ctx.fillText(label, coords.x + 4, coords.y + 12);
         ctx.restore();
       }
+      const role = FACE_ROLES[cluster?.mode ?? 'swap'];
+      ctx.save(); ctx.font = '600 10px system-ui';
+      const badgeWidth = Math.min(containerSize.width, ctx.measureText(role.label).width + 12);
+      const badgeX = Math.max(0, Math.min(coords.x, containerSize.width - badgeWidth));
+      const badgeY = Math.min(containerSize.height - 18, coords.y + coords.h + 2);
+      ctx.fillStyle = '#101719'; ctx.fillRect(badgeX, badgeY, badgeWidth, 18);
+      ctx.fillStyle = role.color; ctx.fillText(role.label, badgeX + 6, badgeY + 12); ctx.restore();
     }
 
     ctx.restore();
@@ -422,6 +431,10 @@ export default function FaceOverlayCanvas({
         onMouseMove={handleMouseMove}
         onMouseLeave={handleMouseLeave}
         onClick={handleClick}
+        onContextMenu={event => { event.preventDefault(); handleClick(event); }}
+        tabIndex={0}
+        aria-label="Detected face bounding boxes"
+        onKeyDown={event => { if (event.key !== 'ContextMenu' && !(event.shiftKey && event.key === 'F10')) return; const face = visibleFaces.find(face => face.id === activeSelection) ?? visibleFaces[0]; if (!face) return; event.preventDefault(); const coords = mapBoxToPixels(face.bbox, letterbox); setPopover({ ...coords, face, cluster: targetClusters.find(cluster => cluster.id === face.clusterId) }); }}
         style={{
           width: '100%',
           height: '100%',
@@ -433,13 +446,17 @@ export default function FaceOverlayCanvas({
       {/* Context Action: Fast target-to-source face assignment popover */}
       {popover && (
         <FaceAssignmentPopover
-          popover={popover}
+          popover={{ ...popover, cluster: targetClusters.find(cluster => cluster.id === popover.face.clusterId) }}
           containerWidth={containerSize.width}
           containerHeight={containerSize.height}
           sources={sources}
           assignedSourceId={assignments[popover.face.clusterId]}
           onSelectSource={facesetId => handleSelectSource(popover.face.clusterId, facesetId)}
           onSetMode={mode => setClusterMode(popover.face.clusterId, mode)}
+          onRecenter={() => { useFaceSelectionStore.getState().focusPose(popover.face.id); setPopover(null); }}
+          onSplit={() => { useFaceSelectionStore.getState().splitCluster(popover.face.clusterId, Math.round(currentTime * fps)); setPopover(null); }}
+          onSourceView={index => useFaceSelectionStore.getState().setSourceView(popover.face.clusterId, index)}
+          canSplit={Math.round(currentTime * fps) > (targetClusters.find(cluster => cluster.id === popover.face.clusterId)?.startFrame ?? 0)}
           onClose={() => setPopover(null)}
         />
       )}
@@ -459,7 +476,12 @@ function FaceAssignmentPopover({
   onSelectSource,
   onSetMode,
   onClose,
+  onRecenter, onSplit, onSourceView, canSplit,
 }) {
+  const [views, setViews] = useState([]), [error, setError] = useState('');
+  const menu = useRef(null);
+  useEffect(() => { menu.current?.querySelector('button')?.focus(); }, []);
+  useEffect(() => { setViews([]); setError(''); if (!assignedSourceId) return; const controller = new AbortController(); void api(`/facesets/${encodeURIComponent(assignedSourceId)}/views`, { signal: controller.signal }).then(setViews).catch(error => { if (error.name !== 'AbortError') setError(error.message); }); return () => controller.abort(); }, [assignedSourceId]);
   const popoverW = 260;
   const popoverH = 240;
 
@@ -475,6 +497,8 @@ function FaceAssignmentPopover({
 
   return (
     <div
+      ref={menu} role="menu" aria-label="Face context menu"
+      onKeyDown={event => { if (!['ArrowDown', 'ArrowUp'].includes(event.key)) return; event.preventDefault(); const items = [...menu.current.querySelectorAll('button:not(:disabled),select:not(:disabled)')]; const index = items.indexOf(document.activeElement); items[(index + (event.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length]?.focus(); }}
       className="face-assignment-popover"
       style={{
         position: 'absolute',
@@ -504,10 +528,12 @@ function FaceAssignmentPopover({
             className={`popover-mode-btn ${currentMode === m ? 'active ' + m : ''}`}
             onClick={() => onSetMode(m)}
           >
-            {m.charAt(0).toUpperCase() + m.slice(1)}
+            {FACE_ROLES[m].label}
           </button>
         ))}
       </div>
+      <div className="face-context-actions"><button className="button small" role="menuitem" onClick={onRecenter}>Re-center pose camera</button><button className="button small" role="menuitem" disabled={!canSplit} onClick={onSplit}>Split cluster from current frame</button></div>
+      <label className="source-view-choice">Single source face<select aria-label="Single source face" disabled={currentMode !== 'swap' || !assignedSourceId || !views.length} value={popover.cluster?.sourceViewIndex ?? ''} onChange={event => onSourceView(event.target.value === '' ? null : Number(event.target.value))}><option value="">Auto-select FaceSet view</option>{views.map(view => <option key={view.index} value={view.index}>Face {view.index} · yaw {view.yaw.toFixed(1)}°</option>)}</select></label>{error && <small role="alert">{error}</small>}
 
       <div className="popover-source-heading">
         <span>ASSIGN SOURCE IDENTITY</span>
@@ -532,6 +558,7 @@ function FaceAssignmentPopover({
           return (
             <button
               key={src.faceset_id}
+              disabled={currentMode !== 'swap'}
               className={`popover-source-item ${isSelected ? 'active' : ''}`}
               onClick={() => onSelectSource(src.faceset_id)}
             >

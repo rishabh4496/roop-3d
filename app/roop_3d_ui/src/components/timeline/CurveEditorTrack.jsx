@@ -1,0 +1,33 @@
+import React, { useRef, useState } from 'react';
+import useHistoryStore, { editCurves } from '../../stores/useHistoryStore';
+import { CURVE_PARAMETERS, evaluateCurve, upsertKey } from '../../stores/parameterCurves';
+import NumericInput from '../controls/NumericInput';
+
+/** @param {any} props */
+export default function CurveEditorTrack({ frame = 0, totalFrames = 1, parameters = {}, disabled = false, onSeekFrame, poseProjectionAvailable = false }) {
+  const curves = useHistoryStore(state => state.curves);
+  const [expanded, setExpanded] = useState(true), [parameter, setParameter] = useState('swap_weight'), [selected, setSelected] = useState(null), [easing, setEasing] = useState('linear');
+  const [dragKeys, setDragKeys] = useState(null), drag = useRef(null), svg = useRef(null);
+  const definition = CURVE_PARAMETERS[parameter], keys = dragKeys ?? curves[parameter] ?? [];
+  const maxFrame = Math.max(1, totalFrames - 1), width = 1000, height = 180, pad = 18;
+  const xy = key => [pad + key.frame / maxFrame * (width - 2 * pad), height - pad - (key.value - definition.min) / (definition.max - definition.min) * (height - 2 * pad)];
+  const point = event => { const rect = svg.current.getBoundingClientRect(); return { frame: Math.round(Math.max(0, Math.min(1, (event.clientX - rect.left - pad / width * rect.width) / (rect.width * (1 - 2 * pad / width)))) * maxFrame), value: Math.max(definition.min, Math.min(definition.max, definition.min + (1 - (event.clientY - rect.top - pad / height * rect.height) / (rect.height * (1 - 2 * pad / height))) * (definition.max - definition.min))), easing }; };
+  const commit = (next, label) => editCurves({ ...curves, [parameter]: next }, label);
+  const add = key => { const next = upsertKey(keys, key); commit(next, `Add ${definition.label} keyframe`); setSelected(key.frame); };
+  const selectedKey = keys.find(key => key.frame === selected);
+  let path = '';
+  keys.forEach((key, index) => { const [x, y] = xy(key); if (!index) { path = `M ${x} ${y}`; return; } const previous = keys[index - 1], [px, py] = xy(previous); path += previous.easing === 'hold' ? ` H ${x} V ${y}` : previous.easing === 'ease-in-out' ? ` C ${px + (x - px) / 3} ${py},${x - (x - px) / 3} ${y},${x} ${y}` : ` L ${x} ${y}`; });
+  return <section className="curve-editor"><button className="button small" aria-expanded={expanded} onClick={() => setExpanded(!expanded)}>Parameter Curves {expanded ? '▾' : '▸'}</button>{expanded && <>
+    <div className="curve-toolbar"><select aria-label="Curve parameter" value={parameter} onChange={e => { setParameter(e.target.value); setSelected(null); }}>{Object.entries(CURVE_PARAMETERS).map(([name, item]) => <option key={name} value={name}>{item.label}</option>)}</select><select aria-label="Keyframe easing" value={selectedKey?.easing ?? easing} onChange={e => { setEasing(e.target.value); if (selectedKey) commit(upsertKey(keys, { ...selectedKey, easing: e.target.value }), 'Change keyframe easing'); }}><option value="linear">Linear</option><option value="ease-in-out">Ease-In-Out (Bezier)</option><option value="hold">Step / Hold</option></select>
+      <button className="button small" disabled={disabled} onClick={() => add({ frame: Math.min(maxFrame, Math.max(0, Math.round(frame))), value: evaluateCurve(keys, frame, parameters[definition.field] ?? definition.initial), easing })}>Add key at playhead</button><button className="button small" disabled={disabled || !selectedKey} onClick={() => { commit(keys.filter(key => key.frame !== selected), 'Delete keyframe'); setSelected(null); }}>Delete key</button>
+    </div>
+    {parameter === 'pose_correction_strength' && !poseProjectionAvailable && <p className="muted">Controls the available retarget strength. Blending to mesh projection requires a configured 3D projection adapter.</p>}
+    <svg ref={svg} className="curve-svg" viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none" role="img" aria-label={`${definition.label} parameter curve`} onDoubleClick={event => { if (!disabled) add(point(event)); }} onPointerMove={event => { if (drag.current) { const key = { ...point(event), easing: drag.current.key.easing }; setDragKeys(upsertKey(drag.current.keys, key, drag.current.key.frame)); setSelected(key.frame); } }} onPointerUp={event => { if (!drag.current) return; const next = dragKeys; drag.current = null; if (next) commit(next, `Move ${definition.label} keyframe`); setDragKeys(null); event.currentTarget.releasePointerCapture(event.pointerId); }} onPointerCancel={() => { drag.current = null; setDragKeys(null); }}>
+      {[0, .25, .5, .75, 1].map(t => <line key={t} x1={pad} x2={width - pad} y1={pad + t * (height - 2 * pad)} y2={pad + t * (height - 2 * pad)} className="curve-grid-line"/>)}
+      <path d={path} className="curve-path" fill="none"/><line x1={xy({ frame, value: definition.min })[0]} x2={xy({ frame, value: definition.min })[0]} y1={0} y2={height} className="curve-playhead"/>
+      {keys.map(key => { const [cx, cy] = xy(key); return <circle key={key.frame} cx={cx} cy={cy} r={selected === key.frame ? 8 : 6} className="curve-key" tabIndex={disabled ? -1 : 0} role="button" aria-label={`${definition.label} keyframe ${key.frame}: ${key.value}`} onClick={() => { setSelected(key.frame); onSeekFrame?.(key.frame); }} onKeyDown={event => { if (disabled) return; if (event.key === 'Delete' || event.key === 'Backspace') { event.preventDefault(); commit(keys.filter(point => point.frame !== key.frame), 'Delete keyframe'); } if (['ArrowLeft', 'ArrowRight'].includes(event.key)) { event.preventDefault(); const next = { ...key, frame: Math.max(0, Math.min(maxFrame, key.frame + (event.key === 'ArrowRight' ? 1 : -1))) }; commit(upsertKey(keys, next, key.frame), 'Move keyframe'); setSelected(next.frame); } }} onPointerDown={event => { if (disabled || event.button !== 0) return; event.preventDefault(); event.stopPropagation(); drag.current = { key, keys }; setSelected(key.frame); svg.current.setPointerCapture(event.pointerId); }}/>; })}
+    </svg>
+    {selectedKey && <div className="curve-values"><NumericInput label="Keyframe frame" integer value={selectedKey.frame} min={0} max={maxFrame} disabled={disabled} onChange={value => { const next = { ...selectedKey, frame: value }; commit(upsertKey(keys, next, selectedKey.frame), 'Move keyframe'); setSelected(value); }}/><NumericInput label="Keyframe value" value={selectedKey.value} min={definition.min} max={definition.max} step={.01} disabled={disabled} onChange={value => commit(upsertKey(keys, { ...selectedKey, value }), 'Edit keyframe value')}/></div>}
+    <small>Frames 0–{maxFrame} · {definition.min}–{definition.max} · Double-click to add; drag to move; Delete removes selected keys.</small>
+  </>}</section>;
+}

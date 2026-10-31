@@ -62,7 +62,7 @@ class ProjectStore:
         if not inspection.is_file():
             raise DomainError("INSPECTION_NOT_FOUND", "Inspect the target before saving a mapped project", 422)
         paths.append(inspection)
-        for source in sorted({item.faceset_id for item in request.face_mappings}):
+        for source in sorted({item.faceset_id for item in request.face_mappings} | {item.faceset_id for item in request.face_segments or () if item.faceset_id}):
             candidates = [owned(self.root, f"roop_3d/{base}/facesets/{source}.fsz") for base in ("outputs", ".runtime")]
             path = next((path for path in candidates if path.is_file()), None)
             if path is None:

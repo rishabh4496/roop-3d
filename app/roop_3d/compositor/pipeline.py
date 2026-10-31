@@ -30,10 +30,14 @@ class CompositeOptions:
     semantic_confidence_threshold: float = 0.55
     feather_px: float = 5.0
     pyramid_levels: int = 4
+    swap_weight: float = 1.0
+    erosion_px: float = 0.0
 
     def __post_init__(self) -> None:
         if not 0 <= self.restoration_blend <= 1 or not 0 <= self.color_strength <= 1:
             raise ValueError("Blend ratios must be within 0..1")
+        if not np.isfinite(self.swap_weight) or not 0 <= self.swap_weight <= 1 or not np.isfinite(self.erosion_px) or not -32 <= self.erosion_px <= 32:
+            raise ValueError('Swap weight or erosion is outside its bounds')
         if self.color_method not in {"lab", "histogram"}:
             raise ValueError("color_method must be 'lab' or 'histogram'")
         if not 0 <= self.semantic_confidence_threshold <= 1 or self.feather_px < 0 or self.pyramid_levels < 1:
@@ -118,6 +122,11 @@ class FrameCompositor:
             explicit_front = occluder_masks.get(replacement.track_id)
             front = combine_occluders(semantic_front, explicit_front)
             alpha = subtract_occluders(face_mask.alpha, front)
+            if options.erosion_px:
+                radius = max(1, round(abs(options.erosion_px)))
+                kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (radius * 2 + 1, radius * 2 + 1))
+                alpha = cv2.erode(alpha, kernel) if options.erosion_px > 0 else cv2.dilate(alpha, kernel)
+            alpha = alpha * options.swap_weight
             if observer is not None:
                 observer('swapper', crop, replacement.inverse, alpha)
                 observer('matte', (alpha * 255).round().astype(np.uint8), replacement.inverse, alpha)
@@ -147,11 +156,12 @@ class FrameCompositor:
             if options.relight:
                 skin = face_mask.skin if face_mask.source.startswith("bisenet") else alpha
                 harmonized = relight_spherical_harmonics(harmonized, target_crop, skin, alpha)
-            temporal = self.temporal.update(replacement.track_id, replacement.inverse, alpha, color_stats,
+            temporal = self.temporal.update(replacement.track_id, replacement.inverse, alpha / max(options.swap_weight, 1e-8), color_stats,
                                             frame_index=frame_index, scene_cut=False)
             if observer is not None:
                 observer('color', harmonized, replacement.inverse, alpha)
-            output = fuse_crop(output, harmonized, temporal.inverse, temporal.alpha,
+            effective_alpha = temporal.alpha * options.swap_weight
+            output = fuse_crop(output, harmonized, temporal.inverse, effective_alpha,
                                mode=options.mode, levels=options.pyramid_levels)
         self.frames_composited += 1
         return output

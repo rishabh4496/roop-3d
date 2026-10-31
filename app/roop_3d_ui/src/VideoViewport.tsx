@@ -17,6 +17,10 @@ import { DockArea, DockPanel, LayoutToolbar } from './components/workstation/Wor
 import { FloatingPreviewMedia, useFloatingPreview } from './components/workstation/FloatingPreview';
 import { useShortcutActions } from './components/controls/Hotkeys';
 import NumericInput from './components/controls/NumericInput';
+import useHistoryStore from './stores/useHistoryStore';
+import { CURVE_PARAMETERS, evaluateParameters, upsertKey } from './stores/parameterCurves';
+import HistoryDrawer from './components/workstation/HistoryDrawer';
+import SnapshotSlots, { SnapshotViewport } from './components/workstation/SnapshotSlots';
 
 function usePreview(path: string, time: number, playing: boolean) {
   const [source, setSource] = useState('');
@@ -54,6 +58,7 @@ export function VideoViewport({
   onTrimChange,
   active = true, parameters = DEFAULT_PARAMETERS, setParameters = () => {}, previewRequest = null,
   inspector, posePanel, restorerAvailable = false, onPreviewLatency,
+  maskBase64 = null, captureWorkspace = () => ({}), restoreWorkspace = () => {},
 }: {
   target: string;
   output: string;
@@ -77,6 +82,9 @@ export function VideoViewport({
   posePanel?: ReactNode;
   restorerAvailable?: boolean;
   onPreviewLatency?: (latency: Record<string, number>) => void;
+  maskBase64?: string | null;
+  captureWorkspace?: () => any;
+  restoreWorkspace?: (value: any) => void;
 }) {
   const original = useRef<HTMLVideoElement>(null), processed = useRef<HTMLVideoElement>(null);
   const viewportRef = useRef<HTMLDivElement>(null);
@@ -88,13 +96,39 @@ export function VideoViewport({
   const [compMode, setCompMode] = useState<'wipe' | 'diff' | 'blend' | 'loupe'>('wipe');
   const [isMaskEditing, setIsMaskEditing] = useState(false);
   const [viewportSize, setViewportSize] = useState({ width: 0, height: 0 });
+  const history = useHistoryStore(), [historyOpen, setHistoryOpen] = useState(false), [captureBusy, setCaptureBusy] = useState(false), [captureError, setCaptureError] = useState('');
+  const captureAbort = useRef<AbortController | null>(null);
+  const currentFrame = Math.max(0, Math.round(time * parseFps(probe?.fps_rational, 30)));
+  const effectiveParameters = evaluateParameters(parameters, history.curves, currentFrame);
+  const editParameter = (field: string, value: number) => { const curve = Object.keys(CURVE_PARAMETERS).find(name => CURVE_PARAMETERS[name].field === field); if (curve && history.curves[curve]?.length) history.editCurves({ ...history.curves, [curve]: upsertKey(history.curves[curve], { frame: currentFrame, value, easing: 'linear' }) }, 'Edit animated parameter', `parameter-${field}`); else setParameters({ ...parameters, [field]: value }); };
   const [selectedNode, setSelectedNode] = useState('final'), [solo, setSolo] = useState<string | null>(null);
   const [sweepOpen, setSweepOpen] = useState(false), [previewBusy, setPreviewBusy] = useState(false), [previewError, setPreviewError] = useState('');
   const [preview, setPreview] = useState<{ key: string; result: PreviewResult } | null>(null);
   const previewKey = JSON.stringify({ request: previewRequest, timestamp: time, parameters });
   const result = preview?.key === previewKey ? preview.result : null;
+  useEffect(() => { captureAbort.current?.abort(); setCaptureBusy(false); return () => captureAbort.current?.abort(); }, [previewKey]);
+  useEffect(() => { if (history.previewSlot || history.comparison) { setPlaying(false); original.current?.pause(); processed.current?.pause(); } }, [history.previewSlot, history.comparison]);
+  const captureSlot = async (slot: string) => {
+    if (!previewRequest || captureBusy) return;
+    const controller = new AbortController(); captureAbort.current = controller; const workspace = captureWorkspace();
+    setCaptureBusy(true); setCaptureError(''); setPlaying(false); original.current?.pause(); processed.current?.pause();
+    try {
+      const rendered = result ?? await post<PreviewResult>('/workstation/preview', { request: previewRequest, timestamp: time, parameters }, { signal: controller.signal });
+      if (controller.signal.aborted) return;
+      if (!rendered.buffers.final) throw new Error('No rendered composite is available for this frame');
+      useHistoryStore.getState().captureSlot(slot, { image: rendered.buffers.final, frame: rendered.frame_index, timestamp: rendered.timestamp, workspace });
+    } catch (error) { if ((error as Error).name !== 'AbortError') setCaptureError((error as Error).message); }
+    finally { if (captureAbort.current === controller) setCaptureBusy(false); }
+  };
   const previewBody = useRef({ request: previewRequest, timestamp: time, parameters });
   previewBody.current = { request: previewRequest, timestamp: time, parameters };
+  const editFingerprint = JSON.stringify({ parameters, curves: history.curves, maskBase64, roles: previewRequest?.face_segments });
+  const previousEdit = useRef(editFingerprint);
+  useEffect(() => {
+    if (previousEdit.current === editFingerprint) return;
+    previousEdit.current = editFingerprint;
+    if (active && previewRequest) { history.live(); setSolo(previous => previous ?? 'final'); }
+  }, [editFingerprint, active, previewRequest]);
   const latencyCallback = useRef(onPreviewLatency); latencyCallback.current = onPreviewLatency;
   useEffect(() => {
     if (!solo || !active || !previewBody.current.request || preview?.key === previewKey) { setPreviewBusy(false); return; }
@@ -108,12 +142,12 @@ export function VideoViewport({
     return () => { live = false; controller.abort(); clearTimeout(timer); };
   }, [previewKey, solo, active, preview?.key]);
   useEffect(() => { if (!active) { setPlaying(false); setSweepOpen(false); original.current?.pause(); processed.current?.pause(); } }, [active]);
-  const selectSolo = (node: string) => { if (PIPELINE_NODES.find(item => item.id === node)?.unavailable || !previewRequest) return; setSolo(previous => previous === node ? null : node); setIsMaskEditing(false); };
+  const selectSolo = (node: string) => { if (PIPELINE_NODES.find(item => item.id === node)?.unavailable || !previewRequest) return; history.live(); setSolo(previous => previous === node ? null : node); setIsMaskEditing(false); };
   const bypassNode = (node: string) => { if (node !== 'restorer' && node !== 'color') return; setParameters({ ...parameters, bypass: parameters.bypass.includes(node) ? parameters.bypass.filter(item => item !== node) : [...parameters.bypass, node] }); setSolo('final'); setIsMaskEditing(false); };
 
   const sourcePreview = usePreview(enabled && active ? target : '', time, playing);
   const outputPreview = usePreview(enabled && active ? output : '', time, playing);
-  const floatingImage = solo ? result?.buffers[solo] : outputPreview.source || sourcePreview.source;
+  const floatingImage = history.previewSlot ? history.slots[history.previewSlot]?.image : solo ? result?.buffers[solo] : outputPreview.source || sourcePreview.source;
   const floating = useFloatingPreview(<FloatingPreviewMedia image={floatingImage} path={solo ? '' : output || target} time={time} playing={playing && !solo} label={solo ? `SOLO · ${solo}` : output ? 'OUTPUT' : 'SOURCE'}/>);
 
   const updateViewportSize = useCallback(() => {
@@ -196,9 +230,12 @@ export function VideoViewport({
   return (
     <section className="viewport-section">
       <LayoutToolbar onFloat={floating.open}/>
+      <SnapshotSlots onCapture={(slot: string) => void captureSlot(slot)} onRestore={restoreWorkspace} busy={captureBusy} captureAvailable={!!previewRequest}/>
+      {captureError && <p role="alert" className="inline-warning">{captureError}</p>}
       <PipelineNodeFlowBar selected={selectedNode} solo={solo} bypass={parameters.bypass} onSelect={setSelectedNode} onSolo={selectSolo} onBypass={bypassNode} busy={previewBusy} available={!!previewRequest}/>
       <div className="viewport-toolbar">
         <span className="eyebrow">WORKSTATION MEDIA INSPECTOR</span>
+        <button className="button small" disabled={!history.past.length} onClick={history.undo}>Undo</button><button className="button small" disabled={!history.future.length} onClick={history.redo}>Redo</button><button className="button small" onClick={() => setHistoryOpen(true)}>Edit history ({history.past.length})</button>
         <button className="button small" disabled={!previewRequest} onClick={() => { setPlaying(false); original.current?.pause(); processed.current?.pause(); setSweepOpen(true); }}>Parameter Sweep</button>
         {solo && <button className="button small" onClick={() => setSolo(null)}>Exit solo · {solo}</button>}
 
@@ -207,7 +244,7 @@ export function VideoViewport({
           type="button"
           className={`mask-toggle-btn ${isMaskEditing ? 'active' : ''}`}
           disabled={!target}
-          onClick={() => { setSolo(null); setIsMaskEditing(e => !e); }}
+          onClick={() => { history.live(); setSolo(null); setIsMaskEditing(e => !e); }}
           title="Manual & Occlusion Mask Editor (Paint keep-target areas & auto-detect occluders)"
         >
           <span>✎</span> {isMaskEditing ? 'Close Mask Editor' : 'Edit Mask'}
@@ -216,13 +253,14 @@ export function VideoViewport({
         <span className="muted">Source timing preserved</span>
       </div>
 
-      <div className="viewport dual" ref={viewportRef}>
+      <div className={`viewport dual ${isMaskEditing ? 'mask-editing' : ''}`} ref={viewportRef}>
+        <SnapshotViewport/>
         {solo && <div className="solo-viewport" role="region" aria-label={`${solo} intermediate buffer`}>
           {result?.buffers[solo] ? <img src={result.buffers[solo]} alt={`${solo} execution buffer at frame ${result.frame_index}`}/> : <p role="status">{previewError || (previewBusy ? 'Rendering real pipeline buffers…' : 'No buffer is available at this frame')}</p>}
           <span className="pane-label">SOLO · {solo} · {result ? `frame ${result.frame_index}` : formatTime(time)}</span>
         </div>}
         {pane(target, sourcePreview, false)}
-        {pane(output, outputPreview, true)}
+        {!isMaskEditing && pane(output, outputPreview, true)}
 
         {/* Workstation Comparison Canvas (Wipe, Diff Map, Alpha Blend, Magnifier Loupe) */}
         {!isMaskEditing && !solo && (
@@ -248,6 +286,7 @@ export function VideoViewport({
             containerHeight={viewportSize.height}
             mediaDimensions={mediaDims}
             onMaskChange={onMaskChange}
+            initialMask={maskBase64}
             onClose={() => setIsMaskEditing(false)}
           />
         )}
@@ -257,17 +296,21 @@ export function VideoViewport({
       {previewError && <p className="inline-warning" role="alert">{previewError}<button className="button small" onClick={() => { setPreview(null); setSolo(null); setTimeout(() => setSolo(selectedNode), 0); }}>Retry preview</button></p>}
       {solo && result?.notes.map(note => <p className="muted buffer-note" key={note}>{note}</p>)}
       <div className="preview-parameters">
-        <NumericInput label="Restorer blend" value={parameters.restoration_blend} min={0} max={1} step={.01} disabled={!restorerAvailable} title={restorerAvailable ? 'Local GPEN' : 'GPEN weights unavailable'} onChange={value => setParameters({ ...parameters, restoration_blend: value ?? 0 })}/>
-        <NumericInput label="Mask feather (px)" value={parameters.feather_px} min={0} max={64} step={.1} onChange={value => setParameters({ ...parameters, feather_px: value ?? 0 })}/>
-        <NumericInput label="Color match strength" value={parameters.color_strength} min={0} max={1} step={.01} onChange={value => setParameters({ ...parameters, color_strength: value ?? 0 })}/>
-        <NumericInput label="3D pose alignment weight" value={parameters.pose_strength} min={0} max={1} step={.01} onChange={value => setParameters({ ...parameters, pose_strength: value ?? 0 })}/>
+        <NumericInput label="Swap weight" value={effectiveParameters.swap_weight ?? 1} min={0} max={1} step={.01} onChange={value => editParameter('swap_weight', value ?? 1)}/>
+        <NumericInput label="Mask erosion (px)" value={effectiveParameters.erosion_px ?? 0} min={-32} max={32} step={1} onChange={value => editParameter('erosion_px', value ?? 0)}/>
+        <NumericInput label="Restorer blend" value={effectiveParameters.restoration_blend} min={0} max={1} step={.01} disabled={!restorerAvailable} title={restorerAvailable ? 'Local GPEN' : 'GPEN weights unavailable'} onChange={value => editParameter('restoration_blend', value ?? 0)}/>
+        <NumericInput label="Mask feather (px)" value={effectiveParameters.feather_px} min={0} max={64} step={.1} onChange={value => editParameter('feather_px', value ?? 0)}/>
+        <NumericInput label="Color match strength" value={effectiveParameters.color_strength} min={0} max={1} step={.01} onChange={value => editParameter('color_strength', value ?? 0)}/>
+        <NumericInput label="3D pose alignment weight" value={effectiveParameters.pose_strength} min={0} max={1} step={.01} onChange={value => editParameter('pose_strength', value ?? 0)}/>
       </div>
       {floating.portal}
+      {historyOpen && <HistoryDrawer onClose={() => setHistoryOpen(false)}/>}
       {sweepOpen && <ParameterSweepModal request={previewRequest} timestamp={time} parameters={parameters} onApply={setParameters} onClose={() => setSweepOpen(false)} restorerAvailable={restorerAvailable}/>}
       <DockArea>
 
       {/* Video Editor-Grade Workstation Timeline */}
       <DockPanel id="timeline" title="Timeline"><TimelineWorkstation
+        parameters={parameters}
         target={target}
         output={output}
         currentTime={time}

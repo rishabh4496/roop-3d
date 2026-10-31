@@ -1,4 +1,5 @@
 import React from 'react';
+import { FACE_ROLES } from '../canvas/FaceOverlayCanvas';
 
 /**
  * Target identity card in the horizontal face selection tray.
@@ -45,6 +46,7 @@ export default function TargetFaceCard({
     >
       {/* On-screen badge indicator */}
       {isActive && <div className="card-live-indicator" title="Visible in current frame">● VISIBLE</div>}
+      <span className={`face-role-badge role-${currentMode}`} style={{ color: FACE_ROLES[currentMode].color }}>{FACE_ROLES[currentMode].label}</span>
 
       <div className="card-top-row">
         {/* Thumbnail Crop */}
@@ -88,6 +90,7 @@ export default function TargetFaceCard({
           className={`assignment-select ${assignedSourceId ? 'has-source' : ''}`}
           aria-label={`Source face assignment for ${cluster.id}`}
           value={assignedSourceId || ''}
+          disabled={currentMode !== 'swap'}
           onChange={e => onAssignSource(cluster.id, e.target.value || null)}
         >
           <option value="">Keep original</option>

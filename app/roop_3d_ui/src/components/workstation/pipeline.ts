@@ -1,5 +1,5 @@
-export type WorkstationParameters = { restoration_blend: number; feather_px: number; color_strength: number; pose_strength: number; bypass: ('restorer' | 'color')[] };
-export const DEFAULT_PARAMETERS: WorkstationParameters = { restoration_blend: 0, feather_px: 5, color_strength: .65, pose_strength: .35, bypass: [] };
+export type WorkstationParameters = { restoration_blend: number; feather_px: number; color_strength: number; pose_strength: number; swap_weight?: number; erosion_px?: number; bypass: ('restorer' | 'color')[] };
+export const DEFAULT_PARAMETERS: WorkstationParameters = { restoration_blend: 0, feather_px: 5, color_strength: .65, pose_strength: .35, swap_weight: 1, erosion_px: 0, bypass: [] };
 export const SWEEP_PARAMETERS = {
   restoration_blend: { label: 'Restorer blend', min: 0, max: 1, values: [.25, .5, .75] },
   feather_px: { label: 'Mask feather (px)', min: 0, max: 64, values: [0, 5, 10] },

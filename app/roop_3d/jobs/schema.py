@@ -12,6 +12,7 @@ from pydantic import Field, field_validator, model_validator
 from roop_3d.core.errors import DomainError
 from roop_3d.core.settings import Contract
 from roop_3d.core.workstation import WorkstationParameters
+from roop_3d.core.animation import ParameterCurves, FaceSegment
 from roop_3d.media.schema import TrackToFaceSetMap
 from roop_3d.models.diagnostics import JobDiagnostics
 
@@ -60,16 +61,36 @@ class JobRequest(Contract):
     trim_end_seconds: float | None = Field(default=None, gt=0, le=86400)
     mask_base64: str | None = Field(default=None)
     workstation_parameters: WorkstationParameters | None = None
+    parameter_curves: ParameterCurves | None = None
+    face_segments: tuple[FaceSegment, ...] | None = Field(default=None, max_length=256)
 
     def identity_payload(self) -> dict:
         value = self.model_dump(mode="json")
-        for name in ("trim_start_seconds", "trim_end_seconds", "mask_base64", "workstation_parameters"):
+        if self.workstation_parameters:
+            # Preserve fingerprints of requests saved before these opt-in controls existed.
+            for field in ('swap_weight', 'erosion_px'):
+                if field not in self.workstation_parameters.model_fields_set:
+                    value['workstation_parameters'].pop(field, None)
+        for name in ("trim_start_seconds", "trim_end_seconds", "mask_base64", "workstation_parameters", "parameter_curves", "face_segments"):
             if value.get(name) is None:
                 value.pop(name, None)
         return value
 
     @model_validator(mode="after")
     def mapping_contract(self) -> "JobRequest":
+        if self.face_segments is not None:
+            if len({item.faceset_id for item in self.face_segments if item.faceset_id} | {item.faceset_id for item in self.face_mappings}) > 64:
+                raise ValueError('At most 64 FaceSets per job')
+            grouped = {}
+            if len({item.cluster_id for item in self.face_segments}) != len(self.face_segments):
+                raise ValueError('Duplicate segment identity')
+            for item in self.face_segments:
+                grouped.setdefault(item.track_id, []).append(item)
+            for segments in grouped.values():
+                ordered = sorted(segments, key=lambda item: item.start_frame)
+                for left, right in zip(ordered, ordered[1:]):
+                    if left.end_frame is None or left.end_frame >= right.start_frame:
+                        raise ValueError('Face role intervals must not overlap')
         if self.trim_end_seconds is not None and self.trim_end_seconds <= (self.trim_start_seconds or 0):
             raise ValueError("Trim end must exceed trim start")
         if len({item.track_id for item in self.face_mappings}) != len(self.face_mappings):
@@ -77,6 +98,10 @@ class JobRequest(Contract):
         if self.processing == "remote" and not self.remote_consent:
             raise ValueError("Remote processing requires explicit per-job consent")
         return self
+
+    def parameters_at(self, frame: int):
+        base = self.workstation_parameters or WorkstationParameters()
+        return self.parameter_curves.evaluate(frame, base) if self.parameter_curves else base
 
 
 class JobProgress(Contract):

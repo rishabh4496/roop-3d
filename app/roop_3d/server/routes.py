@@ -163,6 +163,11 @@ def validate_job(request: Request, value: JobRequest) -> None:
         raise DomainError("TRACK_NOT_FOUND", "Mapping refers to a track absent from this inspection", 422)
     if any(item.faceset_id not in faceset_ids for item in value.face_mappings):
         raise DomainError("FACESET_NOT_FOUND", "Mapping refers to an unknown FaceSet", 422)
+    if value.face_segments:
+        if any(item.track_id not in track_ids for item in value.face_segments):
+            raise DomainError('TRACK_NOT_FOUND', 'Face role refers to an unknown track', 422)
+        if any(item.faceset_id and item.faceset_id not in faceset_ids for item in value.face_segments):
+            raise DomainError('FACESET_NOT_FOUND', 'Face role refers to an unknown FaceSet', 422)
 
 
 @router.post("/jobs", response_model=JobRecord, status_code=201)

@@ -48,10 +48,6 @@ export default function MaskBrushOverlay({
     { id: 'fingers', label: 'Fingers / Occluding Hand', region: 'chin', confidence: 0.76, active: false },
   ]);
 
-  // Stroke history for undo
-  const [strokeHistory, setStrokeHistory] = useState([]);
-  const [historyIndex, setHistoryIndex] = useState(-1);
-
   // Cursor preview position
   const [cursorPos, setCursorPos] = useState({ x: -100, y: -100, visible: false });
 
@@ -124,6 +120,21 @@ export default function MaskBrushOverlay({
       eCtx.fillRect(0, 0, nativeW, nativeH);
     }
   }, [nativeW, nativeH]);
+
+  // The authoritative mask belongs to the workspace command history. Reload it
+  // after undo/redo, snapshot restoration, or reopening the brush editor.
+  useEffect(() => {
+    const visible = visibleCanvasRef.current, exported = exportCanvasRef.current;
+    if (!visible || !exported) return;
+    const vCtx = visible.getContext('2d'), eCtx = exported.getContext('2d');
+    if (!vCtx || !eCtx) return;
+    vCtx.clearRect(0, 0, nativeW, nativeH); eCtx.fillStyle = '#000'; eCtx.fillRect(0, 0, nativeW, nativeH);
+    if (!initialMask) return;
+    let live = true; const image = new Image();
+    image.onload = () => { if (!live) return; eCtx.drawImage(image, 0, 0, nativeW, nativeH); const pixels = eCtx.getImageData(0, 0, nativeW, nativeH); for (let i = 0; i < pixels.data.length; i += 4) { const alpha = pixels.data[i] * .6; pixels.data[i] = 244; pixels.data[i + 1] = 63; pixels.data[i + 2] = 94; pixels.data[i + 3] = alpha; } vCtx.putImageData(pixels, 0, 0); };
+    image.src = initialMask;
+    return () => { live = false; };
+  }, [initialMask, nativeW, nativeH]);
 
   // Apply brush dab / stroke
   const drawDab = useCallback(
@@ -231,6 +242,7 @@ export default function MaskBrushOverlay({
     if (!pt || !pt.onImage) return;
 
     isPainting.current = true;
+    e.currentTarget.setPointerCapture?.(e.pointerId);
     lastPoint.current = pt;
     drawDab(pt, null);
   };

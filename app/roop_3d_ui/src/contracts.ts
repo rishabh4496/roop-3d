@@ -12,7 +12,7 @@ export interface Capabilities {
 }
 export type JobState = 'queued' | 'preparing' | 'running' | 'pausing' | 'paused' | 'cancelling' | 'cancelled' | 'succeeded' | 'failed' | 'interrupted';
 export interface Mapping { track_id: string; faceset_id: string }
-export interface JobRequest { target_path: string; inspection_id: string; face_mappings: Mapping[]; processing: 'local'; remote_consent: false; trim_start_seconds: number | null; trim_end_seconds: number | null; mask_base64?: string | null; workstation_parameters?: WorkstationParameters | null }
+export interface JobRequest { target_path: string; inspection_id: string; face_mappings: Mapping[]; processing: 'local'; remote_consent: false; trim_start_seconds: number | null; trim_end_seconds: number | null; mask_base64?: string | null; workstation_parameters?: WorkstationParameters | null; parameter_curves?: { tracks: Record<string, {frame: number; value: number; easing: string}[]> } | null; face_segments?: {cluster_id: string; track_id: string; start_frame: number; end_frame: number | null; role: string; faceset_id: string | null; source_view_index: number | null}[] | null }
 export interface Job { job_id: string; state: JobState; request: JobRequest; progress: { frame: number; total_frames: number | null; fps: number; stage: string }; output: { output_path: string; frames: number } | null; failure: { message: string } | null }
 export interface Track { track_id: string; first_frame: number; last_frame: number; first_timestamp_seconds: number; last_timestamp_seconds: number; thumbnail_base64: string; thumbnail_mime: string; landmark_count: number; pose_range: { yaw_degrees: [number, number] | null; pitch_degrees: [number, number] | null; roll_degrees: [number, number] | null; method: string }; bounding_box?: { x1: number; y1: number; x2: number; y2: number }; sampled_detections?: number }
 export interface DetectedFace {
@@ -38,6 +38,11 @@ export interface TargetCluster {
   thumbnailUrl?: string;
   mode: 'swap' | 'ignore' | 'exclude';
   sourceFaceId?: string | null;
+  originTrackId?: string;
+  startFrame?: number;
+  endFrame?: number | null;
+  sourceViewIndex?: number | null;
+  splitLocked?: boolean;
 }
 export interface FaceSelectionState {
   detectedFaces: DetectedFace[];

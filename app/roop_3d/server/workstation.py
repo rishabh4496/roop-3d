@@ -264,6 +264,22 @@ def faceset_coverage(faceset_id: str, request: Request):
     return coverage(FaceSetReader(request.app.state.models, cache_root=root / "roop_3d/.runtime/cache").read(archive, faceset_id=faceset_id))
 
 
+@router.get('/facesets/{faceset_id}/views')
+def faceset_views(faceset_id: str, request: Request):
+    import re
+    if not re.fullmatch(r'[A-Za-z0-9_-]{1,64}', faceset_id):
+        raise DomainError('FACESET_ID_INVALID', 'FaceSet ID is invalid', 422)
+    root = request.app.state.root
+    if not owned(root, f'roop_3d/.runtime/facesets/{faceset_id}.json').is_file():
+        raise DomainError('FACESET_NOT_FOUND', 'FaceSet is not loaded', 404)
+    paths = [owned(root, f'roop_3d/{base}/facesets/{faceset_id}.fsz') for base in ('outputs', '.runtime')]
+    archive = next((path for path in paths if path.is_file()), None)
+    if archive is None:
+        raise DomainError('FACESET_ARCHIVE_NOT_FOUND', 'FaceSet archive is missing', 404)
+    document = FaceSetReader(request.app.state.models, cache_root=root / 'roop_3d/.runtime/cache').read(archive, faceset_id=faceset_id)
+    return [{'index': view.index, 'yaw': view.yaw, 'pitch': view.pitch, 'roll': view.roll} for view in document.views[:500]]
+
+
 class FaceBuildView(Contract):
     image_base64: str
     yaw: float = Field(default=0.0, ge=-90.0, le=90.0)

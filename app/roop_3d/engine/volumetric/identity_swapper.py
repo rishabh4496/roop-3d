@@ -134,6 +134,12 @@ class IdentitySwapper:
             self.release_session()
             raise
 
+    def set_track_source(self, track_id: int, document: FaceSetDocument) -> None:
+        """Change an explicit source without restarting detection or loading another model."""
+        self.sources_by_track[track_id] = document
+        self.canonical_by_track[track_id] = unit_embedding(np.asarray(document.canonical_embedding))
+        self._selectors[track_id] = PoseSelector(document)
+
     def infer_frame(self, image: np.ndarray, landmarks5: np.ndarray, *, pose: tuple[float, float, float] = (0, 0, 0),
                     reference_blend: float = 0.15, track_id: int | None = None) -> SwapResult:
         if self.model is None or self.source is None or self.canonical is None or self.projection is None:

@@ -1,6 +1,6 @@
 import React, { useRef, useState, useEffect, useMemo, useCallback } from 'react';
 import * as THREE from 'three';
-import { Canvas, useFrame } from '@react-three/fiber';
+import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import { OrbitControls, GizmoHelper, GizmoViewport } from '@react-three/drei';
 import { useFaceSelectionStore } from '../../useFaceSelectionStore';
 
@@ -365,6 +365,22 @@ export function FaceSetOrientationSphere({ lattice }) {
  *   mesh?: import('../../contracts').Reconstruction | null;
  * }} props
  */
+function FaceCameraFocus({ controlsRef }) {
+  const { camera } = useThree();
+  const focus = useFaceSelectionStore(state => state.poseFocus);
+  useEffect(() => {
+    if (!focus) return;
+    const face = useFaceSelectionStore.getState().detectedFaces.find(face => face.id === focus.faceId);
+    if (!face) return;
+    const pose = face.pose, quaternion = new THREE.Quaternion().setFromEuler(new THREE.Euler(pose.pitch * Math.PI / 180, pose.yaw * Math.PI / 180, -pose.roll * Math.PI / 180, 'YXZ'));
+    camera.position.copy(new THREE.Vector3(0, 0, 3).applyQuaternion(quaternion));
+    camera.up.copy(new THREE.Vector3(0, 1, 0).applyQuaternion(quaternion)); camera.lookAt(0, 0, 0);
+    controlsRef.current?.target.set(0, 0, 0); controlsRef.current?.update();
+  }, [focus, camera, controlsRef]);
+  return null;
+}
+
+/** @param {any} props */
 export default function PoseGeometryViewer({
   coverage = null,
   track = null,
@@ -527,6 +543,7 @@ export default function PoseGeometryViewer({
               minDistance={1.2}
               maxDistance={7}
             />
+            <FaceCameraFocus controlsRef={controlsRef}/>
 
             {/* Camera Orientation Gizmo */}
             <GizmoHelper alignment="bottom-right" margin={[40, 40]}>

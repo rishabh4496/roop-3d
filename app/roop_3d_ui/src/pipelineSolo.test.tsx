@@ -5,6 +5,7 @@ import { expect, it, vi } from 'vitest';
 import { VideoViewport } from './VideoViewport';
 import { DEFAULT_PARAMETERS } from './components/workstation/pipeline';
 import type { JobRequest } from './contracts';
+import useHistoryStore from './stores/useHistoryStore';
 
 vi.mock('./components/canvas/FaceOverlayCanvas', () => ({ default: () => null }));
 vi.mock('./components/canvas/WorkstationCanvas', () => ({ default: () => <div>Comparison canvas</div> }));
@@ -38,4 +39,22 @@ it('renders real solo buffers in the main viewport, returns to comparison, and d
     await act(async () => replies[1].resolve({ ok: true, json: async () => ({ buffers: { swapper: 'stale' }, notes: [] }) }));
     expect(host.querySelector('.solo-viewport img')).toBeNull();
   } finally { await act(async () => root.unmount()); host.remove(); vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks(); }
+});
+
+it('captures a rendered final composite and full settings into a snapshot slot', async () => {
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true }); useHistoryStore.getState().reset();
+  vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
+  vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(() => {});
+  const fetch = vi.fn(async () => ({ ok: true, json: async () => ({ buffers: { final: 'data:image/jpeg;base64,AQ==' }, frame_index: 25, timestamp: 1, notes: [], parameters: DEFAULT_PARAMETERS }) }));
+  vi.stubGlobal('fetch', fetch);
+  const host = document.createElement('div'); document.body.append(host); const root = createRoot(host);
+  const request: JobRequest = { target_path: 'local.mp4', inspection_id: 'a'.repeat(32), face_mappings: [{ track_id: 'track_0000', faceset_id: 'alice' }], processing: 'local', remote_consent: false, trim_start_seconds: null, trim_end_seconds: null };
+  const workspace = { parameters: DEFAULT_PARAMETERS, maskBase64: 'mask-state', curves: { swap_weight: [] }, faces: { assignments: {} } };
+  try {
+    await act(async () => root.render(<VideoViewport target="" output="" time={1} setTime={() => {}} duration={2} enabled={false} keys={[]} previewRequest={request} captureWorkspace={() => workspace}/>));
+    await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Capture snapshot A"]')!.click());
+    expect(fetch).toHaveBeenCalledOnce();
+    expect(useHistoryStore.getState().slots.A).toMatchObject({ frame: 25, image: 'data:image/jpeg;base64,AQ==', workspace });
+    expect(host.querySelector('[aria-label="Snapshot A"]')).toBeTruthy();
+  } finally { await act(async () => root.unmount()); host.remove(); vi.unstubAllGlobals(); vi.restoreAllMocks(); }
 });

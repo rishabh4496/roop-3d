@@ -32,6 +32,7 @@ from roop_3d.media.video_writer import encode_video
 from roop_3d.models.catalog import ModelCatalog
 from roop_3d.compositor.pipeline import CompositeOptions
 from roop_3d.compositor.restoration import GpenRestorer
+from roop_3d.engine.edit_plan import FrameEditPlan
 
 
 class PipelineCheckpoint(Contract):
@@ -75,6 +76,7 @@ class PreparedPipeline:
     faceset_ids: tuple[str, ...]
     checkpoint: PipelineCheckpoint
     settings: Settings
+    edit_plan: FrameEditPlan | None = None
 
 
 class MasterPipelineRunner:
@@ -232,12 +234,14 @@ class MasterPipelineRunner:
         """Validate media, probe timing, load read-only FaceSets and check resume data."""
         settings = settings or self.settings_provider()
         target, digest, total, sources, labels_to_ids, faceset_ids = self._prepare_inputs(record, settings)
+        edit_plan = FrameEditPlan(self, record.request, sources)
         request_digest = self._request_digest(record)
         checkpoint = self._read_checkpoint(record.job_id, digest, request_digest, total,
                                            "cpu")
         from roop_3d.jobs.project_store import settings_digest
         fingerprint = settings_digest(settings)
         source_fingerprints = {document.faceset_id: document.source_sha256 for document in sources.values()}
+        source_fingerprints.update({document.faceset_id: document.source_sha256 for document in edit_plan.documents.values()})
         if checkpoint.faceset_sha256 and checkpoint.faceset_sha256 != source_fingerprints:
             raise DomainError("JOB_SOURCE_CHANGED", "A source FaceSet changed since the saved checkpoint", 409)
         if checkpoint.settings_sha256 is not None and checkpoint.settings_sha256 != fingerprint:
@@ -249,7 +253,7 @@ class MasterPipelineRunner:
         numeric_ids = set(labels_to_ids.values())
         by_track = {track_id: sources[track_id] for track_id in numeric_ids}
         return PreparedPipeline(target, digest, total, by_track, labels_to_ids,
-                                tuple(faceset_ids), checkpoint, settings)
+                                tuple(faceset_ids), checkpoint, settings, edit_plan)
 
     @staticmethod
     def _control_signal(control: Callable[[], object]) -> type[Exception] | None:
@@ -318,7 +322,8 @@ class MasterPipelineRunner:
                                     sources_by_track=source_by_track, retarget="auto")
             if settings.face_restoration_policy in {"gfpgan", "codeformer"}:
                 raise DomainError("RESTORER_UNAVAILABLE", "The selected restoration architecture has no verified local adapter", 503)
-            if settings.face_restoration_policy == "auto" or (record.request.workstation_parameters and record.request.workstation_parameters.composite_options().restoration_blend > 0):
+            animated_restoration = bool(record.request.parameter_curves and any(key.value > 0 for key in record.request.parameter_curves.tracks.get('restorer_opacity', ())))
+            if settings.face_restoration_policy == "auto" or animated_restoration or (record.request.workstation_parameters and record.request.workstation_parameters.composite_options().restoration_blend > 0):
                 try:
                     gpen = next((item for item in self.catalog.records()
                                  if item["name"] == "gpen_bfr_512.onnx" and item["state"] == "VERIFIED_LOCAL"), None)
@@ -340,12 +345,15 @@ class MasterPipelineRunner:
                     self._check_control(control, checkpoint, last_completed)
                     expected_shape = decoded.image.shape
                     frame_started = time.perf_counter()
-                    parameters = record.request.workstation_parameters
+                    if prepared.edit_plan:
+                        prepared.edit_plan.apply(session, decoded.index)
+                    parameters = record.request.parameters_at(decoded.index) if record.request.workstation_parameters or record.request.parameter_curves else None
                     result = (session.infer_frame(decoded.image, strength=parameters.pose_strength)
                               if parameters else session.infer_frame(decoded.image))
                     output = session.composite_frame(
                         decoded.image, result,
                         options=parameters.composite_options() if parameters else CompositeOptions(restoration_blend=(0.35 if session.compositor.restorer else 0.0)),
+                        occluder_masks=prepared.edit_plan.occluders(decoded.image, result) if prepared.edit_plan and prepared.edit_plan.mask is not None else None,
                         lip_sync_enabled=settings.lip_sync_mode == "wav2lip")
                     mapped_seen.update(item.track_id for item in result.replacements if item.track_id in numeric_ids)
                     decoded_count += 1
@@ -364,7 +372,8 @@ class MasterPipelineRunner:
                 frames.close()
             if decoded_count == 0:
                 raise DomainError("MEDIA_EMPTY", "Target video contains no decodable frames", 422)
-            missing = numeric_ids - mapped_seen
+            required_ids = numeric_ids if record.request.face_segments is None else {prepared.edit_plan.ids[item.track_id] for item in record.request.face_segments if item.role == 'swap'}
+            missing = required_ids - mapped_seen
             if missing:
                 raise DomainError("TRACK_NOT_DETECTED", "One or more mapped tracks were not detected during rendering", 422)
             checkpoint = self._checkpoint(checkpoint, completed_frame=last_completed,
