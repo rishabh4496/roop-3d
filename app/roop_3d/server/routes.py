@@ -54,7 +54,9 @@ def save_config(value: Settings, request: Request) -> Settings:
 
 @router.get("/system/capabilities", response_model=Capabilities)
 def capabilities(request: Request) -> Capabilities:
-    return Capabilities(enabled_modes=("media_probe", "frame_preview", "face_inspection", "persistent_job_queue"),
+    return Capabilities(enabled_modes=("media_probe", "frame_preview", "face_inspection", "persistent_job_queue",
+                                       "local_video_render"),
+                        rendering_worker_available=request.app.state.worker is not None,
                         models=tuple(ModelSummary.model_validate(item) for item in request.app.state.models.public()),
                         legal_parameter_bounds=Settings.model_json_schema(),
                         inspection_parameter_bounds=InspectRequest.model_json_schema(),
@@ -140,6 +142,8 @@ def validate_job(request: Request, value: JobRequest) -> None:
 def create_job(value: JobRequest, request: Request, response: Response,
                idempotency_key: Annotated[str, Header(alias="Idempotency-Key", min_length=1, max_length=128)]) -> JobRecord:
     record, created = request.app.state.jobs.create(value, idempotency_key, lambda: validate_job(request, value))
+    if created and request.app.state.worker is not None:
+        request.app.state.worker.wake()
     response.status_code = 201 if created else 200
     response.headers["Location"] = f"/api/v1/jobs/{record.job_id}"
     return record
@@ -157,17 +161,26 @@ def get_job(job_id: str, request: Request) -> JobRecord:
 
 @router.post("/jobs/{job_id}/cancel", response_model=JobRecord)
 def cancel(job_id: str, request: Request) -> JobRecord:
-    return request.app.state.jobs.control(job_id, "cancel")
+    record = request.app.state.jobs.control(job_id, "cancel")
+    if request.app.state.worker is not None:
+        request.app.state.worker.wake()
+    return record
 
 
 @router.post("/jobs/{job_id}/pause", response_model=JobRecord)
 def pause(job_id: str, request: Request) -> JobRecord:
-    return request.app.state.jobs.control(job_id, "pause")
+    record = request.app.state.jobs.control(job_id, "pause")
+    if request.app.state.worker is not None:
+        request.app.state.worker.wake()
+    return record
 
 
 @router.post("/jobs/{job_id}/resume", response_model=JobRecord)
 def resume(job_id: str, request: Request) -> JobRecord:
-    return request.app.state.jobs.control(job_id, "resume")
+    record = request.app.state.jobs.control(job_id, "resume")
+    if request.app.state.worker is not None:
+        request.app.state.worker.wake()
+    return record
 
 
 router.add_api_websocket_route("/ws/events", event_stream)

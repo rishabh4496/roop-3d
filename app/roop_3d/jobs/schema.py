@@ -3,10 +3,11 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from enum import Enum
+from pathlib import PurePosixPath
 from typing import Literal
 import uuid
 
-from pydantic import Field, model_validator
+from pydantic import Field, field_validator, model_validator
 
 from roop_3d.core.errors import DomainError
 from roop_3d.core.settings import Contract
@@ -78,6 +79,28 @@ class JobProgress(Contract):
         return self
 
 
+class JobOutput(Contract):
+    output_path: str = Field(min_length=1, max_length=1024)
+    manifest_path: str = Field(min_length=1, max_length=1024)
+    output_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    frames: int = Field(ge=1, strict=True)
+    audio_policy: Literal["copy", "transcode", "drop"]
+
+    @field_validator("output_path", "manifest_path")
+    @classmethod
+    def owned_relative_path(cls, value: str) -> str:
+        path = PurePosixPath(value.replace("\\", "/"))
+        if path.is_absolute() or ".." in path.parts or not value.startswith("roop_3d/.runtime/"):
+            raise ValueError("Job output paths must remain inside the configured runtime")
+        return path.as_posix()
+
+
+class JobFailure(Contract):
+    code: str = Field(min_length=1, max_length=64, pattern=r"^[A-Z0-9_]+$")
+    message: str = Field(min_length=1, max_length=512)
+    recoverable: bool = False
+
+
 class JobRecord(Contract):
     schema_version: Literal[1] = 1
     job_id: str = Field(default_factory=lambda: uuid.uuid4().hex, pattern=r"^[0-9a-f]{32}$")
@@ -88,6 +111,8 @@ class JobRecord(Contract):
     updated_at: datetime = Field(default_factory=now)
     progress: JobProgress = Field(default_factory=JobProgress)
     diagnostics: JobDiagnostics = Field(default_factory=JobDiagnostics)
+    output: JobOutput | None = None
+    failure: JobFailure | None = None
 
 
 class FaceSetSummary(Contract):

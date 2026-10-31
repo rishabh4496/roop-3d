@@ -14,8 +14,11 @@ The fix preserves the snapshots rather than overwriting their hashes. Immutable
 legacy files remain strict, while the exact runtime categories in `runtime_policy.py`
 are reported separately. Further real scans identified history/calibration records,
 temporary-upload cleanup and a runtime-profile JSON receipt. Each classification
-has a negative control proving that source/configuration/model changes still fail.
-No Roop Ultimate source, setting, dependency, launcher or weight was edited.
+has a negative control proving that source, model, and default-configuration changes
+still fail. Stage 12 added only the exact ignored `app/config.yaml` runtime file to
+the reported activity list after repeated observed runtime changes; it is not claimed
+byte-identical. No Roop Ultimate source, setting, dependency, launcher or weight was
+edited.
 
 `verified_local_models.json` rehashed 95 local artifacts, rediscovering every one of
 the earlier 94 entries. ONNX input/output metadata was read from 91 actual graphs;

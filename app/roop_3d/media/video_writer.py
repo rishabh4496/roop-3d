@@ -9,6 +9,7 @@ from threading import Event
 from typing import Callable, Literal
 import os
 import uuid
+import json
 
 import av
 import numpy as np
@@ -16,6 +17,7 @@ import numpy as np
 from roop_3d.audit.isolation import sha256_file
 from roop_3d.audit.project_paths import application_root
 from roop_3d.core.errors import DomainError
+from roop_3d.core.settings import runtime_path
 from roop_3d.core.storage import atomic_json, owned, exclusive
 from roop_3d.media.audio import AudioPolicy, audio_packets, plan_audio
 from roop_3d.media.frame_map import FrameMap
@@ -56,7 +58,9 @@ def encode_video(source: Path, filename: str, *, root: Path | None = None,
                  rate: Fraction | None = None, audio_policy: AudioPolicy = "copy",
                  start: Fraction | None = None, end: Fraction | None = None,
                  transform: Callable[[DecodedFrame], np.ndarray] | None = None,
-                 cancel: Event | None = None) -> dict:
+                 cancel: Event | None = None, output_dir: str | None = None,
+                 manifest_metadata: dict | None = None,
+                 before_publish: Callable[[], None] | None = None) -> dict:
     """Trim times are absolute source seconds, start inclusive and end exclusive.
 
     A trim rebases both video and audio by exactly start. Otherwise source PTS,
@@ -73,10 +77,20 @@ def encode_video(source: Path, filename: str, *, root: Path | None = None,
         raise ValueError("Rates and trim boundaries must be Fraction values")
     if start is not None and start < 0 or end is not None and end <= (start or 0):
         raise ValueError("Invalid trim interval")
-    final = owned(root, f"roop_3d/outputs/{filename}")
-    manifest_path = f"roop_3d/outputs/{filename}.manifest.json"
+    relative_dir = "roop_3d/outputs" if output_dir is None else output_dir
+    if output_dir is None:
+        output_directory = owned(root, relative_dir)
+    else:
+        try:
+            output_directory = runtime_path(relative_dir, root)
+        except ValueError:
+            raise DomainError("OUTPUT_PATH_DENIED", "Output directory must stay inside the owned runtime", 422) from None
+        relative_dir = output_directory.relative_to(root).as_posix()
+    output_relative = (Path(relative_dir) / filename).as_posix()
+    final = owned(root, output_relative)
+    manifest_path = output_relative + ".manifest.json"
     owned(root, manifest_path)
-    final.parent.mkdir(parents=True, exist_ok=True)
+    output_directory.mkdir(parents=True, exist_ok=True)
     token = uuid.uuid4().hex
     temporary = owned(root, f"roop_3d/outputs/{token}.video{final.suffix}")
     muxed = owned(root, f"roop_3d/outputs/{token}.mux{final.suffix}")
@@ -202,7 +216,14 @@ def encode_video(source: Path, filename: str, *, root: Path | None = None,
                             raise DomainError("AUDIO_EMPTY", "An output audio track cannot be decoded", 422)
             if sha256_file(source)[1] != digest:
                 raise DomainError("MEDIA_CHANGED", "Input media changed during encoding", 409)
+            try:
+                metadata = json.loads(json.dumps(manifest_metadata or {}, allow_nan=False))
+                if not isinstance(metadata, dict) or len(json.dumps(metadata).encode("utf-8")) > 65536:
+                    raise ValueError("metadata must be a small JSON object")
+            except (TypeError, ValueError):
+                raise DomainError("MANIFEST_METADATA_INVALID", "Output manifest metadata is invalid", 422) from None
             manifest = {"schema_version": 1, "input_sha256": digest, "output_sha256": sha256_file(muxed)[1],
+                        "output_path": output_relative, "manifest_path": manifest_path,
                         "encoder": encoder, "nvenc_state": hardware_state, "decoder": reader.backend,
                         "width": width, "height": height, "pixel_format": "yuv420p",
                         "nvdec_state": reader.hardware_state, "source_frames_read": source_count,
@@ -213,7 +234,11 @@ def encode_video(source: Path, filename: str, *, root: Path | None = None,
                         "frame_map": [asdict(entry) for entry in frame_map.entries] if frame_map else [],
                         "provenance": {"synthetic_media": True, "processor": "Roop 3D", "processing": "local",
                                        "transformed": transform is not None, "notice": "Synthetic media processed locally by Roop 3D"}}
+            if metadata:
+                manifest["stage12"] = metadata
             check_cancel(cancel)
+            if before_publish is not None:
+                before_publish()
             owned(root, final.relative_to(root).as_posix())
             os.replace(muxed, final)
             published = True

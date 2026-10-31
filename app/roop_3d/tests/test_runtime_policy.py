@@ -41,11 +41,21 @@ class RuntimePolicyTests(unittest.TestCase):
         (self.root / "app/output_evil/code.py").write_bytes(b"forbidden")
         self.assertFalse(verify_policy(self.root, self.baseline)["ok"])
 
-    def test_only_explicit_history_files_are_runtime_not_config(self) -> None:
+    def test_exact_runtime_config_is_reported_and_default_config_stays_protected(self) -> None:
         (self.root / "app/run_history.json").write_bytes(b"runtime")
-        assert verify_policy(self.root, self.baseline)["ok"]
-        (self.root / "app/config.yaml").write_bytes(b"protected")
-        assert not verify_policy(self.root, self.baseline)["ok"]
+        config = self.root / "app/config.yaml"
+        config.write_bytes(b"runtime config v1")
+        result = verify_policy(self.root, self.baseline)
+        self.assertTrue(result["ok"], result)
+        self.assertEqual({item["path"] for item in result["runtime_activity"]["files"]},
+                         {"app/config.yaml", "app/run_history.json"})
+
+        default_config = self.root / "app/default_config.yaml"
+        default_config.write_bytes(b"protected defaults")
+        baseline = inventory(self.root)
+        config.write_bytes(b"runtime config v2")
+        default_config.write_bytes(b"modified defaults")
+        self.assertFalse(verify_policy(self.root, baseline)["ok"])
 
     def test_queue_activity_is_an_exact_exception_and_preserves_baseline(self) -> None:
         queue = self.root / "app/queue.json"

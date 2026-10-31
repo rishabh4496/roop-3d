@@ -11,7 +11,8 @@ from pydantic import Field
 from roop_3d.core.errors import DomainError
 from roop_3d.core.settings import Contract
 from roop_3d.core.storage import atomic_json, exclusive, owned
-from roop_3d.jobs.schema import JobProgress, JobRecord, JobRequest, JobState, now, require_transition
+from roop_3d.jobs.schema import (JobFailure, JobOutput, JobProgress, JobRecord, JobRequest,
+                                 JobState, now, require_transition)
 from roop_3d.models.diagnostics import JobDiagnostics
 
 
@@ -125,6 +126,39 @@ class JobStore:
             record = before.model_copy(update={"diagnostics": value, "revision": before.revision + 1, "updated_at": now()})
             data.jobs[job_id] = record
             self._save(data)
+        return record
+
+    def succeed(self, job_id: str, output: JobOutput) -> JobRecord:
+        output = JobOutput.model_validate(output.model_dump())
+        with exclusive(self.root, self.relative + ".lock"):
+            data = self._read()
+            before = data.jobs.get(job_id)
+            if before is None:
+                raise DomainError("JOB_NOT_FOUND", "Job does not exist", 404)
+            require_transition(before.state, JobState.succeeded)
+            record = before.model_copy(update={"state": JobState.succeeded, "output": output,
+                                               "failure": None, "revision": before.revision + 1,
+                                               "updated_at": now()})
+            data.jobs[job_id] = record
+            self._save(data)
+        self.notify({"type": "job.state", "job_id": job_id, "previous_state": before.state.value,
+                     "state": record.state.value, "revision": record.revision})
+        return record
+
+    def fail(self, job_id: str, failure: JobFailure) -> JobRecord:
+        failure = JobFailure.model_validate(failure.model_dump())
+        with exclusive(self.root, self.relative + ".lock"):
+            data = self._read()
+            before = data.jobs.get(job_id)
+            if before is None:
+                raise DomainError("JOB_NOT_FOUND", "Job does not exist", 404)
+            require_transition(before.state, JobState.failed)
+            record = before.model_copy(update={"state": JobState.failed, "failure": failure,
+                                               "revision": before.revision + 1, "updated_at": now()})
+            data.jobs[job_id] = record
+            self._save(data)
+        self.notify({"type": "job.state", "job_id": job_id, "previous_state": before.state.value,
+                     "state": record.state.value, "revision": record.revision})
         return record
 
     def control(self, job_id: str, action: str) -> JobRecord:

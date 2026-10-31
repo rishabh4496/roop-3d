@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from collections.abc import Mapping
 from typing import BinaryIO, Iterator
 import numpy as np
 
@@ -106,30 +107,51 @@ class IdentitySwapper:
         self.projection: np.ndarray | None = None
         self.source: FaceSetDocument | None = None
         self.canonical: np.ndarray | None = None
+        self.sources_by_track: dict[int, FaceSetDocument] = {}
+        self.canonical_by_track: dict[int, np.ndarray] = {}
+        self._selectors: dict[int, PoseSelector] = {}
 
-    def prepare_session(self, source: FaceSetDocument) -> None:
+    def prepare_session(self, source: FaceSetDocument, *,
+                        sources_by_track: Mapping[int, FaceSetDocument] | None = None) -> None:
         if not source.views:
             raise DomainError("FACESET_EMPTY", "Identity transfer requires observed source views", 422)
+        mapped = dict(sources_by_track or {})
+        if any(type(track_id) is not int or track_id < 0 or not document.views
+               for track_id, document in mapped.items()):
+            raise DomainError("FACESET_MAPPING_INVALID", "Mapped tracks require nonempty verified FaceSets", 422)
         canonical = unit_embedding(np.asarray(source.canonical_embedding))
+        canonical_by_track = {track_id: unit_embedding(np.asarray(document.canonical_embedding))
+                              for track_id, document in mapped.items()}
         self.release_session()
         try:
             self.model = OrtModel(self.catalog, "inswapper_128.onnx", self.config)
             self.projection = embedding_map(self.model.path)
             self.source, self.canonical = source, canonical
+            self.sources_by_track = mapped
+            self.canonical_by_track = canonical_by_track
+            self._selectors = {track_id: PoseSelector(document) for track_id, document in mapped.items()}
         except BaseException:
             self.release_session()
             raise
 
     def infer_frame(self, image: np.ndarray, landmarks5: np.ndarray, *, pose: tuple[float, float, float] = (0, 0, 0),
-                    reference_blend: float = 0.15) -> SwapResult:
+                    reference_blend: float = 0.15, track_id: int | None = None) -> SwapResult:
         if self.model is None or self.source is None or self.canonical is None or self.projection is None:
             raise DomainError("SESSION_NOT_PREPARED", "Prepare identity source before inference", 409)
         if not 0 <= reference_blend <= 0.25:
             raise ValueError("Pose reference weight must be within 0..0.25")
-        match = PoseSelector(self.source).select_best_reference(*pose)
-        view = next(v for v in self.source.views if v.index == match.view_index)
+        if track_id is not None and (type(track_id) is not int or track_id < 0):
+            raise ValueError("track_id must be a nonnegative integer")
+        source = self.sources_by_track.get(track_id, self.source) if track_id is not None else self.source
+        selector = self._selectors.get(track_id) if track_id is not None else None
+        if selector is None:
+            selector = PoseSelector(source)
+        match = selector.select_best_reference(*pose)
+        view = next(v for v in source.views if v.index == match.view_index)
         weight = reference_blend * match.confidence
-        embedding = unit_embedding(self.canonical * (1 - weight) + unit_embedding(np.asarray(view.embedding)) * weight)
+        canonical = self.canonical_by_track.get(track_id, self.canonical) if track_id is not None else self.canonical
+        assert canonical is not None
+        embedding = unit_embedding(canonical * (1 - weight) + unit_embedding(np.asarray(view.embedding)) * weight)
         projected = unit_embedding(embedding @ self.projection).reshape(1, 512)
         aligned = aligned_crop(image, landmarks5, 128)
         blob = aligned.image[:, :, ::-1].transpose(2, 0, 1)[None].astype(np.float32) / 255
@@ -142,3 +164,6 @@ class IdentitySwapper:
         if self.model is not None:
             self.model.release()
         self.model = self.projection = self.source = self.canonical = None
+        self.sources_by_track.clear()
+        self.canonical_by_track.clear()
+        self._selectors.clear()

@@ -23,6 +23,7 @@ from roop_3d.audit.isolation import AuditError
 from roop_3d.core.errors import DomainError
 from roop_3d.core.settings import ConfigStore, Settings
 from roop_3d.jobs.store import JobStore
+from roop_3d.jobs.worker import JobWorker
 from roop_3d.media.service import MediaService
 from roop_3d.models.catalog import ModelCatalog
 from roop_3d.server.middleware import IntakeMiddleware
@@ -31,16 +32,27 @@ from roop_3d.server.routes import router
 from roop_3d.server.ws import EventBroker
 
 
-def create_app(settings: Settings | None = None, *, repo_root: Path | None = None) -> FastAPI:
+def create_app(settings: Settings | None = None, *, repo_root: Path | None = None,
+               worker_enabled: bool | None = None, pipeline_runner=None) -> FastAPI:
     root = repo_root or Path(__file__).absolute().parents[2]
+    if worker_enabled is None:
+        # Temporary-root API contract tests do not decode their deliberately
+        # synthetic queue fixtures. The installed application enables the worker.
+        worker_enabled = repo_root is None
     settings = settings or Settings.from_env(ConfigStore(root).load() or Settings())
     started = time.monotonic()
     events = EventBroker()
     jobs = JobStore(root, events.publish)
+    catalog = ModelCatalog(cache_root=root, search_paths=lambda: app.state.settings.model_search_paths)
+    media = MediaService(root, catalog, lambda: app.state.settings)
+    worker = (JobWorker(root, jobs, lambda: app.state.settings, catalog, media,
+                        pipeline_runner=pipeline_runner) if worker_enabled else None)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         await run_in_threadpool(jobs.recover_interrupted)
+        if worker is not None:
+            worker.start()
 
         async def telemetry() -> None:
             while True:
@@ -53,6 +65,8 @@ def create_app(settings: Settings | None = None, *, repo_root: Path | None = Non
         try:
             yield
         finally:
+            if worker is not None:
+                await run_in_threadpool(worker.stop)
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
 
@@ -62,8 +76,9 @@ def create_app(settings: Settings | None = None, *, repo_root: Path | None = Non
     app.state.root = root
     app.state.events = events
     app.state.jobs = jobs
-    app.state.models = ModelCatalog(cache_root=root, search_paths=lambda: app.state.settings.model_search_paths)
-    app.state.media = MediaService(root, app.state.models, lambda: app.state.settings)
+    app.state.models = catalog
+    app.state.media = media
+    app.state.worker = worker
     app.state.config_lock = threading.Lock()
 
     def envelope(request: Request, code: str, message: str, status: int) -> JSONResponse:
@@ -107,7 +122,7 @@ def create_app(settings: Settings | None = None, *, repo_root: Path | None = Non
         return f"""<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width">
 <title>Roop 3D</title><style>body{{background:#10141c;color:#edf2fa;font:17px system-ui;max-width:760px;margin:12vh auto;padding:24px}}a{{color:#80d3ff}}small{{color:#aab6c8}}</style>
 <h1>Roop 3D</h1><p>Local development service · v{__version__}</p>
-<p>Local media inspection, persistent jobs and API contracts are ready. The rendering worker is not installed yet.</p>
+<p>Local media inspection and persistent rendering jobs are available when the background worker is enabled.</p>
 <p><a href="/api/v1/health">Health &amp; isolation</a> · <a href="/api/v1/system/hardware">Live hardware</a> · <a href="/openapi.json">API schema</a></p>
 <small>API: 127.0.0.1:{settings.port} · Vite development port: 5174 · Local processing by default</small></html>"""
 

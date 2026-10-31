@@ -76,6 +76,7 @@ class ReferencePipeline:
         self.compositor = FrameCompositor(self.catalog, config)
         self.lip_sync = LipSyncAdapter(self.catalog)
         self.selected_ids: frozenset[int] | None = None
+        self.sources_by_track: dict[int, FaceSetDocument] = {}
         self.prepared = False
         self.lock = threading.RLock()
         self.last_latency: StageLatency | None = None
@@ -84,16 +85,22 @@ class ReferencePipeline:
 
     @guarded
     def prepare_session(self, source: FaceSetDocument, *, track_ids: set[int] | None = None,
+                        sources_by_track: Mapping[int, FaceSetDocument] | None = None,
                         retarget: Literal["auto", "off", "required"] = "auto") -> dict:
         with self.lock:
             if retarget not in ("auto", "off", "required") or track_ids is not None and (
                     len(track_ids) > 32 or any(type(i) is not int or i < 0 for i in track_ids)):
                 raise ValueError("Invalid session selection/policy")
+            mapped_sources = dict(sources_by_track or {})
+            if (len(mapped_sources) > 32 or any(type(i) is not int or i < 0 for i in mapped_sources)
+                    or track_ids is not None and not set(mapped_sources).issubset(track_ids)):
+                raise ValueError("Mapped FaceSets must use selected nonnegative track IDs")
             self.release_session()
             try:
-                self.swapper.prepare_session(source)
+                self.swapper.prepare_session(source, sources_by_track=mapped_sources)
                 self.tracker = FaceTracker(self.catalog, config=self.config)
                 self.selected_ids = frozenset(track_ids) if track_ids is not None else None
+                self.sources_by_track = mapped_sources
                 if retarget != "off":
                     self.portrait.prepare_session(required=retarget == "required")
                 else:
@@ -122,7 +129,8 @@ class ReferencePipeline:
                     continue
                 face = tracked.observation
                 at = time.perf_counter()
-                swap = self.swapper.infer_frame(image, face.landmarks5, pose=face.pose)
+                swap = self.swapper.infer_frame(image, face.landmarks5, pose=face.pose,
+                                                track_id=tracked.track_id)
                 swap_seconds += time.perf_counter() - at
                 if self.portrait.available:
                     at = time.perf_counter()
@@ -191,6 +199,7 @@ class ReferencePipeline:
             self.compositor.release()
             self.lip_sync.release()
             self.selected_ids = None
+            self.sources_by_track.clear()
             self.prepared = False
             self.last_latency = None
             self.frames_processed = 0
