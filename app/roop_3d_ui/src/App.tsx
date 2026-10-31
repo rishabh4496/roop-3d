@@ -160,7 +160,7 @@ export default function App() {
       <div className="library-footer"><span className="tiny-badge">LOCAL BY DEFAULT</span><p>Media, FaceSets, and identity embeddings stay in your local workspace.</p></div>
     </aside>
     <main className="main-workspace"><div className="workspace-heading"><div><span className="eyebrow">EDIT / INSPECT / RENDER</span><h1>Your scene. A new identity.</h1></div><button className="button accent" disabled={!!reason('queue') || !inspection || !mappings(assigned, inspection?.tracks ?? [], sources).length || !!busy} title={reason('queue') ?? 'Render mapped face tracks locally'} onClick={queue}>Queue render <span>↗</span></button></div>
-      <VideoViewport target={target} output={output} time={time} setTime={setTime} duration={probe?.duration_seconds ?? 0} enabled={!reason('frame_preview')} keys={keys} probe={probe} sources={sources} onMaskChange={setMaskBase64} onAssignSource={(clusterId, facesetId) => {
+      <VideoViewport target={target} output={output} time={time} setTime={setTime} duration={probe?.duration_seconds ?? 0} enabled={!reason('frame_preview')} keys={keys} probe={probe} sources={sources} onMaskChange={setMaskBase64} trimStart={trimStart} trimEnd={trimEnd} onTrimChange={(start, end) => { setTrimStart(start); setTrimEnd(end); }} onAssignSource={(clusterId, facesetId) => {
         setAssigned(previous => {
           const next = { ...previous };
           if (facesetId) next[clusterId] = facesetId;

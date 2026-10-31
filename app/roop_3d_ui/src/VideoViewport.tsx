@@ -6,6 +6,7 @@ import FaceOverlayCanvas from './components/canvas/FaceOverlayCanvas';
 import FaceSelectionTray from './components/tray/FaceSelectionTray';
 import WorkstationCanvas from './components/canvas/WorkstationCanvas';
 import MaskBrushOverlay from './components/canvas/MaskBrushOverlay';
+import TimelineWorkstation, { parseFps } from './components/timeline/TimelineWorkstation';
 
 function usePreview(path: string, time: number, playing: boolean) {
   const [source, setSource] = useState('');
@@ -38,6 +39,9 @@ export function VideoViewport({
   sources = [],
   onAssignSource,
   onMaskChange,
+  trimStart = 0,
+  trimEnd = null,
+  onTrimChange,
 }: {
   target: string;
   output: string;
@@ -50,6 +54,9 @@ export function VideoViewport({
   sources?: FaceSet[];
   onAssignSource?: (clusterId: string, sourceId: string | null) => void;
   onMaskChange?: (maskBase64: string | null) => void;
+  trimStart?: number;
+  trimEnd?: number | null;
+  onTrimChange?: (trimStart: number, trimEnd: number | null) => void;
 }) {
   const original = useRef<HTMLVideoElement>(null), processed = useRef<HTMLVideoElement>(null);
   const viewportRef = useRef<HTMLDivElement>(null);
@@ -191,69 +198,29 @@ export function VideoViewport({
 
       {playbackError && <p className="inline-warning">{playbackError}</p>}
 
-      <div className="transport">
-        <button
-          className="play-button"
-          disabled={!target || !enabled}
-          onClick={() => void toggle()}
-          aria-label={playing ? 'Pause playback' : 'Play playback'}
-        >
-          {playing ? 'Ⅱ' : '▶'}
-        </button>
-        <time>{formatTime(time)}</time>
-        <span className="muted">/ {formatTime(duration)}</span>
-        <div className="transport-spacer" />
-        <span className="tiny-badge">LOCAL PREVIEW</span>
-      </div>
-
-      <div className="timeline">
-        <div className="timeline-ruler">
-          <span>00:00</span>
-          <span>{formatTime(duration / 2)}</span>
-          <span>{formatTime(duration)}</span>
-        </div>
-        <input
-          aria-label="Timeline scrubber"
-          type="range"
-          min="0"
-          max={duration || 1}
-          step="0.01"
-          value={Math.min(time, duration || 1)}
-          disabled={!target || !enabled}
-          onChange={event => {
-            setPlaying(false);
-            original.current?.pause();
-            processed.current?.pause();
-            setTime(+event.target.value);
-          }}
-        />
-        <div className="timeline-clip">
-          <span>{target ? target.split('/').at(-1) : 'No target video'}</span>
-          {keys
-            .filter(at => at >= 0 && at <= duration)
-            .map((at, index) => (
-              <button
-                key={index}
-                className="keyframe"
-                style={{ left: `${duration ? (at / duration) * 100 : 0}%` }}
-                title={`Keyframe ${formatTime(at)}`}
-                aria-label={`Seek keyframe ${formatTime(at)}`}
-                onClick={() => {
-                  setPlaying(false);
-                  original.current?.pause();
-                  processed.current?.pause();
-                  setTime(at);
-                }}
-              >
-                ◆
-              </button>
-            ))}
-        </div>
-        <div className="timeline-foot">
-          <span>◆ Sampled keyframes</span>
-          <span>Scrub for decoded frame preview</span>
-        </div>
-      </div>
+      {/* Video Editor-Grade Workstation Timeline */}
+      <TimelineWorkstation
+        target={target}
+        output={output}
+        currentTime={time}
+        duration={duration}
+        fps={parseFps(probe?.fps_rational, 30)}
+        playing={playing}
+        disabled={!target || !enabled}
+        keys={keys}
+        trimStart={trimStart}
+        trimEnd={trimEnd}
+        targetVideoRef={original}
+        processedVideoRef={processed}
+        onTogglePlay={() => void toggle()}
+        onSeek={(seekTime) => {
+          setPlaying(false);
+          original.current?.pause();
+          processed.current?.pause();
+          setTime(seekTime);
+        }}
+        onTrimChange={onTrimChange}
+      />
 
       {/* Target Face Selection Tray */}
       <FaceSelectionTray
