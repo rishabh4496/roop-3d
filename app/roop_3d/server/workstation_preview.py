@@ -27,6 +27,8 @@ from roop_3d.engine.scheduler import RuntimeScheduler
 from roop_3d.engine.volumetric.session import ReferencePipeline
 from roop_3d.compositor.restoration import GpenRestorer
 from roop_3d.jobs.schema import JobRecord, JobRequest
+from roop_3d.media.probe import open_media
+from roop_3d.media.timestamps import Timestamp
 from roop_3d.media.video_reader import VideoReader
 from roop_3d.engine.edit_plan import FrameEditPlan
 from roop_3d.media.finishing import Finisher
@@ -155,31 +157,74 @@ class PreviewService:
             check()
             selected = None
             origin = None
-            with closing(VideoReader(target, hardware='software', cancel=cancel).frames()) as frames:
-                for frame in frames:
-                    check()
-                    if frame.index >= self.MAX_FRAMES:
-                        raise DomainError('PREVIEW_FRAME_BUDGET', 'Preview replays tracking from the beginning; select a frame within the first 1200 frames', 422)
-                    if frame.image.shape[0] * frame.image.shape[1] > 3840 * 2160:
-                        raise DomainError('PREVIEW_SIZE_BUDGET', 'Preview input exceeds the 4K frame budget', 422)
-                    origin = frame.timestamp.seconds if origin is None else origin
-                    edit_plan.apply(session, frame.index)
-                    parameters = value.request.parameter_curves.evaluate(frame.index, base_parameters) if value.request.parameter_curves else base_parameters
-                    result = session.infer_frame(frame.image, **parameters.inference_options())
-                    selected = (frame, result, float(frame.timestamp.seconds - origin))
-                    if frame.timestamp.seconds - origin >= Fraction(str(value.timestamp)):
-                        break
-                else:
-                    raise DomainError('PREVIEW_FRAME_MISSING', 'No frame exists at the requested playhead time', 422)
+            target_time = Fraction(str(value.timestamp))
+            seek_threshold = Fraction(1, 10)
+
+            with open_media(target) as container:
+                stream = container.streams.video[0]
+                time_base = Fraction(stream.time_base)
+                start_offset = (stream.start_time or 0) * time_base
+                rate = stream.average_rate or stream.base_rate or 25
+                fps = float(rate) if rate else 25.0
+
+            if target_time <= seek_threshold:
+                with closing(VideoReader(target, hardware='software', cancel=cancel).frames()) as frames:
+                    for frame in frames:
+                        check()
+                        if frame.index >= self.MAX_FRAMES:
+                            raise DomainError('PREVIEW_FRAME_BUDGET', 'Preview replays tracking from the beginning; select a frame within the first 1200 frames', 422)
+                        if frame.image.shape[0] * frame.image.shape[1] > 3840 * 2160:
+                            raise DomainError('PREVIEW_SIZE_BUDGET', 'Preview input exceeds the 4K frame budget', 422)
+                        origin = frame.timestamp.seconds if origin is None else origin
+                        edit_plan.apply(session, frame.index)
+                        parameters = value.request.parameter_curves.evaluate(frame.index, base_parameters) if value.request.parameter_curves else base_parameters
+                        result = session.infer_frame(frame.image, **parameters.inference_options())
+                        selected = (frame, result, float(frame.timestamp.seconds - origin), frame.index)
+                        if frame.timestamp.seconds - origin >= target_time:
+                            break
+                    else:
+                        raise DomainError('PREVIEW_FRAME_MISSING', 'No frame exists at the requested playhead time', 422)
+            else:
+                target_pts_seconds = start_offset + target_time
+                seek_pts = int(round(target_pts_seconds / time_base))
+                seek_ts = Timestamp(seek_pts, time_base)
+                with closing(VideoReader(target, hardware='software', cancel=cancel).frames(seek=seek_ts)) as frames:
+                    last_frame = None
+                    for frame in frames:
+                        check()
+                        if frame.index >= self.MAX_FRAMES:
+                            raise DomainError('PREVIEW_FRAME_BUDGET', 'Preview seek exceeded decoder frame budget', 422)
+                        if frame.image.shape[0] * frame.image.shape[1] > 3840 * 2160:
+                            raise DomainError('PREVIEW_SIZE_BUDGET', 'Preview input exceeds the 4K frame budget', 422)
+                        last_frame = frame
+                        frame_seconds = frame.timestamp.seconds - start_offset
+                        if frame_seconds >= target_time:
+                            calculated_frame_index = int(round(float(frame_seconds * Fraction(str(fps)))))
+                            edit_plan.apply(session, calculated_frame_index)
+                            parameters = value.request.parameter_curves.evaluate(calculated_frame_index, base_parameters) if value.request.parameter_curves else base_parameters
+                            result = session.infer_frame(frame.image, **parameters.inference_options())
+                            selected = (frame, result, float(frame_seconds), calculated_frame_index)
+                            break
+                    else:
+                        if last_frame is not None and (target_time - (last_frame.timestamp.seconds - start_offset)) <= Fraction(1, int(round(fps))):
+                            frame_seconds = last_frame.timestamp.seconds - start_offset
+                            calculated_frame_index = int(round(float(frame_seconds * Fraction(str(fps)))))
+                            edit_plan.apply(session, calculated_frame_index)
+                            parameters = value.request.parameter_curves.evaluate(calculated_frame_index, base_parameters) if value.request.parameter_curves else base_parameters
+                            result = session.infer_frame(last_frame.image, **parameters.inference_options())
+                            selected = (last_frame, result, float(frame_seconds), calculated_frame_index)
+                        else:
+                            raise DomainError('PREVIEW_FRAME_MISSING', 'No frame exists at the requested playhead time', 422)
+
             if selected is None:
                 raise DomainError('PREVIEW_FRAME_MISSING', 'Target has no decodable frames', 422)
-            frame, result, timestamp = selected
+            frame, result, timestamp, frame_index = selected
             if not result.replacements and value.request.face_segments is None:
                 raise DomainError('PREVIEW_TRACK_MISSING', 'No mapped face is visible at this playhead frame', 422)
-            response = {'frame_index': frame.index, 'timestamp': timestamp,
+            response = {'frame_index': frame_index, 'timestamp': timestamp,
                         'width': frame.image.shape[1], 'height': frame.image.shape[0],
                         'profile': admission.profile, 'provider': admission.provider,
-                        'notes': ['Single-frame preview, tracking replayed from frame zero; temporal smoothing resets per variant.',
+                        'notes': ['Single-frame preview, tracking replayed from frame zero; temporal smoothing resets per variant.' if target_time <= seek_threshold else 'Single-frame preview, seeked to playhead keyframe; temporal smoothing resets per variant.',
                                   'Mesh blend: TPS at 0, perspective 3D proxy projection at 1; canonical geometry and camera are estimates.' if parameters.pose_mode == 'mesh_blend' else 'Reference retarget mode: observed dense landmarks; mesh projection is not selected.',
                                   'Matte uses the reference BiSeNet parser with landmark-hull fallback; no XSeg adapter.']}
             if value.x and value.y:
@@ -200,14 +245,14 @@ class PreviewService:
                             variant = replace(result, replacements=tuple(replacements))
                         buffers = collect_composite(session, frame.image, variant, cell, capture=False, occluder_masks=edit_plan.occluders(frame.image, variant))
                         if value.request.export:
-                            buffers['final'] = Finisher(value.request.export.finishing).apply(buffers['final'], frame.index)
+                            buffers['final'] = Finisher(value.request.export.finishing).apply(buffers['final'], frame_index)
                         cells.append({'row': row, 'column': column, 'coordinates': coordinates,
                                       'parameters': cell.model_dump(), 'image': encode(buffers['final'])})
                 return {**response, 'cells': cells}
             check()
             buffers = collect_composite(session, frame.image, result, parameters, occluder_masks=edit_plan.occluders(frame.image, result))
             if value.request.export:
-                buffers['final'] = Finisher(value.request.export.finishing).apply(buffers['final'], frame.index)
+                buffers['final'] = Finisher(value.request.export.finishing).apply(buffers['final'], frame_index)
             detection, pose = frame.image.copy(), frame.image.copy()
             for tracked in result.observations:
                 face = tracked.observation

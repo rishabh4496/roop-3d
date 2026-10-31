@@ -52,8 +52,8 @@ class FixtureSession:
         self.compositor.release()
 
 
-def preview_fixture(tmp_path, monkeypatch):
-    app, _, payload = _fixture(tmp_path)
+def preview_fixture(tmp_path, monkeypatch, count: int = 8):
+    app, _, payload = _fixture(tmp_path, count=count)
     original = module.MasterPipelineRunner
 
     def runner(*args, **kwargs):
@@ -142,3 +142,16 @@ def test_new_parameters_affect_request_identity_without_rewriting_old_identity()
     assert 'workstation_parameters' not in old.identity_payload()
     new = JobRequest.model_validate({**payload, 'workstation_parameters': {'feather_px': 10}})
     assert new.identity_payload() != old.identity_payload()
+
+
+def test_preview_seek_at_later_timestamp_without_budget_exceeded(tmp_path, monkeypatch):
+    app, payload = preview_fixture(tmp_path, monkeypatch, count=1300)
+    payload['timestamp'] = 48.0
+    with TestClient(app, base_url='http://127.0.0.1:8030') as client:
+        response = client.post('/api/v1/workstation/preview', json=payload)
+    assert response.status_code == 200, response.text
+    value = response.json()
+    assert value['frame_index'] == 1200
+    assert value['timestamp'] >= 48.0
+    assert FixtureSession.instances[-1].inferred == 1
+    assert 'seeked to playhead keyframe' in value['notes'][0]
