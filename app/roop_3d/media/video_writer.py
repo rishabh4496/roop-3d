@@ -236,6 +236,8 @@ def encode_video(source: Path, filename: str, *, root: Path | None = None,
                                        "transformed": transform is not None, "notice": "Synthetic media processed locally by Roop 3D"}}
             if metadata:
                 manifest["stage12"] = metadata
+                if "model_hashes" in metadata:
+                    manifest["model_hashes"] = metadata["model_hashes"]
             check_cancel(cancel)
             if before_publish is not None:
                 before_publish()

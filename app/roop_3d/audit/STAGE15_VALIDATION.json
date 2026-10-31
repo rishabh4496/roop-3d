@@ -1,0 +1,66 @@
+{
+  "schema_version": 1,
+  "stage": "15",
+  "title": "E2E Golden-Clip Validation, Benchmarks & Release Gate",
+  "status": "PASSED",
+  "release_verdict": "READY FOR RELEASE",
+  "timestamp": "2026-10-31T12:14:00Z",
+  "gates": {
+    "tier_1_cpu_and_contracts": {
+      "status": "PASSED",
+      "python_tests_passed": 390,
+      "python_subtests_passed": 18,
+      "python_failures": 0,
+      "ui_typecheck": "PASSED",
+      "ui_vitest_passed": 18,
+      "ui_build": "PASSED"
+    },
+    "tier_2_golden_clip_e2e": {
+      "status": "PASSED",
+      "test_file": "app/roop_3d/tests/test_stage15_e2e_golden.py",
+      "unmocked_inference": true,
+      "job_state": "succeeded",
+      "video_verified": true,
+      "audio_preserved": true,
+      "background_preserved": true,
+      "face_region_changed": true,
+      "manifest_with_model_hashes": true
+    },
+    "tier_3_hardware_benchmarks": {
+      "status": "PASSED",
+      "tool": "app/roop_3d/run_benchmarks.py",
+      "host_gpu": "NVIDIA GeForce RTX 4070 Desktop",
+      "host_vram_mib": 12282,
+      "host_cpu_cores": 32,
+      "targets": {
+        "RTX_4070_Desktop": "VERIFIED_LOCAL",
+        "RTX_3060_Laptop": "UNAVAILABLE_LOCAL"
+      },
+      "warmup_ms": 14137.46,
+      "p50_swap_ms": 220.00,
+      "p95_swap_ms": 230.66,
+      "peak_gpu_vram_mib": 3970,
+      "peak_system_ram_mib": 23562
+    },
+    "tier_4_resilience_and_fault_injection": {
+      "status": "PASSED",
+      "test_file": "app/roop_3d/tests/test_stage15_resilience.py",
+      "tests_passed": 5,
+      "tests_failed": 0,
+      "scenarios": [
+        "mid_job_cancellation",
+        "pause_resume_checkpoint",
+        "port_collision_fail_closed",
+        "corrupt_model_quarantine",
+        "simulated_oom_fallback"
+      ]
+    },
+    "integrity_gate": {
+      "status": "PASSED",
+      "historical_hashes_matched": "2645/2645",
+      "comprehensive_hashes_matched": "68390/68390",
+      "violations": 0,
+      "git_porcelain_clean": true
+    }
+  }
+}

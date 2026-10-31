@@ -401,6 +401,26 @@ class MasterPipelineRunner:
         else:
             timing, output_rate = "preserve_source_timing", None
 
+        model_hashes: dict[str, str] = {}
+        try:
+            detector_rec = self.catalog.detector()
+            if detector_rec and "sha256" in detector_rec:
+                model_hashes["detector"] = detector_rec["sha256"]
+        except Exception:
+            pass
+        try:
+            recognizer_rec = self.catalog.recognizer()
+            if recognizer_rec and "sha256" in recognizer_rec:
+                model_hashes["recognizer"] = recognizer_rec["sha256"]
+        except Exception:
+            pass
+        if capability.get("identity_swapper", {}).get("sha256"):
+            model_hashes["identity_swapper"] = capability["identity_swapper"]["sha256"]
+        if getattr(session, "compositor", None) and getattr(session.compositor, "restorer", None):
+            res_rec = getattr(session.compositor.restorer, "record", None)
+            if res_rec and "sha256" in res_rec:
+                model_hashes["restorer"] = res_rec["sha256"]
+
         metadata = {
             "stage": "12",
             "job_id": record.job_id,
@@ -413,6 +433,7 @@ class MasterPipelineRunner:
             "stage11_diffusion_vfx": "UNSUPPORTED" if settings.execution_mode in {"hybrid", "diffusion_vfx"} else "NOT_REQUESTED",
             "face_mappings": [{"track_id": label, "faceset_id": source_id}
                                for (label, source_id) in zip(labels_to_ids, faceset_ids)],
+            "model_hashes": model_hashes,
         }
         try:
             manifest = self.writer(target, f"roop3d_{record.job_id}.mp4", root=self.root,
