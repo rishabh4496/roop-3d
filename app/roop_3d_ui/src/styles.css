@@ -77,3 +77,18 @@
 .mode-btn.swap.active{background:var(--soft);color:var(--accent)}
 .mode-btn.ignore.active{background:var(--raised);color:var(--text)}
 .mode-btn.exclude.active{background:rgba(255,173,154,0.18);color:var(--danger)}
+
+/* 3D Pose & Geometry Viewer */
+.pose-geometry-container{width:100%;height:270px;position:relative;display:flex;flex-direction:column;border:1px solid var(--line);border-radius:6px;overflow:hidden;background:#080d0e;margin:10px 0}
+.pose-viewer-toolbar{display:flex;justify-content:space-between;align-items:center;padding:6px 8px;background:rgba(17,23,25,0.85);border-bottom:1px solid var(--line);z-index:10;backdrop-filter:blur(8px)}
+.pose-mode-toggle{display:flex;gap:2px;background:var(--bg);border:1px solid var(--line);border-radius:4px;padding:2px}
+.viewer-mode-btn{background:transparent;border:0;font-size:9px;color:var(--muted);padding:3px 8px;border-radius:3px;cursor:pointer;transition:all .15s}
+.viewer-mode-btn.active{background:var(--raised);color:var(--accent);font-weight:600}
+.camera-reset-btn{background:var(--raised);border:1px solid var(--line);color:var(--muted);font-size:9px;padding:3px 8px;border-radius:3px;cursor:pointer}
+.camera-reset-btn:hover{color:var(--text);border-color:var(--accent)}
+.pose-canvas-wrapper{flex:1;position:relative;width:100%;min-height:180px}
+.pose-canvas-wrapper canvas{display:block;width:100%!important;height:100%!important}
+.pose-status-readout{display:flex;align-items:center;justify-content:space-between;padding:6px 10px;background:rgba(17,23,25,0.92);border-top:1px solid var(--line);font-size:8px;color:var(--muted);letter-spacing:0.3px}
+.status-metric{display:flex;align-items:center;gap:4px}
+.status-metric strong{color:var(--accent);font-family:monospace}
+.status-divider{width:1px;height:10px;background:var(--line)}
