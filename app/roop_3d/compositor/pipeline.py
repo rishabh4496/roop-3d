@@ -121,6 +121,8 @@ class FrameCompositor:
                               if probabilities is not None and face_mask.source.startswith("bisenet") else None)
             explicit_front = occluder_masks.get(replacement.track_id)
             front = combine_occluders(semantic_front, explicit_front)
+            if observer is not None:
+                observer('occluder', front if front is not None else np.zeros(crop.shape[:2], np.float32), replacement.inverse, face_mask.alpha)
             alpha = subtract_occluders(face_mask.alpha, front)
             if options.erosion_px:
                 radius = max(1, round(abs(options.erosion_px)))
@@ -169,6 +171,8 @@ class FrameCompositor:
             effective_alpha = temporal.alpha * options.swap_weight
             if coverage is not None:
                 effective_alpha = np.minimum(effective_alpha, coverage)
+            if observer is not None:
+                observer('vfx', crop, temporal.inverse, effective_alpha)
             output = fuse_crop(output, harmonized, temporal.inverse, effective_alpha,
                                mode=options.mode, levels=options.pyramid_levels)
         self.frames_composited += 1

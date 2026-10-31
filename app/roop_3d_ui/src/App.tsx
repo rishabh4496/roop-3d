@@ -16,6 +16,8 @@ import WorkstationScreens from './components/workstation/WorkstationScreens';
 import PipelinePill from './components/hud/PipelinePill';
 import QueueDrawer from './components/queue/QueueDrawer';
 import PreFlightLinterModalComponent from './components/diagnostics/PreFlightLinterModal';
+import { DEFAULT_EXPORT } from './components/export/VfxExportPanel';
+import type { ExportOptions } from './contracts';
 const PreFlightLinterModal = PreFlightLinterModalComponent as unknown as ComponentType<any>;
 const PoseCoverageInspector = lazy(() => import('./ThreeViewport').then(module => ({ default: module.PoseCoverageInspector })));
 
@@ -34,6 +36,7 @@ export default function App() {
   const [busy, setBusy] = useState(''), [error, setError] = useState(''), [notice, setNotice] = useState(''), [uploadProgress, setUploadProgress] = useState(0);
   const [theme, setTheme] = useState(() => localStorage.getItem('roop3d-theme') ?? 'dark');
   const route = useHashRoute();
+  const [exportOptions, setExportOptions] = useState<ExportOptions>(DEFAULT_EXPORT);
   const [parameters, setParametersRaw] = useState<WorkstationParameters>({ ...DEFAULT_PARAMETERS });
   const assigned = useFaceSelectionStore(state => state.assignments);
   const clusters = useFaceSelectionStore(state => state.targetClusters);
@@ -42,8 +45,8 @@ export default function App() {
   const setParameters = (value: WorkstationParameters) => { if (JSON.stringify(value) === JSON.stringify(parameters)) return; const before = parameters; const changed = Object.keys(value).filter(key => JSON.stringify(value[key as keyof WorkstationParameters]) !== JSON.stringify(before[key as keyof WorkstationParameters])); executeCommand({ label: `Change ${changed.join(', ')}`, mergeKey: changed.length === 1 && changed[0] !== 'bypass' ? `parameter-${changed[0]}` : undefined, undo: () => setParametersRaw(before), redo: () => setParametersRaw(value) }); };
   const setMaskBase64 = (value: string | null) => { if (value === maskBase64) return; const before = maskBase64; executeCommand({ label: value ? 'Mask stroke' : 'Clear manual mask', bytes: (before?.length ?? 0) + (value?.length ?? 0), undo: () => setMaskRaw(before), redo: () => setMaskRaw(value) }); };
   const renderMappings = () => { const values: Record<string, string> = {}; for (const cluster of clusters) if (cluster.mode === 'swap' && assigned[cluster.id]) values[cluster.originTrackId ?? cluster.id] = assigned[cluster.id]; return mappings(values, inspection?.tracks ?? [], sources); };
-  const captureWorkspace = () => ({ parameters, maskBase64, curves, faces: faceEditState(), time, sourceId, selectedTrack, trimStart, trimEnd });
-  const restoreWorkspace = (value: ReturnType<typeof captureWorkspace>) => { const before = captureWorkspace(); const apply = (snapshot: typeof before) => { setParametersRaw(snapshot.parameters); setMaskRaw(snapshot.maskBase64); replaceCurves(snapshot.curves); restoreFaceEdit(snapshot.faces); setTime(snapshot.time); setSourceId(snapshot.sourceId); setSelectedTrack(snapshot.selectedTrack); setTrimStart(snapshot.trimStart); setTrimEnd(snapshot.trimEnd); useHistoryStore.getState().live(); }; executeCommand({ label: 'Restore snapshot settings', undo: () => apply(before), redo: () => apply(value) }); };
+  const captureWorkspace = () => ({ parameters, exportOptions, maskBase64, curves, faces: faceEditState(), time, sourceId, selectedTrack, trimStart, trimEnd });
+  const restoreWorkspace = (value: ReturnType<typeof captureWorkspace>) => { const before = captureWorkspace(); const apply = (snapshot: typeof before) => { setParametersRaw(snapshot.parameters); setExportOptions(snapshot.exportOptions ?? DEFAULT_EXPORT); setMaskRaw(snapshot.maskBase64); replaceCurves(snapshot.curves); restoreFaceEdit(snapshot.faces); setTime(snapshot.time); setSourceId(snapshot.sourceId); setSelectedTrack(snapshot.selectedTrack); setTrimStart(snapshot.trimStart); setTrimEnd(snapshot.trimEnd); useHistoryStore.getState().live(); }; executeCommand({ label: 'Restore snapshot settings', undo: () => apply(before), redo: () => apply(value) }); };
   const [previewLatency, setPreviewLatency] = useState<Record<string, number> | null>(null);
   const fileInput = useRef<HTMLInputElement>(null), sourceInput = useRef<HTMLInputElement>(null), projectInput = useRef<HTMLInputElement>(null);
   const uploadAbort = useRef<AbortController | null>(null), queueKey = useRef({ fingerprint: '', key: '' });
@@ -57,6 +60,7 @@ export default function App() {
     || JSON.stringify(project.effective_settings) !== JSON.stringify(config)
     || JSON.stringify({ ...DEFAULT_PARAMETERS, ...project.request.workstation_parameters, pose_mode: project.request.workstation_parameters?.pose_mode ?? 'retarget' }) !== JSON.stringify(parameters)
     || JSON.stringify(project.request.parameter_curves?.tracks ?? {}) !== JSON.stringify(curves)
+    || JSON.stringify(project.request.export ?? DEFAULT_EXPORT) !== JSON.stringify(exportOptions)
     || (project.request.mask_base64 ?? null) !== maskBase64
     || !!project.request.face_segments && JSON.stringify(project.request.face_segments) !== JSON.stringify(buildFaceSegments(clusters, assigned));
   const reason = (name: string) => featureReason(caps, name);
@@ -127,7 +131,7 @@ export default function App() {
   const request = (): JobRequest => {
     const selected = renderMappings();
     if (!target || !inspection || !selected.length) throw new Error('Inspect a target and map at least one face track before continuing.');
-    return { target_path: target, inspection_id: inspection.inspection_id, face_mappings: selected, processing: 'local', remote_consent: false, trim_start_seconds: trimStart || null, trim_end_seconds: trimEnd, mask_base64: maskBase64 || undefined, workstation_parameters: parameters, parameter_curves: { tracks: curves }, face_segments: buildFaceSegments(clusters, assigned) };
+    return { target_path: target, inspection_id: inspection.inspection_id, face_mappings: selected, processing: 'local', remote_consent: false, trim_start_seconds: trimStart || null, trim_end_seconds: trimEnd, mask_base64: maskBase64 || undefined, workstation_parameters: parameters, parameter_curves: { tracks: curves }, face_segments: buildFaceSegments(clusters, assigned), export: exportOptions };
   };
   const executeQueue = () => void run('Queueing local render', async () => {
     const value = request(), fingerprint = JSON.stringify(value);
@@ -170,6 +174,7 @@ export default function App() {
     useFaceSelectionStore.getState().populateFromInspection(loaded, null, restoredMappings);
     if (saved.request.face_segments) hydrateFaceSegments(saved.request.face_segments);
     replaceCurves(saved.request.parameter_curves?.tracks ?? {}); setMaskRaw(saved.request.mask_base64 ?? null);
+    setExportOptions(saved.request.export ?? DEFAULT_EXPORT);
     setParametersRaw({ ...DEFAULT_PARAMETERS, ...saved.request.workstation_parameters, pose_mode: saved.request.workstation_parameters?.pose_mode ?? 'retarget' });
     location.hash = '#/faceswap';
     setTrimStart(saved.request.trim_start_seconds ?? 0); setTrimEnd(saved.request.trim_end_seconds); setProject(saved); setProjectName(saved.name); setSelectedJob(saved.checkpoint_job_id ?? ''); setIncludeCheckpoint(!!saved.checkpoint_job_id); setProjectsOpen(false); setNotice('Project input and model hashes verified. Saved settings restored.');
@@ -190,6 +195,7 @@ export default function App() {
       setSelectedTrack(loaded.tracks[0]?.track_id ?? ''); setSelectedJob(job.job_id);
       if (job.request.face_segments) hydrateFaceSegments(job.request.face_segments);
       replaceCurves(job.request.parameter_curves?.tracks ?? {}); setMaskRaw(job.request.mask_base64 ?? null);
+      setExportOptions(job.request.export ?? DEFAULT_EXPORT);
       setParametersRaw({ ...DEFAULT_PARAMETERS, ...job.request.workstation_parameters, pose_mode: job.request.workstation_parameters?.pose_mode ?? 'retarget' });
       setTrimStart(job.request.trim_start_seconds ?? 0); setTrimEnd(job.request.trim_end_seconds);
     });
@@ -270,7 +276,7 @@ export default function App() {
         </div>
       )}
     </main></div></AppRouter>
-    <WorkstationScreens route={route} caps={caps} config={config} sources={sources} jobs={jobs} projects={projects} busy={!!busy} telemetry={telemetry} connection={connection} openProject={openProject} showJob={showJob} controlJob={controlJob} saveSettings={saveSettings} refreshJobs={refreshJobs} openLibrary={() => { setProjectsOpen(true); void refreshProjects(); }} latency={previewLatency} target={target} probe={probe} inspection={inspection} refreshProjects={refreshProjects}/>
+    <WorkstationScreens route={route} caps={caps} config={config} sources={sources} jobs={jobs} projects={projects} busy={!!busy} telemetry={telemetry} connection={connection} openProject={openProject} showJob={showJob} controlJob={controlJob} saveSettings={saveSettings} refreshJobs={refreshJobs} openLibrary={() => { setProjectsOpen(true); void refreshProjects(); }} latency={previewLatency} target={target} probe={probe} inspection={inspection} refreshProjects={refreshProjects} exportOptions={exportOptions} onExportChange={setExportOptions} meshBlend={parameters.pose_mode === 'mesh_blend'} onQueue={queue} canQueue={!reason('queue') && !!inspection && !!renderMappings().length && !busy} previewRequest={inspection && renderMappings().length ? request() : null} timestamp={time}/>
     <footer className="app-footer"><span>ROOP 3D / LOCAL WORKSTATION</span><span>Observed identities. Explicit processing. Synthetic media.</span><span>API :{config?.port ?? '—'}</span></footer>
     {projectsOpen && <div className="modal-backdrop" onClick={() => setProjectsOpen(false)}><section role="dialog" aria-modal="true" aria-labelledby="projects-title" className="project-modal" onClick={event => event.stopPropagation()}><div className="panel-heading"><div><span className="eyebrow">VERSIONED .R3DP MANIFESTS</span><h2 id="projects-title">Project library</h2></div><button aria-label="Close projects" className="icon-button" onClick={() => setProjectsOpen(false)}>×</button></div><p className="muted">Reopening verifies target, inspection, FaceSet, and model hashes. Project files contain references and settings, never raw media.</p><button className="button" disabled={!!busy} onClick={() => projectInput.current?.click()}>Import .r3dp</button><input ref={projectInput} hidden type="file" accept=".r3dp,application/json" onChange={event => { importProject(event.target.files?.[0]); event.target.value = ''; }}/>{!projects.length && <p className="empty-note muted">No saved projects yet.</p>}{projects.map(item => <div key={item.project_id} className="saved-project"><div><strong>{item.name}</strong><small>{new Date(item.saved_at).toLocaleString()} · checkpoint {item.last_completed_frame >= 0 ? item.last_completed_frame : 'none'}</small></div><button className="button small" disabled={!!busy} onClick={() => openProject(item.project_id)}>Verify & open</button><a className="button small" href={`/api/v1/projects/${item.project_id}/download`} download>Export</a></div>)}{project?.checkpoint_job_id && <button className="button accent" disabled={!!busy || !!reason('queue')} onClick={() => void run('Verifying checkpoint continuation', async () => { const resumed = await post<Job>(`/projects/${project.project_id}/resume`, {}); setSelectedJob(resumed.job_id); await refreshJobs(); setProjectsOpen(false); })}>Verify & resume {project.name}</button>}</section></div>}
     <PreFlightLinterModal

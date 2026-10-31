@@ -185,7 +185,8 @@ class ReferencePipeline:
                         options: CompositeOptions = CompositeOptions(),
                         occluder_masks: dict[int, np.ndarray] | None = None,
                         lip_sync_enabled: bool = False,
-                        lip_sync_inputs: Mapping[int, LipSyncFrameInput] | None = None) -> np.ndarray:
+                        lip_sync_inputs: Mapping[int, LipSyncFrameInput] | None = None,
+                        observer=None) -> np.ndarray:
         """Run optional post-swap lip sync, then fuse mouth/face regions into the frame."""
         with self.lock:
             landmarks = {item.track_id: item.observation.landmarks106 for item in result.observations}
@@ -205,7 +206,7 @@ class ReferencePipeline:
                                            scene_cut=result.scene_cut,
                                            frame_index=max(0, self.frames_processed - 1),
                                            occluder_masks=occluder_masks, lip_sync_results=lip_results,
-                                           options=options)
+                                           options=options, observer=observer)
 
     @guarded
     def release_session(self) -> None:

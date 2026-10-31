@@ -20,6 +20,7 @@ test = ["pytest==9.1.1", "onnx==1.16.0"]
 diffusion = ["diffusers==0.30.2"]
 trt = ["tensorrt-cu12==10.9.0.34; platform_system != 'Darwin'"]
 flame = ["smplx==0.1.28"]
+provenance = ["c2pa-python==0.38.0"]
 
 [tool.setuptools]
 packages = ["roop_3d", "roop_3d.audit", "roop_3d.core", "roop_3d.server", "roop_3d.models", "roop_3d.faceset", "roop_3d.media", "roop_3d.engine", "roop_3d.engine.detection", "roop_3d.engine.volumetric", "roop_3d.engine.diffusion", "roop_3d.engine.audio_sync", "roop_3d.reconstruction", "roop_3d.compositor", "roop_3d.bridges", "roop_3d.jobs", "roop_3d.tools"]

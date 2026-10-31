@@ -9,6 +9,9 @@ import BatchMatrixScreen from '../../screens/BatchMatrixScreen';
 import HistoryScreen from '../../screens/HistoryScreen';
 import BottleneckFlamegraphComponent from '../diagnostics/BottleneckFlamegraph';
 import SettingsScreenComponent from '../../screens/SettingsScreen';
+import ExtrasScreenComponent from '../../screens/ExtrasScreen';
+import type { ExportOptions, JobRequest } from '../../contracts';
+const ExtrasScreen = ExtrasScreenComponent as unknown as React.ComponentType<any>;
 
 const BatchMatrix = BatchMatrixScreen as unknown as React.ComponentType<any>;
 const History = HistoryScreen as unknown as React.ComponentType<any>;
@@ -17,6 +20,13 @@ const SettingsScreen = SettingsScreenComponent as unknown as React.ComponentType
 
 type ProjectSummary = Pick<Project, 'project_id' | 'name' | 'saved_at' | 'last_completed_frame'>;
 type Props = {
+  exportOptions?: ExportOptions;
+  onExportChange?: (value: ExportOptions) => void;
+  meshBlend?: boolean;
+  onQueue?: () => void;
+  canQueue?: boolean;
+  previewRequest?: JobRequest | null;
+  timestamp?: number;
   route: string;
   caps: Capabilities | null;
   config: Config | null;
@@ -210,42 +220,7 @@ export default function WorkstationScreens(props: Props) {
       </AppRouter>
 
       <AppRouter route={route} screen="extras">
-        <main className="screen-page">
-          <h1>Media tools</h1>
-          <div className="dashboard-cards">
-            {['Video Repair', 'Segment Joiner', 'LUT', 'Audio Remux'].map(tool => (
-              <section className="screen-card" key={tool}>
-                <h2>{tool}</h2>
-                <p className="muted">No callable local tool endpoint is configured.</p>
-                <button className="button" disabled>
-                  Unavailable
-                </button>
-              </section>
-            ))}
-          </div>
-          <h2>Inspect local media</h2>
-          <form
-            onSubmit={event => {
-              event.preventDefault();
-              setProbeError('');
-              void post('/media/probe', { path: probePath })
-                .then(setProbeResult)
-                .catch(e => setProbeError(e.message));
-            }}
-          >
-            <input
-              aria-label="Owned media path"
-              placeholder="roop_3d/.runtime/media/…"
-              value={probePath}
-              onChange={e => setProbePath(e.target.value)}
-            />
-            <button className="button" disabled={!probePath}>
-              Inspect streams
-            </button>
-          </form>
-          {probeError && <p role="alert">{probeError}</p>}
-          {probeResult != null && <pre>{JSON.stringify(probeResult, null, 2)}</pre>}
-        </main>
+        <ExtrasScreen active={route === '#/extras'} jobs={jobs} target={target} exportOptions={props.exportOptions} onExportChange={props.onExportChange} meshBlend={props.meshBlend} onQueue={props.onQueue} canQueue={props.canQueue} previewRequest={props.previewRequest} timestamp={props.timestamp}/>
       </AppRouter>
 
       <AppRouter route={route} screen="gallery">

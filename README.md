@@ -1,5 +1,11 @@
 # Roop 3D
 
+Post-production controls are available in **Extras** (`#/extras`): compositing
+passes, FCPXML/EDL/OTIO interchange, LUT/grain finishing, and optional provenance.
+See [Post-production and acceptance limits](docs/POST_PRODUCTION.md) for formats,
+requirements, local endpoints, and the distinction between estimated geometry,
+integrity hashes, and cryptographic signatures.
+
 An independent Pinokio application with its own source checkout, Git repository,
 virtual environment, launchers, cache, logs and process. It does not launch or
 import Roop Ultimate. The current release is the Stage 01 local service scaffold;

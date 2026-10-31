@@ -687,3 +687,12 @@
 .drawer-subtab:hover{color:var(--text)}
 .drawer-subtab.active{background:var(--soft);color:var(--accent);border-color:var(--accent)}
 .drawer-flamegraph-wrap{border-top:1px solid var(--line);padding-top:10px}
+/* Post-production workstation */
+.vfx-export-panel, .standalone-finishing { max-width: 1100px; padding: 24px; margin: 20px 0; border: 1px solid var(--border, #354044); border-radius: 12px; background: var(--panel, #151c20); }
+.vfx-export-panel fieldset, .finishing-controls { border: 1px solid var(--border, #354044); border-radius: 8px; padding: 18px; margin: 18px 0; }
+.export-check { display: flex; align-items: center; gap: 10px; padding: 7px 0; }
+.export-check input { width: auto; }
+.finishing-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(155px, 1fr)); gap: 14px; margin: 16px 0; }
+.finishing-grid label, .finishing-controls > label, .standalone-finishing > label { display: grid; gap: 7px; }
+.export-actions { display: flex; flex-wrap: wrap; gap: 10px; margin: 18px 0; }
+.finishing-preview { display: block; max-width: 100%; max-height: 650px; margin: 20px 0; border-radius: 8px; }

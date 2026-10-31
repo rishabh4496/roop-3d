@@ -24,6 +24,8 @@ from roop_3d.media.frame_map import FrameMap
 from roop_3d.media.probe import open_media, probe
 from roop_3d.media.timestamps import rescale
 from roop_3d.media.video_reader import DecodedFrame, VideoReader, check_cancel
+from roop_3d.media.finishing import Finisher, FinishingOptions
+from roop_3d.media.provenance import recipe_claim, authenticate_manifest, sign_c2pa
 
 
 def _encoder(codec: str, hardware: str, width: int, height: int, base: Fraction) -> tuple[str, str]:
@@ -60,13 +62,16 @@ def encode_video(source: Path, filename: str, *, root: Path | None = None,
                  transform: Callable[[DecodedFrame], np.ndarray] | None = None,
                  cancel: Event | None = None, output_dir: str | None = None,
                  manifest_metadata: dict | None = None,
-                 before_publish: Callable[[], None] | None = None) -> dict:
+                 before_publish: Callable[[], None] | None = None,
+                 finishing: FinishingOptions | None = None) -> dict:
     """Trim times are absolute source seconds, start inclusive and end exclusive.
 
     A trim rebases both video and audio by exactly start. Otherwise source PTS,
     including a nonzero origin, are retained. The caller owns any transform.
     """
     root = root or application_root()
+    finisher = Finisher(finishing or FinishingOptions())
+    claim = None
     if Path(filename).name != filename or Path(filename).suffix.lower() not in (".mp4", ".mov", ".mkv"):
         raise ValueError("Output must be a simple MP4, MOV, or MKV filename")
     if codec not in ("h264", "hevc") or hardware not in ("auto", "software"):
@@ -94,6 +99,7 @@ def encode_video(source: Path, filename: str, *, root: Path | None = None,
     token = uuid.uuid4().hex
     temporary = owned(root, f"roop_3d/outputs/{token}.video{final.suffix}")
     muxed = owned(root, f"roop_3d/outputs/{token}.mux{final.suffix}")
+    signed = owned(root, f"roop_3d/outputs/{token}.signed{final.suffix}")
     published = False
     with exclusive(root, f"roop_3d/outputs/.{filename}.lock"):
         if final.exists() or owned(root, manifest_path).exists():
@@ -103,6 +109,9 @@ def encode_video(source: Path, filename: str, *, root: Path | None = None,
         try:
             check_cancel(cancel)
             digest = sha256_file(source)[1]
+            if finishing and finishing.provenance != 'none':
+                claim = recipe_claim({'input_sha256': digest, 'finishing': finisher.metadata(),
+                                      'render': manifest_metadata or {}}, finishing.provenance)
             info = probe(source)
             video = info.videos[0]
             plans = plan_audio(source, final.suffix.lower(), audio_policy, start=start, end=end, cancel=cancel)
@@ -159,6 +168,7 @@ def encode_video(source: Path, filename: str, *, root: Path | None = None,
                     image = transform(decoded) if transform else decoded.image
                     if not isinstance(image, np.ndarray) or image.shape != (height, width, 3) or image.dtype != np.uint8:
                         raise DomainError("ENCODE_FRAME_INVALID", "Transform must return upright uint8 BGR with unchanged dimensions", 422)
+                    image = finisher.apply(image, decoded.index)
                     frame = av.VideoFrame.from_ndarray(image, format="bgr24")
                     conversion = {"dst_color_range": video.color_range} if video.color_range in (1, 2) else {}
                     if video.colorspace in (1, 4, 5, 6, 7):
@@ -180,6 +190,9 @@ def encode_video(source: Path, filename: str, *, root: Path | None = None,
                     str(muxed), "w", options=mux_options) as output:
                 target = output.add_stream_from_template(encoded.streams.video[0])
                 output.metadata["comment"] = "Synthetic media processed locally by Roop 3D"
+                if claim:
+                    # The recipe hash is embedded before computing the final file hash.
+                    output.metadata['comment'] += '\n' + json.dumps(claim, sort_keys=True)
                 audio = audio_packets(original, output, plans, start=start, end=end, cancel=cancel)
                 # Prime audio to create every output stream before header emission.
                 pending = next(audio, None)
@@ -196,6 +209,10 @@ def encode_video(source: Path, filename: str, *, root: Path | None = None,
                     check_cancel(cancel)
                     output.mux(pending)
                     pending = next(audio, None)
+            c2pa_result = None
+            if finishing and finishing.provenance == 'c2pa':
+                c2pa_result = sign_c2pa(muxed, signed, claim)
+                os.replace(signed, muxed)
             observed = probe(muxed)
             if len(observed.audio) != len(info.audio):
                 raise DomainError("AUDIO_TRACK_LOSS", "Output audio track count differs from input", 422)
@@ -238,6 +255,12 @@ def encode_video(source: Path, filename: str, *, root: Path | None = None,
                 manifest["stage12"] = metadata
                 if "model_hashes" in metadata:
                     manifest["model_hashes"] = metadata["model_hashes"]
+            if finishing:
+                manifest['finishing'] = finisher.metadata()
+            if claim:
+                manifest['render_claim'] = claim
+                manifest['c2pa'] = c2pa_result
+                authenticate_manifest(manifest, finishing.provenance)
             check_cancel(cancel)
             if before_publish is not None:
                 before_publish()
@@ -257,5 +280,5 @@ def encode_video(source: Path, filename: str, *, root: Path | None = None,
                 frames.close()
             if audio is not None:
                 audio.close()
-            for path in (temporary, muxed):
+            for path in (temporary, muxed, signed):
                 owned(root, path.relative_to(root).as_posix()).unlink(missing_ok=True)

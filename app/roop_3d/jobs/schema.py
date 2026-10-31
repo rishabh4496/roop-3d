@@ -15,6 +15,7 @@ from roop_3d.core.workstation import WorkstationParameters
 from roop_3d.core.animation import ParameterCurves, FaceSegment
 from roop_3d.media.schema import TrackToFaceSetMap
 from roop_3d.models.diagnostics import JobDiagnostics
+from roop_3d.media.finishing import ExportOptions
 
 
 def now() -> datetime:
@@ -63,6 +64,7 @@ class JobRequest(Contract):
     workstation_parameters: WorkstationParameters | None = None
     parameter_curves: ParameterCurves | None = None
     face_segments: tuple[FaceSegment, ...] | None = Field(default=None, max_length=256)
+    export: ExportOptions | None = None
 
     def identity_payload(self) -> dict:
         value = self.model_dump(mode="json")
@@ -71,7 +73,7 @@ class JobRequest(Contract):
             for field in ('swap_weight', 'erosion_px'):
                 if field not in self.workstation_parameters.model_fields_set:
                     value['workstation_parameters'].pop(field, None)
-        for name in ("trim_start_seconds", "trim_end_seconds", "mask_base64", "workstation_parameters", "parameter_curves", "face_segments"):
+        for name in ("trim_start_seconds", "trim_end_seconds", "mask_base64", "workstation_parameters", "parameter_curves", "face_segments", "export"):
             if value.get(name) is None:
                 value.pop(name, None)
         return value
@@ -124,6 +126,9 @@ class JobOutput(Contract):
     output_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     frames: int = Field(ge=1, strict=True)
     audio_policy: Literal["copy", "transcode", "drop"]
+    passes: dict[str, str] = Field(default_factory=dict)
+    pass_manifest_path: str | None = None
+    baked_video: bool = True
 
     @field_validator("output_path", "manifest_path")
     @classmethod
@@ -132,6 +137,18 @@ class JobOutput(Contract):
         if path.is_absolute() or ".." in path.parts or not value.startswith("roop_3d/.runtime/"):
             raise ValueError("Job output paths must remain inside the configured runtime")
         return path.as_posix()
+
+    @field_validator('pass_manifest_path')
+    @classmethod
+    def optional_manifest(cls, value):
+        return cls.owned_relative_path(value) if value is not None else None
+
+    @field_validator('passes')
+    @classmethod
+    def pass_paths(cls, value):
+        if set(value) - {'alpha', 'occluder', 'uv', 'normal', 'depth'}:
+            raise ValueError('Unsupported output pass')
+        return {name: cls.owned_relative_path(path) for name, path in value.items()}
 
 
 class JobFailure(Contract):

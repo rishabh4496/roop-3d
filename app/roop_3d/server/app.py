@@ -33,6 +33,7 @@ from roop_3d.models.catalog import ModelCatalog
 from roop_3d.server.middleware import IntakeMiddleware
 from roop_3d.server.contracts import ErrorEnvelope, Health
 from roop_3d.server.routes import router
+from roop_3d.server.finishing import router as finishing_router
 from roop_3d.server.ws import EventBroker, event_stream
 
 
@@ -124,6 +125,7 @@ def create_app(settings: Settings | None = None, *, repo_root: Path | None = Non
     app.include_router(router)
     app.include_router(workstation_router)
     app.include_router(preview_router)
+    app.include_router(finishing_router)
     app.add_api_websocket_route("/ws/telemetry", event_stream)
     app.add_api_websocket_route("/ws/events", event_stream)
 

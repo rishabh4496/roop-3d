@@ -122,13 +122,14 @@ export function VideoViewport({
   };
   const previewBody = useRef({ request: previewRequest, timestamp: time, parameters });
   previewBody.current = { request: previewRequest, timestamp: time, parameters };
-  const editFingerprint = JSON.stringify({ parameters, curves: history.curves, maskBase64, roles: previewRequest?.face_segments });
+  const editFingerprint = JSON.stringify({ parameters, curves: history.curves, maskBase64, roles: previewRequest?.face_segments, finishing: previewRequest?.export });
   const previousEdit = useRef(editFingerprint);
   useEffect(() => {
     if (previousEdit.current === editFingerprint) return;
     previousEdit.current = editFingerprint;
     if (active && previewRequest) { history.live(); setSolo(previous => previous ?? 'final'); }
   }, [editFingerprint, active, previewRequest]);
+  useEffect(() => { if (active && previewRequest && (previewRequest.export?.finishing.cube || previewRequest.export?.finishing.grain.intensity)) setSolo('final'); }, [active, previewRequest?.export?.finishing]);
   const latencyCallback = useRef(onPreviewLatency); latencyCallback.current = onPreviewLatency;
   useEffect(() => {
     if (!solo || !active || !previewBody.current.request || preview?.key === previewKey) { setPreviewBusy(false); return; }

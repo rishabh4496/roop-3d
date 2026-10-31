@@ -259,6 +259,13 @@ class MasterPipelineRunner:
     def prepare(self, record: JobRecord, settings: Settings | None = None) -> PreparedPipeline:
         """Validate media, probe timing, load read-only FaceSets and check resume data."""
         settings = settings or self.settings_provider()
+        if record.request.export:
+            from roop_3d.media.provenance import require_mode
+            require_mode(record.request.export.finishing.provenance)
+            if {'normal', 'depth'} & set(record.request.export.passes) and record.request.parameters_at(0).pose_mode != 'mesh_blend':
+                raise DomainError('VFX_GEOMETRY_UNAVAILABLE', 'Normal/depth exports require mesh blend mode', 422)
+            if record.request.export.passes and settings.video_timing_policy == 'cfr':
+                raise DomainError('VFX_TIMING_POLICY', 'Pass exports require preserved source timing; conform VFR media before rendering for NLE interchange', 422)
         target, digest, total, sources, labels_to_ids, faceset_ids = self._prepare_inputs(record, settings)
         edit_plan = FrameEditPlan(self, record.request, sources)
         request_digest = self._request_digest(record)
@@ -349,6 +356,9 @@ class MasterPipelineRunner:
         expected_shape: tuple[int, ...] | None = None
         last_completed = checkpoint.completed_frame
         capability: dict = {}
+        export = record.request.export
+        scene_cuts: list[int] = []
+        swapped_ranges: list[list[int]] = []
 
         try:
             signal = self._control_signal(control)
@@ -388,11 +398,27 @@ class MasterPipelineRunner:
                     parameters = record.request.parameters_at(decoded.index) if record.request.workstation_parameters or record.request.parameter_curves else None
                     result = (session.infer_frame(decoded.image, **parameters.inference_options())
                               if parameters else session.infer_frame(decoded.image))
+                    if export:
+                        if getattr(result, 'scene_cut', False):
+                            scene_cuts.append(decoded.index)
+                        if result.replacements:
+                            if swapped_ranges and swapped_ranges[-1][1] == decoded.index:
+                                swapped_ranges[-1][1] += 1
+                            else:
+                                swapped_ranges.append([decoded.index, decoded.index + 1])
+                    collector = None
+                    if export and export.passes:
+                        from roop_3d.media.vfx import PassCollector
+                        collector = PassCollector(decoded.image.shape[:2], export.passes)
                     output = session.composite_frame(
                         decoded.image, result,
                         options=parameters.composite_options() if parameters else CompositeOptions(restoration_blend=(0.35 if session.compositor.restorer else 0.0)),
                         occluder_masks=prepared.edit_plan.occluders(decoded.image, result) if prepared.edit_plan and prepared.edit_plan.mask is not None else None,
-                        lip_sync_enabled=settings.lip_sync_mode == "wav2lip")
+                        lip_sync_enabled=settings.lip_sync_mode == "wav2lip",
+                        **({'observer': collector.observe} if collector else {}))
+                    if collector is not None and decoded.index > checkpoint.completed_frame:
+                        collector.geometry(result.replacements, record.request.parameters_at(decoded.index).pose_strength)
+                        collector.save(self.root, record.job_id, decoded.index)
                     mapped_seen.update(item.track_id for item in result.replacements if item.track_id in numeric_ids)
                     decoded_count += 1
                     if decoded.index > checkpoint.completed_frame:
@@ -486,6 +512,27 @@ class MasterPipelineRunner:
                                for (label, source_id) in zip(labels_to_ids, faceset_ids)],
             "model_hashes": model_hashes,
         }
+        if export:
+            metadata['timeline'] = {'scene_cuts': scene_cuts, 'swapped_ranges': swapped_ranges}
+        pass_result = None
+        if export and export.passes:
+            from roop_3d.media.vfx import publish_passes
+            pass_result = publish_passes(self.root, record.job_id, target, export.passes, settings.output_root,
+                start=Fraction(str(record.request.trim_start_seconds)) if record.request.trim_start_seconds is not None else None,
+                end=Fraction(str(record.request.trim_end_seconds)) if record.request.trim_end_seconds is not None else None,
+                check=lambda: self._check_control(control, checkpoint, last_completed), timeline=metadata['timeline'])
+            metadata['vfx_manifest'] = pass_result['manifest_path']
+            metadata['vfx_manifest_sha256'] = sha256_file(owned(self.root, pass_result['manifest_path']))[1]
+            if not export.baked_video:
+                first = export.passes[0]
+                result = JobOutput(output_path=pass_result['paths'][first], manifest_path=pass_result['manifest_path'],
+                    output_sha256=pass_result['metadata']['output_sha256'][first], frames=len(pass_result['metadata']['frames']),
+                    audio_policy='drop', passes=pass_result['paths'], baked_video=False,
+                    pass_manifest_path=pass_result['manifest_path'])
+                if self._control_signal(control) is not None:
+                    self.discard_output(result)
+                    self._check_control(control, checkpoint, last_completed)
+                return result
         try:
             manifest = self.writer(target, f"roop3d_{record.job_id}.mp4", root=self.root,
                 hardware="software" if admission.profile == "cpu" else "auto", timing=timing,
@@ -493,8 +540,14 @@ class MasterPipelineRunner:
                 output_dir=settings.output_root, manifest_metadata=metadata,
                 start=Fraction(str(record.request.trim_start_seconds)) if record.request.trim_start_seconds is not None else None,
                 end=Fraction(str(record.request.trim_end_seconds)) if record.request.trim_end_seconds is not None else None,
-                before_publish=lambda: self._check_control(control, checkpoint, last_completed))
+                before_publish=lambda: self._check_control(control, checkpoint, last_completed),
+                **({'finishing': export.finishing} if export else {}))
         except BaseException as error:
+            if pass_result:
+                from roop_3d.media.vfx import discard_sequences
+                discard_sequences(self.root, pass_result['manifest_path'])
+                for relative in (*pass_result['paths'].values(), pass_result['manifest_path']):
+                    owned(self.root, relative).unlink(missing_ok=True)
             if is_cuda_oom(error):
                 if checkpoint.oom_retries == 0 and admission.profile != "cpu":
                     self._checkpoint(checkpoint, completed_frame=last_completed, profile=admission.profile,
@@ -504,7 +557,8 @@ class MasterPipelineRunner:
             raise
         result = JobOutput(output_path=manifest["output_path"], manifest_path=manifest["manifest_path"],
                            output_sha256=manifest["output_sha256"], frames=manifest["verified_frames"],
-                           audio_policy=manifest["audio_policy"])
+                           audio_policy=manifest["audio_policy"], passes=pass_result['paths'] if pass_result else {},
+                           pass_manifest_path=pass_result['manifest_path'] if pass_result else None)
         signal = self._control_signal(control)
         if signal is not None:
             self.discard_output(result)
@@ -512,7 +566,13 @@ class MasterPipelineRunner:
         return result
 
     def discard_output(self, output: JobOutput) -> None:
-        for relative in (output.output_path, output.manifest_path):
+        if output.pass_manifest_path:
+            from roop_3d.media.vfx import discard_sequences
+            discard_sequences(self.root, output.pass_manifest_path)
+        artifacts = {output.output_path, output.manifest_path, *output.passes.values()}
+        if output.pass_manifest_path:
+            artifacts.add(output.pass_manifest_path)
+        for relative in artifacts:
             path = owned(self.root, relative)
             if path.exists():
                 if path.is_symlink() or not path.is_file():

@@ -29,6 +29,7 @@ from roop_3d.compositor.restoration import GpenRestorer
 from roop_3d.jobs.schema import JobRecord, JobRequest
 from roop_3d.media.video_reader import VideoReader
 from roop_3d.engine.edit_plan import FrameEditPlan
+from roop_3d.media.finishing import Finisher
 
 router = APIRouter(prefix='/api/v1/workstation')
 AxisParameter = Literal['restoration_blend', 'feather_px', 'color_strength', 'pose_strength']
@@ -86,6 +87,8 @@ def collect_composite(session, image, result, parameters, *, capture=True, occlu
     buffers = {}
 
     def observe(stage, crop, inverse, alpha):
+        if stage in {'vfx', 'occluder'}:
+            return
         size = (image.shape[1], image.shape[0])
         if stage == 'matte':
             projected = cv2.warpAffine(crop, inverse, size)
@@ -196,11 +199,15 @@ class PreviewService:
                                 replacements.append(replace(item, image=projection.image, coverage=projection.coverage, projection=projection))
                             variant = replace(result, replacements=tuple(replacements))
                         buffers = collect_composite(session, frame.image, variant, cell, capture=False, occluder_masks=edit_plan.occluders(frame.image, variant))
+                        if value.request.export:
+                            buffers['final'] = Finisher(value.request.export.finishing).apply(buffers['final'], frame.index)
                         cells.append({'row': row, 'column': column, 'coordinates': coordinates,
                                       'parameters': cell.model_dump(), 'image': encode(buffers['final'])})
                 return {**response, 'cells': cells}
             check()
             buffers = collect_composite(session, frame.image, result, parameters, occluder_masks=edit_plan.occluders(frame.image, result))
+            if value.request.export:
+                buffers['final'] = Finisher(value.request.export.finishing).apply(buffers['final'], frame.index)
             detection, pose = frame.image.copy(), frame.image.copy()
             for tracked in result.observations:
                 face = tracked.observation
@@ -211,6 +218,21 @@ class PreviewService:
                 cv2.putText(pose, 'Y/P/R ' + '/'.join(f'{p:.1f}' for p in face.pose),
                             (max(0, x1), max(20, y1)), cv2.FONT_HERSHEY_SIMPLEX, .6, (80, 245, 180), 2)
             buffers.update(detector=detection, pose=pose)
+            if value.request.export and {'normal', 'depth'} & set(value.request.export.passes):
+                aligned = []
+                for item in result.replacements:
+                    projection = getattr(item, 'projection', None)
+                    if projection is None:
+                        raise DomainError('VFX_GEOMETRY_UNAVAILABLE', 'Frame-aligned mesh projection is required', 422)
+                    geometry = projection.geometry
+                    vertices = geometry.flat_camera_vertices * (1 - parameters.pose_strength) + geometry.mesh_camera_vertices * parameters.pose_strength
+                    pixels = projection.blend_pixels @ item.inverse[:, :2].T + item.inverse[:, 2]
+                    left, _, right = np.linalg.svd(item.inverse[:, :2])
+                    target_vertices = vertices.copy()
+                    target_vertices[:, :2] = vertices[:, :2] @ (left @ right).T
+                    aligned.append({'pixels': pixels.tolist(), 'camera_vertices': target_vertices.tolist(),
+                                    'faces': projection.visible_faces.tolist(), 'track_id': item.track_id})
+                response['aligned_geometry'] = aligned
             projection_info = []
             if parameters.pose_mode == 'mesh_blend':
                 for item in result.replacements:
