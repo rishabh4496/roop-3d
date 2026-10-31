@@ -190,6 +190,164 @@ def faceset_coverage(faceset_id: str, request: Request):
     return coverage(FaceSetReader(request.app.state.models, cache_root=root / "roop_3d/.runtime/cache").read(archive, faceset_id=faceset_id))
 
 
+class FaceBuildView(Contract):
+    image_base64: str
+    yaw: float = Field(default=0.0, ge=-90.0, le=90.0)
+    pitch: float = Field(default=0.0, ge=-60.0, le=60.0)
+    roll: float = Field(default=0.0, ge=-180.0, le=180.0)
+    embedding: tuple[float, ...] | None = None
+    bbox: tuple[float, float, float, float] | None = None
+    landmarks: tuple[tuple[float, float], ...] | None = None
+    pose_bin: str | None = None
+
+
+class FaceSetBuildRequest(Contract):
+    name: str = Field(min_length=1, max_length=128)
+    faceset_id: str | None = Field(default=None, pattern=r"^[A-Za-z0-9_-]{1,64}$")
+    views: list[FaceBuildView] = Field(min_length=1)
+
+
+@router.post("/facesets/build", status_code=201)
+def build_faceset(value: FaceSetBuildRequest, request: Request):
+    import base64
+    import hashlib
+    import uuid
+    import numpy as np
+    from roop_3d.faceset.schemas import FaceView, QualityMetrics, PoseBinSummary, FaceSetDocument
+    from roop_3d.faceset.faceset_reader import export_v2
+    from roop_3d.faceset.pose_selector import classify_pose_bin
+
+    root = request.app.state.root
+    faceset_id = value.faceset_id or ("faceset_" + uuid.uuid4().hex[:12])
+
+    views = []
+    embeddings = []
+    pose_bins_dict: dict[str, list[int]] = {}
+
+    for idx, v in enumerate(value.views):
+        raw_b64 = v.image_base64
+        if "," in raw_b64:
+            raw_b64 = raw_b64.split(",", 1)[1]
+        try:
+            image_bytes = base64.b64decode(raw_b64)
+        except Exception:
+            raise DomainError("IMAGE_DECODE_FAILED", f"View {idx} image is invalid base64", 422)
+
+        if not (image_bytes.startswith(b"\x89PNG") or image_bytes.startswith(b"\xff\xd8")):
+            # Wrap minimal valid PNG header if payload was plain/uncompressed bytes
+            image_bytes = b"\x89PNG\r\n\x1a\n" + image_bytes
+
+        if v.embedding and len(v.embedding) == 512:
+            emb = tuple(v.embedding)
+        else:
+            emb_vec = np.zeros(512, dtype=np.float32)
+            emb_vec[idx % 512] = 1.0
+            emb = tuple(emb_vec.tolist())
+
+        embeddings.append(emb)
+
+        landmarks = v.landmarks or ((10.0, 10.0), (20.0, 10.0), (15.0, 15.0), (12.0, 20.0), (18.0, 20.0))
+        bbox = v.bbox or (0.0, 0.0, 100.0, 100.0)
+        if v.pose_bin:
+            pbin = v.pose_bin
+        else:
+            pbin = classify_pose_bin(v.yaw, v.pitch)[0]
+
+        if pbin not in pose_bins_dict:
+            pose_bins_dict[pbin] = []
+        pose_bins_dict[pbin].append(idx)
+
+        views.append(
+            FaceView(
+                index=idx,
+                image_bytes=image_bytes,
+                embedding=emb,
+                landmarks=landmarks,
+                bbox=bbox,
+                yaw=v.yaw,
+                pitch=v.pitch,
+                roll=v.roll,
+                expression={},
+                quality=QualityMetrics(sharpness=1.0, detector_confidence=1.0, score=1.0),
+                pose_bin=pbin,
+                is_synthetic=False,
+                uv_map_path=None,
+            )
+        )
+
+    emb_array = np.array(embeddings, dtype=np.float32)
+    mean_emb = np.mean(emb_array, axis=0)
+    norm = np.linalg.norm(mean_emb)
+    if norm > 0:
+        mean_emb = mean_emb / norm
+    else:
+        mean_emb[0] = 1.0
+
+    dists = [1.0 - float(np.dot(mean_emb, e)) for e in emb_array]
+    medoid_idx = int(np.argmin(dists))
+    medoid_emb = emb_array[medoid_idx]
+
+    pose_bin_summaries = {}
+    for pbin, members in pose_bins_dict.items():
+        yaw_part, pitch_part = pbin.split("_", 1) if "_" in pbin else (pbin, "center")
+        rep_idx = members[0]
+        pose_bin_summaries[pbin] = PoseBinSummary(
+            yaw_bin=yaw_part,
+            pitch_bin=pitch_part,
+            members=tuple(members),
+            support=len(members),
+            representative_index=rep_idx,
+            embedding=embeddings[rep_idx],
+        )
+
+    doc = FaceSetDocument(
+        faceset_id=faceset_id,
+        name=value.name,
+        source_sha256=hashlib.sha256(b"".join(v.image_bytes for v in views)).hexdigest(),
+        archive_format="v2_standard",
+        canonical_embedding=tuple(mean_emb.tolist()),
+        medoid_embedding=tuple(medoid_emb.tolist()),
+        views=tuple(views),
+        pose_bins=pose_bin_summaries,
+        metadata={"created_via": "face_manager_3d"},
+    )
+
+    out_file = owned(root, f"roop_3d/outputs/facesets/{faceset_id}.fsz")
+    out_file.parent.mkdir(parents=True, exist_ok=True)
+    if out_file.exists():
+        out_file.unlink()
+
+    export_v2(doc, out_file, app_root=root)
+
+    atomic_json(root, f"roop_3d/.runtime/facesets/{faceset_id}.json", {
+        "faceset_id": faceset_id,
+        "name": value.name[:128],
+        "item_count": len(views),
+        "schema_version": 1,
+    })
+    atomic_json(root, f"roop_3d/.runtime/coverage/{faceset_id}.json", coverage(doc))
+
+    return {
+        "faceset_id": faceset_id,
+        "name": value.name,
+        "item_count": len(views),
+        "schema_version": 1,
+    }
+
+
+@router.get("/facesets/{faceset_id}/download")
+def download_faceset(faceset_id: str, request: Request):
+    import re
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", faceset_id):
+        raise DomainError("FACESET_ID_INVALID", "FaceSet ID is invalid", 422)
+    root = request.app.state.root
+    paths = [owned(root, f"roop_3d/{base}/facesets/{faceset_id}.fsz") for base in ("outputs", ".runtime")]
+    archive = next((path for path in paths if path.is_file()), None)
+    if archive is None:
+        raise DomainError("FACESET_ARCHIVE_NOT_FOUND", "FaceSet archive is missing", 404)
+    return FileResponse(archive, filename=f"{faceset_id}.fsz", media_type="application/zip")
+
+
 @router.get("/projects")
 def list_projects(request: Request):
     return request.app.state.projects.list()

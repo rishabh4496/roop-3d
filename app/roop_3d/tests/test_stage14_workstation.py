@@ -235,3 +235,57 @@ def test_prepared_checkpoint_refuses_changed_faceset_archive_before_model_creati
     with pytest.raises(DomainError) as error:
         worker.runner.prepare(record)
     assert error.value.code == "JOB_SOURCE_CHANGED"
+
+
+def test_build_and_download_faceset(tmp_path):
+    import base64
+    app, payload, _ = project_fixture(tmp_path)
+    tiny_png = cv2.imencode(".png", np.zeros((48, 48, 3), dtype=np.uint8))[1].tobytes()
+    b64 = base64.b64encode(tiny_png).decode("utf-8")
+
+    build_payload = {
+        "name": "Actor Hero",
+        "faceset_id": "actor_hero",
+        "views": [
+            {
+                "image_base64": b64,
+                "yaw": 0.0,
+                "pitch": 0.0,
+                "roll": 0.0,
+                "embedding": [1.0] + [0.0] * 511,
+            },
+            {
+                "image_base64": b64,
+                "yaw": -25.0,
+                "pitch": 5.0,
+                "roll": 0.0,
+                "embedding": [0.98] + [0.02] * 511,
+            },
+            {
+                "image_base64": b64,
+                "yaw": 40.0,
+                "pitch": -2.0,
+                "roll": 0.0,
+                "embedding": [0.95] + [0.05] * 511,
+            },
+        ],
+    }
+
+    with TestClient(app, base_url="http://127.0.0.1:8030") as client:
+        res = client.post("/api/v1/facesets/build", json=build_payload)
+        assert res.status_code == 201, res.text
+        data = res.json()
+        assert data["faceset_id"] == "actor_hero"
+        assert data["item_count"] == 3
+
+        # Coverage inspection
+        cov_res = client.get("/api/v1/facesets/actor_hero/coverage")
+        assert cov_res.status_code == 200
+        cov = cov_res.json()
+        assert len(cov["views"]) == 3
+
+        # Download archive
+        dl_res = client.get("/api/v1/facesets/actor_hero/download")
+        assert dl_res.status_code == 200
+        assert dl_res.headers["content-type"] == "application/zip"
+        assert len(dl_res.content) > 0

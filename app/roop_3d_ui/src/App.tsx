@@ -6,6 +6,7 @@ import { featureReason, jobActions, mappings, optionReason } from './state';
 import { SettingsInspector } from './SettingsInspector';
 import { VideoViewport, formatTime } from './VideoViewport';
 import { useFaceSelectionStore } from './useFaceSelectionStore';
+import FaceManager from './components/facemgr/FaceManager';
 const PoseCoverageInspector = lazy(() => import('./ThreeViewport').then(module => ({ default: module.PoseCoverageInspector })));
 
 export default function App() {
@@ -21,6 +22,7 @@ export default function App() {
   const [maskBase64, setMaskBase64] = useState<string | null>(null);
   const [busy, setBusy] = useState(''), [error, setError] = useState(''), [notice, setNotice] = useState(''), [uploadProgress, setUploadProgress] = useState(0);
   const [theme, setTheme] = useState(() => localStorage.getItem('roop3d-theme') ?? 'dark');
+  const [route, setRoute] = useState(() => (typeof window !== 'undefined' ? window.location.hash || '#/' : '#/'));
   const fileInput = useRef<HTMLInputElement>(null), sourceInput = useRef<HTMLInputElement>(null), projectInput = useRef<HTMLInputElement>(null);
   const uploadAbort = useRef<AbortController | null>(null), queueKey = useRef({ fingerprint: '', key: '' });
   const currentJob = jobs.find(job => job.job_id === selectedJob) ?? null;
@@ -44,6 +46,11 @@ export default function App() {
   }, []);
   useEffect(() => { void connect(); }, [connect]);
   useEffect(() => { document.documentElement.dataset.theme = theme; localStorage.setItem('roop3d-theme', theme); }, [theme]);
+  useEffect(() => {
+    const onHashChange = () => setRoute(window.location.hash || '#/');
+    window.addEventListener('hashchange', onHashChange);
+    return () => window.removeEventListener('hashchange', onHashChange);
+  }, []);
   useEffect(() => {
     let refresh: ReturnType<typeof setTimeout> | undefined;
     const events = new EventConnection(`${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/api/v1/ws/events`, event => {
@@ -148,12 +155,34 @@ export default function App() {
   const checkpointAllowed = !!currentJob && jobActions(caps, currentJob.state).includes('resume');
   return <div className="workstation">
     <header className="app-header"><a className="brand" href="/" aria-label="Roop 3D home"><span className="brand-mark">R<span>3</span></span><strong>roop<span>3D</span></strong></a><span className="header-divider"/><span className="workspace-label">VIDEO WORKSTATION</span>
+      <nav className="header-nav" aria-label="Workstation View Modes">
+        <a href="#/" className={`nav-tab ${route !== '#/facemgr' ? 'active' : ''}`}>Workstation</a>
+        <a href="#/facemgr" className={`nav-tab ${route === '#/facemgr' ? 'active' : ''}`}>Face Manager</a>
+      </nav>
       <div className="project-name"><input aria-label="Project name" maxLength={128} value={projectName} onChange={event => setProjectName(event.target.value)} /><span>{projectDirty ? 'UNSAVED' : 'SAVED'}</span></div>
       <span className="local-status"><i className={`dot ${connection === 'online' ? 'mint' : 'amber'}`}/>{connection === 'online' ? 'Local service' : connection}</span><button className="icon-button" aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} theme`} onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}>{theme === 'dark' ? '☀' : '◐'}</button>
       <button className="button" disabled={!!reason('projects') || !!busy} title={reason('projects') ?? ''} onClick={() => { setProjectsOpen(true); void refreshProjects(); }}>Projects</button><button className="button" disabled={!!reason('projects') || !inspection || !!busy} onClick={saveProject}>Save project</button>
     </header>
     {(error || notice || busy) && <div className={`notification ${error ? 'error' : ''}`} role={error ? 'alert' : 'status'}><span>{error || busy || notice}</span>{busy === 'Importing asset' && <><progress value={uploadProgress} max={1}/><button onClick={() => uploadAbort.current?.abort()}>Cancel import</button></>}{error && <button onClick={() => void connect()}>Reconnect</button>}{!busy && <button aria-label="Dismiss message" onClick={() => { setError(''); setNotice(''); }}>×</button>}</div>}
-    <div className="workstation-body"><aside className="asset-sidebar"><div className="section-title"><span>ASSET LIBRARY</span><span className="muted">01</span></div><div className="asset-actions"><button className="button full primary-soft" disabled={!!reason('uploads') || !!busy} title={reason('uploads') ?? ''} onClick={() => fileInput.current?.click()}>＋ Import target video</button><input ref={fileInput} hidden type="file" accept=".mp4,.mov,.mkv,.avi,.webm,.m4v,.ts" onChange={event => { importAsset(event.target.files?.[0]); event.target.value = ''; }} /></div>
+    {route === '#/facemgr' ? (
+      <FaceManager
+        sources={sources}
+        target={target}
+        inspection={inspection}
+        onRefreshSources={refreshSources}
+        onAssignSource={(clusterId, facesetId) => {
+          setAssigned(previous => {
+            const next = { ...previous };
+            if (facesetId) next[clusterId] = facesetId;
+            else delete next[clusterId];
+            return next;
+          });
+          if (facesetId) setSourceId(facesetId);
+        }}
+        onBackToWorkstation={() => { window.location.hash = '#/'; }}
+      />
+    ) : (
+      <div className="workstation-body"><aside className="asset-sidebar"><div className="section-title"><span>ASSET LIBRARY</span><span className="muted">01</span></div><div className="asset-actions"><button className="button full primary-soft" disabled={!!reason('uploads') || !!busy} title={reason('uploads') ?? ''} onClick={() => fileInput.current?.click()}>＋ Import target video</button><input ref={fileInput} hidden type="file" accept=".mp4,.mov,.mkv,.avi,.webm,.m4v,.ts" onChange={event => { importAsset(event.target.files?.[0]); event.target.value = ''; }} /></div>
       <div className={`target-asset ${target ? 'loaded' : ''}`}><span className="asset-symbol">▤</span><div><strong>{target ? target.split('/').at(-1) : 'No target loaded'}</strong><small>{probe ? `${probe.width} × ${probe.height} · ${probe.fps_rational ?? '?'} fps` : 'Your files stay on this machine'}</small></div></div>
       <div className="section-title spaced"><span>SOURCE IDENTITIES</span><span>{sources.length.toString().padStart(2, '0')}</span></div><button className="button full" disabled={!!reason('uploads') || !!busy} onClick={() => sourceInput.current?.click()}>＋ Add .fsz FaceSet</button><input ref={sourceInput} hidden type="file" accept=".fsz" onChange={event => { importAsset(event.target.files?.[0]); event.target.value = ''; }} />
       <div className="source-list">{sources.map((source, index) => <button className={`source-card ${sourceId === source.faceset_id ? 'selected' : ''}`} key={source.faceset_id} onClick={() => setSourceId(source.faceset_id)}><span className="source-avatar">{(index + 1).toString().padStart(2, '0')}</span><span><strong>{source.name}</strong><small>{source.item_count} observed views</small></span><span className="source-check">{sourceId === source.faceset_id ? '●' : '○'}</span></button>)}{!sources.length && <p className="muted empty-note">Load an observed FaceSet to assign an identity to a target track.</p>}</div>
@@ -179,7 +208,7 @@ export default function App() {
         {!jobs.length && <p className="muted empty-note">Your queue is clear. Map a target face to begin a local render.</p>}{[...jobs].reverse().map(job => <div className={`job ${selectedJob === job.job_id ? 'selected' : ''}`} key={job.job_id}><button className="job-select" onClick={() => showJob(job)}><span className={`state-dot ${job.state}`}/><span><strong>{job.request.target_path.split('/').at(-1)}</strong><small>{job.job_id.slice(0, 8)} · {job.progress.stage}</small></span></button><div className="job-progress"><span className={`state-badge ${job.state}`}>{job.state}</span><span>{job.progress.frame}{job.progress.total_frames ? ` / ${job.progress.total_frames}` : ''} frames{job.progress.fps > 0 ? ` · ${job.progress.fps.toFixed(1)} fps` : ''}</span><progress max={job.progress.total_frames ?? 1} value={job.progress.total_frames ? job.progress.frame : undefined}/>{job.failure && <small className="inline-warning">{job.failure.message}</small>}</div><div className="job-actions">{jobActions(caps, job.state).map(action => <button className="button small" key={action} disabled={!!busy} onClick={() => controlJob(job, action)}>{action}</button>)}{job.output && <a className="button small" href={`/api/v1/media/content?${new URLSearchParams({ path: job.output.output_path })}`} download>Output ↗</a>}</div></div>)}
         <label className="checkpoint-option"><input type="checkbox" checked={includeCheckpoint && checkpointAllowed} disabled={!checkpointAllowed} onChange={event => setIncludeCheckpoint(event.target.checked)}/>Include selected paused/interrupted checkpoint when saving a project</label>
       </>}</section>
-    </main><aside className="inspector-sidebar"><SettingsInspector caps={caps} config={config} save={saveSettings} busy={!!busy}/><Suspense fallback={<p className="muted empty-note">Loading pose inspection…</p>}><PoseCoverageInspector coverage={coverage} track={currentTrack} mesh={mesh}/></Suspense><label className="reconstruction-choice">Reconstructed artifact<select value="" disabled={!target || !reconstructions.length || !!reason('reconstruction_viewer')} onChange={event => { const id = event.target.value; if (!id) { setMesh(null); return; } void run('Verifying reconstruction', async () => setMesh(await api<Reconstruction>(`/reconstructions/${id}?${new URLSearchParams({ target_path: target })}`))); }}><option value="">{mesh ? 'Choose another artifact' : 'No reconstruction loaded'}</option>{reconstructions.map(item => <option key={item.reconstruction_id} value={item.reconstruction_id}>{item.reconstruction_id.slice(0, 12)}</option>)}</select></label>{mesh && <button className="button small" onClick={() => setMesh(null)}>Show pose coverage</button>}</aside></div>
+    </main><aside className="inspector-sidebar"><SettingsInspector caps={caps} config={config} save={saveSettings} busy={!!busy}/><Suspense fallback={<p className="muted empty-note">Loading pose inspection…</p>}><PoseCoverageInspector coverage={coverage} track={currentTrack} mesh={mesh}/></Suspense><label className="reconstruction-choice">Reconstructed artifact<select value="" disabled={!target || !reconstructions.length || !!reason('reconstruction_viewer')} onChange={event => { const id = event.target.value; if (!id) { setMesh(null); return; } void run('Verifying reconstruction', async () => setMesh(await api<Reconstruction>(`/reconstructions/${id}?${new URLSearchParams({ target_path: target })}`))); }}><option value="">{mesh ? 'Choose another artifact' : 'No reconstruction loaded'}</option>{reconstructions.map(item => <option key={item.reconstruction_id} value={item.reconstruction_id}>{item.reconstruction_id.slice(0, 12)}</option>)}</select></label>{mesh && <button className="button small" onClick={() => setMesh(null)}>Show pose coverage</button>}</aside></div>)}
     <footer className="app-footer"><span>ROOP 3D / LOCAL WORKSTATION</span><span>Observed identities. Explicit processing. Synthetic media.</span><span>API :{config?.port ?? '—'}</span></footer>
     {projectsOpen && <div className="modal-backdrop" onClick={() => setProjectsOpen(false)}><section role="dialog" aria-modal="true" aria-labelledby="projects-title" className="project-modal" onClick={event => event.stopPropagation()}><div className="panel-heading"><div><span className="eyebrow">VERSIONED .R3DP MANIFESTS</span><h2 id="projects-title">Project library</h2></div><button aria-label="Close projects" className="icon-button" onClick={() => setProjectsOpen(false)}>×</button></div><p className="muted">Reopening verifies target, inspection, FaceSet, and model hashes. Project files contain references and settings, never raw media.</p><button className="button" disabled={!!busy} onClick={() => projectInput.current?.click()}>Import .r3dp</button><input ref={projectInput} hidden type="file" accept=".r3dp,application/json" onChange={event => { importProject(event.target.files?.[0]); event.target.value = ''; }}/>{!projects.length && <p className="empty-note muted">No saved projects yet.</p>}{projects.map(item => <div key={item.project_id} className="saved-project"><div><strong>{item.name}</strong><small>{new Date(item.saved_at).toLocaleString()} · checkpoint {item.last_completed_frame >= 0 ? item.last_completed_frame : 'none'}</small></div><button className="button small" disabled={!!busy} onClick={() => openProject(item.project_id)}>Verify & open</button><a className="button small" href={`/api/v1/projects/${item.project_id}/download`} download>Export</a></div>)}{project?.checkpoint_job_id && <button className="button accent" disabled={!!busy || !!reason('queue')} onClick={() => void run('Verifying checkpoint continuation', async () => { const resumed = await post<Job>(`/projects/${project.project_id}/resume`, {}); setSelectedJob(resumed.job_id); await refreshJobs(); setProjectsOpen(false); })}>Verify & resume {project.name}</button>}</section></div>}
   </div>;

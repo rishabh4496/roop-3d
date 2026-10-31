@@ -303,7 +303,7 @@ function CanonicalHeadMesh({ pose, mode, mesh }) {
 /**
  * Interactive FaceSet Orientation Sphere (Heatmap of observed angles).
  */
-function FaceSetOrientationSphere({ lattice }) {
+export function FaceSetOrientationSphere({ lattice }) {
   // Wireframe guide circles
   const circleGeom = useMemo(() => {
     const pts = [];
