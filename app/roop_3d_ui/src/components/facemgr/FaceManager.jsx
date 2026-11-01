@@ -1,19 +1,15 @@
+import { rankClusters, poseGrid } from './faceBank';
 import NumericInput from '../controls/NumericInput';
-import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { Canvas } from '@react-three/fiber';
 import { OrbitControls } from '@react-three/drei';
-import * as THREE from 'three';
 import {
   POSE_BUCKETS,
   POSE_BUCKET_CONFIG,
   classifyPoseBucket,
-  dbscanClustering,
-  buildZip,
-  buildFaceSetManifest,
 } from './fszBuilder';
 import { generateFibonacciSphere, projectViewsToLattice, FaceSetOrientationSphere } from '../three/PoseGeometryViewer';
-import { useFaceSelectionStore } from '../../useFaceSelectionStore';
-import { post } from '../../api';
+import { api, post } from '../../api';
 import FacesetLibrary from './FacesetLibrary';
 
 /**
@@ -37,11 +33,6 @@ export function extractFacesFromInspection(inspection, target = '') {
       ? (track.pose_range.roll_degrees[0] + track.pose_range.roll_degrees[1]) / 2
       : 0;
 
-    const emb = new Array(512).fill(0);
-    const seed = track.track_id.charCodeAt(track.track_id.length - 1) || 1;
-    emb[seed % 512] = 0.9;
-    emb[(seed + 1) % 512] = 0.3;
-
     extracted.push({
       id: `face_${faceIdCounter++}`,
       sourceFile: target ? target.split('/').at(-1) : track.track_id,
@@ -49,8 +40,8 @@ export function extractFacesFromInspection(inspection, target = '') {
       yaw: yawAvg,
       pitch: pitchAvg,
       roll: rollAvg,
-      confidence: 0.98,
-      embedding: emb,
+      confidence: track.confidence ?? null,
+      embedding: track.embedding || track.centroid || null,
       poseBucket: classifyPoseBucket(yawAvg, pitchAvg),
       trackId: track.track_id,
     });
@@ -94,10 +85,45 @@ export default function FaceManager({
   const [personNames, setPersonNames] = useState({});
   const [isProcessing, setIsProcessing] = useState(false);
   const [statusNotice, setStatusNotice] = useState('');
+  const [assignedSource, setAssignedSource] = useState('');
+  const [bank, setBank] = useState(null), [bankTarget, setBankTarget] = useState('');
+  const [archiveMatrix, setArchiveMatrix] = useState(null), [matrixRevision, setMatrixRevision] = useState(0), [bankRevision, setBankRevision] = useState(0);
+  const bankRef = useRef(null), assignSourceRef = useRef(onAssignSource);
+  assignSourceRef.current = onAssignSource;
+  bankRef.current = bank;
+  const bankReady = bankTarget === target && !!bank;
+  const bankEdits = useRef(Promise.resolve());
+  const persistBankEdit = (action, clusterIds, extra = {}) => {
+    const pending=bankEdits.current.catch(()=>{}).then(async()=>{
+      const result = await post('/faces/bank/edit',{target_media_path:target,revision:bankRef.current.revision,action,cluster_ids:clusterIds,...extra});
+      bankRef.current=result;setBank(result);
+      return result;
+    });
+    bankEdits.current=pending;
+    return pending;
+  };
+  useEffect(()=>{
+    if (!target || !inspection?.inspection_id) {setBank(null);setBankTarget('');return;}
+    setBank(null);setBankTarget('');setAssignedSource('');
+    const controller=new AbortController();
+    void post('/faces/bank/discover',{target_media_path:target,inspection_id:inspection.inspection_id},{signal:controller.signal})
+      .then(result=>{setBank(result);setBankTarget(target);setSelectedPersonId(null);setPersonNames({});
+        for (const person of result.clusters) if (person.faceset_id) for (const track of person.track_ids) assignSourceRef.current?.(track,person.faceset_id);
+        if (result.unresolved_tracks.length) setStatusNotice(`${result.unresolved_tracks.length} tracks need a clearer observed frame before banking.`);
+      }).catch(error=>{if(error.name!=='AbortError') setStatusNotice(`Face bank: ${error.message}`);});
+    return ()=>controller.abort();
+  },[target,inspection?.inspection_id,bankRevision]);
+  useEffect(()=>{
+    setArchiveMatrix(null);
+    if(!assignedSource) return;
+    const controller=new AbortController();
+    void api(`/facesets/${encodeURIComponent(assignedSource)}/pose_matrix`,{signal:controller.signal})
+      .then(setArchiveMatrix).catch(error=>{if(error.name!=='AbortError')setStatusNotice(error.message);});
+    return ()=>controller.abort();
+  },[assignedSource,matrixRevision]);
   const [activeTab, setActiveTab] = useState('builder'); // 'builder' | 'clustering' | 'sphere'
 
   const fileInputRef = useRef(null);
-  const videoInputRef = useRef(null);
 
   // Extract initial faces from inspection if available and faces is empty
   useEffect(() => {
@@ -109,16 +135,20 @@ export default function FaceManager({
     }
   }, [inspection, target, faces.length]);
 
-  // Run DBSCAN Clustering on ArcFace embeddings
+  // Target bank ranks are durable; local imported photos use cosine grouping.
   const clusters = useMemo(() => {
+    if (bankReady) return [
+      ...bank.clusters.map(person=>({...person,name:personNames[person.id] ?? person.name})),
+      ...rankClusters(faces.filter(face=>!face.trackId),dbscanEps).map(person=>({...person,local:true,name:personNames[person.id] ?? person.name})),
+    ];
     if (faces.length === 0) return [];
-    const clustered = dbscanClustering(faces, dbscanEps, 1);
+    const clustered = rankClusters(faces, dbscanEps);
     // Apply custom names
     return clustered.map(c => ({
       ...c,
       name: personNames[c.id] || c.name,
     }));
-  }, [faces, dbscanEps, personNames]);
+  }, [faces, dbscanEps, personNames, bankReady, bank]);
 
   // Ensure an active person is selected
   useEffect(() => {
@@ -130,6 +160,10 @@ export default function FaceManager({
   const activePerson = useMemo(() => {
     return clusters.find(c => c.id === selectedPersonId) || clusters[0] || null;
   }, [clusters, selectedPersonId]);
+
+  useEffect(()=>{
+    if(bankReady && !activePerson?.local) setAssignedSource(activePerson?.faceset_id ?? '');
+  },[bankReady,activePerson?.id,activePerson?.faceset_id,activePerson?.local]);
 
   // Sort active person's faces into the 5 Pose Angle Buckets
   const bucketedFaces = useMemo(() => {
@@ -180,55 +214,16 @@ export default function FaceManager({
   }, [lattice]);
 
   // Handle Photo Upload
-  const handlePhotoUpload = (e) => {
-    const files = Array.from(e.target.files || []);
-    if (files.length === 0) return;
-
+  const handlePhotoUpload = async (event) => {
     setIsProcessing(true);
-    setStatusNotice(`Processing ${files.length} source photos…`);
-
-    const newFaces = [];
-    let processedCount = 0;
-
-    files.forEach((file, idx) => {
-      const reader = new FileReader();
-      reader.onload = () => {
-        // Mock estimate realistic multi-angle distribution
-        const anglePresets = [
-          { yaw: 0, pitch: 0 },
-          { yaw: -22, pitch: 4 },
-          { yaw: 24, pitch: -2 },
-          { yaw: -48, pitch: 10 },
-          { yaw: 52, pitch: -5 },
-          { yaw: 5, pitch: 22 }, // Looking up
-          { yaw: -3, pitch: -20 }, // Looking down
-        ];
-        const angle = anglePresets[idx % anglePresets.length];
-        const emb = new Array(512).fill(0);
-        emb[0] = 0.95;
-        emb[1 + (idx % 10)] = 0.2;
-
-        newFaces.push({
-          id: `face_upload_${Date.now()}_${idx}`,
-          sourceFile: file.name,
-          thumbnailUrl: reader.result,
-          yaw: angle.yaw,
-          pitch: angle.pitch,
-          roll: 0,
-          confidence: 0.95,
-          embedding: emb,
-          poseBucket: classifyPoseBucket(angle.yaw, angle.pitch),
-        });
-
-        processedCount++;
-        if (processedCount === files.length) {
-          setFaces(prev => [...prev, ...newFaces]);
-          setIsProcessing(false);
-          setStatusNotice(`Imported ${newFaces.length} multi-angle face views.`);
-        }
-      };
-      reader.readAsDataURL(file);
-    });
+    try {
+      for (const file of Array.from(event.target.files || [])) {
+        const image = await new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(reader.result);reader.onerror=reject;reader.readAsDataURL(file);});
+        const result=await post('/faces/analyze_photo',{image_base64:image});
+        setFaces(previous=>[...previous,...result.faces.map(face=>({...face,sourceFile:file.name}))]);
+      }
+      setStatusNotice('Imported measured face crops and identities.');
+    } catch(error) {setStatusNotice(error.message);} finally {setIsProcessing(false);}
   };
 
   // Rename an identity
@@ -242,6 +237,13 @@ export default function FaceManager({
   // Merge selected clusters
   const handleMergeSelected = () => {
     if (selectedForMerge.length < 2) return;
+    if(bankReady && selectedForMerge.some(id=>bank.clusters.some(person=>person.id===id)) && selectedForMerge.some(id=>!bank.clusters.some(person=>person.id===id))) {
+      setStatusNotice('Select target people or imported source-photo groups for each merge.');return;
+    }
+    if (bankReady && selectedForMerge.every(id=>bank.clusters.some(person=>person.id===id))) {
+      void persistBankEdit('merge',selectedForMerge).then(()=>{setSelectedForMerge([]);setStatusNotice('Merged person tracks; discovery ranks preserved.');}).catch(error=>setStatusNotice(error.message));
+      return;
+    }
     const primaryId = selectedForMerge[0];
     const targetClusterFaces = [];
 
@@ -252,14 +254,14 @@ export default function FaceManager({
       }
     }
 
-    // Force their embeddings to share primary cluster's centroid
+    // Store the explicit merge without replacing original measurements.
     const primaryCluster = clusters.find(c => c.id === primaryId);
-    const primaryEmb = primaryCluster?.faces[0]?.embedding || new Array(512).fill(0);
+
 
     setFaces(prev =>
       prev.map(f => {
         if (targetClusterFaces.some(tf => tf.id === f.id)) {
-          return { ...f, embedding: [...primaryEmb] };
+          return { ...f, manualGroup: primaryId };
         }
         return f;
       })
@@ -272,51 +274,27 @@ export default function FaceManager({
   // Batch assign replacement faces to workstation target track
   const handleBatchAssign = (trackId) => {
     if (!activePerson || !onAssignSource) return;
-    onAssignSource(trackId, activePerson.id);
+    if (!assignedSource) return;
+    onAssignSource(trackId, assignedSource);
     setStatusNotice(`Assigned "${activePerson.name}" (${activePerson.faces.length} views) to ${trackId}.`);
   };
 
   // Export as .fsz FaceSet archive (Local Download)
+  const buildMeasuredArchive = async () => {
+    if (!activePerson?.faces.length) throw new Error('Select measured source faces');
+    const views = activePerson.faces.map(face=>{
+      if (!face.embedding?.length || !face.landmarks || !face.bbox || !face.thumbnailUrl?.includes('base64,')) throw new Error('Import measured source photos before exporting this identity');
+      return {image_base64:face.thumbnailUrl.split('base64,')[1], embedding:face.embedding, landmarks:face.landmarks,bbox:face.bbox,yaw:face.yaw,pitch:face.pitch,roll:face.roll};
+    });
+    return post('/facesets/build',{name:activePerson.name,faceset_id:activePerson.id.toLowerCase().replace(/[^a-z0-9_-]/g,'_').slice(0,32),views});
+  };
   const handleDownloadFsz = async () => {
-    if (!activePerson || activePerson.faces.length === 0) return;
+    setIsProcessing(true);
     try {
-      setStatusNotice('Packaging .fsz archive container…');
-      const manifest = buildFaceSetManifest(activePerson.id, activePerson.name, activePerson.faces);
-
-      const zipFiles = [
-        {
-          name: 'metadata.json',
-          data: JSON.stringify(manifest, null, 2),
-        },
-      ];
-
-      // Add image crops
-      for (let i = 0; i < activePerson.faces.length; i++) {
-        const face = activePerson.faces[i];
-        let bytes;
-        if (face.thumbnailUrl?.includes('base64,')) {
-          const b64 = face.thumbnailUrl.split('base64,')[1];
-          const binStr = atob(b64);
-          bytes = new Uint8Array(binStr.length);
-          for (let j = 0; j < binStr.length; j++) bytes[j] = binStr.charCodeAt(j);
-        } else {
-          // Minimal mock PNG bytes
-          bytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
-        }
-        zipFiles.push({ name: `${i}.png`, data: bytes });
-      }
-
-      const zipBlob = buildZip(zipFiles);
-      const url = URL.createObjectURL(zipBlob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `${activePerson.name.toLowerCase().replace(/\s+/g, '_')}.fsz`;
-      a.click();
-      URL.revokeObjectURL(url);
-      setStatusNotice(`Downloaded ${a.download} successfully.`);
-    } catch (err) {
-      setStatusNotice(`Export failed: ${err.message}`);
-    }
+      const result=assignedSource ? (sources.find(source=>source.faceset_id===assignedSource) ?? {faceset_id:assignedSource,name:assignedSource}) : await buildMeasuredArchive();
+      const anchor=document.createElement('a'); anchor.href=`/api/v1/facesets/${encodeURIComponent(result.faceset_id)}/download`;anchor.download=`${result.name}.fsz`;anchor.click();
+      await onRefreshSources?.(); setStatusNotice('Exported measured .fsz archive.');
+    } catch(error) {setStatusNotice(error.message);} finally {setIsProcessing(false);}
   };
 
   // Save FaceSet to Local Workstation Library via Backend API
@@ -326,25 +304,7 @@ export default function FaceManager({
       setIsProcessing(true);
       setStatusNotice('Saving FaceSet to workstation library…');
 
-      const viewsPayload = activePerson.faces.map(f => {
-        let b64 = f.thumbnailUrl || '';
-        if (b64.includes('base64,')) b64 = b64.split('base64,')[1];
-        else b64 = btoa('dummy_face_image_bytes');
-        return {
-          image_base64: b64,
-          yaw: f.yaw || 0,
-          pitch: f.pitch || 0,
-          roll: f.roll || 0,
-          embedding: f.embedding || undefined,
-          pose_bin: f.poseBucket || classifyPoseBucket(f.yaw || 0, f.pitch || 0),
-        };
-      });
-
-      const result = await post('/facesets/build', {
-        name: activePerson.name,
-        faceset_id: activePerson.id.toLowerCase().replace(/[^a-z0-9_-]/g, '_').slice(0, 32),
-        views: viewsPayload,
-      });
+      const result = await buildMeasuredArchive();
 
       if (onRefreshSources) await onRefreshSources();
       setStatusNotice(`Saved "${result.name}" (${result.item_count} views) to workstation FaceSet catalog.`);
@@ -414,7 +374,7 @@ export default function FaceManager({
             ref={fileInputRef}
             type="file"
             multiple
-            accept="image/*"
+            accept=".png,.jpg,.jpeg"
             hidden
             onChange={handlePhotoUpload}
           />
@@ -423,8 +383,8 @@ export default function FaceManager({
             type="button"
             className="button accent"
             onClick={handleSaveToLibrary}
-            disabled={!activePerson || isProcessing}
-            title="Register FaceSet into workstation library for instant swapping"
+            disabled={!activePerson || isProcessing || (bankReady && !activePerson.local)}
+            title="Register measured source photos as a FaceSet into workstation library for instant swapping"
           >
             Save to FaceSet Library ↗
           </button>
@@ -475,9 +435,10 @@ export default function FaceManager({
             )}
           </div>
 
-          {/* DBSCAN Cosine Threshold Slider */}
+          <button className="button small" disabled={!target || !inspection} onClick={()=>setBankRevision(value=>value+1)}>Refresh Person Bank</button>
+          {/* Local photo cosine threshold */}
           <div className="clustering-slider-box">
-            <NumericInput id="faceset-cluster-tolerance" label={`Cluster Tolerance (DBSCAN ε: ${dbscanEps.toFixed(2)})`} value={dbscanEps} min={.15} max={.65} step={.01} onChange={setDbscanEps} title="Adjust ArcFace cosine distance clustering tolerance" />
+            <NumericInput id="faceset-cluster-tolerance" disabled={bankReady && !activePerson?.local} label={bankReady && !activePerson?.local ? 'Target bank minimum cosine similarity: 0.60' : `Local photo cosine distance: ${dbscanEps.toFixed(2)}`} value={dbscanEps} min={.15} max={.65} step={.01} onChange={setDbscanEps} title="Adjust ArcFace cosine distance for imported photos" />
           </div>
 
           {/* Identities List */}
@@ -520,6 +481,7 @@ export default function FaceManager({
                       className="person-name-input"
                       value={personNames[person.id] || person.name}
                       onChange={(e) => handleRenamePerson(person.id, e.target.value)}
+                      onBlur={() => {if(bankReady && !person.local && personNames[person.id] !== undefined) void persistBankEdit('rename',[person.id],{name:personNames[person.id]}).catch(error=>setStatusNotice(error.message));}}
                       onClick={(e) => e.stopPropagation()}
                       title="Click to rename identity"
                     />
@@ -573,7 +535,7 @@ export default function FaceManager({
                 type="button"
                 className="button small"
                 onClick={handleDownloadFsz}
-                disabled={!activePerson}
+                disabled={!activePerson && !assignedSource}
                 title="Download .fsz FaceSet archive to local disk"
               >
                 ⤓ Download .fsz
@@ -581,6 +543,27 @@ export default function FaceManager({
             </div>
           </div>
 
+          <label>Source identity<select aria-label="Bank source identity" value={assignedSource} onChange={event=>{
+            const source=event.target.value;setAssignedSource(source);
+            if(bankReady && activePerson && !activePerson.local) void persistBankEdit('assign',[activePerson.id],{faceset_id:source || null}).then(()=>{
+              for(const track of activePerson.track_ids) onAssignSource?.(track,source || null);
+            }).catch(error=>setStatusNotice(error.message));
+          }}><option value="">Select .fsz identity</option>{sources.map(source=><option key={source.faceset_id} value={source.faceset_id}>{source.name}</option>)}</select></label>
+          <button className="button" disabled={!target || !assignedSource || isProcessing} onClick={async()=>{
+            setIsProcessing(true);
+            try {
+              const result=await post('/faces/fill_missing_angles',{target_media_path:target,faceset_id:assignedSource});
+              setMatrixRevision(value=>value+1);
+              await onRefreshSources?.(); setStatusNotice(`Added ${result.added.length} measured angles to ${assignedSource}. Scanned ${result.sampled_frames} frames (${result.stop_reason}).`);
+            } catch(error) { setStatusNotice(error.message); } finally {setIsProcessing(false);}
+          }}>Fill Missing Angles from Current Target Video</button><small>Only observed faces matching the selected source identity are added. Long scans stop at the reported frame or time budget.</small>
+          <div role="grid" aria-label="3 by 3 Yaw x Pitch Pose Matrix" style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:8}}>
+            {(archiveMatrix?.faceset_id === assignedSource ? archiveMatrix.cells : poseGrid(activePerson?.faces || [])).map(cell=><div role="gridcell" key={cell.cell ?? `${cell.yaw}:${cell.pitch}`} style={{padding:12,border:'1px solid currentColor'}}>
+              <b>{cell.cell ?? `Yaw ${cell.yaw} / Pitch ${cell.pitch}`}</b><p>{(cell.support ?? cell.faces?.length ?? 0) ? `${cell.support ?? cell.faces.length} observed` : 'Missing'}</p>
+              {(cell.thumbnailUrl || cell.faces?.[0]?.thumbnailUrl) && <img width="64" src={cell.thumbnailUrl || cell.faces?.[0]?.thumbnailUrl} alt="Best measured cell view"/>}
+              <small>Sharpness: {cell.best?.sharpness ?? cell.faces?.[0]?.sharpness ?? 'unmeasured'} / Quality: {cell.best?.quality ?? cell.faces?.[0]?.quality ?? 'unmeasured'}</small>
+            </div>)}
+          </div>
           {/* 5 Pose Columns Grid */}
           <div className="pose-buckets-grid">
             {POSE_BUCKET_CONFIG.map((b) => {

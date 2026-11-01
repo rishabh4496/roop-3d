@@ -10,7 +10,7 @@ import zipfile
 
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import FileResponse
-from pydantic import Field
+from pydantic import Field, model_validator
 from starlette.concurrency import run_in_threadpool
 
 from roop_3d.audit.isolation import sha256_file
@@ -281,7 +281,7 @@ def faceset_views(faceset_id: str, request: Request):
 
 
 class FaceBuildView(Contract):
-    image_base64: str
+    image_base64: str = Field(min_length=1,max_length=22_000_000)
     yaw: float = Field(default=0.0, ge=-90.0, le=90.0)
     pitch: float = Field(default=0.0, ge=-60.0, le=60.0)
     roll: float = Field(default=0.0, ge=-180.0, le=180.0)
@@ -294,7 +294,13 @@ class FaceBuildView(Contract):
 class FaceSetBuildRequest(Contract):
     name: str = Field(min_length=1, max_length=128)
     faceset_id: str | None = Field(default=None, pattern=r"^[A-Za-z0-9_-]{1,64}$")
-    views: list[FaceBuildView] = Field(min_length=1)
+    views: list[FaceBuildView] = Field(min_length=1,max_length=500)
+
+    @model_validator(mode='after')
+    def total_image_budget(self):
+        if sum(len(view.image_base64) for view in self.views)>64_000_000:
+            raise ValueError('FaceSet image payload exceeds 64 MB')
+        return self
 
 
 @router.post("/facesets/build", status_code=201)
@@ -304,10 +310,8 @@ def build_faceset(value: FaceSetBuildRequest, request: Request):
     import uuid
     import numpy as np
     from roop_3d.faceset.schemas import FaceView, QualityMetrics, PoseBinSummary, FaceSetDocument
-    from roop_3d.faceset.faceset_reader import export_v2
     from roop_3d.faceset.pose_selector import classify_pose_bin
 
-    root = request.app.state.root
     faceset_id = value.faceset_id or ("faceset_" + uuid.uuid4().hex[:12])
 
     views = []
@@ -319,29 +323,41 @@ def build_faceset(value: FaceSetBuildRequest, request: Request):
         if "," in raw_b64:
             raw_b64 = raw_b64.split(",", 1)[1]
         try:
-            image_bytes = base64.b64decode(raw_b64)
+            image_bytes = base64.b64decode(raw_b64,validate=True)
         except Exception:
             raise DomainError("IMAGE_DECODE_FAILED", f"View {idx} image is invalid base64", 422)
 
-        if not (image_bytes.startswith(b"\x89PNG") or image_bytes.startswith(b"\xff\xd8")):
-            # Wrap minimal valid PNG header if payload was plain/uncompressed bytes
-            image_bytes = b"\x89PNG\r\n\x1a\n" + image_bytes
-
-        if v.embedding and len(v.embedding) == 512:
-            emb = tuple(v.embedding)
+        import cv2
+        from roop_3d.core.image_bytes import decode_face_image
+        from roop_3d.server.face_extract import _unit
+        from roop_3d.core.pose import estimate_pose_5pt
+        image=decode_face_image(image_bytes)
+        points=v.landmarks
+        bbox=v.bbox
+        if points is None or bbox is None or v.embedding is None:
+            service=request.app.state.face_extract
+            with request.app.state.engine_gate.preview_section():
+                detections,_=service._detector().detect(image,.5)
+                if len(detections)!=1:
+                    raise DomainError('FACE_COUNT_INVALID','Each unmeasured view must contain exactly one detected face',422)
+                detected_box,points=detections[0]
+                embedding=service._recognizer().embed(image,np.asarray(points,np.float32))
+            bbox=tuple(float(x) for x in detected_box)
+            yaw,pitch,roll=estimate_pose_5pt(points).legacy_tuple()
         else:
-            emb_vec = np.zeros(512, dtype=np.float32)
-            emb_vec[idx % 512] = 1.0
-            emb = tuple(emb_vec.tolist())
-
+            embedding=v.embedding
+            yaw,pitch,roll=v.yaw,v.pitch,v.roll
+        emb=tuple(float(x) for x in _unit(np.asarray(embedding)))
+        if len(emb)!=512: raise DomainError('IDENTITY_EMBEDDING_INVALID','Expected a 512-dimensional measured identity',422)
         embeddings.append(emb)
-
-        landmarks = v.landmarks or ((10.0, 10.0), (20.0, 10.0), (15.0, 15.0), (12.0, 20.0), (18.0, 20.0))
-        bbox = v.bbox or (0.0, 0.0, 100.0, 100.0)
+        landmarks=tuple(tuple(float(x) for x in point) for point in points)
+        gray=cv2.cvtColor(image,cv2.COLOR_BGR2GRAY)
+        variance=float(cv2.Laplacian(gray,cv2.CV_64F).var())
+        sharpness=min(1.0,variance/500.0)
         if v.pose_bin:
             pbin = v.pose_bin
         else:
-            pbin = classify_pose_bin(v.yaw, v.pitch)[0]
+            pbin = classify_pose_bin(yaw, pitch)[0]
 
         if pbin not in pose_bins_dict:
             pose_bins_dict[pbin] = []
@@ -354,11 +370,11 @@ def build_faceset(value: FaceSetBuildRequest, request: Request):
                 embedding=emb,
                 landmarks=landmarks,
                 bbox=bbox,
-                yaw=v.yaw,
-                pitch=v.pitch,
-                roll=v.roll,
+                yaw=yaw,
+                pitch=pitch,
+                roll=roll,
                 expression={},
-                quality=QualityMetrics(sharpness=1.0, detector_confidence=1.0, score=1.0),
+                quality=QualityMetrics(sharpness=sharpness, detector_confidence=0.0, score=sharpness, laplacian_variance=variance, blur=1-sharpness, face_pixels=float(image.shape[0]*image.shape[1])),
                 pose_bin=pbin,
                 is_synthetic=False,
                 uv_map_path=None,
@@ -402,20 +418,10 @@ def build_faceset(value: FaceSetBuildRequest, request: Request):
         metadata={"created_via": "face_manager_3d"},
     )
 
-    out_file = owned(root, f"roop_3d/outputs/facesets/{faceset_id}.fsz")
-    out_file.parent.mkdir(parents=True, exist_ok=True)
-    if out_file.exists():
-        out_file.unlink()
-
-    export_v2(doc, out_file, app_root=root)
-
-    atomic_json(root, f"roop_3d/.runtime/facesets/{faceset_id}.json", {
-        "faceset_id": faceset_id,
-        "name": value.name[:128],
-        "item_count": len(views),
-        "schema_version": 1,
-    })
-    atomic_json(root, f"roop_3d/.runtime/coverage/{faceset_id}.json", coverage(doc))
+    with request.app.state.face_extract._lock(faceset_id):
+        request.app.state.face_extract._write_faceset(doc,replace=True)
+    from roop_3d.faceset import pose_matrix
+    pose_matrix.invalidate(faceset_id)
 
     return {
         "faceset_id": faceset_id,

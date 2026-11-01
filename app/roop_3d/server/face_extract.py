@@ -50,7 +50,7 @@ MAX_CLUSTERS = 64
 
 class ExtractRequest(Contract):
     target_media_path: str = Field(min_length=1, max_length=1024)
-    frame_index: int = Field(default=0, ge=0, le=9999)
+    frame_index: int = Field(default=0, ge=0, le=10_000_000)
     face_index: int = Field(default=0, ge=0, le=63)
     destination: Literal["source_gallery", "active_faceset", "target_cluster"]
     faceset_name: str | None = Field(default=None, min_length=1, max_length=128,
@@ -130,8 +130,8 @@ class FaceExtractService:
         return self._digests[key]
 
     # -- extraction -------------------------------------------------------------------
-    def extract(self, request: ExtractRequest) -> dict[str, Any]:
-        image, path = self._frame(request)
+    def extract(self, request: ExtractRequest, *, decoded: tuple[np.ndarray, Path] | None = None) -> dict[str, Any]:
+        image, path = decoded if decoded is not None else self._frame(request)
         detections, _ = self._detector().detect(image, 0.5)
         faces = sorted(detections, key=lambda item: float(np.asarray(item[0])[0]))
         if request.face_index >= len(faces):
@@ -151,7 +151,7 @@ class FaceExtractService:
         face = {
             "face_id": "face_" + uuid.uuid4().hex[:12], "frame_index": request.frame_index, "face_index": request.face_index,
             "bbox": [float(v) for v in box], "landmarks5": points.tolist(), "pose": pose.model_dump(),
-            "pose_cell": pose_cell(pose).name, "embedding_dim": int(embedding.shape[0]),
+            "pose_cell": pose_cell(pose).name, "embedding_dim": int(embedding.shape[0]), "sharpness": sharpness,
             "embedding": [float(x) for x in embedding], "thumbnail_base64": base64.b64encode(jpg.tobytes()).decode("ascii"),
         }
         legacy_yaw, legacy_pitch, legacy_roll = pose.legacy_tuple()
@@ -324,3 +324,131 @@ def extract_from_frame(value: ExtractRequest, request: Request) -> dict[str, Any
 @router.get("/faces/target_clusters")
 def target_clusters(request: Request, target_media_path: str = Query(min_length=1, max_length=1024)) -> dict[str, Any]:
     return request.app.state.face_extract.clusters(target_media_path)
+
+
+class FillAnglesRequest(Contract):
+    target_media_path: str = Field(min_length=1, max_length=1024)
+    faceset_id: str = Field(pattern=r'^[A-Za-z0-9_-]{1,64}$')
+    frames: tuple[int, ...] | None = Field(default=None, min_length=1, max_length=48)
+    max_frames: int = Field(default=100_000,ge=1,le=10_000_000,strict=True)
+    time_budget_seconds: float = Field(default=120,ge=1,le=600)
+
+    @model_validator(mode='after')
+    def frame_bounds(self):
+        if self.frames and any(type(v) is not int or not 0 <= v <= 9999 for v in self.frames):
+            raise ValueError('Explicit frame samples must be integers within 0..9999')
+        return self
+
+
+def scan_missing_angles(service, value):
+    from contextlib import closing
+    import time
+    from roop_3d.media.video_reader import VideoReader
+    _, archive = service._resolve_faceset(value.faceset_id)
+    reader = FaceSetReader(service.state.models, cache_root=service.state.root / 'roop_3d/.runtime/cache')
+    document = reader.read(archive, faceset_id=value.faceset_id)
+    occupied = {pose_cell((v.yaw,v.pitch,v.roll)).name for v in document.views}
+    added, sampled, complete, reason = [], 0, False, 'end_of_video'
+    started=time.monotonic()
+    path,is_image=service._media_file(value.target_media_path)
+    def samples():
+        if value.frames is not None or is_image:
+            for frame in sorted(set(value.frames or (0,))):
+                sample=ExtractRequest(target_media_path=value.target_media_path,frame_index=frame,destination='active_faceset',faceset_name=value.faceset_id)
+                yield frame,service._frame(sample)[0]
+        else:
+            with closing(VideoReader(path,hardware='software').frames()) as frames:
+                for decoded in frames:
+                    yield decoded.index,decoded.image
+    with closing(samples()) as frames:
+        for frame,image in frames:
+            if len(occupied)==9:
+                complete=True;reason='all_cells_populated';break
+            if sampled >= value.max_frames or time.monotonic()-started >= value.time_budget_seconds:
+                reason='scan_budget';break
+            sampled+=1
+            detections, _ = service._detector().detect(image, .5)
+            for index, (_, points) in enumerate(sorted(detections, key=lambda item: float(item[0][0]))):
+                cell = pose_cell(estimate_pose_5pt(points)).name
+                if cell in occupied: continue
+                embedding = service._recognizer().embed(image, np.asarray(points,np.float32))
+                similarity = float(_unit(embedding) @ _unit(np.asarray(document.canonical_embedding)))
+                if similarity < CLUSTER_MATCH_SIMILARITY: continue
+                sample=ExtractRequest(target_media_path=value.target_media_path,frame_index=frame,face_index=index,
+                                      destination='active_faceset',faceset_name=value.faceset_id)
+                result=service.extract(sample,decoded=(image,path))
+                occupied.add(cell)
+                added.append(result)
+        else:
+            complete=len(occupied)==9 or value.frames is None or is_image
+            reason='all_cells_populated' if len(occupied)==9 else 'end_of_video' if complete else 'explicit_samples'
+    return {'added':added,'populated_cells':sorted(occupied),'sampled_frames':sampled,
+            'scan_complete':complete,'stop_reason':reason}
+
+
+@router.post('/faces/fill_missing_angles')
+def fill_missing_angles(value: FillAnglesRequest, request: Request):
+    with request.app.state.engine_gate.preview_section():
+        return scan_missing_angles(request.app.state.face_extract,value)
+
+
+class AnalyzePhotoRequest(Contract):
+    image_base64: str = Field(min_length=1, max_length=16_000_000)
+
+
+def _analyze_photo(value: AnalyzePhotoRequest, request: Request):
+    service = request.app.state.face_extract
+    try:
+        data = base64.b64decode(value.image_base64.split(',')[-1], validate=True)
+    except ValueError:
+        raise DomainError('IMAGE_DECODE_FAILED', 'Invalid image base64', 422)
+    from roop_3d.core.image_bytes import decode_face_image
+    image = decode_face_image(data)
+    detections,_ = service._detector().detect(image,.5)
+    faces=[]
+    for box,points in detections[:32]:
+        crop=aligned_crop(image,points,CROP_SIZE)
+        ok,png=cv2.imencode('.png',crop.image)
+        if not ok: continue
+        yaw,pitch,roll=estimate_pose_5pt(points).legacy_tuple()
+        sharpness=float(min(1,cv2.Laplacian(cv2.cvtColor(crop.image,cv2.COLOR_BGR2GRAY),cv2.CV_64F).var()/500))
+        faces.append({'id':'photo_'+uuid.uuid4().hex[:12], 'thumbnailUrl':'data:image/png;base64,'+base64.b64encode(png).decode(),
+                      'embedding':_unit(service._recognizer().embed(image,np.asarray(points,np.float32))).tolist(),
+                      'yaw':yaw,'pitch':pitch,'roll':roll,'sharpness':sharpness,'quality':sharpness,
+                      'landmarks':transform_points(np.asarray(points,np.float64),crop.matrix).tolist(), 'bbox':[0,0,CROP_SIZE,CROP_SIZE]})
+    return {'faces':faces}
+
+
+@router.post('/faces/analyze_photo')
+def analyze_photo(value: AnalyzePhotoRequest, request: Request):
+    with request.app.state.engine_gate.preview_section():
+        return _analyze_photo(value,request)
+
+
+@router.get('/facesets/{faceset_id}/pose_matrix')
+def archive_pose_matrix(faceset_id: str, request: Request):
+    service=request.app.state.face_extract
+    faceset_id,archive=service._resolve_faceset(faceset_id)
+    reader=FaceSetReader(service.state.models,cache_root=service.state.root/'roop_3d/.runtime/cache')
+    document=reader.read(archive,faceset_id=faceset_id)
+    cells={}
+    from roop_3d.core.pose import ALL_CELLS
+    for cell in ALL_CELLS: cells[cell.name]={'cell':cell.name,'support':0,'views':[]}
+    for view in document.views:
+        cell=pose_cell((view.yaw,view.pitch,view.roll)).name
+        cells[cell]['support']+=1
+        cells[cell]['views'].append(view)
+    for cell in cells.values():
+        views=sorted(cell['views'],key=lambda view:(-view.quality.score,-view.quality.sharpness,view.index))
+        best=views[0] if views else None
+        thumbnail=None
+        if best:
+            image=cv2.imdecode(np.frombuffer(best.image_bytes,np.uint8),cv2.IMREAD_COLOR)
+            if image is not None:
+                ok,data=cv2.imencode('.jpg',cv2.resize(image,(128,128)))
+                if ok: thumbnail='data:image/jpeg;base64,'+base64.b64encode(data).decode()
+        cell['views']=[{'index':view.index,'yaw':view.yaw,'pitch':view.pitch,'roll':view.roll,
+                        'sharpness':view.quality.sharpness,'quality':view.quality.score} for view in views]
+        cell['best']=cell['views'][0] if best else None
+        cell['thumbnailUrl']=thumbnail
+    return {'faceset_id':faceset_id,'item_count':len(document.views),'cells':list(cells.values())}

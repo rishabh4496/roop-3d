@@ -46,6 +46,7 @@ class Replacement:
     method: str
     coverage: np.ndarray | None = None
     projection: PoseBlendResult | None = None
+    landmarks5: np.ndarray | None = None
 
 
 @dataclass(frozen=True)
@@ -117,9 +118,25 @@ class ReferencePipeline:
                 self.release_session()
                 raise
 
+    def configure_temporal(self, settings) -> None:
+        from roop_3d.temporal_stabilizer import TemporalStabilizer
+        config = dict(min_cutoff=settings.temporal_min_cutoff, beta=settings.temporal_beta, d_cutoff=settings.temporal_d_cutoff)
+        if self.tracker is not None:
+            self.tracker.stabilizer = TemporalStabilizer(**config)
+        self.compositor.histogram_stabilizer = TemporalStabilizer(**config)
+        self.swapper.pose_deadband = settings.pose_hysteresis_degrees
+        self.swapper._hysteresis = {}
+
+    def set_frame_timestamp(self, seconds: float) -> None:
+        if not np.isfinite(seconds):
+            raise ValueError('Frame timestamp must be finite')
+        if self.tracker is not None:
+            self.tracker.timestamp_seconds = seconds
+        self.compositor.timestamp_seconds = seconds
+
     @guarded
     def infer_frame(self, image: np.ndarray, *, strength: float = 0.35, pose_blend: float | None = None,
-                    frontalization: float = 0.0, tps_expression: float = 0.0) -> FrameResult:
+                    frontalization: float = 0.0, tps_expression: float = 0.0, identity_blend_t: float | None = None) -> FrameResult:
         with self.lock:
             if not self.prepared or self.tracker is None:
                 raise DomainError("SESSION_NOT_PREPARED", "Prepare a source before frame inference", 409)
@@ -135,6 +152,10 @@ class ReferencePipeline:
             faces = self.tracker.process(image, include203=self.portrait.available and pose_blend is None)
             detection_end = time.perf_counter()
             self.portrait.retain_tracks(self.tracker.active_ids)
+            if self.tracker.scene_cut:
+                self.swapper._hysteresis = {}
+            elif hasattr(self.swapper, '_hysteresis'):
+                self.swapper._hysteresis = {key:value for key,value in self.swapper._hysteresis.items() if key in self.tracker.active_ids}
             replacements, swap_seconds, retarget_seconds, projection_seconds = [], 0.0, 0.0, 0.0
             for tracked in faces:
                 if self.selected_ids is not None and tracked.track_id not in self.selected_ids:
@@ -142,7 +163,8 @@ class ReferencePipeline:
                 face = tracked.observation
                 at = time.perf_counter()
                 swap = self.swapper.infer_frame(image, face.landmarks5, pose=face.pose,
-                                                track_id=tracked.track_id, frontalization=frontalization)
+                                                track_id=tracked.track_id, frontalization=frontalization,
+                                                **({"identity_blend_t": identity_blend_t} if identity_blend_t is not None else {}))
                 swap_seconds += time.perf_counter() - at
                 if self.portrait.available and pose_blend is None:
                     at = time.perf_counter()
@@ -174,7 +196,8 @@ class ReferencePipeline:
                     generated, method = projection.image, 'identity_swap_tps_mesh_blend'
                     projection_seconds += time.perf_counter() - at
                 replacements.append(Replacement(tracked.track_id, generated, inverse.copy(), swap.reference_index,
-                                                method, projection.coverage if projection else None, projection))
+                                                method, projection.coverage if projection else None, projection,
+                                                transform_points(face.landmarks5, cv2.invertAffineTransform(inverse))))
             ended = time.perf_counter()
             self.frames_processed += 1
             self.last_latency = StageLatency((detection_end - began) * 1000, swap_seconds * 1000,

@@ -169,7 +169,13 @@ class IdentitySwapper:
         canonical = self.canonical_by_track.get(track_id, self.canonical) if track_id is not None else self.canonical
         matrix = self._matrices.get(track_id) if track_id in self._matrices else self._matrices.get(None)
         if matrix is not None:
-            entry = matrix.lookup(target)
+            from roop_3d.temporal_stabilizer import PoseHysteresis
+            from roop_3d.core.pose import PoseCell
+            if not hasattr(self, '_hysteresis'):
+                self._hysteresis = {}
+            gate = self._hysteresis.setdefault(track_id, PoseHysteresis(getattr(self, 'pose_deadband', 2.5)))
+            yaw, pitch = gate.update(target.yaw, target.pitch)
+            entry = matrix.entry(PoseCell(yaw + 1, pitch + 1))
             marker = (track_id, entry.cell.index)
             if marker not in self._logged_cells:
                 self._logged_cells.add(marker)
@@ -189,7 +195,7 @@ class IdentitySwapper:
         return unit_embedding(canonical * (1 - weight) + unit_embedding(np.asarray(view_vector)) * weight), index, weight
 
     def infer_frame(self, image: np.ndarray, landmarks5: np.ndarray, *, pose: Any = (0, 0, 0),
-                    reference_blend: float = 0.15, track_id: int | None = None, frontalization: float = 0.0) -> SwapResult:
+                    reference_blend: float = 0.15, track_id: int | None = None, frontalization: float = 0.0, identity_blend_t: float | None = None) -> SwapResult:
         if self.model is None or self.source is None or self.canonical is None or self.projection is None:
             raise DomainError("SESSION_NOT_PREPARED", "Prepare identity source before inference", 409)
         if not 0 <= reference_blend <= 0.25:
@@ -199,6 +205,21 @@ class IdentitySwapper:
         if track_id is not None and (type(track_id) is not int or track_id < 0):
             raise ValueError("track_id must be a nonnegative integer")
         embedding, view_index, weight = self.reference_embedding(track_id, pose, reference_blend)
+        if identity_blend_t is not None:
+            if not np.isfinite(identity_blend_t) or not 0 <= identity_blend_t <= 1:
+                raise ValueError('Identity blend must be within 0..1')
+            source = self.sources_by_track.get(track_id, self.source)
+            pair = source.metadata.get('identity_curve_pair')
+            if pair is None or len(pair) != 2:
+                raise DomainError('IDENTITY_PAIR_REQUIRED','Choose a two-source identity mixer FaceSet before animating identity_blend_t',422)
+            a,b = (unit_embedding(np.asarray(v)) for v in pair)
+            cosine=float(np.clip(a@b,-1,1))
+            angle=float(np.arccos(cosine))
+            if cosine < -.9999:
+                raise DomainError('IDENTITY_PAIR_ANTIPODAL','Antipodal identities have no unique Slerp path',422)
+            t=identity_blend_t
+            embedding=unit_embedding((1-t)*a+t*b if angle < 1e-5 else
+                (np.sin((1-t)*angle)*a+np.sin(t*angle)*b)/np.sin(angle))
         projected = unit_embedding(embedding @ self.projection).reshape(1, 512)
         aligned = aligned_crop(image, landmarks5, 128)
         model_input, flat = aligned.image, None
@@ -222,4 +243,5 @@ class IdentitySwapper:
         self.canonical_by_track.clear()
         self._selectors.clear()
         self._matrices.clear()
+        self._hysteresis = {}
         self._logged_cells.clear()

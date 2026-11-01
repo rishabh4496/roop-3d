@@ -106,7 +106,9 @@ class LivePreviewPayload(Contract):
     # enhancer + grading
     restorer: RestorerName = "off"
     restoration_blend: float | None = Field(default=None, ge=0, le=1)
+    identity_blend_t: float | None = Field(default=None, ge=0, le=1)
     fidelity_weight: float = Field(default=0.5, ge=0, le=1)
+    color_method: Literal['lab', 'histogram'] = 'lab'
     color_strength: float = Field(default=0.65, ge=0, le=1)
     swap_weight: float = Field(default=1, ge=0, le=1)
     bypass: tuple[Literal["restorer", "color"], ...] = Field(default=(), max_length=2)
@@ -155,14 +157,14 @@ class LivePreviewPayload(Contract):
         return tuple(dict.fromkeys(ids))
 
     def validate_restorer(self) -> None:
-        if self.restorer in ("codeformer", "gfpgan", "ultramax"):
+        if self.restorer in ("gfpgan", "ultramax"):
             raise DomainError("RESTORER_UNAVAILABLE",
                               f"The {self.restorer} restorer has no verified adapter in the preview compositor; use gpen or off", 422)
 
     def unsupported(self) -> list[str]:
         """Accepted-but-inert fields: the engine has no corresponding control. Never silently dropped."""
         items = []
-        if "fidelity_weight" in self.model_fields_set:
+        if "fidelity_weight" in self.model_fields_set and self.restorer != "codeformer":
             items.append("fidelity_weight")  # only CodeFormer exposes a fidelity input; GPEN has none
         return items
 
@@ -417,11 +419,12 @@ class LivePreviewService:
         if any(item.track_id not in track_ids for item in mappings):
             raise DomainError("TRACK_NOT_FOUND", "Selected target face is absent from this inspection", 422)
 
-        restoring = payload.restorer == "gpen"
+        restoring = payload.restorer in ("gpen", "codeformer")
         blend_amount = (payload.restoration_blend if payload.restoration_blend is not None else 0.7) if restoring else 0.0
         values: dict[str, Any] = {"restoration_blend": blend_amount, "feather_px": payload.occlusion.feather_px,
                                   "erosion_px": payload.occlusion.erosion_px, "color_strength": payload.color_strength,
                                   "swap_weight": payload.swap_weight, "bypass": payload.bypass,
+                                  "color_method": payload.color_method,
                                   "pose_mode": "mesh_blend" if payload.frontalization_weight is not None else "retarget"}
         if payload.frontalization_weight is not None:
             values["pose_strength"] = payload.frontalization_weight
@@ -429,6 +432,10 @@ class LivePreviewService:
             values["pose_frontalization"] = payload.pose_frontalization
         if payload.tps_expression_weight is not None:
             values["tps_expression_weight"] = payload.tps_expression_weight
+        if payload.restorer == 'codeformer':
+            values.update(restorer_model='codeformer', fidelity_weight=payload.fidelity_weight)
+        if payload.identity_blend_t is not None:
+            values['identity_blend_t'] = payload.identity_blend_t
         parameters = WorkstationParameters.model_validate(values)
 
         mask = payload.mask_base64
@@ -437,9 +444,9 @@ class LivePreviewService:
             mask = rasterize_strokes(payload.mask_strokes, info.width, info.height, mask)
         job = JobRequest(target_path=payload.target_path, inspection_id=payload.inspection_id, face_mappings=mappings,
                          processing="local", mask_base64=mask, workstation_parameters=parameters,
-                         parameter_curves=payload.parameter_curves, face_segments=payload.face_segments,
+                         parameter_curves=payload.parameter_curves, identity_blend=blend, face_segments=payload.face_segments,
                          export=payload.export)
-        return PreviewRequest(request=job, timestamp=0, parameters=parameters, identity_blend=blend)
+        return PreviewRequest(request=job, timestamp=0, parameters=parameters)
 
     def _render_one(self, payload: LivePreviewPayload, base: PreviewRequest, info: _MediaInfo, index: int,
                     digest: str, cancel: Event) -> CacheEntry:
@@ -475,8 +482,10 @@ class LivePreviewService:
             applied.append("pose_frontalization")
         if payload.tps_expression_weight:
             applied.append("tps_expression_weight")
-        if payload.restorer == "gpen":
-            applied.append("restorer:gpen")
+        if payload.restorer in ("gpen", "codeformer"):
+            applied.append("restorer:" + payload.restorer)
+        if payload.restorer == "codeformer":
+            applied.append("fidelity_weight")
         if payload.mask_base64 or payload.mask_strokes:
             applied.append("custom_mask")
         if payload.resolved_sources()[1] is not None:

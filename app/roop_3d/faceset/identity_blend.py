@@ -106,6 +106,9 @@ def blend_documents(documents: Sequence[FaceSetDocument], spec: IdentityBlendSpe
     medoid = blend_embeddings([d.medoid_embedding for d in documents], weights, method=spec.method, dials=dials)
     primary = documents[int(np.argmax(weights))]
     metadata = {**primary.metadata, "identity_blend": spec.model_dump(mode="json")}
+    if len(documents) == 2:
+        metadata["identity_curve_pair"] = [list(doc.canonical_embedding) for doc in documents]
+        metadata["identity_curve_sources"] = {doc.faceset_id: doc.source_sha256 for doc in documents}
     metadata.pop("stage0", None)
     # Stage 0: blend per pose cell (same recipe, identity-guarded) so render-time lookups stay O(1).
     from roop_3d.faceset import pose_matrix as stage0

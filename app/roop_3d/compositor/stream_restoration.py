@@ -105,6 +105,9 @@ class OnnxFaceRestorer:
                       if self.spec.name == "ultramax" and self.config.provider == "CPUExecutionProvider" else self.config)
             self.model = OrtModel(self.catalog, self.spec.model_name, config)
         inputs = self.model.record["graph"]["inputs"]
+        if getattr(self, 'require_dynamic_fidelity', False) and not any(item['name'] in ('w','fidelity_weight') for item in inputs):
+            from roop_3d.core.errors import DomainError
+            raise DomainError('FIDELITY_UNAVAILABLE','This CodeFormer artifact has no runtime fidelity input; select a verified dynamic-w artifact',422)
         image_input = next((v for v in inputs if len(v["shape"]) == 4), None)
         if image_input is None or image_input["shape"][1:] != [3, self.spec.size, self.spec.size]:
             raise ValueError("Restorer graph does not match its registered training input contract")

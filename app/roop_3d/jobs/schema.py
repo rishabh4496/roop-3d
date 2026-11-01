@@ -15,6 +15,7 @@ from roop_3d.core.settings import Contract
 from roop_3d.core.workstation import WorkstationParameters
 from roop_3d.core.animation import ParameterCurves, FaceSegment
 from roop_3d.media.schema import TrackToFaceSetMap
+from roop_3d.faceset.identity_blend import IdentityBlendSpec
 from roop_3d.models.diagnostics import JobDiagnostics
 from roop_3d.media.finishing import ExportOptions
 
@@ -63,6 +64,7 @@ class JobRequest(Contract):
     trim_end_seconds: float | None = Field(default=None, gt=0, le=86400)
     mask_base64: str | None = Field(default=None)
     workstation_parameters: WorkstationParameters | None = None
+    identity_blend: IdentityBlendSpec | None = None
     parameter_curves: ParameterCurves | None = None
     face_segments: tuple[FaceSegment, ...] | None = Field(default=None, max_length=256)
     export: ExportOptions | None = None
@@ -74,7 +76,7 @@ class JobRequest(Contract):
             for field in ('swap_weight', 'erosion_px', 'pose_frontalization', 'tps_expression_weight'):
                 if field not in self.workstation_parameters.model_fields_set:
                     value['workstation_parameters'].pop(field, None)
-        for name in ("trim_start_seconds", "trim_end_seconds", "mask_base64", "workstation_parameters", "parameter_curves", "face_segments", "export"):
+        for name in ("identity_blend", "trim_start_seconds", "trim_end_seconds", "mask_base64", "workstation_parameters", "parameter_curves", "face_segments", "export"):
             if value.get(name) is None:
                 value.pop(name, None)
         return value

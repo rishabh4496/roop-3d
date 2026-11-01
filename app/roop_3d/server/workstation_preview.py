@@ -179,15 +179,22 @@ class PreviewService:
             session = ReferencePipeline(self.state.models, runtime)
             session.prepare_session(next(iter(sources.values())), track_ids=set(sources), sources_by_track=sources,
                                     retarget='off' if value.effective_parameters.pose_mode == 'mesh_blend' else 'auto')
+            if hasattr(session, 'configure_temporal'):
+                session.configure_temporal(settings)
             base_parameters = value.effective_parameters
             parameters = base_parameters
             needs_restorer = parameters.composite_options().restoration_blend > 0 or any(
                 axis and axis.parameter == 'restoration_blend' and max(axis.values) > 0 for axis in (value.x, value.y))
             needs_restorer = needs_restorer or bool(value.request.parameter_curves and any(key.value > 0 for key in value.request.parameter_curves.tracks.get('restorer_opacity', ())))
             if needs_restorer:
-                if settings.face_restoration_policy in ('gfpgan', 'codeformer'):
-                    raise DomainError('RESTORER_UNAVAILABLE', 'Selected restoration architecture has no verified local adapter', 503)
-                session.compositor.restorer = GpenRestorer(self.state.models, runtime)
+                architecture = parameters.restorer_model if parameters.restorer_model != 'auto' else settings.face_restoration_policy
+                if architecture == 'codeformer':
+                    from roop_3d.compositor.restoration import CodeFormerRestorer
+                    session.compositor.restorer = CodeFormerRestorer(self.state.models, runtime)
+                elif architecture in ('off', 'auto', 'gpen'):
+                    session.compositor.restorer = GpenRestorer(self.state.models, runtime)
+                else:
+                    raise DomainError('RESTORER_UNAVAILABLE', 'Selected restoration architecture has no local reference adapter', 503)
             check()
             selected = None
             origin = None
@@ -212,6 +219,8 @@ class PreviewService:
                         origin = frame.timestamp.seconds if origin is None else origin
                         edit_plan.apply(session, frame.index)
                         parameters = value.request.parameter_curves.evaluate(frame.index, base_parameters) if value.request.parameter_curves else base_parameters
+                        if hasattr(session, 'set_frame_timestamp'):
+                            session.set_frame_timestamp(float(frame.timestamp.seconds))
                         result = session.infer_frame(frame.image, **parameters.inference_options())
                         selected = (frame, result, float(frame.timestamp.seconds - origin), frame.index)
                         if frame.timestamp.seconds - origin >= target_time:
@@ -236,6 +245,8 @@ class PreviewService:
                             calculated_frame_index = int(round(float(frame_seconds * Fraction(str(fps)))))
                             edit_plan.apply(session, calculated_frame_index)
                             parameters = value.request.parameter_curves.evaluate(calculated_frame_index, base_parameters) if value.request.parameter_curves else base_parameters
+                            if hasattr(session, 'set_frame_timestamp'):
+                                session.set_frame_timestamp(float(frame.timestamp.seconds))
                             result = session.infer_frame(frame.image, **parameters.inference_options())
                             selected = (frame, result, float(frame_seconds), calculated_frame_index)
                             break
@@ -245,6 +256,8 @@ class PreviewService:
                             calculated_frame_index = int(round(float(frame_seconds * Fraction(str(fps)))))
                             edit_plan.apply(session, calculated_frame_index)
                             parameters = value.request.parameter_curves.evaluate(calculated_frame_index, base_parameters) if value.request.parameter_curves else base_parameters
+                            if hasattr(session, 'set_frame_timestamp'):
+                                session.set_frame_timestamp(float(last_frame.timestamp.seconds))
                             result = session.infer_frame(last_frame.image, **parameters.inference_options())
                             selected = (last_frame, result, float(frame_seconds), calculated_frame_index)
                         else:

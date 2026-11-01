@@ -1,4 +1,6 @@
 export type WorkstationParameters = {
+  color_method?: 'lab' | 'histogram';
+  restorer_model?: 'gpen' | 'codeformer'; fidelity_weight?: number; identity_blend_t?: number;
   restoration_blend: number; feather_px: number; color_strength: number; pose_strength: number; pose_mode?: 'retarget' | 'mesh_blend';
   swap_weight?: number; erosion_px?: number; bypass: ('restorer' | 'color')[];
   /** Pre-swap 3D pose frontalization, 0..1 (Stage 5). Omitted until the user touches it, so older requests keep their identity. */

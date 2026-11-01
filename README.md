@@ -179,3 +179,5 @@ frontalization, TPS expression warping and `POST /api/faces/extract_from_frame`)
 Stage 6 (nine deep-linked routes, the 3-step run-bar pill, full-bleed comparison canvas, pose HUD, on-canvas
 "Use Face From Frame" menu, six-node buffer soloing, self-documenting settings and the 3×3 sweep) is documented in
 [docs/WORKSTATION_STAGE6.md](docs/WORKSTATION_STAGE6.md).
+
+Stage 8 (Stage 25 parameter curves, timestamped One-Euro stabilization, CodeFormer fidelity, animated Slerp, durable person banks and the 3x3 archive studio) is documented in [docs/REMEDIATION_STAGE8.md](docs/REMEDIATION_STAGE8.md).

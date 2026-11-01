@@ -89,7 +89,7 @@ class SparsePrepass:
             self.emit({"stage": stage, "state": state, **values})
 
     def _identity(self):
-        return {"version": 1, "source_sha256": sha256_file(self.source)[1], "identity": self.identity,
+        return {"version": 3, "stabilizer": {"min_cutoff": self.policy.temporal_min_cutoff, "beta": self.policy.temporal_beta, "d_cutoff": self.policy.temporal_d_cutoff}, "source_sha256": sha256_file(self.source)[1], "identity": self.identity,
                 "interval": self.policy.sparse_interval, "padding": self.policy.range_padding}
 
     def _load(self, identity):
@@ -159,18 +159,24 @@ class SparsePrepass:
                     sparse_sampled_frames=sampled, absence_evidence="SPARSE_ESTIMATE")
         self.signal(PREPASS, "RUNNING", active_ranges_count=len(ranges))
         faces = []
+        from roop_3d.temporal_stabilizer import TemporalStabilizer
+        stabilizer = TemporalStabilizer(min_cutoff=self.policy.temporal_min_cutoff, beta=self.policy.temporal_beta, d_cutoff=self.policy.temporal_d_cutoff)
         verified_count = 0
         for decoded in self.reader_factory():
             self.check()
             verified_count = decoded.index + 1
+            active_ids = set()
             if any(start <= decoded.index < end for start, end in ranges):
                 for track_id, box, points in self.track(decoded.image):
+                    active_ids.add(int(track_id))
                     box, points = np.asarray(box, np.float32), np.asarray(points, np.float32)
                     if (box.shape != (4,) or points.shape != (5, 2) or not np.isfinite(box).all()
                             or not np.isfinite(points).all() or int(track_id) != track_id or track_id < 0):
                         raise ValueError("Prepass tracker returned invalid geometry")
                     if box[2] > box[0] and box[3] > box[1]:
-                        faces.append(LockedFace(decoded.index, int(track_id), box.copy(), points.copy()))
+                        points = stabilizer.filter(int(track_id), "landmarks5", points, float(decoded.timestamp.seconds))
+                        faces.append(LockedFace(decoded.index, int(track_id), box.copy(), points.astype(np.float32)))
+            stabilizer.retain(active_ids)
         if verified_count != total or sha256_file(self.source)[1] != identity["source_sha256"]:
             raise ValueError("Prepass source changed between scan/verification passes")
         result = PrepassResult(ranges, tuple(faces), total)

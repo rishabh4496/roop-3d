@@ -5,6 +5,10 @@ from roop_3d.core.settings import Contract
 
 
 class WorkstationParameters(Contract):
+    color_method: Literal['lab', 'histogram'] = 'lab'
+    restorer_model: Literal['auto', 'gpen', 'codeformer'] = 'auto'
+    identity_blend_t: float | None = Field(default=None, ge=0, le=1)
+    fidelity_weight: float = Field(default=.5, ge=0, le=1)
     restoration_blend: float = Field(default=0, ge=0, le=1)
     feather_px: float = Field(default=5, ge=0, le=64)
     color_strength: float = Field(default=0.65, ge=0, le=1)
@@ -20,7 +24,7 @@ class WorkstationParameters(Contract):
     @model_serializer(mode='wrap')
     def compatible_serialization(self, handler):
         value = handler(self)
-        for field in ('swap_weight', 'erosion_px', 'pose_mode', 'pose_frontalization', 'tps_expression_weight'):
+        for field in ('color_method', 'restorer_model', 'identity_blend_t', 'fidelity_weight', 'swap_weight', 'erosion_px', 'pose_mode', 'pose_frontalization', 'tps_expression_weight'):
             if field not in self.model_fields_set:
                 value.pop(field, None)
         return value
@@ -33,11 +37,13 @@ class WorkstationParameters(Contract):
             options['frontalization'] = self.pose_frontalization
         if self.tps_expression_weight > 0:
             options['tps_expression'] = self.tps_expression_weight
+        if self.identity_blend_t is not None:
+            options['identity_blend_t'] = self.identity_blend_t
         return options
 
     def composite_options(self):
         from roop_3d.compositor.pipeline import CompositeOptions
-        return CompositeOptions(restoration_blend=0 if 'restorer' in self.bypass else self.restoration_blend,
+        return CompositeOptions(color_method=self.color_method, fidelity_weight=self.fidelity_weight, restoration_blend=0 if 'restorer' in self.bypass else self.restoration_blend,
                                 feather_px=self.feather_px,
                                 swap_weight=self.swap_weight, erosion_px=self.erosion_px,
                                 color_strength=0 if 'color' in self.bypass else self.color_strength)

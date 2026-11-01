@@ -18,7 +18,7 @@ export function buildLivePayload({ request, time, fps, parameters, maskBase64, r
   solo?: string | null;
 }): LivePayload | null {
   if (!request || !request.face_mappings.length) return null;
-  const restoring = restorerAvailable && parameters.restoration_blend > 0 && !parameters.bypass.includes('restorer');
+  const restoring = restorerAvailable && (parameters.restoration_blend > 0 || request.parameter_curves?.tracks.restorer_opacity?.some(key=>key.value>0)) && !parameters.bypass.includes('restorer');
   return {
     target_path: request.target_path,
     inspection_id: request.inspection_id,
@@ -30,9 +30,13 @@ export function buildLivePayload({ request, time, fps, parameters, maskBase64, r
     solo_node: solo || undefined,
     occlusion: { erosion_px: parameters.erosion_px ?? 0, feather_px: parameters.feather_px },
     mask_base64: maskBase64 || request.mask_base64 || undefined,
-    restorer: restoring ? 'gpen' : 'off',
+    restorer: restoring ? (parameters.restorer_model === 'codeformer' ? 'codeformer' : 'gpen') : 'off',
+    identity_blend: request.identity_blend ?? undefined,
+    identity_blend_t: parameters.identity_blend_t,
+    fidelity_weight: parameters.fidelity_weight,
     restoration_blend: restoring ? parameters.restoration_blend : undefined,
     color_strength: parameters.color_strength,
+    color_method: parameters.color_method ?? 'lab',
     swap_weight: parameters.swap_weight ?? 1,
     bypass: parameters.bypass,
     face_segments: request.face_segments ?? undefined,

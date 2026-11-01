@@ -35,6 +35,11 @@ def runtime_path(value: str, root: Path | None = None) -> Path:
 
 
 class Settings(Contract):
+    temporal_min_cutoff: float = Field(default=.15, gt=0, le=120)
+    temporal_beta: float = Field(default=.04, ge=0, le=10)
+    temporal_d_cutoff: float = Field(default=1, gt=0, le=120)
+    pose_hysteresis_degrees: float = Field(default=2.5, ge=0, lt=10)
+
     schema_version: Literal[2] = 2
     execution_mode: Literal["swap", "volumetric", "hybrid", "diffusion_vfx"] = "swap"
     hardware_profile: Literal["auto", "cpu", "6gb", "12gb"] = "auto"

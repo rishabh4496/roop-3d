@@ -46,7 +46,7 @@ class FrameEditPlan:
             key = (segment.faceset_id, segment.source_view_index)
             if key in self.documents:
                 continue
-            document = next((item for item in sources.values() if item.faceset_id == segment.faceset_id), None)
+            document = next(iter(sources.values())) if request.identity_blend else next((item for item in sources.values() if item.faceset_id == segment.faceset_id), None)
             if document is None:
                 document = runner.faceset_reader.read(runner._faceset_path(segment.faceset_id), faceset_id=segment.faceset_id)
             if segment.source_view_index is not None:

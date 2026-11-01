@@ -168,6 +168,8 @@ def create_app(settings: Settings | None = None, *, repo_root: Path | None = Non
     app.include_router(preview_router)
     app.include_router(live_preview_router)
     app.include_router(face_extract_router)
+    from roop_3d.server.face_bank import router as face_bank_router
+    app.include_router(face_bank_router)
     app.include_router(finishing_router)
     from roop_3d.server.api import benchmark_router
     app.include_router(benchmark_router)

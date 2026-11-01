@@ -255,7 +255,7 @@ def make_stream_runner(root, catalog, media, settings_provider, *, pipeline_trac
             try:
                 with context.activate():
                     detector = Detector(catalog, session_factory(catalog, config))
-                    tracker = FaceTracker(catalog, config=config)
+                    tracker = FaceTracker(catalog, config=config, stabilize=False)
                     static = record_named(catalog, "inswapper_128.onnx")
                     projection = cached_emap(catalog._path(static), embedding_map, source_sha256=static["sha256"])
                     embeddings = {key: unit_embedding(unit_embedding(np.asarray(value.canonical_embedding)) @ projection)
@@ -291,7 +291,9 @@ def make_stream_runner(root, catalog, media, settings_provider, *, pipeline_trac
                         return [(v.track_id, v.observation.box, v.observation.landmarks5) for v in tracker.process(image)
                                 if v.track_id in embeddings]
                 mark_running()
-                policy = RenderPolicy.from_env(batch_size=settings.stream_batch_size,
+                policy = RenderPolicy.from_env(temporal_min_cutoff=settings.temporal_min_cutoff,
+                    temporal_beta=settings.temporal_beta, temporal_d_cutoff=settings.temporal_d_cutoff,
+                    batch_size=settings.stream_batch_size,
                     execution_threads=settings.execution_threads, ring_slots=settings.stream_ring_slots,
                     hardware_profile=admission.profile, sparse_interval=settings.sparse_interval,
                     range_padding=settings.sparse_interval, segment_frames=settings.stream_segment_frames)

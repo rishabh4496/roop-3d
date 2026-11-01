@@ -85,3 +85,40 @@ class GpenRestorer:
         if self.model is not None:
             self.model.release()
         self.model = None
+
+
+class CodeFormerRestorer:
+    """Lazy, hash-verified CodeFormer with training alignment in replacement-crop space."""
+    def __init__(self, catalog, config):
+        from roop_3d.compositor.stream_restoration import OnnxFaceRestorer, codeformer_spec
+        self.spec = codeformer_spec()
+        self.runner = OnnxFaceRestorer(catalog, config, self.spec)
+        self.runner.require_dynamic_fidelity = True
+        self.fidelity_weight = 0.5
+        self.inference_verified = False
+
+    def restore_aligned(self, image, landmarks5):
+        from roop_3d.engine.volumetric.preprocess import similarity
+        points = np.asarray(landmarks5, np.float64)
+        if points.shape != (5, 2) or not np.isfinite(points).all():
+            raise DomainError('RESTORER_LANDMARKS_REQUIRED', 'CodeFormer requires five crop-space landmarks', 422)
+        matrix = similarity(points, self.spec.template)
+        crop = cv2.warpAffine(image, matrix, (self.spec.size, self.spec.size), borderMode=cv2.BORDER_CONSTANT)
+        self.runner.fidelity_weight = self.fidelity_weight
+        restored = self.runner.restore(crop)
+        inverse = cv2.invertAffineTransform(matrix)
+        size = (image.shape[1], image.shape[0])
+        warped = cv2.warpAffine(restored, inverse, size)
+        support = cv2.warpAffine(np.ones(image.shape[:2], np.float32), matrix, (self.spec.size, self.spec.size))
+        alpha = np.clip(cv2.warpAffine(support, inverse, size), 0, 1)[..., None]
+        self.inference_verified = True
+        return np.clip(warped * alpha + image * (1-alpha), 0, 255).round().astype(np.uint8)
+
+    def capability(self):
+        return {'architecture': 'codeformer', 'alignment': 'CODEFORMER_REFERENCE_5PTS',
+                'inference': 'VERIFIED_THIS_SESSION' if self.inference_verified else 'NOT_RUN',
+                'weights': 'VERIFIED_LOCAL' if self.runner.model is not None else 'NOT_LOADED'}
+
+    def release(self):
+        self.runner.close()
+        self.inference_verified = False

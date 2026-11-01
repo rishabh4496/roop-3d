@@ -158,7 +158,7 @@ describe('FaceManager Component Rendering', () => {
 
     // Person Grouping & Clustering panel
     expect(html).toContain('IDENTITIES');
-    expect(html).toContain('Cluster Tolerance (DBSCAN ε: 0.38)');
+    expect(html).toContain('Local photo cosine distance: 0.38');
     expect(html).toContain('Person A');
 
     // 3D Geometry Unit Sphere readouts

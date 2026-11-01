@@ -25,6 +25,7 @@ from roop_3d.engine.runtime import RuntimeConfig, image_bgr
 class CompositeOptions:
     mode: BlendMode = BlendMode.FEATHER
     restoration_blend: float = 0.0
+    fidelity_weight: float = 0.5
     color_method: str = "lab"
     color_strength: float = 0.65
     relight: bool = False
@@ -35,6 +36,8 @@ class CompositeOptions:
     erosion_px: float = 0.0
 
     def __post_init__(self) -> None:
+        if not np.isfinite(self.fidelity_weight) or not 0 <= self.fidelity_weight <= 1:
+            raise ValueError("CodeFormer fidelity must be within 0..1")
         if not 0 <= self.restoration_blend <= 1 or not 0 <= self.color_strength <= 1:
             raise ValueError("Blend ratios must be within 0..1")
         if not np.isfinite(self.swap_weight) or not 0 <= self.swap_weight <= 1 or not np.isfinite(self.erosion_px) or not -32 <= self.erosion_px <= 32:
@@ -57,6 +60,8 @@ class FrameCompositor:
         self.parser = parser if parser is not None else BisenetFaceParser(catalog, config)
         self.restorer = restorer
         self.temporal = temporal or TemporalSmoother()
+        from roop_3d.temporal_stabilizer import TemporalStabilizer
+        self.histogram_stabilizer = TemporalStabilizer(min_cutoff=.15, beta=.04)
         self.frames_composited = 0
         self.last_timing: dict[str, float] = {}
 
@@ -78,10 +83,10 @@ class FrameCompositor:
 
     @staticmethod
     def _color_process(swapped: np.ndarray, target: np.ndarray, alpha: np.ndarray, method: str,
-                       strength: float) -> tuple[np.ndarray, ColorStats]:
+                       strength: float, smooth_histogram=None) -> tuple[np.ndarray, ColorStats]:
         stats = estimate_lab_stats(swapped, target, alpha)
         if method == "histogram":
-            matched = masked_histogram_match(swapped, target, alpha)
+            matched = masked_histogram_match(swapped, target, alpha, smooth_histogram=smooth_histogram)
             if strength < 1:
                 active = alpha > 0
                 partial = swapped.copy()
@@ -103,6 +108,8 @@ class FrameCompositor:
         lip_sync_results = lip_sync_results or {}
         active_tracks = set(landmarks_by_track) | {item.track_id for item in replacements}
         self.temporal.begin_frame(frame_index, active_track_ids=active_tracks, scene_cut=scene_cut)
+        if scene_cut: self.histogram_stabilizer.reset()
+        self.histogram_stabilizer.retain(active_tracks)
         output = frame.copy()
         compose_began, restorer_seconds = time.perf_counter(), 0.0
         for replacement in sorted(replacements, key=lambda item: item.track_id):
@@ -154,7 +161,14 @@ class FrameCompositor:
                 if self.restorer is None:
                     raise DomainError("RESTORER_UNAVAILABLE", "A positive restoration blend requires an explicit local restorer", 503)
                 restore_began = time.perf_counter()
-                restored = self.restorer.restore(crop)
+                if hasattr(self.restorer, 'fidelity_weight'):
+                    self.restorer.fidelity_weight = options.fidelity_weight
+                elif options.fidelity_weight != .5:
+                    raise DomainError('FIDELITY_UNAVAILABLE','The selected restorer has no CodeFormer fidelity input',422)
+                if hasattr(self.restorer, 'restore_aligned'):
+                    restored = self.restorer.restore_aligned(crop, getattr(replacement, 'landmarks5', None))
+                else:
+                    restored = self.restorer.restore(crop)
                 enhanced = blend_restored_roi(crop, restored, alpha, options.restoration_blend)
                 restorer_seconds += time.perf_counter() - restore_began
 
@@ -170,7 +184,9 @@ class FrameCompositor:
                 enhanced = composite_mouth_region(enhanced, lip_image, mouth_mask, lip_blend)
 
             harmonized, color_stats = self._color_process(enhanced, target_crop, alpha,
-                                                           options.color_method, options.color_strength)
+                                                           options.color_method, options.color_strength,
+                    lambda histogram: self.histogram_stabilizer.filter(replacement.track_id, "histogram", histogram,
+                        getattr(self, "timestamp_seconds", (frame_index if frame_index is not None else self.frames_composited) / 30.0)))
             if options.relight:
                 skin = face_mask.skin if face_mask.source.startswith("bisenet") else alpha
                 harmonized = relight_spherical_harmonics(harmonized, target_crop, skin, alpha)
@@ -209,4 +225,5 @@ class FrameCompositor:
         if self.restorer is not None:
             self.restorer.release()
         self.temporal.clear()
+        self.histogram_stabilizer.reset()
         self.watchdog.clear()

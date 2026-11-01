@@ -271,6 +271,8 @@ def test_build_and_download_faceset(tmp_path):
         ],
     }
 
+    for view in build_payload['views']:
+        view.update(landmarks=[[10,10],[30,10],[20,20],[12,32],[28,32]],bbox=[0,0,48,48])
     with TestClient(app, base_url="http://127.0.0.1:8030") as client:
         res = client.post("/api/v1/facesets/build", json=build_payload)
         assert res.status_code == 201, res.text

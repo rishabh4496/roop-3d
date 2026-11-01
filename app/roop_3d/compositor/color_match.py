@@ -85,7 +85,7 @@ def lab_mean_std_match(source: np.ndarray, reference: np.ndarray, mask: np.ndarr
     return apply_lab_stats(source, estimate_lab_stats(source, reference, mask), mask, strength=strength)
 
 
-def masked_histogram_match(source: np.ndarray, reference: np.ndarray, mask: np.ndarray) -> np.ndarray:
+def masked_histogram_match(source: np.ndarray, reference: np.ndarray, mask: np.ndarray, *, smooth_histogram=None) -> np.ndarray:
     """Per-channel masked LAB CDF matching; all pixels outside the mask are copied."""
     a, b, weight = _validate_pair(source, reference, mask)
     active = weight > 0
@@ -93,6 +93,18 @@ def masked_histogram_match(source: np.ndarray, reference: np.ndarray, mask: np.n
         return a.copy()
     source_lab, target_lab = _lab(a), _lab(b)
     mapped = source_lab.copy()
+    if smooth_histogram is not None:
+        histograms = np.array([[np.bincount(lab[...,c][active].astype(np.uint8),minlength=256) for c in range(3)] for lab in (source_lab,target_lab)],dtype=np.float64)
+        histograms /= np.maximum(histograms.sum(axis=-1,keepdims=True),1)
+        histograms = np.maximum(smooth_histogram(histograms),0)
+        cdfs=np.cumsum(histograms,axis=-1)
+        cdfs /= np.maximum(cdfs[...,-1:],1e-12)
+        for channel in range(3):
+            lut=np.interp(cdfs[0,channel],cdfs[1,channel],np.arange(256))
+            mapped[...,channel][active]=lut[source_lab[...,channel][active].astype(np.uint8)]
+        output=cv2.cvtColor(np.clip(mapped,0,255).astype(np.uint8),cv2.COLOR_LAB2BGR)
+        output[~active]=a[~active]
+        return output
     for channel in range(3):
         x = source_lab[..., channel][active]
         y = target_lab[..., channel][active]

@@ -11,6 +11,9 @@ import threading
 
 @dataclass(frozen=True)
 class RenderPolicy:
+    temporal_min_cutoff: float = .15
+    temporal_beta: float = .04
+    temporal_d_cutoff: float = 1.0
     batch_size: int = 4
     execution_threads: int = 1
     ring_slots: int = 4
@@ -24,6 +27,8 @@ class RenderPolicy:
     hardware_profile: str = "6gb"
 
     def __post_init__(self):
+        from roop_3d.temporal_stabilizer import OneEuroFilter
+        OneEuroFilter(self.temporal_min_cutoff,self.temporal_beta,self.temporal_d_cutoff)
         if (not 1 <= self.batch_size <= 8 or not 1 <= self.execution_threads <= 8
                 or not 2 <= self.ring_slots <= 32 or self.sparse_interval < 1 or self.range_padding < 0
                 or not 1 <= self.segment_frames <= 10000 or self.ultramax_min_pixels < 1

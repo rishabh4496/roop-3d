@@ -1,7 +1,7 @@
 """Bounded multi-face observations and deterministic IoU/identity assignment."""
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import cv2
 import numpy as np
 
@@ -80,7 +80,7 @@ def optimal_assignment(scores: np.ndarray) -> list[tuple[int, int]]:
 
 class FaceTracker:
     def __init__(self, catalog: ModelCatalog | None = None, *, max_tracks: int = 32, max_missed: int = 15,
-                 threshold: float = 0.5, config: RuntimeConfig = RuntimeConfig(), detector: Detector | None = None):
+                 threshold: float = 0.5, config: RuntimeConfig = RuntimeConfig(), detector: Detector | None = None, stabilize: bool = True):
         if not 1 <= max_tracks <= 32 or not 0 <= max_missed <= 120 or not 0.1 <= threshold <= 0.99:
             raise ValueError("Invalid tracker bounds")
         self.catalog = catalog or ModelCatalog()
@@ -90,6 +90,10 @@ class FaceTracker:
         self.dense = DenseLandmarks(self.catalog, config)
         self.max_tracks, self.max_missed, self.threshold = max_tracks, max_missed, threshold
         self._tracks: dict[int, tuple[FaceObservation, int, int]] = {}
+        from roop_3d.temporal_stabilizer import TemporalStabilizer
+        self.stabilizer = TemporalStabilizer()
+        self.stabilize = stabilize
+        self.frame_index = 0
         self.next_id = self.scene_id = 0
         self.previous_thumbnail: np.ndarray | None = None
         self.scene_cut = False
@@ -118,6 +122,7 @@ class FaceTracker:
         self.scene_cut = self.previous_thumbnail is not None and self._cut(self.previous_thumbnail, thumb)
         if self.scene_cut:
             self._tracks.clear()
+            self.stabilizer.reset()
             self.scene_id += 1
         self.previous_thumbnail = thumb
         return self.assign(self.observe(image, include203=include203))
@@ -163,7 +168,23 @@ class FaceTracker:
             if identity not in updated and missed < self.max_missed and len(updated) < self.max_tracks:
                 updated[identity] = (previous, missed + 1, age)
         self._tracks = updated
-        return tuple(output)
+        if not self.stabilize:
+            return tuple(output)
+        self.stabilizer.retain(updated)
+        self.frame_index += 1
+        timestamp = getattr(self, "timestamp_seconds", self.frame_index / 30.0)
+        filtered = []
+        for item in output:
+            face = item.observation
+            points = self.stabilizer.filter(item.track_id, 'landmarks5', face.landmarks5, timestamp)
+            # Unwrap Euler angles against the last raw sample before filtering.
+            state = self.stabilizer.tracks.get((item.track_id, 'pose'))
+            angles = np.asarray(face.pose)
+            if state is not None:
+                angles = state.raw + (angles - state.raw + 180) % 360 - 180
+            pose = self.stabilizer.filter(item.track_id, 'pose', angles, timestamp)
+            filtered.append(replace(item, observation=replace(face, landmarks5=points.astype(np.float32), pose=tuple(pose))))
+        return tuple(filtered)
 
     @property
     def active_ids(self) -> frozenset[int]:
@@ -171,6 +192,7 @@ class FaceTracker:
 
     def release(self) -> None:
         self._tracks.clear()
+        self.stabilizer.reset()
         self.previous_thumbnail = None
         if self._owns_detector:
             self.detector._session = None

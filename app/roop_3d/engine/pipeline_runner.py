@@ -284,6 +284,12 @@ class MasterPipelineRunner:
             else:
                 existing = next(value for value in documents.values() if value.faceset_id == mapping.faceset_id)
                 documents[persistent_id] = existing
+        if request.identity_blend is not None:
+            from roop_3d.faceset.identity_blend import blend_documents
+            recipe = request.identity_blend
+            pair = [self.faceset_reader.read(self._faceset_path(item), faceset_id=item) for item in recipe.source_face_ids]
+            blended = blend_documents(pair, recipe)
+            documents = {track: blended for track in documents}
         if settings.execution_mode == "diffusion_vfx":
             raise DomainError("DIFFUSION_VFX_UNAVAILABLE",
                               "Stage 11 requires a verified local family loader; no loader is configured", 503)
@@ -313,6 +319,8 @@ class MasterPipelineRunner:
         fingerprint = settings_digest(settings)
         source_fingerprints = {document.faceset_id: document.source_sha256 for document in sources.values()}
         source_fingerprints.update({document.faceset_id: document.source_sha256 for document in edit_plan.documents.values()})
+        for document in (*sources.values(), *edit_plan.documents.values()):
+            source_fingerprints.update(document.metadata.get('identity_curve_sources', {}))
         if checkpoint.faceset_sha256 and checkpoint.faceset_sha256 != source_fingerprints:
             raise DomainError("JOB_SOURCE_CHANGED", "A source FaceSet changed since the saved checkpoint", 409)
         if checkpoint.settings_sha256 is not None and checkpoint.settings_sha256 != fingerprint:
@@ -461,10 +469,17 @@ class MasterPipelineRunner:
             session.prepare_session(base_source, track_ids=numeric_ids,
                                     sources_by_track=source_by_track,
                                     retarget='off' if record.request.parameters_at(0).pose_mode == 'mesh_blend' else 'auto')
-            if settings.face_restoration_policy not in {"off", "auto"}:
+            if hasattr(session, 'configure_temporal'):
+                session.configure_temporal(settings)
+            architecture = record.request.parameters_at(0).restorer_model
+            architecture = settings.face_restoration_policy if architecture == "auto" else architecture
+            if architecture not in {"off", "auto", "gpen", "codeformer"}:
                 raise DomainError("RESTORER_UNAVAILABLE", "The selected restoration architecture has no verified local adapter", 503)
             animated_restoration = bool(record.request.parameter_curves and any(key.value > 0 for key in record.request.parameter_curves.tracks.get('restorer_opacity', ())))
-            if settings.face_restoration_policy == "auto" or animated_restoration or (record.request.workstation_parameters and record.request.workstation_parameters.composite_options().restoration_blend > 0):
+            if architecture == 'codeformer':
+                from roop_3d.compositor.restoration import CodeFormerRestorer
+                session.compositor.restorer = CodeFormerRestorer(self.catalog, runtime_config)
+            elif architecture in ('auto', 'gpen') or animated_restoration or (record.request.workstation_parameters and record.request.workstation_parameters.composite_options().restoration_blend > 0):
                 try:
                     gpen = next((item for item in self.catalog.records()
                                  if item["name"] == "gpen_bfr_512.onnx" and item["state"] == "VERIFIED_LOCAL"), None)
@@ -491,6 +506,8 @@ class MasterPipelineRunner:
                     if prepared.edit_plan:
                         prepared.edit_plan.apply(session, decoded.index)
                     parameters = record.request.parameters_at(decoded.index) if record.request.workstation_parameters or record.request.parameter_curves else None
+                    if hasattr(session, 'set_frame_timestamp'):
+                        session.set_frame_timestamp(float(decoded.timestamp.seconds))
                     result = (session.infer_frame(decoded.image, **parameters.inference_options())
                               if parameters else session.infer_frame(decoded.image))
                     if export:
