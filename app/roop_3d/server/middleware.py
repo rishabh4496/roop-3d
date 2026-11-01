@@ -29,7 +29,7 @@ class ApiAliasMiddleware:
             path = scope["path"]
             if path.startswith("/api/") and path.split("/", 3)[2] != "v1":
                 rewritten = "/api/v1/" + path[len("/api/"):]
-                scope = {**scope, "path": rewritten, "raw_path": rewritten.encode("latin1")}
+                scope = {**scope, "path": rewritten, "raw_path": rewritten.encode("latin1"), "original_api_path": path}
         await self.app(scope, receive, send)
 
 

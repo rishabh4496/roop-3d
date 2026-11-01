@@ -5,7 +5,7 @@ import { buildZip } from '../facemgr/fszBuilder';
 import NumericInput from '../controls/NumericInput';
 
 export const DEFAULT_EXPORT = { baked_video: true, passes: [], finishing: { cube: null, grain: { size: 1, intensity: 0, shadows: 1, highlights: .5, seed: 0 }, provenance: 'none' } };
-const PASSES = [['alpha', 'Face-Canvas Alpha Matte'], ['occluder', 'Occluder / XSeg Matte Pass'], ['normal', '3D Normal Map Pass'], ['depth', '3D Depth Map Pass'], ['uv', 'UV Warped Face Pass']];
+const PASSES = [['alpha', 'Face-Canvas Alpha Matte'], ['foreground', 'Swapped-Face-Only Foreground (RGBA)'], ['occluder', 'Occluder / XSeg Matte Pass'], ['normal', '3D Normal Map Pass'], ['depth', '3D Depth Map Pass'], ['uv', 'UV Warped Face Pass']];
 
 export function FinishingControls({ value, onChange, capabilities = null, disabled = false }) {
   const [error, setError] = useState(''), [lutName, setLutName] = useState('');
@@ -40,6 +40,12 @@ export default function VfxExportPanel({ value = DEFAULT_EXPORT, onChange, capab
   const job = completed.find(item => item.job_id === selected);
   const perform = async work => { setBusy(true); setError(''); setNotice(''); try { await work(); } catch (e) { setError(e.message); } finally { setBusy(false); } };
   const interchange = format => perform(async () => {
+    if (format === 'xml') {
+      const xmlData = await api(`/exports/${selected}/timeline?format=xml`);
+      downloadText('roop3d.xml', typeof xmlData === 'string' ? xmlData : xmlData.xml || JSON.stringify(xmlData), 'application/xml');
+      setNotice('Timeline exported as Premiere/FCP XML (.xml). Relink local media if moved.');
+      return;
+    }
     const plan = await api(`/exports/${selected}/timeline`);
     if (format === 'fcpxml') downloadText('roop3d.fcpxml', exportFCPXML(plan), 'application/xml');
     else if (format === 'otio') downloadText('roop3d.otio', exportOTIO(plan), 'application/json');
@@ -74,7 +80,7 @@ export default function VfxExportPanel({ value = DEFAULT_EXPORT, onChange, capab
     <p><a href="#/faceswap">Open workstation canvas to preview finishing</a></p>
     <h2>NLE timeline interchange</h2>
     <label>Completed render<select aria-label="Export render" value={selected} onChange={event => { setSelected(event.target.value); setNotice(''); setError(''); }}><option value="">Select a completed render</option>{completed.map(item => <option key={item.job_id} value={item.job_id}>{item.request.target_path.split(/[\\/]/).at(-1)} · {item.job_id.slice(0, 8)}</option>)}</select></label>
-    <div className="export-actions">{[['fcpxml', 'Final Cut Pro XML (.fcpxml)'], ['edl', 'CMX 3600 EDL (.edl)'], ['otio', 'OpenTimelineIO (.otio)']].map(([id, label]) => <button key={id} className="button" disabled={!job || busy} onClick={() => void interchange(id)}>{label}</button>)}</div>
+    <div className="export-actions">{[['fcpxml', 'Final Cut Pro XML (.fcpxml)'], ['xml', 'Premiere / FCP 7 XML (.xml)'], ['edl', 'CMX 3600 EDL (.edl)'], ['otio', 'OpenTimelineIO (.otio)']].map(([id, label]) => <button key={id} className="button" disabled={!job || busy} onClick={() => void interchange(id)}>{label}</button>)}</div>
     <p className="muted">V1 source · V2 actual swapped ranges · V3 face alpha. Scene cuts and range boundaries create separate clips. EDL exports one file per track. CFR media is required; missing passes are omitted.</p>
     {job && <div className="export-actions"><a className="button" href={`/api/v1/exports/${job.job_id}/manifest`} download>Render manifest</a>{job.output.pass_manifest_path && <a className="button" href={`/api/v1/exports/${job.job_id}/manifest?passes=true`} download>Pass manifest & sequence paths</a>}{Object.entries(job.output.passes || {}).map(([name, path]) => <a className="button" key={name} href={mediaURL(path)} download>{name} pass</a>)}<button className="button" disabled={busy} onClick={() => void perform(async () => { const result = await api(`/exports/${job.job_id}/verify`); setNotice(JSON.stringify(result)); })}>Verify output integrity</button></div>}
     {notice && <p role="status">{notice}</p>}{error && <p role="alert">{error}</p>}

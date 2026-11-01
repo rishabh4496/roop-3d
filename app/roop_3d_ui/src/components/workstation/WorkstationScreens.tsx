@@ -23,11 +23,47 @@ const SettingsScreen = SettingsScreenComponent as unknown as React.ComponentType
 /** Leaf subscriber: the only part of the Processing screen that re-renders when a hardware tick arrives. */
 function GpuReadout() {
   const gpus = useTelemetry(state => state.hardware?.gpus);
-  return <>{gpus?.map(gpu => (
-    <span key={gpu.name}>
-      {gpu.name} · {(gpu.free_vram_mib / 1024).toFixed(1)} GB free
-    </span>
-  ))}</>;
+  const [purging, setPurging] = useState(false);
+  const [notice, setNotice] = useState('');
+  const purgeVram = async () => {
+    setPurging(true);
+    setNotice('');
+    try {
+      const res = await post<{ freed_vram_mib?: number; available_vram_mib?: number }>('/system/purge-vram', {});
+      setNotice(`Freed ${res.freed_vram_mib ?? 0} MiB`);
+      setTimeout(() => setNotice(''), 3000);
+    } catch (e: any) {
+      setNotice(`Error: ${e.message}`);
+    } finally {
+      setPurging(false);
+    }
+  };
+
+  return (
+    <div style={{ display: 'inline-flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+      {gpus?.map(gpu => {
+        const pressure = (1.0 - (gpu.free_vram_mib / Math.max(1, gpu.total_vram_mib)));
+        const pct = Math.round(pressure * 100);
+        const col = pct > 85 ? 'var(--rose, #ff6b6b)' : (pct > 60 ? 'var(--amber, #ffd166)' : 'var(--mint, #06d6a0)');
+        return (
+          <span key={gpu.name} style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+            <span>{gpu.name} · {(gpu.free_vram_mib / 1024).toFixed(1)} GB free</span>
+            <span style={{ fontSize: '10px', color: col, fontWeight: 'bold' }}>[{pct}% VRAM]</span>
+          </span>
+        );
+      })}
+      <button
+        className="button small"
+        style={{ padding: '2px 8px', fontSize: '11px' }}
+        disabled={purging}
+        onClick={purgeVram}
+        title="Purge Idle VRAM / Unload Cached Sessions"
+      >
+        {purging ? 'Purging…' : 'Purge VRAM'}
+      </button>
+      {notice && <span className="mint" style={{ fontSize: '11px' }}>{notice}</span>}
+    </div>
+  );
 }
 
 type ProjectSummary =Pick<Project, 'project_id' | 'name' | 'saved_at' | 'last_completed_frame'>;

@@ -8,7 +8,7 @@ import time
 import uuid
 
 import cv2
-from fastapi import APIRouter, Request, Query
+from fastapi import APIRouter, Request, Query, Response
 from fastapi.responses import FileResponse
 from pydantic import Field
 
@@ -127,7 +127,7 @@ def export_verify(job_id: str, request: Request):
 
 
 @router.get('/exports/{job_id}/timeline')
-def export_timeline(job_id: str, request: Request):
+def export_timeline(job_id: str, request: Request, format: str | None = Query(default=None)):
     job = completed_job(request, job_id)
     state, output = request.app.state, job.output
     source = state.media.path(job.request.target_path)
@@ -169,8 +169,18 @@ def export_timeline(job_id: str, request: Request):
         for name, path in output.passes.items():
             if sha256_file(state.media.path(path))[1] != pass_manifest['output_sha256'].get(name):
                 raise DomainError('EXPORT_PASS_CHANGED', 'A compositing pass changed after publication', 409)
-    return {'name': 'Roop 3D composite', 'frameRate': str(rate), 'frameCount': count,
+    plan = {'name': 'Roop 3D composite', 'frameRate': str(rate), 'frameCount': count,
             'width': info.width, 'height': info.height, 'vfr': False, 'mediaOffset': first,
             'sourceUrl': source.as_uri(), 'swappedUrl': owned(state.root, output.output_path).as_uri() if output.baked_video else None,
             'alphaUrl': owned(state.root, output.passes['alpha']).as_uri() if 'alpha' in output.passes else None,
             'sceneCuts': sorted(set(timeline['scene_cuts'] + inspection.get('scene_cut_frames', []))), 'ranges': ranges}
+    if format == 'fcpxml':
+        from roop_3d.vfx_export import export_fcpxml
+        return Response(content=export_fcpxml(plan), media_type='application/xml')
+    if format in ('xml', 'xmeml'):
+        from roop_3d.vfx_export import export_xmeml
+        return Response(content=export_xmeml(plan), media_type='application/xml')
+    if format == 'edl':
+        from roop_3d.vfx_export import export_edl
+        return export_edl(plan)
+    return plan

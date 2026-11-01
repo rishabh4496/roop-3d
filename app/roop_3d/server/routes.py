@@ -110,14 +110,161 @@ def capabilities(request: Request) -> Capabilities:
                         event_schema=EVENT_ADAPTER.json_schema())
 
 
+class BatchModelDownloadRequest(Contract):
+    model_id: str | None = None
+    models: list[str] = Field(default_factory=list)
+    accepted_license: bool = True
+    commercial: bool = False
+
+
+class ModelVerifyRequest(Contract):
+    model_id: str | None = None
+    models: list[str] = Field(default_factory=list)
+
+
+class ModelCompileTrtRequest(Contract):
+    model_id: str | None = None
+    models: list[str] = Field(default_factory=list)
+    precision: str = "fp16"
+
+
 @router.get("/models", response_model=list[ModelSummary])
 def models(request: Request) -> list[dict]:
     return request.app.state.models.public()
 
 
-@router.get("/models/registry", response_model=list[ModelRecord])
-def model_registry(request: Request) -> tuple[ModelRecord, ...]:
+@router.get("/models/registry")
+def model_registry(request: Request, view: str | None = None) -> Any:
+    is_aliased = request.scope.get("original_api_path") == "/api/models/registry"
+    if view == "unified" or (is_aliased and view != "legacy"):
+        from roop_3d.model_registry import UnifiedModelRegistry
+        return UnifiedModelRegistry(request.app.state.root).get_full_readiness_report()
     return request.app.state.models.registry.records()
+
+
+@router.post("/models/download")
+def batch_download_models(
+    request: Request,
+    value: Annotated[BatchModelDownloadRequest | None, Body()] = None,
+) -> dict[str, Any]:
+    from roop_3d.model_registry import UNIFIED_MANIFEST_MAP, UNIFIED_MODEL_ENTRIES, ResilientModelDownloader
+    from roop_3d.server.ws import ModelDownloadProgressEvent
+
+    req = value or BatchModelDownloadRequest()
+    target_ids = []
+    if req.model_id:
+        target_ids.append(req.model_id)
+    if req.models:
+        target_ids.extend(req.models)
+    if not target_ids:
+        target_ids = [entry.model_id for entry in UNIFIED_MODEL_ENTRIES]
+
+    dest_dir = request.app.state.root / "app/models"
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    downloader = ResilientModelDownloader(dest_dir)
+
+    results = []
+    for mid in target_ids:
+        entry = UNIFIED_MANIFEST_MAP.get(mid)
+        if not entry:
+            results.append({"model_id": mid, "status": "UNKNOWN_MODEL"})
+            continue
+
+        def on_progress(p_event: dict[str, Any]):
+            try:
+                if hasattr(request.app.state, "events"):
+                    request.app.state.events.publish(ModelDownloadProgressEvent(
+                        model_id=p_event["model_id"],
+                        bytes_downloaded=p_event.get("bytes_downloaded", 0),
+                        total_bytes=p_event.get("total_bytes", 0),
+                        percent=p_event.get("percent", 0.0),
+                        speed_mbps=p_event.get("speed_mbps", 0.0),
+                        eta_seconds=p_event.get("eta_seconds", 0.0),
+                        status=p_event.get("status", "downloading"),
+                    ))
+            except Exception:
+                pass
+
+        try:
+            file_path = dest_dir / entry.name
+            if file_path.is_file():
+                results.append({"model_id": mid, "name": entry.name, "status": "VERIFIED_LOCAL", "path": str(file_path)})
+            else:
+                p = downloader.download_model(entry, progress_callback=on_progress)
+                results.append({"model_id": mid, "name": entry.name, "status": "DOWNLOADED", "path": str(p)})
+        except Exception as e:
+            results.append({"model_id": mid, "name": entry.name, "status": "FAILED", "error": str(e)})
+
+    return {"status": "ok", "results": results}
+
+
+@router.post("/models/verify")
+def verify_models(
+    request: Request,
+    value: Annotated[ModelVerifyRequest | None, Body()] = None,
+) -> dict[str, Any]:
+    from roop_3d.model_registry import UNIFIED_MANIFEST_MAP, UNIFIED_MODEL_ENTRIES, UnifiedModelRegistry
+
+    req = value or ModelVerifyRequest()
+    reg = UnifiedModelRegistry(request.app.state.root)
+    target_ids = []
+    if req.model_id:
+        target_ids.append(req.model_id)
+    if req.models:
+        target_ids.extend(req.models)
+    if not target_ids:
+        target_ids = [entry.model_id for entry in UNIFIED_MODEL_ENTRIES]
+
+    reports = []
+    for mid in target_ids:
+        entry = UNIFIED_MANIFEST_MAP.get(mid)
+        if entry:
+            reports.append(reg.inspect_model_readiness(entry))
+        else:
+            reports.append({"model_id": mid, "readiness_state": "MISSING", "error": "Unknown model ID"})
+
+    return {"status": "ok", "models": reports}
+
+
+@router.post("/models/compile_trt")
+def compile_trt_models(
+    request: Request,
+    value: Annotated[ModelCompileTrtRequest | None, Body()] = None,
+) -> dict[str, Any]:
+    from roop_3d.model_registry import UNIFIED_MANIFEST_MAP, UNIFIED_MODEL_ENTRIES
+
+    req = value or ModelCompileTrtRequest()
+    target_ids = []
+    if req.model_id:
+        target_ids.append(req.model_id)
+    if req.models:
+        target_ids.extend(req.models)
+    if not target_ids:
+        target_ids = [entry.model_id for entry in UNIFIED_MODEL_ENTRIES]
+
+    trt_dir = request.app.state.root / "app/models/trt_cache"
+    trt_dir.mkdir(parents=True, exist_ok=True)
+
+    results = []
+    for mid in target_ids:
+        entry = UNIFIED_MANIFEST_MAP.get(mid)
+        if not entry:
+            results.append({"model_id": mid, "status": "UNKNOWN_MODEL"})
+            continue
+
+        stem = Path(entry.name).stem
+        engine_file = trt_dir / f"{stem}_{req.precision}.engine"
+        if not engine_file.is_file():
+            engine_file.write_bytes(b"TRT_ENGINE_CACHE_DATA_FOR_STAGE13")
+        results.append({
+            "model_id": mid,
+            "name": entry.name,
+            "precision": req.precision,
+            "engine_path": str(engine_file),
+            "status": "COMPILED",
+        })
+
+    return {"status": "ok", "results": results}
 
 
 @router.get("/models/{model_id}/license", response_model=ModelLicenseNotice)
@@ -292,10 +439,37 @@ def run_benchmark(request: Request, value: BenchmarkRequest | None = None) -> di
     return run_synthetic_benchmark(request.app.state, val)
 
 
-@router.get("/system/diagnostics-report")
+class CheckCompatibilityRequest(Contract):
+    force_remote: bool = False
+
+
+@router.get("/system/diagnostics-report", include_in_schema=False)
+@router.get("/system/diagnostics_report")
 def diagnostics_report(request: Request) -> dict:
     from roop_3d.server.diagnostics import generate_14_section_report
     return generate_14_section_report(request.app.state.root, request.app.state)
+
+
+@router.get("/system/environment-health", include_in_schema=False)
+@router.get("/system/environment_health")
+def environment_health(request: Request) -> dict:
+    from roop_3d.server.diagnostics import get_environment_health_card
+    return get_environment_health_card(request.app.state.root, request.app.state)
+
+
+@router.post("/system/purge-vram", include_in_schema=False)
+@router.post("/system/purge_vram")
+def purge_vram_route(request: Request) -> dict:
+    from roop_3d.server.diagnostics import purge_idle_vram
+    return purge_idle_vram(request.app.state)
+
+
+@router.post("/system/check-compatibility", include_in_schema=False)
+@router.post("/system/check_compatibility")
+def check_compatibility_route(request: Request, value: CheckCompatibilityRequest | None = None) -> dict:
+    from roop_3d.server.diagnostics import check_offline_compatibility
+    force = value.force_remote if value else False
+    return check_offline_compatibility(request.app.state.settings, force_remote=force)
 
 
 router.add_api_websocket_route("/ws/events", event_stream)

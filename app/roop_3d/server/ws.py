@@ -82,9 +82,21 @@ class QueueEvent(EventBase):
     data: dict[str, Any] = Field(default_factory=dict)
 
 
-QueueEvent.model_rebuild()
+class ModelDownloadProgressEvent(EventBase):
+    type: Literal["model_download_progress"] = "model_download_progress"
+    model_id: str
+    bytes_downloaded: int = 0
+    total_bytes: int = 0
+    percent: float = 0.0
+    speed_mbps: float = 0.0
+    eta_seconds: float = 0.0
+    status: str = "downloading"
 
-Event = Annotated[Union[JobStateEvent, JobProgressEvent, TelemetryEvent, PipelineStatusEvent, StreamGapEvent, StreamReadyEvent, QueueEvent],
+
+QueueEvent.model_rebuild()
+ModelDownloadProgressEvent.model_rebuild()
+
+Event = Annotated[Union[JobStateEvent, JobProgressEvent, TelemetryEvent, PipelineStatusEvent, StreamGapEvent, StreamReadyEvent, QueueEvent, ModelDownloadProgressEvent],
                   Field(discriminator="type")]
 EVENT_ADAPTER = TypeAdapter(Event)
 EVENT_ADAPTER.rebuild()
