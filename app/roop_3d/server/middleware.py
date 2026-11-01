@@ -7,17 +7,35 @@ import time
 import uuid
 from typing import Any
 
-from starlette.responses import JSONResponse
+from urllib.parse import parse_qsl, urlencode
+
+from starlette.responses import JSONResponse, RedirectResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from roop_3d.core.settings import Settings
+from roop_3d.server.security import COOKIE_NAME, ShareMode, is_loopback_peer
 
 log = logging.getLogger("roop3d.requests")
 
 
+class ApiAliasMiddleware:
+    """Serve `/api/<path>` from the versioned `/api/v1/<path>` routes."""
+
+    def __init__(self, app: ASGIApp):
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] in {"http", "websocket"}:
+            path = scope["path"]
+            if path.startswith("/api/") and path.split("/", 3)[2] != "v1":
+                rewritten = "/api/v1/" + path[len("/api/"):]
+                scope = {**scope, "path": rewritten, "raw_path": rewritten.encode("latin1")}
+        await self.app(scope, receive, send)
+
+
 class IntakeMiddleware:
-    def __init__(self, app: ASGIApp, settings: Settings):
-        self.app, self.settings = app, settings
+    def __init__(self, app: ASGIApp, settings: Settings, share: ShareMode | None = None):
+        self.app, self.settings, self.share = app, settings, share
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] not in {"http", "websocket"}:
@@ -43,18 +61,40 @@ class IntakeMiddleware:
 
         origin = headers.get(b"origin", b"").decode("latin1")
         host = headers.get(b"host", b"").decode("latin1")
-        allowed_hosts = {f"127.0.0.1:{self.settings.port}", f"localhost:{self.settings.port}"}
-        if self.settings.port == 80:
-            allowed_hosts.update({"127.0.0.1", "localhost"})
-        if host and host not in allowed_hosts:
-            await reject("HOST_DENIED", "Host must identify the local service", 400)
-            return
-        allowed = {f"http://127.0.0.1:{self.settings.port}"}
-        if self.settings.dev_cors:
-            allowed.add("http://127.0.0.1:5174")
-        if origin and origin not in allowed:
-            await reject("ORIGIN_DENIED", "Origin is not enabled for this local service", 403)
-            return
+        remote_peer = self.share is not None and not is_loopback_peer(scope.get("client"))
+        if remote_peer:
+            # Shared mode, non-loopback peer: any Host, but the token is mandatory and a
+            # browser Origin must be this very service (cookie auth must not be CSRF-able).
+            if origin and origin not in {f"http://{host}", f"https://{host}"}:
+                await reject("ORIGIN_DENIED", "Origin must match the shared service host", 403)
+                return
+            supplied, source = self.share.credential(scope)
+            if not self.share.accepts(supplied):
+                await reject("TOKEN_REQUIRED", "A valid access token is required for the shared service", 401)
+                return
+            path = scope["path"]
+            if source == "query" and scope["type"] == "http" and scope["method"] == "GET" \
+                    and not path.startswith(("/api/", "/ws/")):
+                # Browser landing: trade the URL token for an HTTP-only cookie, then drop it from the address bar.
+                rest = urlencode([(k, v) for k, v in parse_qsl(scope.get("query_string", b"").decode("latin1"))
+                                  if k != "token"])
+                response = RedirectResponse(path + (f"?{rest}" if rest else ""), status_code=303)
+                response.set_cookie(COOKIE_NAME, self.share.token, httponly=True, samesite="strict", path="/")
+                await response(scope, receive, send)
+                return
+        else:
+            allowed_hosts = {f"127.0.0.1:{self.settings.port}", f"localhost:{self.settings.port}"}
+            if self.settings.port == 80:
+                allowed_hosts.update({"127.0.0.1", "localhost"})
+            if host and host not in allowed_hosts:
+                await reject("HOST_DENIED", "Host must identify the local service", 400)
+                return
+            allowed = {f"http://127.0.0.1:{self.settings.port}", f"http://localhost:{self.settings.port}"}
+            if self.settings.dev_cors:
+                allowed.add("http://127.0.0.1:5174")
+            if origin and origin not in allowed:
+                await reject("ORIGIN_DENIED", "Origin is not enabled for this local service", 403)
+                return
         if scope["type"] == "websocket":
             await self.app(scope, receive, send)
             return

@@ -5,6 +5,8 @@ import csv
 import ctypes
 import ctypes.util
 from datetime import datetime, timezone
+from functools import lru_cache
+import importlib.metadata
 import os
 import platform
 from pathlib import Path
@@ -53,6 +55,20 @@ class Hardware(BaseModel):
     ffmpeg_probe_state: Literal["VERIFIED_LOCAL", "UNKNOWN"] = "UNKNOWN"
     ffmpeg_execution_verified: bool = False
     probe_notes: list[str] = Field(default_factory=list)
+    # Flat summary of the active GPU (index 0) for dashboards and HUDs. Every value is
+    # derived from the observations above; unknown stays None rather than guessed.
+    gpu_name: str | None = None
+    compute_capability: str | None = None
+    vram_total_gb: float | None = None
+    vram_available_gb: float | None = None
+    cuda_version: str | None = None
+    tensorrt_version: str | None = None
+    onnxruntime_providers: list[str] = Field(default_factory=list)
+    tensor_core_precisions: list[str] = Field(default_factory=list)
+    tensor_core_state: Literal["INFERRED_FROM_COMPUTE_CAPABILITY", "UNKNOWN"] = "UNKNOWN"
+    nvdec_available: bool | None = None
+    nvenc_available: bool | None = None
+    codec_hardware_state: Literal["FFMPEG_REGISTRATION_ONLY", "UNKNOWN"] = "UNKNOWN"
 
 
 def effective_vram_budget(total: int, free: int, settings: Settings) -> int:
@@ -61,6 +77,57 @@ def effective_vram_budget(total: int, free: int, settings: Settings) -> int:
     profile = {"6gb": 6144, "12gb": 12288}.get(settings.hardware_profile, total)
     ceiling = min(total, profile, settings.vram_limit_mb or total)
     return max(0, min(free, ceiling) - settings.memory_safety_reserve_mb)
+
+
+def tensor_core_precisions(compute_capability: str | None) -> list[str]:
+    """Tensor Core math modes documented for each NVIDIA architecture generation.
+
+    Inferred from the compute capability alone: it says what the silicon supports,
+    not that a given model or engine runs in that precision.
+    """
+    if not compute_capability or not re.fullmatch(r"\d+[.]\d+", compute_capability):
+        return []
+    major, minor = (int(part) for part in compute_capability.split("."))
+    version = (major, minor)
+    modes: list[str] = []
+    if version >= (7, 0):
+        modes.append("fp16")
+    if version >= (7, 5):
+        modes.append("int8")
+    if version >= (8, 0):
+        modes += ["bf16", "tf32"]
+    if version >= (8, 9):
+        modes.append("fp8")
+    return modes
+
+
+@lru_cache(maxsize=1)
+def tensorrt_version() -> str | None:
+    """Installed TensorRT Python distribution version; no native library is loaded."""
+    for name in ("tensorrt", "tensorrt-cu12", "tensorrt_cu12", "tensorrt-cu13", "tensorrt_cu13", "tensorrt-cu11", "tensorrt_cu11"):
+        try:
+            return importlib.metadata.version(name)
+        except importlib.metadata.PackageNotFoundError:
+            continue
+    return None
+
+
+def _summarize(result: Hardware) -> None:
+    gpu = result.gpus[0] if result.gpus else None
+    if gpu:
+        result.gpu_name, result.compute_capability = gpu.name, gpu.compute_capability
+        result.vram_total_gb = round(gpu.total_vram_mib / 1024, 2)
+        result.vram_available_gb = round(gpu.free_vram_mib / 1024, 2)
+        result.tensor_core_precisions = tensor_core_precisions(gpu.compute_capability)
+        if result.tensor_core_precisions:
+            result.tensor_core_state = "INFERRED_FROM_COMPUTE_CAPABILITY"
+    result.cuda_version = result.cuda_runtime_version or result.driver_supported_cuda_version
+    result.tensorrt_version = tensorrt_version()
+    result.onnxruntime_providers = list(result.advertised_providers or [])
+    if result.ffmpeg_probe_state == "VERIFIED_LOCAL":
+        result.nvdec_available = bool(result.ffmpeg_nvdec_decoders)
+        result.nvenc_available = bool(result.ffmpeg_nvenc_encoders)
+        result.codec_hardware_state = "FFMPEG_REGISTRATION_ONLY"
 
 
 def _run(arguments: list[str]) -> str:
@@ -172,6 +239,7 @@ def probe_hardware(settings: Settings | None = None) -> Hardware:
             result.ffmpeg_probe_state = "VERIFIED_LOCAL"
         except (OSError, subprocess.SubprocessError):
             result.probe_notes.append("FFmpeg codec inventory probe failed")
+    _summarize(result)
     result.probe_notes.append("Codec registration does not prove usable NVENC/NVDEC hardware")
     result.probe_notes.append("No inference sessions created; GPU execution is unverified")
     return result

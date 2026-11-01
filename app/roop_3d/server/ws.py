@@ -5,7 +5,7 @@ import asyncio
 from contextlib import contextmanager
 from datetime import datetime, timezone
 import threading
-from typing import Annotated, Iterator, Literal, Union
+from typing import Annotated, Callable, Iterator, Literal, Union
 
 from fastapi import WebSocket, WebSocketDisconnect
 from pydantic import Field, TypeAdapter
@@ -40,6 +40,30 @@ class TelemetryEvent(EventBase):
     hardware: Hardware
 
 
+StageId = Literal["STAGE_1_SPARSE_PRESCAN", "STAGE_2_ACTIVE_PREPASS", "STAGE_3_MAIN_SWAP"]
+StageStatus = Literal["PENDING", "RUNNING", "DONE", "SKIPPED", "FAILED", "RESTORED"]
+EngineState = Literal["IDLE", "COMPILING_TRT", "RUNNING_CANARY"]
+
+
+class PipelineStatusEvent(EventBase):
+    """One telemetry frame. None means "not measured", never a placeholder number."""
+    type: Literal["pipeline.status"] = "pipeline.status"
+    job_id: str | None = None
+    stage: StageId | None = None
+    stages: dict[StageId, StageStatus]
+    stage_progress_pct: float | None = Field(default=None, ge=0, le=100)
+    active_ranges_count: int | None = Field(default=None, ge=0)
+    verified_target_frames: int | None = Field(default=None, ge=0)
+    skipped_frames_pct: float | None = Field(default=None, ge=0, le=100)
+    eta_seconds: float | None = Field(default=None, ge=0)
+    fps: float = Field(default=0, ge=0)
+    engine_state: EngineState = "IDLE"
+    engine_label: str | None = None
+    engine_model: str | None = None
+    engine_precision: str | None = None
+    engine_since: datetime | None = None
+
+
 class StreamGapEvent(EventBase):
     type: Literal["stream.gap"] = "stream.gap"
     action: Literal["refresh_jobs"] = "refresh_jobs"
@@ -50,7 +74,8 @@ class StreamReadyEvent(EventBase):
     action: Literal["refresh_jobs"] = "refresh_jobs"
 
 
-Event = Annotated[Union[JobStateEvent, JobProgressEvent, TelemetryEvent, StreamGapEvent, StreamReadyEvent], Field(discriminator="type")]
+Event = Annotated[Union[JobStateEvent, JobProgressEvent, TelemetryEvent, PipelineStatusEvent, StreamGapEvent, StreamReadyEvent],
+                  Field(discriminator="type")]
 EVENT_ADAPTER = TypeAdapter(Event)
 
 
@@ -58,8 +83,13 @@ class EventBroker:
     def __init__(self, capacity: int = 128):
         self.capacity = capacity
         self._subscribers: dict[asyncio.Queue, asyncio.AbstractEventLoop] = {}
+        self._observers: list[Callable[[EventBase], None]] = []
         self._lock = threading.Lock()
         self.sequence = 0
+
+    def add_observer(self, observer: Callable[[EventBase], None]) -> None:
+        """Synchronous tap called after fanout, outside the broker lock (it may publish)."""
+        self._observers.append(observer)
 
     @property
     def subscriber_count(self) -> int:
@@ -85,6 +115,8 @@ class EventBroker:
             for queue, loop in self._subscribers.items():
                 if not loop.is_closed():
                     loop.call_soon_threadsafe(self._deliver, queue, event)
+        for observer in self._observers:
+            observer(event)
 
     @staticmethod
     def _deliver(queue: asyncio.Queue, event: EventBase) -> None:
@@ -97,10 +129,30 @@ class EventBroker:
 
 
 async def event_stream(websocket: WebSocket) -> None:
+    """Job, hardware and pipeline events (`/ws/telemetry`, `/ws/events`)."""
+    await _stream(websocket, lambda event: event)
+
+
+async def pipeline_status_stream(websocket: WebSocket) -> None:
+    """Only `pipeline.status` frames (`/ws/v1/pipeline/status`); a snapshot opens and follows every gap."""
+    tracker = websocket.app.state.pipeline
+
+    def select(event: EventBase) -> EventBase | None:
+        if isinstance(event, PipelineStatusEvent):
+            return event
+        return tracker.snapshot() if isinstance(event, StreamGapEvent) else None
+
+    await _stream(websocket, select, greeting=lambda: tracker.snapshot())
+
+
+async def _stream(websocket: WebSocket, select: Callable[[EventBase], EventBase | None],
+                  greeting: Callable[[], EventBase] | None = None) -> None:
     broker: EventBroker = websocket.app.state.events
     with broker.subscribe() as queue:
         await websocket.accept()
         await websocket.send_json(StreamReadyEvent(sequence=broker.sequence).model_dump(mode="json"))
+        if greeting is not None:
+            await websocket.send_json(greeting().model_dump(mode="json"))
         receive = asyncio.create_task(websocket.receive())
         pending = asyncio.create_task(queue.get())
         try:
@@ -114,7 +166,9 @@ async def event_stream(websocket: WebSocket) -> None:
                     await websocket.close(code=1008, reason="Event stream is receive-only")
                     return
                 if pending in done:
-                    await websocket.send_json(pending.result().model_dump(mode="json"))
+                    selected = select(pending.result())
+                    if selected is not None:
+                        await websocket.send_json(selected.model_dump(mode="json"))
                     pending = asyncio.create_task(queue.get())
         except (WebSocketDisconnect, RuntimeError):
             return

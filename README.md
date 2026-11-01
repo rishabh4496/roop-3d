@@ -82,6 +82,61 @@ origins/Host headers are checked, and errors use JSON envelopes with request IDs
 There are no remote-provider or archive-import endpoints in this stage. Secrets
 remain in the environment/OS secret stores, never project manifests or logs.
 
+### Single origin, aliases and telemetry
+
+The built workstation (`app/roop_3d_ui/dist`) is served by the same process, port and origin as
+the API, so the production UI needs no proxy or CORS. Any `/api/<path>` also resolves to
+`/api/v1/<path>`. On loopback, a request whose `Origin` is not this service (`127.0.0.1` or
+`localhost` on the service port) gets HTTP 403 `ORIGIN_DENIED`; WebSockets are closed with 1008.
+
+- `GET /api/meta`: `{"mock": false, "version", "api_versions", "share_mode"}`. The dev mock server answers `{"mock": true}`.
+- `GET /api/system/hardware` and `GET /api/system/telemetry` (the latter adds `pipeline`): besides the
+  full probe, the active GPU as `gpu_name`, `compute_capability`, `vram_total_gb`, `vram_available_gb`,
+  `cuda_version`, `tensorrt_version`, `onnxruntime_providers`, `tensor_core_precisions`,
+  `nvdec_available`, `nvenc_available`. Unknown stays `null`. Tensor Core precisions are inferred from
+  the compute capability, and NVDEC/NVENC mean FFmpeg registered the codecs; neither proves a model or
+  codec actually runs.
+- `WS /ws/telemetry`: `job.state`, `job.progress`, `system.telemetry` and `pipeline.status` events.
+  `WS /ws/v1/pipeline/status`: only `pipeline.status` frames, starting with a snapshot.
+
+A `pipeline.status` frame: `stage` (`STAGE_1_SPARSE_PRESCAN` | `STAGE_2_ACTIVE_PREPASS` |
+`STAGE_3_MAIN_SWAP` | null), `stages` (`PENDING` | `RUNNING` | `DONE` | `SKIPPED` | `FAILED` | `RESTORED`),
+`stage_progress_pct`, `active_ranges_count`, `verified_target_frames`, `skipped_frames_pct`,
+`eta_seconds`, `fps`, and `engine_state` (`IDLE` | `COMPILING_TRT` | `RUNNING_CANARY`) with
+`engine_label`, `engine_model`, `engine_precision`, `engine_since`. Today only the render pass is
+measured, as `STAGE_3_MAIN_SWAP`; stages 1 and 2 are `SKIPPED` for a job, and the quantities nothing
+measures are `null`. Engine fields are driven by `TensorRTBuilder(engine_observer=...)`.
+
+```javascript
+const ws = new WebSocket(`ws://${location.host}/ws/v1/pipeline/status`);
+ws.onmessage = e => { const f = JSON.parse(e.data); if (f.type === 'pipeline.status') console.log(f.stage, f.stage_progress_pct, f.eta_seconds); };
+```
+
+```python
+import httpx
+hw = httpx.get('http://127.0.0.1:8030/api/system/hardware').json()
+print(hw['gpu_name'], hw['vram_available_gb'], hw['tensor_core_precisions'])
+```
+
+```shell
+curl http://127.0.0.1:8030/api/system/telemetry
+```
+
+### Sharing on the network (`--server_share`)
+
+`python -B app/serve.py --server_share` (or `ROOP3D_SERVER_SHARE=1`) listens on all interfaces and
+prints, on this terminal only, a per-launch random token with ready-to-open URLs. Remote peers must
+send it as `Authorization: Bearer <token>`, `?token=<token>`, or the HTTP-only `roop3d_token`
+cookie that opening `/?token=<token>` sets; their `Origin`, when present, must equal their `Host`.
+Peers on this machine (loopback) need no token and keep the strict loopback rules. Traffic is
+plain HTTP, so share only on a network you trust. Leave the flag off for normal use.
+
+### UI development without a GPU
+
+`npm run dev:mock` in `app/roop_3d_ui` starts an Express mock backend (`mock-server/server.ts`,
+every response has `X-Mock-Server: true`) and Vite on 5174 proxied to it. Node `^20.19 || >=22.12`;
+`npm ci` is the supported install, and the Inter font is bundled so the UI is fully offline.
+
 ## Validate and continue
 
 From this app's `app/` directory on Windows:

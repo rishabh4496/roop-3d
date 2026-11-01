@@ -30,15 +30,17 @@ from roop_3d.server.workstation_preview import PreviewService, router as preview
 from roop_3d.server.api import mount_workstation
 from roop_3d.media.service import MediaService
 from roop_3d.models.catalog import ModelCatalog
-from roop_3d.server.middleware import IntakeMiddleware
+from roop_3d.server.middleware import ApiAliasMiddleware, IntakeMiddleware
 from roop_3d.server.contracts import ErrorEnvelope, Health
+from roop_3d.server.pipeline_status import PipelineTracker, TelemetrySnapshot
 from roop_3d.server.routes import router
 from roop_3d.server.finishing import router as finishing_router
-from roop_3d.server.ws import EventBroker, event_stream
+from roop_3d.server.security import ShareMode
+from roop_3d.server.ws import EventBroker, event_stream, pipeline_status_stream
 
 
 def create_app(settings: Settings | None = None, *, repo_root: Path | None = None,
-               worker_enabled: bool | None = None, pipeline_runner=None) -> FastAPI:
+               worker_enabled: bool | None = None, pipeline_runner=None, share: ShareMode | None = None) -> FastAPI:
     root = repo_root or Path(__file__).absolute().parents[2]
     if worker_enabled is None:
         # Temporary-root API contract tests do not decode their deliberately
@@ -47,6 +49,8 @@ def create_app(settings: Settings | None = None, *, repo_root: Path | None = Non
     settings = settings or Settings.from_env(ConfigStore(root).load() or Settings())
     started = time.monotonic()
     events = EventBroker()
+    pipeline = PipelineTracker(events.publish, lambda: events.sequence)
+    events.add_observer(pipeline.observe)
     jobs = JobStore(root, events.publish)
     catalog = ModelCatalog(cache_root=root, search_paths=lambda: app.state.settings.model_search_paths)
     media = MediaService(root, catalog, lambda: app.state.settings)
@@ -64,6 +68,8 @@ def create_app(settings: Settings | None = None, *, repo_root: Path | None = Non
                 if events.subscriber_count:
                     value = await run_in_threadpool(probe_hardware, app.state.settings)
                     events.publish({"type": "system.telemetry", "hardware": value})
+                    # Heartbeat frame so late joiners and idle dashboards stay current.
+                    events.publish(pipeline.snapshot().model_dump(mode="json", exclude={"sequence", "timestamp"}))
                 await asyncio.sleep(2)
 
         task = asyncio.create_task(telemetry())
@@ -80,6 +86,8 @@ def create_app(settings: Settings | None = None, *, repo_root: Path | None = Non
     app.state.settings = settings
     app.state.root = root
     app.state.events = events
+    app.state.pipeline = pipeline
+    app.state.share = share
     app.state.jobs = jobs
     app.state.models = catalog
     app.state.media = media
@@ -122,16 +130,28 @@ def create_app(settings: Settings | None = None, *, repo_root: Path | None = Non
     def hardware() -> Hardware:
         return probe_hardware(app.state.settings)
 
+    @app.get("/api/v1/system/telemetry", response_model=TelemetrySnapshot)
+    def telemetry_snapshot() -> TelemetrySnapshot:
+        value = probe_hardware(app.state.settings)
+        return TelemetrySnapshot(**value.model_dump(), pipeline=app.state.pipeline.snapshot())
+
+    @app.get("/api/v1/meta")
+    def meta() -> dict[str, Any]:
+        return {"mock": False, "application": "roop_3d", "version": __version__,
+                "api_versions": ["v1"], "share_mode": app.state.share is not None}
+
     app.include_router(router)
     app.include_router(workstation_router)
     app.include_router(preview_router)
     app.include_router(finishing_router)
     app.add_api_websocket_route("/ws/telemetry", event_stream)
     app.add_api_websocket_route("/ws/events", event_stream)
+    app.add_api_websocket_route("/ws/v1/pipeline/status", pipeline_status_stream)
 
     mount_workstation(app, root)
     if settings.dev_cors:
         app.add_middleware(CORSMiddleware, allow_origins=["http://127.0.0.1:5174"], allow_methods=["GET", "PUT", "POST", "DELETE"],
                            allow_headers=["Content-Type", "Idempotency-Key"])
-    app.add_middleware(IntakeMiddleware, settings=settings)
+    app.add_middleware(ApiAliasMiddleware)
+    app.add_middleware(IntakeMiddleware, settings=settings, share=share)
     return app

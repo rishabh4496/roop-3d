@@ -64,7 +64,7 @@ class AcceleratorFactory:
     """
     def __init__(self, bank: GoldenBank, catalog: ModelCatalog | None = None, *, root: Path | None = None,
                  profile: str = "6gb", preferred: str = "TensorrtExecutionProvider", reserve_mib: int = 768,
-                 cpu_threads: int = 2, allow_fp16: bool = True, custom_ops: bool = False):
+                 cpu_threads: int = 2, allow_fp16: bool = True, custom_ops: bool = False, engine_observer=None):
         require_no_custom_ops(custom_ops)
         if preferred not in PROVIDERS or profile not in ("6gb", "12gb"):
             raise ValueError("Invalid acceleration provider/profile")
@@ -73,7 +73,8 @@ class AcceleratorFactory:
         self.allow_fp16 = allow_fp16
         self.config = RuntimeConfig(provider="CUDAExecutionProvider", hardware_profile=profile,
                                     reserve_mib=reserve_mib, cpu_threads=cpu_threads)
-        self.builder = TensorRTBuilder(self.catalog, root=self.root, profile=profile, reserve_mib=reserve_mib, cpu_threads=cpu_threads)
+        self.builder = TensorRTBuilder(self.catalog, root=self.root, profile=profile, reserve_mib=reserve_mib, cpu_threads=cpu_threads,
+                                    engine_observer=engine_observer)
         self.receipts: dict[str, dict] = {}
         self._models: weakref.WeakSet = weakref.WeakSet()
         self._rejections: dict[str, dict[str, list[dict]]] = {}

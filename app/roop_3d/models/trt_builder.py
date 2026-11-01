@@ -130,14 +130,24 @@ def finish_profile(session, root: Path) -> dict[str, int]:
 
 class TensorRTBuilder:
     def __init__(self, catalog: ModelCatalog, *, root: Path | None = None, profile: str = "6gb",
-                 reserve_mib: int = 768, workspace_mib: int = 1024, cpu_threads: int = 2):
+                 reserve_mib: int = 768, workspace_mib: int = 1024, cpu_threads: int = 2,
+                 engine_observer: Callable[[str, dict, str], None] | None = None):
         if profile not in ("6gb", "12gb") or reserve_mib < 0 or workspace_mib < 16 or not 1 <= cpu_threads <= 8:
             raise ValueError("Invalid build policy")
+        self.engine_observer = engine_observer
         self.catalog, self.root = catalog, root or application_root()
         configure_native_paths(self.root)
         self.profile, self.reserve_mib, self.workspace_mib, self.cpu_threads = profile, reserve_mib, workspace_mib, cpu_threads
         self.cache = EngineCache(self.root)
         self.last_diagnostics: dict = {}
+
+    def _engine_state(self, state: str, record: dict, precision: str) -> None:
+        """Telemetry only (IDLE / COMPILING_TRT / RUNNING_CANARY); it must never affect a build."""
+        if self.engine_observer is not None:
+            try:
+                self.engine_observer(state, record, precision)
+            except Exception:
+                pass
 
     def build(self, record: dict, policy: PrecisionPolicy, precision: str, golden_digest: str,
               cases: tuple[dict[str, np.ndarray], ...], validate: Callable[[object], tuple[ParityReport, ...]]) -> EngineKey:
@@ -198,6 +208,7 @@ class TensorRTBuilder:
                         name + ":" + "x".join(str(v) for v in getattr(shape, field)) for name, shape in sorted(shapes.items()))
                 session = None
                 try:
+                    self._engine_state("COMPILING_TRT", record, precision)
                     session = ort.InferenceSession(str(path), sess_options=session_options(self.root, self.cpu_threads),
                         providers=[("TensorrtExecutionProvider", trt_options),
                             ("CUDAExecutionProvider", {"gpu_mem_limit": max(16 * 1048576, gpu.free_vram_mib * 1048576 - self.reserve_mib * 1048576),
@@ -205,6 +216,7 @@ class TensorRTBuilder:
                                 "cudnn_conv_use_max_workspace": False}), "CPUExecutionProvider"])
                     if session.get_providers()[0] != "TensorrtExecutionProvider":
                         raise DomainError("TRT_ACTIVATION_FAILED", f"ORT selected {session.get_providers()} instead of TensorRT", 503)
+                    self._engine_state("RUNNING_CANARY", record, precision)
                     reports = validate(session)
                     policy.admit(precision, reports)
                     providers = finish_profile(session, self.root)
@@ -236,3 +248,4 @@ class TensorRTBuilder:
                     raise DomainError("TRT_BUILD_FAILED", str(error)[:4096], 503) from None
                 finally:
                     session = None
+                    self._engine_state("IDLE", record, precision)
