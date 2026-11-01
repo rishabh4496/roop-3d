@@ -50,6 +50,8 @@ class FrameCompositor:
     def __init__(self, catalog=None, config: RuntimeConfig = RuntimeConfig(), *, parser: FaceParser | None = None,
                  restorer: GpenRestorer | None = None, temporal: TemporalSmoother | None = None):
         self.catalog = catalog
+        from roop_3d.compositor.stream_restoration import MaskSeamWatchdog
+        self.watchdog = MaskSeamWatchdog()
         self.config = config
         self.parser = parser if parser is not None else BisenetFaceParser(catalog, config)
         self.restorer = restorer
@@ -121,6 +123,9 @@ class FrameCompositor:
                               if probabilities is not None and face_mask.source.startswith("bisenet") else None)
             explicit_front = occluder_masks.get(replacement.track_id)
             front = combine_occluders(semantic_front, explicit_front)
+            self.watchdog.observe(replacement.track_id, face_mask.alpha, kind="geometric")
+            if front is not None:
+                self.watchdog.observe(replacement.track_id, np.clip(front, 0, 1), kind="occluder")
             if observer is not None:
                 observer('occluder', front if front is not None else np.zeros(crop.shape[:2], np.float32), replacement.inverse, face_mask.alpha)
             alpha = subtract_occluders(face_mask.alpha, front)
@@ -195,3 +200,4 @@ class FrameCompositor:
         if self.restorer is not None:
             self.restorer.release()
         self.temporal.clear()
+        self.watchdog.clear()

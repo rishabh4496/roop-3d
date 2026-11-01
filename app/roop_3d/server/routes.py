@@ -64,12 +64,28 @@ def capabilities(request: Request) -> Capabilities:
     available = {item["name"] for item in state.models.public()}
     gpu = bool(hardware.gpus) and "CUDAExecutionProvider" in hardware.advertised_providers
     lp = all(name in available for name in ("liveportrait_appearance_feature_extractor.onnx", "liveportrait_motion_extractor.onnx", "liveportrait_warping_spade.onnx"))
+    stream = state.settings.render_backend == "stream" or state.settings.render_backend == "auto" and gpu
+    import importlib.metadata
+    try:
+        importlib.metadata.version("tensorrt-cu12-libs")
+        trt = gpu and stream
+    except importlib.metadata.PackageNotFoundError:
+        trt = False
+    try:
+        from roop_3d.compositor.stream_restoration import load_ultramax_spec
+        ultramax = load_ultramax_spec(state.root).model_name in available
+    except (ValueError, OSError, TypeError, KeyError):
+        ultramax = False
     options = {
         "execution_mode": {"swap": None, "volumetric": None if lp else "LivePortrait weights are unavailable", "hybrid": "No verified diffusion loader is configured", "diffusion_vfx": "No verified diffusion loader is configured"},
-        "preferred_provider": {"auto": None, "CPUExecutionProvider": None, "CUDAExecutionProvider": None if gpu else "CUDA is unavailable", "TensorrtExecutionProvider": "Worker preserves the Stage 06 reference path"},
+        "preferred_provider": {"auto": None, "CPUExecutionProvider": None, "CUDAExecutionProvider": None if gpu else "CUDA is unavailable", "TensorrtExecutionProvider": None if trt else "TensorRT requires the stream backend, NVIDIA GPU and packaged TensorRT libraries"},
         "hardware_profile": {"auto": None, "cpu": None, "6gb": None if gpu else "No CUDA GPU is available", "12gb": None if gpu and hardware.gpus[0].total_vram_mib >= 12288 else "A 12 GB CUDA GPU is required"},
         "precision_policy": {"auto": None, "fp32": None, "fp16": "The reference session uses observed FP32 graph contracts"},
-        "face_restoration_policy": {"off": None, "auto": None, "gfpgan": "No verified GFPGAN adapter", "codeformer": "No verified CodeFormer adapter"},
+        "face_restoration_policy": {"off": None, "auto": None, "gfpgan": "No verified GFPGAN adapter",
+            "gpen": None if stream and "gpen_bfr_512.onnx" in available else "GPEN requires the stream backend and registered weights",
+            "codeformer": None if stream and "CodeFormerv0.1.onnx" in available else "CodeFormer requires the stream backend and registered weights",
+            "ultramax": None if stream and ultramax else "UltraMax requires an explicit registered model and preprocessing contract"},
+        "render_backend": {"auto": None, "reference": None, "stream": None},
         "lip_sync_mode": {"off": None, "wav2lip": "No verified Wav2Lip inference adapter"},
         "audio_policy": {"copy": None, "transcode": None, "drop": "The workstation preserves source audio; use copy or transcode"},
     }

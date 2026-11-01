@@ -38,7 +38,7 @@ def precision_for(model: str | Path, environ: Mapping[str, str] | None = None) -
     env = os.environ if environ is None else environ
     if env.get("ROOP_TRT_FP16") == "0":
         return "FP32"
-    name = Path(model).stem.casefold().removesuffix("_dynamic")
+    name = Path(model).stem.casefold().removesuffix("_dynamic").removesuffix(".batch")
     if name == "inswapper_128" and env.get("ROOP_SWAP_FP16") != "1":
         return "FP32"
     return "FP16"

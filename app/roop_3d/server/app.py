@@ -54,6 +54,9 @@ def create_app(settings: Settings | None = None, *, repo_root: Path | None = Non
     jobs = JobStore(root, events.publish)
     catalog = ModelCatalog(cache_root=root, search_paths=lambda: app.state.settings.model_search_paths)
     media = MediaService(root, catalog, lambda: app.state.settings)
+    if worker_enabled and pipeline_runner is None:
+        from roop_3d.optimized_processor import make_stream_runner
+        pipeline_runner = make_stream_runner(root, catalog, media, lambda: app.state.settings, pipeline_tracker=pipeline)
     worker = (JobWorker(root, jobs, lambda: app.state.settings, catalog, media,
                         pipeline_runner=pipeline_runner) if worker_enabled else None)
 
@@ -82,6 +85,7 @@ def create_app(settings: Settings | None = None, *, repo_root: Path | None = Non
                 await run_in_threadpool(worker.stop)
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
+            await run_in_threadpool(app.state.thread_benchmark.close)
 
     app = FastAPI(title="Roop 3D", version=__version__, docs_url=None, redoc_url=None, lifespan=lifespan,
                   responses={status: {"model": ErrorEnvelope} for status in (400, 403, 404, 409, 413, 416, 422, 500)})
@@ -100,6 +104,8 @@ def create_app(settings: Settings | None = None, *, repo_root: Path | None = Non
     app.state.projects = ProjectStore(root, media, catalog, jobs)
     app.state.worker = worker
     app.state.config_lock = threading.Lock()
+    from roop_3d.thread_benchmark import ThreadBenchmark
+    app.state.thread_benchmark = ThreadBenchmark()
     app.state.previews = PreviewService(app.state)
 
     def envelope(request: Request, code: str, message: str, status: int) -> JSONResponse:
@@ -150,6 +156,8 @@ def create_app(settings: Settings | None = None, *, repo_root: Path | None = Non
     app.include_router(workstation_router)
     app.include_router(preview_router)
     app.include_router(finishing_router)
+    from roop_3d.server.api import benchmark_router
+    app.include_router(benchmark_router)
     app.add_api_websocket_route("/ws/telemetry", event_stream)
     app.add_api_websocket_route("/ws/events", event_stream)
     app.add_api_websocket_route("/ws/v1/pipeline/status", pipeline_status_stream)

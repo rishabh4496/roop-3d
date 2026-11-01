@@ -1,0 +1,320 @@
+"""Three-stage streaming coordinator and production job-runner dispatch."""
+from __future__ import annotations
+
+from dataclasses import replace
+from collections import deque
+from concurrent.futures import ThreadPoolExecutor
+from fractions import Fraction
+import hashlib
+import json
+from pathlib import Path
+import threading
+import time
+import uuid
+
+import numpy as np
+
+from roop_3d.audit.isolation import sha256_file
+from roop_3d.core.errors import DomainError
+from roop_3d.core.storage import atomic_json, owned
+from roop_3d.hardware_streamer import (FrameMetadata, NvdecFrameSource, SharedMemoryFrameRing,
+                                      NVHardwareVideoWriter, SegmentWorkspace)
+from roop_3d.optimized_prepass import SparsePrepass, MAIN
+from roop_3d.render_policy import RenderPolicy
+
+
+class StreamingProcessor:
+    def __init__(self, root: Path, project_id: str, source: Path, *, detect, track, pipeline,
+                 policy: RenderPolicy = RenderPolicy(), identity=None, emit=None,
+                 check=lambda: None, progress=lambda *_: None):
+        self.root, self.project_id, self.source = root, project_id, source
+        self.detect, self.track, self.pipeline, self.policy = detect, track, pipeline, policy
+        self.identity, self.emit, self.check, self.progress = identity or {}, emit, check, progress
+
+    def run(self, destination: Path, *, audio=True, lut_path=None, lut_bake=False, prepass_reader=None):
+        from roop_3d.models.owned_files import owned_path
+        destination = owned_path(destination)
+        if destination.exists():
+            raise ValueError("Streaming output already exists")
+        published = False
+        prepass = SparsePrepass(self.root, self.project_id, self.source, detect=self.detect, track=self.track,
+            policy=self.policy, emit=self.emit, identity=self.identity, check=self.check, reader_factory=prepass_reader)
+        locked = prepass.run()
+        self.check()
+        source = NvdecFrameSource(self.source, strict=self.policy.strict_nvdec,
+                                  hardware=self.policy.hardware_profile != "cpu")
+        workspace = SegmentWorkspace(owned(self.root, f"roop_3d/.runtime/stream/{self.project_id}"))
+        by_frame = locked.by_frame()
+        if self.emit:
+            self.emit({"stage": MAIN, "state": "RUNNING", "active_ranges_count": len(locked.ranges),
+                       "verified_target_frames": locked.verified_target_frames, "skipped_frames_pct": locked.skipped_frames_pct})
+        writer = None
+        decoded = 0
+        failures = []
+        started = time.perf_counter()
+        ring = SharedMemoryFrameRing(source.shape, self.policy.ring_slots)
+        def produce():
+            iterator = source.frames()
+            try:
+                for frame, metadata in iterator:
+                    if ring.cancelled.is_set():
+                        break
+                    ring.put(frame, metadata)
+            except BaseException as error:
+                failures.append(error)
+                ring.cancel()
+            finally:
+                iterator.close()
+                ring.finish()
+        producer = threading.Thread(target=produce, name="roop3d-stream-decode", daemon=True)
+        producer.start()
+        executor = ThreadPoolExecutor(max_workers=self.policy.execution_threads, thread_name_prefix="roop3d-render")
+        local = threading.local()
+        pending = deque()
+        submitted = 0
+        bundle_frames, bundle_faces, bundle_metadata = [], [], []
+        batch_limit = min(self.policy.batch_size, self.policy.ring_slots)
+        max_pending = max(1, min(self.policy.execution_threads,
+            (512 * 1024**2) // (int(np.prod(source.shape)) * batch_limit)))
+        def infer(frames, faces_by_frame):
+            if not hasattr(local, "pipeline"):
+                factory = getattr(self.pipeline, "fork_worker", None)
+                if not callable(factory) and self.policy.execution_threads > 1:
+                    raise ValueError("Concurrent rendering requires independent worker pipeline/buffer ownership")
+                local.pipeline = factory() if callable(factory) else self.pipeline
+            batch = getattr(local.pipeline, "process_batch", None)
+            if callable(batch) and all(len(v) == 1 for v in faces_by_frame):
+                return batch(frames, faces_by_frame)
+            return [local.pipeline.process(frame, faces) if faces else frame for frame, faces in zip(frames, faces_by_frame)]
+        def submit_bundle():
+            nonlocal bundle_frames, bundle_faces, bundle_metadata
+            if bundle_frames:
+                pending.append((executor.submit(infer, bundle_frames, bundle_faces), bundle_metadata))
+                bundle_frames, bundle_faces, bundle_metadata = [], [], []
+        def write_next():
+            nonlocal writer, decoded
+            future, metadata_batch = pending.popleft()
+            outputs = future.result()
+            if len(outputs) != len(metadata_batch):
+                raise RuntimeError("Batch output count differs from submitted source frames")
+            for output, metadata in zip(outputs, metadata_batch):
+                if metadata.index != decoded:
+                    raise RuntimeError("Renderer reordered source frames")
+                if writer is None:
+                    writer = NVHardwareVideoWriter(workspace.next_path(), source.shape, source.rate,
+                        hardware=self.policy.hardware_profile != "cpu", strict=self.policy.strict_nvenc,
+                        lut_path=lut_path, lut_bake=lut_bake)
+                writer.write(output)
+                decoded += 1
+                self.progress(decoded, locked.total_frames, decoded / max(1e-6, time.perf_counter() - started))
+                if decoded % self.policy.segment_frames == 0:
+                    writer.close()
+                    writer = None
+        try:
+            while True:
+                self.check()
+                with ring.lease() as item:
+                    if item is None:
+                        break
+                    frame, metadata = item
+                    if metadata.index != submitted:
+                        raise RuntimeError("Frame transport reordered or dropped source frames")
+                    faces = by_frame.get(metadata.index, ())
+                    # A bounded owned host copy lets the ring slot be released before
+                    # asynchronous work completes. No frame serialization takes place.
+                    if len(faces) != 1:
+                        submit_bundle()
+                        pending.append((executor.submit(infer, [frame.copy()], [faces]), [metadata]))
+                    else:
+                        bundle_frames.append(frame.copy())
+                        bundle_faces.append(faces)
+                        bundle_metadata.append(metadata)
+                        if len(bundle_frames) == batch_limit:
+                            submit_bundle()
+                    submitted += 1
+                del item, frame
+                if len(pending) >= max_pending:
+                    self.check()
+                    write_next()
+            submit_bundle()
+            while pending:
+                self.check()
+                write_next()
+            if failures:
+                raise failures[0]
+            if decoded != locked.total_frames:
+                raise RuntimeError("Rendered frame count differs from the verified prepass source")
+            if writer:
+                writer.close()
+                writer = None
+            self.check()
+            final_video = owned(self.root, f"roop_3d/.runtime/stream/{self.project_id}/video_{workspace.run_id}.mp4")
+            workspace.concat(final_video)
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            if audio:
+                NVHardwareVideoWriter.remux_audio(final_video, self.source, destination)
+                published = True
+            else:
+                from roop_3d.models.owned_files import owned_path
+                owned_path(destination)
+                if destination.exists():
+                    raise ValueError("Final output exists")
+                final_video.replace(destination)
+                published = True
+            self.check()
+            from roop_3d.media.video_reader import VideoReader
+            verified = (sum(1 for _ in NvdecFrameSource(destination, strict=True).frames())
+                        if self.policy.strict_nvdec else sum(1 for _ in VideoReader(destination, hardware="software").frames()))
+            if verified != decoded:
+                raise RuntimeError("Final stream-copy output failed frame-count verification")
+            if self.emit:
+                self.emit({"stage": MAIN, "state": "DONE"})
+            return {"frames": decoded, "prepass_restored": locked.restored,
+                    "active_ranges_count": len(locked.ranges), "verified_target_frames": locked.verified_target_frames,
+                    "skipped_frames_pct": locked.skipped_frames_pct, "decoder": source.backend,
+                    "pipeline": self.pipeline.backend, "segments": [p.name for p in workspace.segments],
+                    "source_sha256": sha256_file(self.source)[1], "output_sha256": sha256_file(destination)[1]}
+        except BaseException:
+            if writer:
+                writer.abort()
+            if self.emit:
+                self.emit({"stage": MAIN, "state": "FAILED"})
+            if published:
+                owned_path(destination).unlink(missing_ok=True)
+            raise
+        finally:
+            ring.cancel()
+            source.cancel()
+            executor.shutdown(wait=True, cancel_futures=True)
+            producer.join(timeout=35)
+            if producer.is_alive():
+                raise RuntimeError("Decoder did not stop; shared-memory handles are preserved until it exits")
+            item = frame = None
+            ring.close()
+
+
+def make_stream_runner(root, catalog, media, settings_provider, *, pipeline_tracker=None):
+    from roop_3d.engine.pipeline_runner import MasterPipelineRunner
+
+    class StreamDispatchRunner(MasterPipelineRunner):
+        def run_prepared(self, record, admission, *, prepared, control, mark_running, report_progress):
+            settings = prepared.settings
+            requested = settings.render_backend
+            basic = (settings.execution_mode == "swap" and settings.lip_sync_mode == "off"
+                and record.request.export is None and record.request.trim_start_seconds is None
+                and record.request.trim_end_seconds is None and record.request.face_segments is None
+                and record.request.workstation_parameters is None and record.request.parameter_curves is None
+                and record.request.mask_base64 is None and settings.audio_policy in ("copy", "drop")
+                and settings.face_restoration_policy in ("off", "auto", "gpen", "codeformer", "ultramax"))
+            if requested == "reference" or requested == "auto" and (admission.profile == "cpu" or not basic):
+                return super().run_prepared(record, admission, prepared=prepared, control=control,
+                    mark_running=mark_running, report_progress=report_progress)
+            if not basic:
+                raise DomainError("STREAM_FEATURE_UNAVAILABLE", "This job requires the preserved reference timeline/finishing path", 422)
+            from roop_3d.media.probe import probe
+            info = probe(prepared.target).videos[0]
+            if (info.vfr is not False or info.rotation % 360 or not (info.average_rate or info.nominal_rate)
+                    or info.start_time not in (None, 0)):
+                if requested == "auto":
+                    return super().run_prepared(record, admission, prepared=prepared, control=control,
+                        mark_running=mark_running, report_progress=report_progress)
+                raise DomainError("STREAM_TIMING_UNSUPPORTED", "Streaming requires verified CFR and upright frames", 422)
+            try:
+                # Full packet-grid/SAR/HDR validation happens before model activation.
+                NvdecFrameSource(prepared.target, hardware=admission.profile != "cpu", strict=False)
+            except ValueError:
+                if requested == "auto":
+                    return super().run_prepared(record, admission, prepared=prepared, control=control,
+                        mark_running=mark_running, report_progress=report_progress)
+                raise DomainError("STREAM_TIMING_UNSUPPORTED", "Input requires the reference timing/color pipeline", 422) from None
+            from roop_3d.engine.runtime import OrtModel, record_named, session_factory
+            from roop_3d.engine.detection.face_tracker import FaceTracker
+            from roop_3d.media.detector import Detector
+            from roop_3d.models.emap_cache import cached_emap
+            from roop_3d.engine.volumetric.identity_swapper import embedding_map, unit_embedding
+            from roop_3d.vectorized_pipeline import CpuBatchPipeline, GpuBatchPipeline
+            from roop_3d.render_policy import CudaWorkerContext
+            config = self._runtime_config(admission, settings)
+            context = CudaWorkerContext(enabled=admission.profile != "cpu")
+            tracker = detector = model = restorer = None
+            def check():
+                signal = self._control_signal(control)
+                if signal:
+                    raise signal()
+            def emit(value):
+                if pipeline_tracker:
+                    pipeline_tracker.render_event(record.job_id, value)
+            try:
+                with context.activate():
+                    detector = Detector(catalog, session_factory(catalog, config))
+                    tracker = FaceTracker(catalog, config=config)
+                    static = record_named(catalog, "inswapper_128.onnx")
+                    projection = cached_emap(catalog._path(static), embedding_map, source_sha256=static["sha256"])
+                    embeddings = {key: unit_embedding(unit_embedding(np.asarray(value.canonical_embedding)) @ projection)
+                                  for key, value in prepared.sources_by_track.items()}
+                    model = OrtModel(catalog, "inswapper_128.batch.onnx", config)
+                    if settings.face_restoration_policy != "off":
+                        from roop_3d.compositor.stream_restoration import DecoupledRestorer, OnnxFaceRestorer, gpen_spec, codeformer_spec, load_ultramax_spec
+                        if settings.face_restoration_policy == "ultramax":
+                            spec = load_ultramax_spec(self.root)
+                        else:
+                            spec = codeformer_spec() if settings.face_restoration_policy == "codeformer" else gpen_spec()
+                        restorer = DecoupledRestorer(lambda: OnnxFaceRestorer(catalog, config, spec), spec,
+                            workers=settings.restorer_threads, pool_size=settings.restorer_pool_size,
+                            cuda=admission.profile != "cpu", ultramax_native_bypass=settings.ultramax_native_bypass,
+                            ultramax_min_pixels=settings.ultramax_min_pixels)
+                    selected_session = model.session
+                    if settings.preferred_provider == "TensorrtExecutionProvider":
+                        from roop_3d.trt_session_builder import TensorRTSessionBuilder
+                        selected_session = TensorRTSessionBuilder(hardware_profile=admission.profile,
+                            telemetry=pipeline_tracker.compilation_event if pipeline_tracker else None).build(model.path)
+                    if admission.profile == "cpu":
+                        pipeline = CpuBatchPipeline(lambda target, source: selected_session.run(None, {"target": target,
+                            "source": source})[0], embeddings=embeddings, restorer=restorer)
+                    else:
+                        pipeline = GpuBatchPipeline(selected_session, embeddings, max_batch=settings.stream_batch_size,
+                            hardware_profile=admission.profile, restorer=restorer, execution_threads=settings.execution_threads)
+                def detect(image):
+                    with context.activate():
+                        return detector.detect(image)[0]
+                def track(image):
+                    with context.activate():
+                        return [(v.track_id, v.observation.box, v.observation.landmarks5) for v in tracker.process(image)
+                                if v.track_id in embeddings]
+                mark_running()
+                policy = RenderPolicy.from_env(batch_size=settings.stream_batch_size,
+                    execution_threads=settings.execution_threads, ring_slots=settings.stream_ring_slots,
+                    hardware_profile=admission.profile, sparse_interval=settings.sparse_interval,
+                    range_padding=settings.sparse_interval, segment_frames=settings.stream_segment_frames)
+                destination = owned(self.root, f"{settings.output_root}/roop3d_{record.job_id}_{time.time_ns()}.mp4")
+                processor = StreamingProcessor(self.root, record.job_id, prepared.target, detect=detect, track=track,
+                    pipeline=pipeline, policy=policy, emit=emit, check=check,
+                    identity={"request": self._request_digest(record), "settings": settings.model_dump(),
+                              "model_sha256": model.record["sha256"]},
+                    progress=lambda frame, total, fps: report_progress(__import__("roop_3d.jobs.schema", fromlist=["JobProgress"]).JobProgress(
+                        frame=frame, total_frames=total, fps=fps, stage="render")))
+                metadata = processor.run(destination, audio=settings.audio_policy == "copy")
+                relative = destination.relative_to(self.root).as_posix()
+                manifest_path = relative + ".manifest.json"
+                metadata.update(output_path=relative, manifest_path=manifest_path, audio_policy=settings.audio_policy,
+                    model_hashes={"identity_swapper": model.record["sha256"]}, verified_frames=metadata["frames"],
+                    sparse_absence_evidence="SPARSE_ESTIMATE", render_backend="stream",
+                    restorer=settings.face_restoration_policy, restorer_host_bridge=restorer is not None)
+                if restorer:
+                    metadata["restorer_providers"] = sorted({v.model.provider for v in restorer.instances if v.model})
+                    metadata["restorer_model_hashes"] = sorted({v.model.record["sha256"] for v in restorer.instances if v.model})
+                atomic_json(self.root, manifest_path, metadata)
+                from roop_3d.jobs.schema import JobOutput
+                return JobOutput(output_path=relative, manifest_path=manifest_path,
+                    output_sha256=metadata["output_sha256"], frames=metadata["frames"], audio_policy=settings.audio_policy)
+            finally:
+                if restorer:
+                    restorer.close()
+                with context.activate():
+                    if tracker:
+                        tracker.release()
+                    if detector:
+                        detector.release_for_build()
+                    if model:
+                        model.release()
+    return StreamDispatchRunner(root, catalog, media, settings_provider)

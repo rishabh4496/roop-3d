@@ -103,9 +103,10 @@ A `pipeline.status` frame: `stage` (`STAGE_1_SPARSE_PRESCAN` | `STAGE_2_ACTIVE_P
 `STAGE_3_MAIN_SWAP` | null), `stages` (`PENDING` | `RUNNING` | `DONE` | `SKIPPED` | `FAILED` | `RESTORED`),
 `stage_progress_pct`, `active_ranges_count`, `verified_target_frames`, `skipped_frames_pct`,
 `eta_seconds`, `fps`, and `engine_state` (`IDLE` | `COMPILING_TRT` | `RUNNING_CANARY`) with
-`engine_label`, `engine_model`, `engine_precision`, `engine_since`. Today only the render pass is
-measured, as `STAGE_3_MAIN_SWAP`; stages 1 and 2 are `SKIPPED` for a job, and the quantities nothing
-measures are `null`. Engine fields are driven by `TensorRTBuilder(engine_observer=...)`.
+`engine_label`, `engine_model`, `engine_precision`, `engine_since`. Streaming jobs report all three
+stages and their measured policy counts; sparse absence estimates are not proof of no faces.
+Reference jobs retain stage-1/2 `SKIPPED` and unmeasured quantities remain `null`.
+Engine fields are driven by the TensorRT builder observers.
 
 ```javascript
 const ws = new WebSocket(`ws://${location.host}/ws/v1/pipeline/status`);
@@ -162,3 +163,7 @@ compilation telemetry and prebuild/benchmark commands are documented in
 [docs/TRT_STAGE2.md](docs/TRT_STAGE2.md). These tools preserve the existing
 reference inference paths; GPU performance and production-model parity require
 separate hardware runs.
+
+Stage 3 streaming, numeric prepass checkpoints, the zero-pickle frame ring,
+CUDA I/O binding, NVDEC/NVENC, restorer contracts and thread benchmark routes are
+documented in [docs/STREAM_STAGE3.md](docs/STREAM_STAGE3.md).

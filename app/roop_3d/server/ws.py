@@ -170,9 +170,12 @@ async def _stream(websocket: WebSocket, select: Callable[[EventBase], EventBase 
                     if selected is not None:
                         await websocket.send_json(selected.model_dump(mode="json"))
                     pending = asyncio.create_task(queue.get())
-        except (WebSocketDisconnect, RuntimeError):
+        except (WebSocketDisconnect, RuntimeError, asyncio.CancelledError):
             return
         finally:
             receive.cancel()
             pending.cancel()
-            await asyncio.gather(receive, pending, return_exceptions=True)
+            try:
+                await asyncio.gather(receive, pending, return_exceptions=True)
+            except asyncio.CancelledError:
+                pass  # ASGI cancellation may arrive again during disconnect cleanup.

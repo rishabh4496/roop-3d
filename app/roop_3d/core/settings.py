@@ -43,7 +43,7 @@ class Settings(Contract):
     vram_limit_mb: int = Field(default=0, ge=0, le=131072, strict=True, description="0 uses available VRAM")
     memory_safety_reserve_mb: int = Field(default=768, ge=0, le=131072, strict=True)
     max_concurrent_jobs: int = Field(default=1, ge=1, le=8, strict=True)
-    face_restoration_policy: Literal["off", "auto", "gfpgan", "codeformer"] = "off"
+    face_restoration_policy: Literal["off", "auto", "gpen", "gfpgan", "codeformer", "ultramax"] = "off"
     video_timing_policy: Literal["preserve", "cfr"] = "preserve"
     audio_policy: Literal["copy", "transcode", "drop"] = "copy"
     lip_sync_mode: Literal["off", "wav2lip"] = "off"
@@ -53,6 +53,16 @@ class Settings(Contract):
     remote_processing_enabled: bool = False
     synthetic_media_notice: bool = True
     diagnostics_level: Literal["error", "warning", "info", "debug"] = "info"
+    render_backend: Literal["auto", "reference", "stream"] = "auto"
+    execution_threads: int = Field(default=1, ge=1, le=8, strict=True)
+    stream_batch_size: int = Field(default=4, ge=1, le=8, strict=True)
+    stream_ring_slots: int = Field(default=4, ge=2, le=32, strict=True)
+    stream_segment_frames: int = Field(default=250, ge=1, le=10000, strict=True)
+    sparse_interval: int = Field(default=25, ge=1, le=1000, strict=True)
+    restorer_threads: int = Field(default=1, ge=1, le=8, strict=True)
+    restorer_pool_size: int = Field(default=2, ge=1, le=32, strict=True)
+    ultramax_native_bypass: bool = True
+    ultramax_min_pixels: int = Field(default=320, ge=1, le=4096, strict=True)
     host: Literal["127.0.0.1"] = "127.0.0.1"
     port: int = Field(default=8030, ge=1, le=65535)
     max_body_bytes: int = Field(default=2 * 1024 * 1024, ge=1, le=64 * 1024 * 1024)

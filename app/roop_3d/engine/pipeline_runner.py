@@ -368,7 +368,7 @@ class MasterPipelineRunner:
             session.prepare_session(base_source, track_ids=numeric_ids,
                                     sources_by_track=source_by_track,
                                     retarget='off' if record.request.parameters_at(0).pose_mode == 'mesh_blend' else 'auto')
-            if settings.face_restoration_policy in {"gfpgan", "codeformer"}:
+            if settings.face_restoration_policy not in {"off", "auto"}:
                 raise DomainError("RESTORER_UNAVAILABLE", "The selected restoration architecture has no verified local adapter", 503)
             animated_restoration = bool(record.request.parameter_curves and any(key.value > 0 for key in record.request.parameter_curves.tracks.get('restorer_opacity', ())))
             if settings.face_restoration_policy == "auto" or animated_restoration or (record.request.workstation_parameters and record.request.workstation_parameters.composite_options().restoration_blend > 0):

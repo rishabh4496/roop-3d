@@ -4,6 +4,32 @@ from fastapi.responses import FileResponse, HTMLResponse
 from starlette.exceptions import HTTPException
 from starlette.staticfiles import StaticFiles
 from roop_3d.audit.isolation import safe_path
+from fastapi import APIRouter, Request
+from typing import Literal
+from roop_3d.core.settings import Contract
+from roop_3d.core.errors import DomainError
+
+benchmark_router = APIRouter(prefix="/api/v1/settings")
+
+
+class ThreadBenchmarkRequest(Contract):
+    profile: Literal["quick", "full"] = "quick"
+
+
+@benchmark_router.post("/benchmark_threads", status_code=202)
+def benchmark_threads(value: ThreadBenchmarkRequest, request: Request):
+    from roop_3d.jobs.schema import JobState
+    if any(job.state in (JobState.preparing, JobState.running) for job in request.app.state.jobs.list()):
+        raise DomainError("BENCHMARK_BUSY", "Wait for active jobs before benchmarking GPU concurrency", 409)
+    try:
+        return request.app.state.thread_benchmark.start(value.profile)
+    except RuntimeError:
+        raise DomainError("BENCHMARK_BUSY", "A thread benchmark is already running", 409) from None
+
+
+@benchmark_router.get("/benchmark_status")
+def benchmark_status(request: Request):
+    return request.app.state.thread_benchmark.snapshot()
 
 
 class WorkstationFiles(StaticFiles):

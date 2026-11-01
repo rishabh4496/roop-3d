@@ -20,6 +20,7 @@ class RuntimeConfig:
     reserve_mib: int = 768
     cpu_threads: int = 2
     model_factory: Any = field(default=None, compare=False, repr=False)
+    graph_optimization: str = "all"
 
     def __post_init__(self) -> None:
         if self.provider not in ("CPUExecutionProvider", "CUDAExecutionProvider"):
@@ -30,6 +31,8 @@ class RuntimeConfig:
             raise ValueError("CUDA requires an explicit 6gb or 12gb profile")
         if not 1 <= self.cpu_threads <= 8:
             raise ValueError("CPU thread budget must be within 1..8")
+        if self.graph_optimization not in ("all", "extended"):
+            raise ValueError("Unsupported graph optimization policy")
 
     @cached_property
     def gpu_budget_bytes(self) -> int:
@@ -45,12 +48,12 @@ class RuntimeConfig:
 def tensor(value: np.ndarray, shape: tuple[int, ...], *, dtype: np.dtype = np.dtype("float32")) -> np.ndarray:
     if not isinstance(value, np.ndarray) or value.shape != shape or value.dtype != dtype or not np.isfinite(value).all():
         raise DomainError("INFERENCE_TENSOR_INVALID", "Tensor shape, dtype or finite-value contract failed", 422)
-    return np.ascontiguousarray(value)
+    return np.asarray(value) if value.ndim == 0 else np.ascontiguousarray(value)
 
 
 def contract_array(value: np.ndarray, declared, *, dtype=np.dtype("float32"), batch_one: bool = False) -> np.ndarray:
     if (not isinstance(value, np.ndarray) or value.ndim != len(declared) or value.nbytes > 64 * 1048576
-            or any(d <= 0 for d in value.shape) or batch_one and value.shape[0] != 1):
+            or any(d <= 0 for d in value.shape) or batch_one and value.ndim > 0 and value.shape[0] != 1):
         raise DomainError("INFERENCE_TENSOR_INVALID", "Tensor rank, batch or memory budget failed", 422)
     shape = tuple(d if isinstance(d, int) else value.shape[i] for i, d in enumerate(declared))
     return tensor(value, shape, dtype=dtype)
@@ -107,6 +110,8 @@ class OrtModel:
         options.intra_op_num_threads, options.inter_op_num_threads = config.cpu_threads, 1
         options.enable_mem_pattern = False
         options.log_severity_level = 3
+        options.graph_optimization_level = (ort.GraphOptimizationLevel.ORT_ENABLE_EXTENDED
+            if config.graph_optimization == "extended" else ort.GraphOptimizationLevel.ORT_ENABLE_ALL)
         self.executions = 0
         self.provider = self.requested_provider = config.provider
         self.fallback_reason: str | None = None
@@ -117,7 +122,11 @@ class OrtModel:
             if config.provider not in ort.get_available_providers():
                 raise DomainError("PROVIDER_UNAVAILABLE", "Requested CUDA provider is unavailable", 503)
             ort.preload_dlls()
-            divisor = {"inswapper_128.onnx": 4, "liveportrait_warping_spade.onnx": 2,
+            divisor = {"inswapper_128.onnx": 4, "inswapper_128.batch.onnx": 4,
+                       "inswapper_128_dynamic.onnx": 4, "gpen_bfr_512.onnx": 4,
+                       "GPEN-BFR-512.onnx": 4, "CodeFormerv0.1.onnx": 3, "codeformer.fp16.onnx": 8,
+                       "scrfd_2.5g_kps.onnx": 32, "det_10g.onnx": 16,
+                       "liveportrait_warping_spade.onnx": 2,
                        "liveportrait_motion_extractor.onnx": 8, "liveportrait_landmark.onnx": 16,
                        "2d106det.onnx": 32, "liveportrait_appearance_feature_extractor.onnx": 64}.get(name, 192)
             providers = [(config.provider, {"gpu_mem_limit": config.gpu_budget_bytes // divisor,
@@ -161,10 +170,11 @@ class OrtModel:
                 raise DomainError("MODEL_GRAPH_DRIFT", "Runtime graph differs from verified graph", 503)
             for node, declared in zip(actual, expected):
                 if (node.name != declared["name"] or len(node.shape) != len(declared["shape"])
-                        or any(isinstance(a, int) != isinstance(b, int) or isinstance(a, int) and a != b
+                        or any(isinstance(b, int) and (not isinstance(a, int) or a != b)
+                               or isinstance(a, int) and a <= 0
                                for a, b in zip(node.shape, declared["shape"]))):
                     raise DomainError("MODEL_GRAPH_DRIFT", "Runtime tensor layout differs from verified graph", 503)
-                expected_type = {"FLOAT": "tensor(float)", "FLOAT16": "tensor(float16)"}.get(declared["dtype"])
+                expected_type = {"FLOAT": "tensor(float)", "FLOAT16": "tensor(float16)", "DOUBLE": "tensor(double)"}.get(declared["dtype"])
                 if node.type != expected_type:
                     raise DomainError("MODEL_GRAPH_DRIFT", "Runtime tensor dtype differs from verified graph", 503)
 
@@ -185,7 +195,7 @@ class OrtModel:
         for node in nodes:
             value = values[node.name]
             contract_array(value, node.shape, batch_one=True,
-                           dtype=np.dtype("float16" if node.type == "tensor(float16)" else "float32"))
+                           dtype=np.dtype({"tensor(float16)": "float16", "tensor(double)": "float64"}.get(node.type, "float32")))
         retry_reason = None
         try:
             arrays = self.session.run(None, values)
@@ -204,7 +214,7 @@ class OrtModel:
         outputs = {}
         for node, value in zip(self.session.get_outputs(), arrays):
             outputs[node.name] = contract_array(value, node.shape,
-                dtype=np.dtype("float16" if node.type == "tensor(float16)" else "float32"))
+                dtype=np.dtype({"tensor(float16)": "float16", "tensor(double)": "float64"}.get(node.type, "float32")))
         self.executions += 1
         return outputs
 

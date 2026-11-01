@@ -1,11 +1,4 @@
-"""Pipeline stage telemetry derived from job events and engine-build notifications.
-
-The reference pipeline has a single measured stage (`render`), reported as
-STAGE_3_MAIN_SWAP. Stages 1 and 2 (sparse prescan / active prepass) are not
-implemented, so a job marks them SKIPPED. Quantities that nothing measures
-(active ranges, verified target frames, skipped-frame percentage) stay None;
-nothing here invents a figure.
-"""
+"""Measured three-stage stream telemetry and preserved reference-job status."""
 from __future__ import annotations
 
 import time
@@ -48,6 +41,22 @@ class PipelineTracker:
     def _emit(self) -> None:
         self._publish(self.snapshot().model_dump(mode="json", exclude={"sequence", "timestamp"}))
 
+    def render_event(self, job_id: str, value: dict) -> None:
+        stage, status = value["stage"], value["state"]
+        if stage not in STAGE_ORDER or status not in ("RUNNING", "DONE", "RESTORED", "FAILED"):
+            raise ValueError("Invalid render-stage event")
+        with self._lock:
+            if self._state["job_id"] not in (None, job_id):
+                return
+            if stage == STAGE_ORDER[0] and status in ("RUNNING", "RESTORED"):
+                self._state["stages"] = _idle()
+            self._state.update(job_id=job_id, stage=stage)
+            self._state["stages"] = {**self._state["stages"], stage: status}
+            for name in ("active_ranges_count", "verified_target_frames", "skipped_frames_pct"):
+                if name in value:
+                    self._state[name] = value[name]
+        self._emit()
+
     # -- job events -----------------------------------------------------------------
     def observe(self, event: EventBase) -> None:
         if isinstance(event, JobStateEvent):
@@ -64,6 +73,7 @@ class PipelineTracker:
             state = self._state
             if event.state is JobState.preparing:
                 state.update(job_id=event.job_id, stage=None, stage_progress_pct=0.0, eta_seconds=None, fps=0.0,
+                             active_ranges_count=None, verified_target_frames=None, skipped_frames_pct=None,
                              stages={"STAGE_1_SPARSE_PRESCAN": "SKIPPED", "STAGE_2_ACTIVE_PREPASS": "SKIPPED", MAIN: "PENDING"})
             elif state["job_id"] not in (None, event.job_id):
                 return False  # another job owns the frame; only its own events move it

@@ -125,7 +125,8 @@ class IdentitySwapper:
         self.release_session()
         try:
             self.model = OrtModel(self.catalog, "inswapper_128.onnx", self.config)
-            self.projection = embedding_map(self.model.path)
+            from roop_3d.models.emap_cache import cached_emap
+            self.projection = cached_emap(self.model.path, embedding_map, source_sha256=self.model.record["sha256"])
             self.source, self.canonical = source, canonical
             self.sources_by_track = mapped
             self.canonical_by_track = canonical_by_track
