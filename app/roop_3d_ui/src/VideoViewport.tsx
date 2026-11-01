@@ -23,6 +23,7 @@ import useHistoryStore from './stores/useHistoryStore';
 import { CURVE_PARAMETERS, evaluateParameters, upsertKey } from './stores/parameterCurves';
 import HistoryDrawer from './components/workstation/HistoryDrawer';
 import SnapshotSlots, { SnapshotViewport } from './components/workstation/SnapshotSlots';
+import { panAnchoredAt } from './utils/zoomPan';
 
 function usePreview(path: string, time: number, playing: boolean) {
   const [source, setSource] = useState('');
@@ -224,6 +225,29 @@ export function VideoViewport({
   const [showFaceOverlays, setShowFaceOverlays] = useState(true);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [snapshotNotice, setSnapshotNotice] = useState('');
+  const [isSpaceDown, setIsSpaceDown] = useState(false);
+  const isSpaceDownRef = useRef(false);
+
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.code === 'Space' && !e.repeat && !(e.target as HTMLElement)?.closest('input, textarea, select')) {
+        isSpaceDownRef.current = true;
+        setIsSpaceDown(true);
+      }
+    };
+    const onKeyUp = (e: KeyboardEvent) => {
+      if (e.code === 'Space') {
+        isSpaceDownRef.current = false;
+        setIsSpaceDown(false);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    window.addEventListener('keyup', onKeyUp);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('keyup', onKeyUp);
+    };
+  }, []);
 
   // Fullscreen sync
   const toggleFullscreen = useCallback(() => {
@@ -292,7 +316,7 @@ export function VideoViewport({
 
   // Viewport pan & zoom handlers
   const handleViewportPointerDown = (e: React.PointerEvent) => {
-    if (previewZoom <= 1 || isMaskEditing) return;
+    if ((previewZoom <= 1 && !isSpaceDownRef.current) || isMaskEditing) return;
     const targetEl = e.target as HTMLElement;
     if (targetEl.closest('button, input, select, .face-assignment-popover, .preview-hud-toolbar, .preview-face-selector-strip')) return;
     setIsPanning(true);
@@ -303,7 +327,7 @@ export function VideoViewport({
   };
 
   const handleViewportPointerMove = (e: React.PointerEvent) => {
-    if (!isPanning || previewZoom <= 1) return;
+    if (!isPanning || (previewZoom <= 1 && !isSpaceDownRef.current)) return;
     setPreviewPan({
       x: e.clientX - panOrigin.x,
       y: e.clientY - panOrigin.y,
@@ -324,11 +348,17 @@ export function VideoViewport({
       e.preventDefault();
       e.stopPropagation();
       const delta = e.deltaY < 0 ? 0.25 : -0.25;
-      setPreviewZoom(current => {
-        const next = Math.max(1, Math.min(4, Math.round((current + delta) * 4) / 4));
-        if (next === 1) setPreviewPan({ x: 0, y: 0 });
-        return next;
-      });
+      const nextZoom = Math.max(1, Math.min(4, Math.round((previewZoom + delta) * 4) / 4));
+      if (nextZoom === 1) {
+        setPreviewZoom(1);
+        setPreviewPan({ x: 0, y: 0 });
+      } else {
+        const stage = viewportRef.current;
+        const client = { x: e.clientX, y: e.clientY };
+        const nextPan = panAnchoredAt(client, stage, previewZoom, nextZoom, previewPan);
+        setPreviewZoom(nextZoom);
+        setPreviewPan(nextPan);
+      }
     }
   };
 
@@ -450,12 +480,12 @@ export function VideoViewport({
         onWheel={handleWheelZoom}
       >
         {/* Floating Preview Controls HUD */}
-        <div className="preview-hud-toolbar" role="toolbar" aria-label="Preview Controls">
+        <div className="preview-hud-toolbar hud-glass" role="toolbar" aria-label="Preview Controls">
           {/* Zoom Controller */}
-          <div className="hud-group zoom-group" role="group" aria-label="Preview Zoom">
+          <div className="hud-group zoom-group spring-cluster" role="group" aria-label="Preview Zoom">
             <button
               type="button"
-              className="hud-btn zoom-step-btn"
+              className="hud-btn hud-glass-button zoom-step-btn"
               disabled={previewZoom <= 1}
               onClick={() => {
                 const next = Math.max(1, Math.round((previewZoom - 0.25) * 4) / 4);
@@ -468,7 +498,7 @@ export function VideoViewport({
             </button>
             <button
               type="button"
-              className="hud-btn zoom-level-btn"
+              className="hud-btn hud-glass-button zoom-level-btn"
               onClick={() => {
                 if (previewZoom === 1) {
                   setPreviewZoom(2);
@@ -483,17 +513,48 @@ export function VideoViewport({
             </button>
             <button
               type="button"
-              className="hud-btn zoom-step-btn"
+              className="hud-btn hud-glass-button zoom-step-btn"
               disabled={previewZoom >= 4}
               onClick={() => setPreviewZoom(z => Math.min(4, Math.round((z + 0.25) * 4) / 4))}
               title="Zoom In Preview [+]"
             >
               +
             </button>
+            <button
+              type="button"
+              className={`hud-btn hud-glass-button zoom-preset-btn ${previewZoom === 1 ? 'active' : ''}`}
+              onClick={() => {
+                setPreviewZoom(1);
+                setPreviewPan({ x: 0, y: 0 });
+              }}
+              title="1:1 Native Resolution (Shift+1)"
+            >
+              1:1
+            </button>
+            <button
+              type="button"
+              className={`hud-btn hud-glass-button zoom-preset-btn ${previewZoom === 2 ? 'active' : ''}`}
+              onClick={() => {
+                setPreviewZoom(2);
+              }}
+              title="2:1 200% Zoom (Shift+2)"
+            >
+              2:1
+            </button>
+            <button
+              type="button"
+              className={`hud-btn hud-glass-button zoom-preset-btn ${previewZoom === 4 ? 'active' : ''}`}
+              onClick={() => {
+                setPreviewZoom(4);
+              }}
+              title="4:1 400% Zoom (Shift+4)"
+            >
+              4:1
+            </button>
             {previewZoom > 1 && (
               <button
                 type="button"
-                className="hud-btn hud-reset-btn"
+                className="hud-btn hud-glass-button hud-reset-btn"
                 onClick={() => {
                   setPreviewZoom(1);
                   setPreviewPan({ x: 0, y: 0 });
@@ -587,7 +648,7 @@ export function VideoViewport({
             height: '100%',
             display: 'grid',
             gridTemplateColumns: isMaskEditing ? '1fr' : '1fr 1fr',
-            cursor: previewZoom > 1 ? (isPanning ? 'grabbing' : 'grab') : 'default',
+            cursor: isPanning ? 'grabbing' : isSpaceDown ? 'grab' : previewZoom > 1 ? 'grab' : 'default',
             transition: isPanning ? 'none' : 'transform 0.12s cubic-bezier(0.2, 0, 0, 1)',
           }}
         >

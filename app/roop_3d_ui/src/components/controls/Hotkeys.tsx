@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
-export const DEFAULT_KEYS: Record<string, string> = { play: 'Space', previous: 'ArrowLeft', next: 'ArrowRight', markIn: 'I', markOut: 'O', solo: 'S', bypass: 'B', sweep: 'Shift+P', floating: 'Shift+F', save: 'Ctrl+S', undo: 'Ctrl+Z', redo: 'Ctrl+Y' };
-export const KEY_LABELS: Record<string, string> = { play: 'Play / pause', previous: 'Previous frame', next: 'Next frame', markIn: 'Mark trim in', markOut: 'Mark trim out', solo: 'Solo selected pipeline node', bypass: 'Bypass selected pipeline node', sweep: 'Parameter sweep', floating: 'Floating preview', save: 'Save project', undo: 'Undo edit', redo: 'Redo edit' };
+export const DEFAULT_KEYS: Record<string, string> = { play: 'Space', previous: 'ArrowLeft', next: 'ArrowRight', markIn: 'I', markOut: 'O', jumpIn: 'Shift+I', jumpOut: 'Shift+O', resetRange: 'Alt+R', solo: 'S', bypass: 'B', sweep: 'Shift+P', floating: 'Shift+F', save: 'Ctrl+S', undo: 'Ctrl+Z', redo: 'Ctrl+Y' };
+export const KEY_LABELS: Record<string, string> = { play: 'Play / pause', previous: 'Previous frame', next: 'Next frame', markIn: 'Mark trim in', markOut: 'Mark trim out', jumpIn: 'Jump to trim in', jumpOut: 'Jump to trim out', resetRange: 'Reset trim range', solo: 'Solo selected pipeline node', bypass: 'Bypass selected pipeline node', sweep: 'Parameter sweep', floating: 'Floating preview', save: 'Save project', undo: 'Undo edit', redo: 'Redo edit' };
 const STORAGE = 'roop3d-hotkeys-v1';
 export function keyChord(event: Pick<KeyboardEvent, 'key' | 'ctrlKey' | 'altKey' | 'shiftKey' | 'metaKey'>) {
   if (['Control', 'Alt', 'Shift', 'Meta'].includes(event.key)) return '';

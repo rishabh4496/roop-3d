@@ -2,6 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { api, post } from '../api';
 import { SettingsInspector } from '../SettingsInspector';
 import { HotkeyEditor } from '../components/controls/Hotkeys';
+import ThemeGallery from '../components/ThemeGallery';
+import { THEMES, themeByName, applyThemeToDom } from '../themes';
 
 export default function SettingsScreen({
   caps,
@@ -12,6 +14,15 @@ export default function SettingsScreen({
   connection = 'local',
 }) {
   const [activeTab, setActiveTab] = useState('preferences'); // 'preferences' | 'diagnostics'
+  const [currentTheme, setCurrentTheme] = useState(() => localStorage.getItem('roop3d-theme-name') || 'Default');
+
+  const handleThemeChange = (name) => {
+    setCurrentTheme(name);
+    const t = themeByName(name);
+    applyThemeToDom(t);
+    localStorage.setItem('roop3d-theme-name', name);
+    localStorage.setItem('roop3d-theme', t.mode);
+  };
 
   // Benchmark state
   const [benchmarkLoading, setBenchmarkLoading] = useState(false);
@@ -124,6 +135,19 @@ export default function SettingsScreen({
             busy={busy}
           />
           <div>
+            <section className="offline-health theme-settings-section" style={{ marginBottom: '1.25rem' }}>
+              <div className="panel-heading" style={{ marginBottom: '0.75rem' }}>
+                <div>
+                  <span className="eyebrow">VISUAL STYLING & ACCENT COLORS</span>
+                  <h2>Interface Themes & Styles ({THEMES.length})</h2>
+                </div>
+                <span className="badge-theme" style={{ padding: '0.2rem 0.5rem', borderRadius: '4px', background: 'rgba(255,255,255,0.1)', fontSize: '0.75rem', fontWeight: 'bold' }}>{currentTheme}</span>
+              </div>
+              <p className="muted" style={{ marginBottom: '0.75rem' }}>
+                Choose from 38 studio-calibrated themes including Obsidian, Dracula, pure AMOLED black, and light frosted styles.
+              </p>
+              <ThemeGallery value={currentTheme} onChange={handleThemeChange} />
+            </section>
             <HotkeyEditor />
             <section className="offline-health">
               <h2>Connection & Host Architecture</h2>

@@ -438,6 +438,113 @@ def download_faceset(faceset_id: str, request: Request):
     return FileResponse(archive, filename=f"{faceset_id}.fsz", media_type="application/zip")
 
 
+@router.get("/facesets/{faceset_id}/thumb")
+def faceset_thumb(faceset_id: str, request: Request):
+    import re
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", faceset_id):
+        raise DomainError("FACESET_ID_INVALID", "FaceSet ID is invalid", 422)
+    root = request.app.state.root
+    paths = [owned(root, f"roop_3d/{base}/facesets/{faceset_id}.fsz") for base in ("outputs", ".runtime")]
+    archive = next((path for path in paths if path.is_file()), None)
+    if archive is None:
+        raise DomainError("FACESET_ARCHIVE_NOT_FOUND", "FaceSet archive is missing", 404)
+    from fastapi.responses import Response
+    with zipfile.ZipFile(archive, "r") as zf:
+        names = [n for n in zf.namelist() if n.lower().endswith(".png")]
+        if not names:
+            raise DomainError("FACESET_EMPTY", "No thumbnail images in FaceSet", 404)
+        best_name = names[0]
+        if "metadata.json" in zf.namelist():
+            try:
+                meta = json.loads(zf.read("metadata.json").decode("utf-8"))
+                sources = meta.get("sources", [])
+                if sources:
+                    best_src = min(sources, key=lambda s: abs(s.get("yaw", 0.0)) + abs(s.get("pitch", 0.0)))
+                    candidate = best_src.get("filename", "")
+                    if candidate in zf.namelist():
+                        best_name = candidate
+            except Exception:
+                pass
+        img_bytes = zf.read(best_name)
+    return Response(content=img_bytes, media_type="image/png")
+
+
+class FaceSetRenameRequest(Contract):
+    name: str = Field(min_length=1, max_length=128)
+
+
+@router.post("/facesets/{faceset_id}/rename")
+def rename_faceset(faceset_id: str, value: FaceSetRenameRequest, request: Request):
+    import re
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", faceset_id):
+        raise DomainError("FACESET_ID_INVALID", "FaceSet ID is invalid", 422)
+    root = request.app.state.root
+    manifest_path = owned(root, f"roop_3d/.runtime/facesets/{faceset_id}.json")
+    if not manifest_path.is_file():
+        raise DomainError("FACESET_NOT_FOUND", "FaceSet is not loaded", 404)
+    data = json.loads(manifest_path.read_text("utf-8"))
+    data["name"] = value.name.strip()
+    atomic_json(root, f"roop_3d/.runtime/facesets/{faceset_id}.json", data)
+    return data
+
+
+@router.delete("/facesets/{faceset_id}")
+def delete_faceset(faceset_id: str, request: Request):
+    import re
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", faceset_id):
+        raise DomainError("FACESET_ID_INVALID", "FaceSet ID is invalid", 422)
+    root = request.app.state.root
+    manifest_path = owned(root, f"roop_3d/.runtime/facesets/{faceset_id}.json")
+    if not manifest_path.is_file():
+        raise DomainError("FACESET_NOT_FOUND", "FaceSet is not loaded", 404)
+    try:
+        manifest_path.unlink(missing_ok=True)
+    except Exception:
+        pass
+    coverage_path = owned(root, f"roop_3d/.runtime/coverage/{faceset_id}.json")
+    if coverage_path.is_file():
+        try:
+            coverage_path.unlink(missing_ok=True)
+        except Exception:
+            pass
+    for base in ("outputs", ".runtime"):
+        fsz_path = owned(root, f"roop_3d/{base}/facesets/{faceset_id}.fsz")
+        if fsz_path.is_file():
+            try:
+                fsz_path.unlink(missing_ok=True)
+            except Exception:
+                pass
+    return {"deleted": faceset_id}
+
+
+@router.post("/facesets/open-folder")
+def open_facesets_folder(request: Request):
+    root = request.app.state.root
+    target_dir = owned(root, "roop_3d/outputs/facesets")
+    target_dir.mkdir(parents=True, exist_ok=True)
+    import subprocess
+    import sys
+    try:
+        if sys.platform == "win32":
+            os.startfile(str(target_dir))
+        elif sys.platform == "darwin":
+            subprocess.run(["open", str(target_dir)], check=False)
+        else:
+            subprocess.run(["xdg-open", str(target_dir)], check=False)
+    except Exception:
+        pass
+    return {"path": str(target_dir)}
+
+
+@router.post("/facesets/rebuild-thumbs")
+def rebuild_faceset_thumbs(request: Request):
+    from roop_3d.server.routes import facesets
+    root = request.app.state.root
+    loaded = facesets(root)
+    return {"rebuilt": len(loaded)}
+
+
+
 @router.get("/projects")
 def list_projects(request: Request):
     return request.app.state.projects.list()

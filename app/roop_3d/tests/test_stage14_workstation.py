@@ -290,6 +290,31 @@ def test_build_and_download_faceset(tmp_path):
         assert dl_res.headers["content-type"] == "application/zip"
         assert len(dl_res.content) > 0
 
+        # Thumb inspection
+        th_res = client.get("/api/v1/facesets/actor_hero/thumb")
+        assert th_res.status_code == 200
+        assert th_res.headers["content-type"] == "image/png"
+        assert len(th_res.content) > 0
+
+        # Rename faceset
+        rn_res = client.post("/api/v1/facesets/actor_hero/rename", json={"name": "Renamed Hero"})
+        assert rn_res.status_code == 200
+        assert rn_res.json()["name"] == "Renamed Hero"
+
+        # Open folder and rebuild thumbs
+        f_res = client.post("/api/v1/facesets/open-folder")
+        assert f_res.status_code == 200
+        assert "path" in f_res.json()
+
+        rb_res = client.post("/api/v1/facesets/rebuild-thumbs")
+        assert rb_res.status_code == 200
+        assert rb_res.json()["rebuilt"] >= 1
+
+        # Delete faceset
+        del_res = client.delete("/api/v1/facesets/actor_hero")
+        assert del_res.status_code == 200
+        assert del_res.json()["deleted"] == "actor_hero"
+
 
 def test_concat_media_segments(tmp_path):
     app, payload, _ = project_fixture(tmp_path)

@@ -18,6 +18,9 @@ import QueueDrawer from './components/queue/QueueDrawer';
 import PreFlightLinterModalComponent from './components/diagnostics/PreFlightLinterModal';
 import { DEFAULT_EXPORT } from './components/export/VfxExportPanel';
 import type { ExportOptions } from './contracts';
+import FacesetLibrary from './components/facemgr/FacesetLibrary';
+import ThemeGallery from './components/ThemeGallery';
+import { THEMES, themeByName, applyThemeToDom } from './themes';
 const PreFlightLinterModal = PreFlightLinterModalComponent as unknown as ComponentType<any>;
 const PoseCoverageInspector = lazy(() => import('./ThreeViewport').then(module => ({ default: module.PoseCoverageInspector })));
 
@@ -34,7 +37,8 @@ export default function App() {
   const [maskBase64, setMaskRaw] = useState<string | null>(null);
   const [linterOpen, setLinterOpen] = useState(false);
   const [busy, setBusy] = useState(''), [error, setError] = useState(''), [notice, setNotice] = useState(''), [uploadProgress, setUploadProgress] = useState(0);
-  const [theme, setTheme] = useState(() => localStorage.getItem('roop3d-theme') ?? 'dark');
+  const [themeName, setThemeName] = useState(() => localStorage.getItem('roop3d-theme-name') ?? 'Default');
+  const [themeGalleryOpen, setThemeGalleryOpen] = useState(false);
   const route = useHashRoute();
   const [exportOptions, setExportOptions] = useState<ExportOptions>(DEFAULT_EXPORT);
   const [parameters, setParametersRaw] = useState<WorkstationParameters>({ ...DEFAULT_PARAMETERS });
@@ -75,7 +79,12 @@ export default function App() {
     } catch (error) { setError((error as Error).message); }
   }, []);
   useEffect(() => { void connect(); }, [connect]);
-  useEffect(() => { document.documentElement.dataset.theme = theme; localStorage.setItem('roop3d-theme', theme); }, [theme]);
+  useEffect(() => {
+    const t = themeByName(themeName);
+    applyThemeToDom(t);
+    localStorage.setItem('roop3d-theme-name', themeName);
+    localStorage.setItem('roop3d-theme', t.mode);
+  }, [themeName]);
   useEffect(() => {
     let refresh: ReturnType<typeof setTimeout> | undefined;
     const events = new EventConnection(`${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/api/v1/ws/events`, event => {
@@ -208,7 +217,8 @@ export default function App() {
       <div className="project-name"><input aria-label="Project name" maxLength={128} value={projectName} onChange={event => setProjectName(event.target.value)} /><span>{projectDirty ? 'UNSAVED' : 'SAVED'}</span></div>
       <span className="local-status"><i className={`dot ${connection === 'online' ? 'mint' : 'amber'}`}/>{connection === 'online' ? 'Local service' : connection}</span>
       <PipelinePill telemetry={telemetry} activeJob={currentJob} />
-      <button className="icon-button" aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} theme`} onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}>{theme === 'dark' ? '☀' : '◐'}</button>
+      <button className="icon-button" aria-label="Open Theme Gallery" title="Choose UI Theme & Styles" onClick={() => setThemeGalleryOpen(true)}>🎨</button>
+      <button className="icon-button" aria-label={`Switch to ${themeByName(themeName).mode === 'dark' ? 'light' : 'dark'} theme`} onClick={() => setThemeName(themeByName(themeName).mode === 'dark' ? 'Glass Light' : 'Default')}>{themeByName(themeName).mode === 'dark' ? '☀' : '◐'}</button>
       <button className="button" disabled={!!reason('projects') || !!busy} title={reason('projects') ?? ''} onClick={() => { setProjectsOpen(true); void refreshProjects(); }}>Projects</button><button className="button" disabled={!!reason('projects') || !inspection || !!busy} onClick={saveProject}>Save project</button>
     </header>
     <Navigation route={route}/>
@@ -234,8 +244,33 @@ export default function App() {
     <AppRouter route={route} screen="faceswap">
       <div className="workstation-body"><aside className="asset-sidebar"><div className="section-title"><span>ASSET LIBRARY</span><span className="muted">01</span></div><div className="asset-actions"><button className="button full primary-soft" disabled={!!reason('uploads') || !!busy} title={reason('uploads') ?? ''} onClick={() => fileInput.current?.click()}>＋ Import target video</button><input ref={fileInput} hidden type="file" accept=".mp4,.mov,.mkv,.avi,.webm,.m4v,.ts" onChange={event => { importAsset(event.target.files?.[0]); event.target.value = ''; }} /></div>
       <div className={`target-asset ${target ? 'loaded' : ''}`}><span className="asset-symbol">▤</span><div><strong>{target ? target.split('/').at(-1) : 'No target loaded'}</strong><small>{probe ? `${probe.width} × ${probe.height} · ${probe.fps_rational ?? '?'} fps` : 'Your files stay on this machine'}</small></div></div>
-      <div className="section-title spaced"><span>SOURCE IDENTITIES</span><span>{sources.length.toString().padStart(2, '0')}</span></div><button className="button full" disabled={!!reason('uploads') || !!busy} onClick={() => sourceInput.current?.click()}>＋ Add .fsz FaceSet</button><input ref={sourceInput} hidden type="file" accept=".fsz" onChange={event => { importAsset(event.target.files?.[0]); event.target.value = ''; }} />
-      <div className="source-list">{sources.map((source, index) => <button className={`source-card ${sourceId === source.faceset_id ? 'selected' : ''}`} key={source.faceset_id} onClick={() => setSourceId(source.faceset_id)}><span className="source-avatar">{(index + 1).toString().padStart(2, '0')}</span><span><strong>{source.name}</strong><small>{source.item_count} observed views</small></span><span className="source-check">{sourceId === source.faceset_id ? '●' : '○'}</span></button>)}{!sources.length && <p className="muted empty-note">Load an observed FaceSet to assign an identity to a target track.</p>}</div>
+      <div className="section-title spaced"><span>SOURCE IDENTITIES</span><span>{sources.length.toString().padStart(2, '0')}</span></div>
+      <FacesetLibrary
+        sources={sources}
+        selectedSourceId={sourceId}
+        onSelectSource={id => setSourceId(id)}
+        onRefreshSources={refreshSources}
+        onImportFaceset={file => importAsset(file)}
+        canSave={Boolean(inspection?.tracks?.length)}
+        onSaveFace={async (name) => {
+          const track = inspection?.tracks.find(t => t.track_id === selectedTrack) || inspection?.tracks[0];
+          if (!track?.thumbnail_base64) {
+            throw new Error('Inspect target faces first to extract an identity.');
+          }
+          await post('/facesets/build', {
+            name,
+            views: [{
+              image_base64: track.thumbnail_base64,
+              bbox: [0, 0, 100, 100],
+            }],
+          });
+          await refreshSources();
+        }}
+        notify={(msg, type) => {
+          if (type === 'error') setError(msg);
+          else setNotice(msg);
+        }}
+      />
       <div className="library-footer"><span className="tiny-badge">LOCAL BY DEFAULT</span><p>Media, FaceSets, and identity embeddings stay in your local workspace.</p></div>
     </aside>
     <main className="main-workspace"><div className="workspace-heading"><div><span className="eyebrow">EDIT / INSPECT / RENDER</span><h1>Your scene. A new identity.</h1></div><button className="button accent" disabled={!!reason('queue') || !inspection || !renderMappings().length || !!busy} title={reason('queue') ?? 'Render mapped face tracks locally'} onClick={queue}>Queue render <span>↗</span></button></div>
@@ -290,5 +325,31 @@ export default function App() {
       maskBase64={maskBase64}
       hardware={caps}
     />
+    {themeGalleryOpen && (
+      <div className="modal-backdrop" onClick={() => setThemeGalleryOpen(false)}>
+        <section
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="theme-modal-title"
+          className="project-modal theme-gallery-modal"
+          onClick={event => event.stopPropagation()}
+        >
+          <div className="panel-heading">
+            <div>
+              <span className="eyebrow">WORKSTATION PALETTE & STYLES</span>
+              <h2 id="theme-modal-title">Theme Gallery ({THEMES.length} Themes)</h2>
+            </div>
+            <button aria-label="Close themes" className="icon-button" onClick={() => setThemeGalleryOpen(false)}>×</button>
+          </div>
+          <p className="muted">Select from 38 studio-calibrated dark, AMOLED pure-black, and high-contrast light themes.</p>
+          <ThemeGallery
+            value={themeName}
+            onChange={(name) => {
+              setThemeName(name);
+            }}
+          />
+        </section>
+      </div>
+    )}
   </div>;
 }

@@ -133,6 +133,71 @@ export function getClusterColor(clusterId) {
 }
 
 /**
+ * Chip-shaped inline editable range field matching roop-ultimate.
+ * Displays SMPTE timecode and frame number, editable on click.
+ */
+export function RangeField({ label, frame, time, fps, onCommitFrame, disabled = false }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState('');
+
+  const handleStart = () => {
+    if (disabled) return;
+    setDraft(String(frame));
+    setEditing(true);
+  };
+
+  const handleCommit = () => {
+    if (!editing) return;
+    setEditing(false);
+    const cleaned = String(draft).trim();
+    if (!cleaned) return;
+    let targetFrame;
+    if (/^\d+$/.test(cleaned)) {
+      targetFrame = parseInt(cleaned, 10);
+    } else {
+      const parsed = parseTimecodeString(cleaned, fps);
+      targetFrame = Math.round(parsed * fps);
+    }
+    if (!isNaN(targetFrame)) {
+      onCommitFrame(targetFrame);
+    }
+  };
+
+  return (
+    <div
+      className={`range-field ${editing ? 'editing' : ''}`}
+      title={`Click to edit ${label} point (frame number or HH:MM:SS:FF timecode)`}
+    >
+      <span className="range-field-label">{label}</span>
+      {editing ? (
+        <input
+          type="text"
+          className="range-field-input"
+          value={draft}
+          autoFocus
+          onChange={(e) => setDraft(e.target.value)}
+          onBlur={handleCommit}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') handleCommit();
+            if (e.key === 'Escape') setEditing(false);
+          }}
+        />
+      ) : (
+        <button
+          type="button"
+          className="range-field-btn"
+          disabled={disabled}
+          onClick={handleStart}
+        >
+          <span className="range-field-tc">{formatTimecode(time, fps).slice(3)}</span>
+          <span className="range-field-frame">f:{frame}</span>
+        </button>
+      )}
+    </div>
+  );
+}
+
+/**
  * Video editor-grade timeline workstation matching roop-ultimate.
  * Includes Filmstrip Track, Timecode Ruler, Draggable Trim In/Out, Playback Engine, and Landmark & Pose Sub-Track.
  *
@@ -369,6 +434,46 @@ export default function TimelineWorkstation({
     if (disabled || !onTrimChange) return;
     onTrimChange(0, null);
   };
+
+  const handleJumpIn = useCallback(() => {
+    if (disabled || !onSeek) return;
+    onSeek(trimStart > 0 ? trimStart : 0);
+  }, [disabled, onSeek, trimStart]);
+
+  const handleJumpOut = useCallback(() => {
+    if (disabled || !onSeek) return;
+    onSeek(effectiveTrimEnd < effectiveDuration ? effectiveTrimEnd : effectiveDuration);
+  }, [disabled, onSeek, effectiveTrimEnd, effectiveDuration]);
+
+  // NLE-style keyboard shortcuts: I (Mark In), O (Mark Out), Shift+I (Jump In), Shift+O (Jump Out), Alt+R (Reset Range)
+  useEffect(() => {
+    if (disabled || !target) return;
+    const handleKeyDown = (e) => {
+      if (e.target?.closest?.('input, textarea, select, [contenteditable="true"]')) return;
+      if (e.key === 'i' || e.key === 'I') {
+        if (e.shiftKey) {
+          e.preventDefault();
+          handleJumpIn();
+        } else if (!e.ctrlKey && !e.metaKey && !e.altKey) {
+          e.preventDefault();
+          handleMarkIn();
+        }
+      } else if (e.key === 'o' || e.key === 'O') {
+        if (e.shiftKey) {
+          e.preventDefault();
+          handleJumpOut();
+        } else if (!e.ctrlKey && !e.metaKey && !e.altKey) {
+          e.preventDefault();
+          handleMarkOut();
+        }
+      } else if ((e.key === 'r' || e.key === 'R') && (e.altKey || (e.shiftKey && e.altKey))) {
+        e.preventDefault();
+        handleResetTrim();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [disabled, target, handleJumpIn, handleJumpOut, trimStart, effectiveTrimEnd, currentTime, effectiveDuration, effectiveFps, trimEnd, onTrimChange]);
 
   // Timecode Ruler Major and Minor Ticks
   const rulerTicks = useMemo(() => {
@@ -633,6 +738,15 @@ export default function TimelineWorkstation({
         <div className="trim-actions-group">
           <button
             type="button"
+            className="trim-btn jump-in"
+            onClick={handleJumpIn}
+            disabled={disabled || !target}
+            title="Jump to In Point [Shift+I]"
+          >
+            ⏮ In
+          </button>
+          <button
+            type="button"
             className="trim-btn mark-in"
             onClick={handleMarkIn}
             disabled={disabled || !target}
@@ -640,6 +754,28 @@ export default function TimelineWorkstation({
           >
             [ In
           </button>
+          <RangeField
+            label="In"
+            frame={Math.round(trimStart * effectiveFps)}
+            time={trimStart}
+            fps={effectiveFps}
+            disabled={disabled || !target}
+            onCommitFrame={(f) => {
+              const sec = Math.max(0, f / effectiveFps);
+              onTrimChange?.(sec, trimEnd);
+            }}
+          />
+          <RangeField
+            label="Out"
+            frame={Math.round(effectiveTrimEnd * effectiveFps)}
+            time={effectiveTrimEnd}
+            fps={effectiveFps}
+            disabled={disabled || !target}
+            onCommitFrame={(f) => {
+              const sec = Math.min(effectiveDuration, Math.max(trimStart + 0.01, f / effectiveFps));
+              onTrimChange?.(trimStart, sec);
+            }}
+          />
           <button
             type="button"
             className="trim-btn mark-out"
@@ -649,17 +785,30 @@ export default function TimelineWorkstation({
           >
             Out ]
           </button>
+          <button
+            type="button"
+            className="trim-btn jump-out"
+            onClick={handleJumpOut}
+            disabled={disabled || !target}
+            title="Jump to Out Point [Shift+O]"
+          >
+            Out ⏭
+          </button>
           {(trimStart > 0 || trimEnd !== null) && (
             <button
               type="button"
               className="trim-btn reset"
               onClick={handleResetTrim}
               disabled={disabled}
-              title="Reset trim range to full clip"
+              title="Reset trim range to full clip [Alt+R]"
             >
               Reset
             </button>
           )}
+          <div className="trim-range-summary" title="Length of selected in-out range">
+            <span className="summary-len">{formatTimecode(Math.max(0, effectiveTrimEnd - trimStart), effectiveFps).slice(3)}</span>
+            <small className="summary-frames">({Math.max(1, Math.round((effectiveTrimEnd - trimStart) * effectiveFps))} f · {Math.round(((effectiveTrimEnd - trimStart) / effectiveDuration) * 100)}%)</small>
+          </div>
         </div>
 
         {/* Timeline Zoom Controller */}

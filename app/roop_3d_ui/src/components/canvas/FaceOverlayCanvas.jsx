@@ -66,6 +66,7 @@ export function mapPointToPixels(point, letterbox) {
  *   onAssignSource?: (clusterId: string, sourceId: string | null) => void;
  *   onExtractFaces?: () => void;
  *   detecting?: boolean;
+ *   showOverlays?: boolean;
  * }} props
  */
 export default function FaceOverlayCanvas({
