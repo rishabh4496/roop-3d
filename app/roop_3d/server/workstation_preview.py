@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
-from contextlib import closing
+from contextlib import closing, nullcontext
 from fractions import Fraction
 from threading import Event, Lock
 import time
@@ -21,6 +21,7 @@ from starlette.concurrency import run_in_threadpool
 from roop_3d.core.errors import DomainError
 from roop_3d.core.settings import Contract
 from roop_3d.core.workstation import WorkstationParameters
+from roop_3d.faceset.identity_blend import IdentityBlendSpec, blend_documents
 from roop_3d.engine.pipeline_runner import MasterPipelineRunner
 from roop_3d.engine.runtime import RuntimeConfig
 from roop_3d.engine.scheduler import RuntimeScheduler
@@ -56,6 +57,8 @@ class PreviewRequest(Contract):
     parameters: WorkstationParameters = WorkstationParameters()
     x: SweepAxis | None = None
     y: SweepAxis | None = None
+    # Optional multi-FaceSet identity recipe; replaces the mapped FaceSet's canonical identity.
+    identity_blend: IdentityBlendSpec | None = None
 
     @property
     def effective_parameters(self) -> WorkstationParameters:
@@ -81,6 +84,19 @@ def encode(image: np.ndarray, max_edge: int = 1920) -> str:
     if not ok:
         raise DomainError('PREVIEW_ENCODE_FAILED', 'Preview encoding failed', 500)
     return 'data:image/jpeg;base64,' + base64.b64encode(data).decode('ascii')
+
+
+def face_readouts(result) -> list[dict]:
+    """Detected boxes, 5-point ArcFace landmarks and yaw/pitch/roll for every tracked face."""
+    faces = []
+    for tracked in result.observations:
+        face = tracked.observation
+        landmarks = getattr(face, 'landmarks5', None)
+        yaw, pitch, roll = (float(v) for v in face.pose)
+        faces.append({'track_id': int(tracked.track_id), 'box': [float(v) for v in np.asarray(face.box).tolist()],
+                      'landmarks5': np.asarray(landmarks, float).tolist() if landmarks is not None else None,
+                      'yaw': yaw, 'pitch': pitch, 'roll': roll})
+    return faces
 
 
 def collect_composite(session, image, result, parameters, *, capture=True, occluder_masks=None):
@@ -117,7 +133,19 @@ class PreviewService:
         self.lock = Lock()
         self.scheduler = state.worker.scheduler if state.worker is not None else RuntimeScheduler()
 
-    def render(self, value: PreviewRequest, cancel: Event):
+    def render(self, value: PreviewRequest, cancel: Event, *, raw: bool = False):
+        """Run one preview. `raw=True` keeps buffers as ndarrays instead of JPEG data URLs.
+
+        Inference is a gate "preview" section: it is refused immediately (EngineBusy, 503) while a
+        job, TensorRT compile or Start-button model re-bind owns the engine, and the owner in turn
+        waits for this call to finish before it tears down or re-binds models.
+        """
+        gate = getattr(self.state, 'engine_gate', None)
+        with gate.preview_section() if gate is not None else nullcontext():
+            return self._render(value, cancel, raw)
+
+    def _render(self, value: PreviewRequest, cancel: Event, raw: bool):
+        pack = (lambda image: image) if raw else encode
         if not self.lock.acquire(blocking=False):
             raise DomainError('PREVIEW_BUSY', 'Another preview is running; try again shortly', 409)
         key = 'preview-' + uuid.uuid4().hex
@@ -139,6 +167,11 @@ class PreviewService:
             runner = MasterPipelineRunner(self.state.root, self.state.models, self.state.media, lambda: settings)
             # Reuse target hashes, inspection identity and FaceSet validation without creating a job/checkpoint.
             target, _, _, sources, _, _ = runner._prepare_inputs(JobRecord(request=value.request), settings)
+            if value.identity_blend is not None:
+                blend = value.identity_blend
+                blended = blend_documents([runner.faceset_reader.read(runner._faceset_path(item), faceset_id=item)
+                                           for item in blend.source_face_ids], blend)
+                sources = {track: blended for track in sources}
             edit_plan = FrameEditPlan(runner, value.request, sources)
             runtime = RuntimeConfig(provider=admission.provider, hardware_profile=admission.profile,
                                     reserve_mib=settings.memory_safety_reserve_mb)
@@ -227,6 +260,7 @@ class PreviewService:
                         'notes': ['Single-frame preview, tracking replayed from frame zero; temporal smoothing resets per variant.' if target_time <= seek_threshold else 'Single-frame preview, seeked to playhead keyframe; temporal smoothing resets per variant.',
                                   'Mesh blend: TPS at 0, perspective 3D proxy projection at 1; canonical geometry and camera are estimates.' if parameters.pose_mode == 'mesh_blend' else 'Reference retarget mode: observed dense landmarks; mesh projection is not selected.',
                                   'Matte uses the reference BiSeNet parser with landmark-hull fallback; no XSeg adapter.']}
+            response['faces'] = face_readouts(result)
             if value.x and value.y:
                 cells = []
                 for row, y in enumerate(value.y.values):
@@ -247,7 +281,7 @@ class PreviewService:
                         if value.request.export:
                             buffers['final'] = Finisher(value.request.export.finishing).apply(buffers['final'], frame_index)
                         cells.append({'row': row, 'column': column, 'coordinates': coordinates,
-                                      'parameters': cell.model_dump(), 'image': encode(buffers['final'])})
+                                      'parameters': cell.model_dump(), 'image': pack(buffers['final'])})
                 return {**response, 'cells': cells}
             check()
             buffers = collect_composite(session, frame.image, result, parameters, occluder_masks=edit_plan.occluders(frame.image, result))
@@ -294,12 +328,12 @@ class PreviewService:
             replacement = result.replacements[0] if result.replacements else None
             source = (session.swapper.sources_by_track.get(replacement.track_id, sources.get(replacement.track_id)) if value.request.face_segments and replacement else sources.get(replacement.track_id) if replacement else None)
             if source is None:
-                return {**response, 'buffers': {key: encode(image) for key, image in buffers.items()}, 'parameters': parameters.model_dump(), 'latency': result.latency.__dict__}
+                return {**response, 'buffers': {key: pack(image) for key, image in buffers.items()}, 'parameters': parameters.model_dump(), 'latency': result.latency.__dict__}
             view = next((view for view in source.views if view.index == replacement.reference_index), source.views[0])
             source_image = cv2.imdecode(np.frombuffer(view.image_bytes, np.uint8), cv2.IMREAD_COLOR)
             if source_image is not None:
                 buffers['source'] = source_image
-            return {**response, 'buffers': {key: encode(image) for key, image in buffers.items()},
+            return {**response, 'buffers': {key: pack(image) for key, image in buffers.items()},
                     'parameters': parameters.model_dump(), 'latency': result.latency.__dict__}
         finally:
             try:

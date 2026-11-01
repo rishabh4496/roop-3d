@@ -2137,3 +2137,29 @@ body {
   background: var(--soft);
   font-weight: 700;
 }
+
+/* Live swap preview (POST /api/preview) */
+.live-swap-preview.stale { opacity: 0.55; transition: opacity 0.15s; }
+.live-swap-status {
+  position: absolute;
+  left: 13px;
+  bottom: 13px;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: calc(100% - 26px);
+  padding: 4px 9px;
+  border-radius: 12px;
+  border: 1px solid #ffffff1a;
+  background: #101719cc;
+  color: #adbfc0;
+  font-size: 10px;
+  letter-spacing: 0.4px;
+  pointer-events: none;
+}
+.live-swap-status.busy { color: #dfb977; }
+.live-swap-status.error { color: var(--danger); pointer-events: auto; }
+.live-swap-status.ready { color: var(--accent); }
+.live-swap-status .live-swap-unsupported { color: #dfb977; pointer-events: auto; }
+.live-swap-retry { pointer-events: auto; background: none; border: 0; padding: 0; color: inherit; text-decoration: underline; font-size: 10px; }

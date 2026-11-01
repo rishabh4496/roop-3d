@@ -24,6 +24,8 @@ import { CURVE_PARAMETERS, evaluateParameters, upsertKey } from './stores/parame
 import HistoryDrawer from './components/workstation/HistoryDrawer';
 import SnapshotSlots, { SnapshotViewport } from './components/workstation/SnapshotSlots';
 import { panAnchoredAt } from './utils/zoomPan';
+import { buildLivePayload, downloadBlob, previewFilename, useLiveSwapPreview } from './livePreview';
+import LiveSwapStatus from './components/workstation/LiveSwapStatus';
 
 function usePreview(path: string, time: number, playing: boolean) {
   const [source, setSource] = useState('');
@@ -183,7 +185,12 @@ export function VideoViewport({
 
   const sourcePreview = usePreview(enabled && active ? target : '', time, playing);
   const outputPreview = usePreview(enabled && active ? output : '', time, playing);
-  const floatingImage = history.previewSlot ? history.slots[history.previewSlot]?.image : solo ? result?.buffers[solo] : outputPreview.source || sourcePreview.source;
+  // Real swapped frame for the current playhead + every edit, via POST /api/preview (debounced, 503-aware).
+  const [liveSwap, setLiveSwap] = useState(true);
+  const live = useLiveSwapPreview(active && enabled && liveSwap && !playing && !solo && !isMaskEditing
+    ? buildLivePayload({ request: previewRequest, time, fps: parseFps(probe?.fps_rational, 30), parameters, maskBase64, restorerAvailable })
+    : null);
+  const floatingImage = history.previewSlot ? history.slots[history.previewSlot]?.image : solo ? result?.buffers[solo] : live.url || outputPreview.source || sourcePreview.source;
   const floating = useFloatingPreview(<FloatingPreviewMedia image={floatingImage} path={solo ? '' : output || target} time={time} playing={playing && !solo} label={solo ? `SOLO · ${solo}` : output ? 'OUTPUT' : 'SOURCE'}/>);
 
   const updateViewportSize = useCallback(() => {
@@ -266,9 +273,23 @@ export function VideoViewport({
     return () => document.removeEventListener('fullscreenchange', handleFsChange);
   }, []);
 
+  // Swapped-preview download: a click handler builds the blob URL itself, so the saved name and type never
+  // depend on an `<a download>` attribute surviving a data/blob URL round trip.
+  const handleDownloadLive = useCallback(() => {
+    if (!live.blob) {
+      setSnapshotNotice('No swapped preview is available to download yet.');
+      setTimeout(() => setSnapshotNotice(''), 3000);
+      return;
+    }
+    downloadBlob(live.blob, previewFilename());
+    setSnapshotNotice('Swapped preview downloaded');
+    setTimeout(() => setSnapshotNotice(''), 3000);
+  }, [live.blob]);
+
   // Frame snapshot download
   const handleDownloadSnapshot = useCallback(() => {
     try {
+      if (!solo && !showSourcePeek && live.blob && !live.stale) { handleDownloadLive(); return; }
       let dataUrl = '';
       if (solo && result?.buffers[solo]) {
         dataUrl = result.buffers[solo];
@@ -312,7 +333,7 @@ export function VideoViewport({
       setSnapshotNotice(err.message || 'Snapshot download failed');
       setTimeout(() => setSnapshotNotice(''), 3000);
     }
-  }, [solo, result, showSourcePeek, sourcePreview.source, outputPreview.source, output, time]);
+  }, [solo, result, showSourcePeek, sourcePreview.source, outputPreview.source, output, time, live.blob, live.stale, handleDownloadLive]);
 
   // Viewport pan & zoom handlers
   const handleViewportPointerDown = (e: React.PointerEvent) => {
@@ -377,6 +398,7 @@ export function VideoViewport({
     const isShowingSourcePeek = isOutput && showSourcePeek;
     const activePath = isShowingSourcePeek ? target : path;
     const activeResult = isShowingSourcePeek ? sourcePreview : result;
+    const showLive = isOutput && !isShowingSourcePeek && !playing && !!live.url;
 
     return (
       <div
@@ -395,7 +417,7 @@ export function VideoViewport({
               onError={() => setPlaybackError('Browser playback unavailable; frame previews can still be used.')}
               onTimeUpdate={!isOutput ? event => { if (playing) setTime(event.currentTarget.currentTime); } : undefined}
             />
-            {!playing && activeResult.source && (
+            {!playing && !showLive && activeResult.source && (
               <img
                 className="frame-preview"
                 src={activeResult.source}
@@ -418,15 +440,23 @@ export function VideoViewport({
               </div>
             )}
           </>
-        ) : (
+        ) : !showLive && (
           <div className="viewport-empty">
             <span className="film-icon">{isOutput ? '◇' : '⊞'}</span>
             <h2>{isOutput ? 'Your output starts here' : 'Bring a scene to life'}</h2>
             <p>{isOutput ? 'Completed renders appear alongside your source.' : 'Import a local video, inspect its faces, and assign an identity.'}</p>
           </div>
         )}
+        {showLive && (
+          <img
+            className={`frame-preview live-swap-preview ${live.stale ? 'stale' : ''}`}
+            src={live.url!}
+            alt={`Live swapped preview at ${time.toFixed(2)} seconds`}
+          />
+        )}
+        {isOutput && !isShowingSourcePeek && <LiveSwapStatus live={live}/>}
         <span className="pane-label">
-          {isOutput ? (isShowingSourcePeek ? 'SOURCE (PEEK)' : 'OUTPUT') : 'SOURCE'} <i className={`dot ${activePath ? 'mint' : 'dim'}`} />
+          {isOutput ? (isShowingSourcePeek ? 'SOURCE (PEEK)' : showLive ? 'LIVE SWAP' : 'OUTPUT') : 'SOURCE'} <i className={`dot ${activePath || showLive ? 'mint' : 'dim'}`} />
         </span>
         {activeResult.error && <span className="preview-error">{activeResult.error}</span>}
       </div>
@@ -605,6 +635,26 @@ export function VideoViewport({
               <span>👁</span> Hold: Source
             </button>
           )}
+
+          {/* Live swapped preview: on/off + PNG download (click handler, blob URL) */}
+          <button
+            type="button"
+            className={`hud-btn live-swap-toggle ${liveSwap ? 'active' : ''}`}
+            aria-pressed={liveSwap}
+            onClick={() => setLiveSwap(value => !value)}
+            title="Render the real face swap for the current frame whenever the playhead, faces or parameters change"
+          >
+            <span>⚡</span> Live swap
+          </button>
+          <button
+            type="button"
+            className="hud-btn live-download-btn"
+            disabled={!live.blob}
+            onClick={handleDownloadLive}
+            title="Download the swapped preview frame as a PNG"
+          >
+            <span>⬇</span> PNG
+          </button>
 
           {/* Instant Frame Snapshot Grab */}
           <button

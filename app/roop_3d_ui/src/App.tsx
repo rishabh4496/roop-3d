@@ -5,6 +5,7 @@ import { EventConnection } from './events';
 import { featureReason, jobActions, mappings, optionReason } from './state';
 import { SettingsInspector } from './SettingsInspector';
 import { VideoViewport, formatTime } from './VideoViewport';
+import { JOB_START_EVENT } from './livePreview';
 import { useFaceSelectionStore, faceEditState, restoreFaceEdit, buildFaceSegments, hydrateFaceSegments } from './useFaceSelectionStore';
 import useHistoryStore, { executeCommand, replaceCurves } from './stores/useHistoryStore';
 import FaceManager from './components/facemgr/FaceManager';
@@ -176,6 +177,7 @@ export default function App() {
   const executeQueue = () => void run('Queueing local render', async () => {
     const value = request(), fingerprint = JSON.stringify(value);
     if (queueKey.current.fingerprint !== fingerprint) queueKey.current = { fingerprint, key: crypto.randomUUID() };
+    window.dispatchEvent(new Event(JOB_START_EVENT)); // drop in-flight live previews so the render can take the GPU promptly
     const job = await post<Job>('/jobs', value, { headers: { 'Idempotency-Key': queueKey.current.key } });
     queueKey.current = { fingerprint: '', key: '' }; setSelectedJob(job.job_id); setQueueOpen(true); await refreshJobs(); setNotice('Render added to the local queue.');
   });

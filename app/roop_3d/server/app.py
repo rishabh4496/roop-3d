@@ -28,6 +28,8 @@ from roop_3d.jobs.project_store import ProjectStore
 from roop_3d.server.workstation import router as workstation_router
 from roop_3d.server.workstation_preview import PreviewService, router as preview_router
 from roop_3d.server.api import mount_workstation
+from roop_3d.server.engine_gate import EngineBusy, EngineGate
+from roop_3d.server.live_preview import LivePreviewService, busy_response, router as live_preview_router
 from roop_3d.media.service import MediaService
 from roop_3d.models.catalog import ModelCatalog
 from roop_3d.server.middleware import ApiAliasMiddleware, IntakeMiddleware
@@ -52,13 +54,14 @@ def create_app(settings: Settings | None = None, *, repo_root: Path | None = Non
     pipeline = PipelineTracker(events.publish, lambda: events.sequence)
     events.add_observer(pipeline.observe)
     jobs = JobStore(root, events.publish)
+    engine_gate = EngineGate()
     catalog = ModelCatalog(cache_root=root, search_paths=lambda: app.state.settings.model_search_paths)
     media = MediaService(root, catalog, lambda: app.state.settings)
     if worker_enabled and pipeline_runner is None:
         from roop_3d.optimized_processor import make_stream_runner
         pipeline_runner = make_stream_runner(root, catalog, media, lambda: app.state.settings, pipeline_tracker=pipeline)
     worker = (JobWorker(root, jobs, lambda: app.state.settings, catalog, media,
-                        pipeline_runner=pipeline_runner) if worker_enabled else None)
+                        pipeline_runner=pipeline_runner, engine_gate=engine_gate) if worker_enabled else None)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -98,6 +101,7 @@ def create_app(settings: Settings | None = None, *, repo_root: Path | None = Non
     app.state.trt_builder = TensorRTSessionBuilder(telemetry=pipeline.compilation_event,
                                                  hardware_profile="12gb" if settings.hardware_profile == "12gb" else "6gb")
     app.state.share = share
+    app.state.engine_gate = engine_gate
     app.state.jobs = jobs
     app.state.models = catalog
     app.state.media = media
@@ -107,6 +111,7 @@ def create_app(settings: Settings | None = None, *, repo_root: Path | None = Non
     from roop_3d.thread_benchmark import ThreadBenchmark
     app.state.thread_benchmark = ThreadBenchmark()
     app.state.previews = PreviewService(app.state)
+    app.state.live_previews = LivePreviewService(app.state)
 
     def envelope(request: Request, code: str, message: str, status: int) -> JSONResponse:
         return JSONResponse({"error": {"code": code, "message": message,
@@ -123,6 +128,10 @@ def create_app(settings: Settings | None = None, *, repo_root: Path | None = Non
     @app.exception_handler(Exception)
     async def internal_error(request: Request, error: Exception) -> JSONResponse:
         return envelope(request, "INTERNAL_ERROR", "The local service could not complete the request", 500)
+
+    @app.exception_handler(EngineBusy)
+    async def engine_busy(request: Request, error: EngineBusy) -> JSONResponse:
+        return busy_response(error.stage)
 
     @app.exception_handler(DomainError)
     async def domain_error(request: Request, error: DomainError) -> JSONResponse:
@@ -155,6 +164,7 @@ def create_app(settings: Settings | None = None, *, repo_root: Path | None = Non
     app.include_router(router)
     app.include_router(workstation_router)
     app.include_router(preview_router)
+    app.include_router(live_preview_router)
     app.include_router(finishing_router)
     from roop_3d.server.api import benchmark_router
     app.include_router(benchmark_router)
@@ -165,7 +175,9 @@ def create_app(settings: Settings | None = None, *, repo_root: Path | None = Non
     mount_workstation(app, root)
     if settings.dev_cors:
         app.add_middleware(CORSMiddleware, allow_origins=["http://127.0.0.1:5174"], allow_methods=["GET", "PUT", "POST", "DELETE"],
-                           allow_headers=["Content-Type", "Idempotency-Key"])
+                           allow_headers=["Content-Type", "Idempotency-Key"],
+                           expose_headers=["Retry-After", "X-Preview-Cache", "X-Preview-Frame-Index", "X-Preview-Config-Hash",
+                                           "X-Preview-Media-Id", "X-Preview-Meta"])
     app.add_middleware(ApiAliasMiddleware)
     app.add_middleware(IntakeMiddleware, settings=settings, share=share)
     return app

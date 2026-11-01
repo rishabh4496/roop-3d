@@ -19,12 +19,15 @@ from roop_3d.jobs.store import JobStore
 from roop_3d.models.catalog import ModelCatalog
 
 
+RENDER_JOB = "RENDER_JOB"
+
+
 class JobWorker:
     """Poll durable queued jobs and run them under live scheduler admission."""
 
     def __init__(self, root: Path, store: JobStore, settings_provider: Callable[[], Settings],
                  catalog: ModelCatalog, media, *, pipeline_runner=None, scheduler: RuntimeScheduler | None = None,
-                 poll_interval: float = 0.15, max_threads: int = 8):
+                 poll_interval: float = 0.15, max_threads: int = 8, engine_gate=None):
         if poll_interval <= 0 or max_threads < 1:
             raise ValueError("Worker polling and thread limits must be positive")
         self.root, self.store, self.settings_provider = root, store, settings_provider
@@ -32,6 +35,8 @@ class JobWorker:
         self.runner = pipeline_runner or MasterPipelineRunner(root, catalog, media, settings_provider)
         self.scheduler = scheduler or RuntimeScheduler(VRAMGovernor())
         self.poll_interval, self.max_threads = poll_interval, max_threads
+        # Shared with live preview: model teardown/re-binding waits for in-flight preview inference.
+        self.gate = engine_gate
         self._stop = threading.Event()
         self._wake_event = threading.Event()
         self._thread: threading.Thread | None = None
@@ -157,6 +162,15 @@ class JobWorker:
             self.store.fail(job_id, JobFailure(code=code, message=message))
 
     def _execute(self, job_id: str) -> None:
+        if self.gate is None:
+            self._execute_job(job_id)
+            return
+        # Start-button path: wait (off the event loop) for in-flight preview inference to drain; while
+        # waiting the gate refuses new previews, so slider scrubbing cannot starve the job.
+        with self.gate.owner(RENDER_JOB):
+            self._execute_job(job_id)
+
+    def _execute_job(self, job_id: str) -> None:
         admission: ScheduledJob | None = None
         try:
             record = self.store.get(job_id)

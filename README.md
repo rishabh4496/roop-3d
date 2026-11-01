@@ -167,3 +167,7 @@ separate hardware runs.
 Stage 3 streaming, numeric prepass checkpoints, the zero-pickle frame ring,
 CUDA I/O binding, NVDEC/NVENC, restorer contracts and thread benchmark routes are
 documented in [docs/STREAM_STAGE3.md](docs/STREAM_STAGE3.md).
+
+Stage 4 live swap preview (`POST /api/preview`, `GET /api/target/preview{,_grid,_seq}`), the cache-first /
+HTTP 503 busy contract and the preview-vs-Start model mutex are documented in
+[docs/LIVE_PREVIEW_STAGE4.md](docs/LIVE_PREVIEW_STAGE4.md).

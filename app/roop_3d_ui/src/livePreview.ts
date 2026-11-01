@@ -1,0 +1,124 @@
+import { useEffect, useRef, useState } from 'react';
+import { PreviewBusyError, postLivePreview, type LivePreviewMeta } from './api';
+import { PreviewURL } from './state';
+import type { JobRequest } from './contracts';
+import type { WorkstationParameters } from './components/workstation/pipeline';
+
+/** Slider drags coalesce into one request per pause of this length. */
+export const LIVE_DEBOUNCE_MS = 150;
+/** Dispatched on `window` when the Start button queues a render; in-flight previews are dropped so the server can yield. */
+export const JOB_START_EVENT = 'roop3d:job-start';
+
+export type LivePayload = Record<string, unknown>;
+
+export function buildLivePayload({ request, time, fps, parameters, maskBase64, restorerAvailable }: {
+  request: JobRequest | null; time: number; fps: number; parameters: WorkstationParameters;
+  maskBase64?: string | null; restorerAvailable: boolean;
+}): LivePayload | null {
+  if (!request || !request.face_mappings.length) return null;
+  const restoring = restorerAvailable && parameters.restoration_blend > 0 && !parameters.bypass.includes('restorer');
+  return {
+    target_path: request.target_path,
+    inspection_id: request.inspection_id,
+    frame_index: Math.max(0, Math.round(time * fps)),
+    face_mappings: request.face_mappings,
+    frontalization_weight: parameters.pose_mode === 'mesh_blend' ? parameters.pose_strength : undefined,
+    occlusion: { erosion_px: parameters.erosion_px ?? 0, feather_px: parameters.feather_px },
+    mask_base64: maskBase64 || request.mask_base64 || undefined,
+    restorer: restoring ? 'gpen' : 'off',
+    restoration_blend: restoring ? parameters.restoration_blend : undefined,
+    color_strength: parameters.color_strength,
+    swap_weight: parameters.swap_weight ?? 1,
+    bypass: parameters.bypass,
+    face_segments: request.face_segments ?? undefined,
+    parameter_curves: request.parameter_curves ?? undefined,
+    export: request.export ?? undefined,
+  };
+}
+
+/** `roop3d_preview_2026-11-01T14-02-03Z.png`: ISO-8601 UTC, with no characters Windows forbids in filenames. */
+export const previewFilename = (date: Date = new Date()) =>
+  `roop3d_preview_${date.toISOString().replace(/\.\d{3}Z$/, 'Z').replace(/:/g, '-')}.png`;
+
+/** Programmatic blob download. Invoked from a click handler, so no `download` attribute is needed on the control itself. */
+export function downloadBlob(blob: Blob, filename: string): void {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  link.rel = 'noopener';
+  link.style.display = 'none';
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 10_000);
+}
+
+export type LiveStatus = 'idle' | 'loading' | 'ready' | 'busy' | 'error';
+export interface LivePreview {
+  status: LiveStatus;
+  url: string | null;
+  blob: Blob | null;
+  meta: LivePreviewMeta | null;
+  cached: boolean;
+  /** Stage that owns the GPU while `status === 'busy'`. */
+  stage: string | null;
+  error: string | null;
+  /** The shown image belongs to an earlier request; a newer one is pending, busy or failed. */
+  stale: boolean;
+  retry: () => void;
+}
+
+type Snapshot = Omit<LivePreview, 'retry'>;
+const IDLE: Snapshot = { status: 'idle', url: null, blob: null, meta: null, cached: false, stage: null, error: null, stale: false };
+
+/**
+ * Posts `payload` to `/api/preview` whenever it changes (debounced). A 503 busy answer is not an error:
+ * the previous image stays up, a status flag is raised, and the request is re-sent after `retry_after_ms`.
+ * Pass `null` to switch the preview off (nothing is requested and the image is released).
+ */
+export function useLiveSwapPreview(payload: LivePayload | null, debounceMs: number = LIVE_DEBOUNCE_MS): LivePreview {
+  const [state, setState] = useState<Snapshot>(IDLE);
+  const [nonce, setNonce] = useState(0);
+  const lease = useRef(new PreviewURL());
+  const key = payload ? JSON.stringify(payload) : '';
+
+  useEffect(() => () => lease.current.clear(), []);
+  useEffect(() => {
+    const restart = () => setNonce(value => value + 1);
+    window.addEventListener(JOB_START_EVENT, restart);
+    return () => window.removeEventListener(JOB_START_EVENT, restart);
+  }, []);
+
+  useEffect(() => {
+    if (!key) {
+      lease.current.clear();
+      setState(previous => previous.status === 'idle' ? previous : IDLE);
+      return;
+    }
+    let live = true;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const controller = new AbortController();
+    const run = async () => {
+      setState(previous => previous.status === 'busy' ? previous : { ...previous, status: 'loading', error: null, stale: previous.url !== null });
+      try {
+        const result = await postLivePreview(JSON.parse(key), { signal: controller.signal });
+        if (!live) return;
+        setState({ status: 'ready', url: lease.current.replace(result.blob), blob: result.blob, meta: result.meta,
+          cached: result.cached, stage: null, error: null, stale: false });
+      } catch (error) {
+        if (!live || (error as Error).name === 'AbortError') return;
+        if (error instanceof PreviewBusyError) {
+          setState(previous => ({ ...previous, status: 'busy', stage: error.stage, error: null, stale: previous.url !== null }));
+          timer = setTimeout(() => void run(), error.retryAfterMs);
+        } else {
+          setState(previous => ({ ...previous, status: 'error', error: (error as Error).message, stale: previous.url !== null }));
+        }
+      }
+    };
+    timer = setTimeout(() => void run(), debounceMs);
+    return () => { live = false; clearTimeout(timer); controller.abort(); };
+  }, [key, nonce, debounceMs]);
+
+  return { ...state, retry: () => setNonce(value => value + 1) };
+}
