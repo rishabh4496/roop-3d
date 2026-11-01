@@ -1,4 +1,5 @@
 import { useId } from 'react';
+import { renderProbe } from '../../utils/renderProbe';
 import NumericInput from './NumericInput';
 import { recommendedText, type SettingSpec } from './settingsRegistry';
 
@@ -19,6 +20,7 @@ type Props = {
  */
 export default function SettingControl({ spec, value, onChange, disabled = false, disabledReason, label }: Props) {
   const tipId = useId();
+  renderProbe('SettingControl');
   const name = label ?? spec.label;
   const unavailable = disabled || !!spec.inactive;
   const reason = spec.inactive ?? disabledReason;

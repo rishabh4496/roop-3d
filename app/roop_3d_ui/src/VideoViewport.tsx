@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
+import { renderProbe } from './utils/renderProbe';
 import { mediaURL, postLivePreview } from './api';
 import { PreviewURL } from './state';
 import type { FaceSet, Probe, Inspection, FrameFaceDetectionResponse } from './contracts';
@@ -23,7 +24,10 @@ import { calculateLetterbox, mapBoxToPixels } from './utils/letterbox';
 import { leftToRightRank } from './utils/poseCells';
 import { DEFAULT_PARAMETERS, PIPELINE_NODES, nodeBuffer, type WorkstationParameters } from './components/workstation/pipeline';
 import { DockArea, DockPanel, LayoutToolbar } from './components/workstation/WorkspaceLayouts';
-import { FloatingPreviewMedia, useFloatingPreview } from './components/workstation/FloatingPreview';
+import { FloatingPreviewMedia, pipStore, useFloatingPreview } from './components/workstation/FloatingPreview';
+import { LiveTime } from './components/workstation/LiveTime';
+import { useStoreSelector } from './stores/atomicStore';
+import { getPlayhead, setPlayhead } from './stores/playheadStore';
 import { useShortcutActions } from './components/controls/Hotkeys';
 import NumericInput from './components/controls/NumericInput';
 import useHistoryStore from './stores/useHistoryStore';
@@ -113,6 +117,7 @@ export function VideoViewport({
   activeSourceId?: string;
 }) {
   const [detectingFaces, setDetectingFaces] = useState(false);
+  renderProbe('VideoViewport');
   const [detectionNotice, setDetectionNotice] = useState('');
 
   const handleUseFaceFromFrame = useCallback(async () => {
@@ -148,6 +153,17 @@ export function VideoViewport({
 
   const [playing, setPlaying] = useState(false);
   const [playbackError, setPlaybackError] = useState('');
+  // `time` is the committed playhead. While playing, ticks go to playheadStore only (see stores/playheadStore.ts);
+  // `now()` is the up-to-the-frame value for anything that acts on "the current frame" (marks, steps, captures).
+  const now = () => (playing ? getPlayhead() : time);
+  const wasPlaying = useRef(false), commitTime = useRef(setTime); commitTime.current = setTime;
+  useEffect(() => {
+    if (wasPlaying.current && !playing) { const live = getPlayhead(); if (live !== time) commitTime.current(live); }   // playback stopped: commit the final tick
+    wasPlaying.current = playing;
+  }, [playing, time]);
+  // A pinned floating preview keeps rendering the swapped face even while another screen (#/facemgr, #/batch …) is shown.
+  const previewPinned = useStoreSelector(pipStore, state => state.mode !== 'closed');
+  const previewLive = active || previewPinned;
 
   // Comparison & Masking Modes
   const [compMode, setCompMode] = useState<'wipe' | 'crossfade' | 'diff' | 'blend' | 'loupe'>('wipe');
@@ -165,14 +181,15 @@ export function VideoViewport({
   useEffect(() => { captureAbort.current?.abort(); setCaptureBusy(false); return () => captureAbort.current?.abort(); }, [previewKey]);
   useEffect(() => { if (history.previewSlot || history.comparison) { setPlaying(false); original.current?.pause(); processed.current?.pause(); } }, [history.previewSlot, history.comparison]);
   const captureSlot = async (slot: string) => {
-    const payload = buildLivePayload({ request: previewRequest, time, fps, parameters, maskBase64, restorerAvailable, solo: 'final' });
+    const at = now();
+    const payload = buildLivePayload({ request: previewRequest, time: at, fps, parameters, maskBase64, restorerAvailable, solo: 'final' });
     if (!payload || captureBusy) return;
     const controller = new AbortController(); captureAbort.current = controller; const workspace = captureWorkspace();
     setCaptureBusy(true); setCaptureError(''); setPlaying(false); original.current?.pause(); processed.current?.pause();
     try {
       const rendered = await postLivePreview(payload, { signal: controller.signal });
       if (controller.signal.aborted) return;
-      useHistoryStore.getState().captureSlot(slot, { image: await blobToDataUrl(rendered.blob), frame: rendered.meta?.frame_index ?? currentFrame, timestamp: time, workspace });
+      useHistoryStore.getState().captureSlot(slot, { image: await blobToDataUrl(rendered.blob), frame: rendered.meta?.frame_index ?? currentFrame, timestamp: at, workspace });
     } catch (error) { if ((error as Error).name !== 'AbortError') setCaptureError((error as Error).message); }
     finally { if (captureAbort.current === controller) setCaptureBusy(false); }
   };
@@ -188,11 +205,11 @@ export function VideoViewport({
   const selectSolo = (node: string) => { if (PIPELINE_NODES.find(item => item.id === node)?.unavailable || !previewRequest) return; history.live(); setSolo(previous => previous === node ? null : node); setIsMaskEditing(false); };
   const bypassNode = (node: string) => { if (node !== 'restorer') return; setParameters({ ...parameters, bypass: parameters.bypass.includes(node) ? parameters.bypass.filter(item => item !== node) : [...parameters.bypass, node] }); setSolo('final'); setIsMaskEditing(false); };
 
-  const sourcePreview = usePreview(enabled && active ? target : '', time, playing);
-  const outputPreview = usePreview(enabled && active ? output : '', time, playing);
+  const sourcePreview = usePreview(enabled && previewLive ? target : '', time, playing);
+  const outputPreview = usePreview(enabled && previewLive ? output : '', time, playing);
   // The real swapped frame (or, when a node is soloed, that stage's buffer) from POST /api/preview: debounced, 503-aware.
   const [liveSwap, setLiveSwap] = useState(true);
-  const live = useLiveSwapPreview(active && enabled && liveSwap && !playing && !isMaskEditing
+  const live = useLiveSwapPreview(previewLive && enabled && liveSwap && !playing && !isMaskEditing
     ? buildLivePayload({ request: previewRequest, time, fps, parameters, maskBase64, restorerAvailable, solo: nodeBuffer(solo) })
     : null);
   useEffect(() => { if (live.meta?.latency) latencyCallback.current?.(live.meta.latency); }, [live.meta]);
@@ -238,7 +255,37 @@ export function VideoViewport({
     catch { setPlaybackError('Browser playback is unavailable for this codec. Use frame previews to inspect it.'); }
   };
   const seek = (value: number) => { original.current?.pause(); processed.current?.pause(); setPlaying(false); setTime(Math.max(0, Math.min(duration, value))); };
-  useShortcutActions({ play: target ? () => void toggle() : undefined, previous: () => seek(time - 1 / parseFps(probe?.fps_rational, 30)), next: () => seek(time + 1 / parseFps(probe?.fps_rational, 30)), markIn: () => onTrimChange?.(time, trimEnd !== null && trimEnd <= time ? null : trimEnd), markOut: () => { if (time > trimStart) onTrimChange?.(trimStart, time); }, solo: () => selectSolo(selectedNode), bypass: () => bypassNode(selectedNode), sweep: () => { if (previewRequest) setSweepPanel('geometry'); }, floating: floating.open }, active && !sweepPanel);
+  const frameStep = 1 / parseFps(probe?.fps_rational, 30);
+  const flash = (message: string) => { setSnapshotNotice(message); setTimeout(() => setSnapshotNotice(''), 3000); };
+  /** W / D: enter the full-bleed comparison canvas in `mode`, or leave it when that mode is already showing. */
+  const toggleCanvasMode = (mode: typeof compMode) => {
+    if (playing) { flash('Pause playback to use the comparison canvas.'); return; }
+    if (viewMode === 'compare' && compMode === mode) { setViewMode('side'); return; }
+    if (mode !== 'wipe' && !(liveUrl || outputPreview.source)) { flash('No swapped frame yet: the diff map compares original against swapped.'); return; }
+    setCompMode(mode); setViewMode('compare'); setSolo(null); setIsMaskEditing(false);
+  };
+  /** E: extract the selected (else left-most) face of the paused frame as the active source, without opening the menu. */
+  const quickExtractFace = () => {
+    if (!target) return;
+    if (playing) { flash('Pause on a frame to extract its face.'); return; }
+    const store = useFaceSelectionStore.getState(), faces = store.getFacesAtTimestamp(time, fps), face = faces.find(item => item.id === store.activeSelection);
+    void extraction.run('source_gallery', { faceRank: face ? leftToRightRank(faces, face) : sourceFaceNumber - 1 });
+  };
+  const bufferShortcuts = Object.fromEntries(PIPELINE_NODES.map((node, index) => [`buffer${index + 1}`, () => selectSolo(node.id)]));
+  useShortcutActions({
+    play: target ? () => void toggle() : undefined,
+    previous: () => seek(now() - frameStep), next: () => seek(now() + frameStep),
+    markIn: () => { const at = now(); onTrimChange?.(at, trimEnd !== null && trimEnd <= at ? null : trimEnd); },
+    markOut: () => { const at = now(); if (at > trimStart) onTrimChange?.(trimStart, at); },
+    jumpIn: () => seek(trimStart), jumpOut: () => seek(trimEnd ?? duration), resetRange: () => onTrimChange?.(0, null),
+    toggleWipe: () => toggleCanvasMode('wipe'), toggleDiff: () => toggleCanvasMode('diff'),
+    ...bufferShortcuts,
+    solo: () => selectSolo(selectedNode), bypass: () => bypassNode(selectedNode), sweep: () => { if (previewRequest) setSweepPanel('geometry'); },
+    extractFace: quickExtractFace,
+    snapshotA: () => void captureSlot('A'), snapshotB: () => void captureSlot('B'), snapshotC: () => void captureSlot('C'), snapshotD: () => void captureSlot('D'),
+  }, active && !sweepPanel);
+  // The preview window toggles work from every screen, so they live outside the faceswap-only map above.
+  useShortcutActions({ floating: floating.toggle, pip: () => void floating.openPip() }, !sweepPanel);
 
   const mediaDims = probe ? { width: probe.width, height: probe.height } : { width: 1920, height: 1080 };
   const handleCompareContextMenu = useCallback((clientX: number, clientY: number) => {
@@ -444,7 +491,7 @@ export function VideoViewport({
               muted
               onEnded={() => setPlaying(false)}
               onError={() => setPlaybackError('Browser playback unavailable; frame previews can still be used.')}
-              onTimeUpdate={!isOutput ? event => { if (playing) setTime(event.currentTarget.currentTime); } : undefined}
+              onTimeUpdate={!isOutput ? event => { if (playing) setPlayhead(event.currentTarget.currentTime); } : undefined}
             />
             {!playing && !showLive && activeResult.source && (
               <img
@@ -454,17 +501,17 @@ export function VideoViewport({
               />
             )}
             {!isOutput && !isMaskEditing && showFaceOverlays && (
-              <FaceOverlayCanvas
+              <LiveTime fallback={time} live={playing}>{liveTime => <FaceOverlayCanvas
                 videoRef={original}
                 mediaDimensions={mediaDims}
-                currentTime={time}
+                currentTime={liveTime}
                 sources={sources}
                 onAssignSource={onAssignSource}
                 showOverlays={showFaceOverlays}
                 showLandmarks={showLandmarks}
                 showPose={showPose}
                 onFaceContextMenu={openFaceMenu}
-              />
+              />}</LiveTime>
             )}
             {isShowingSourcePeek && (
               <div className="source-peek-badge">
@@ -497,7 +544,7 @@ export function VideoViewport({
 
   return (
     <section className={`viewport-section ${isFullscreen ? 'is-fullscreen' : ''}`}>
-      <LayoutToolbar onFloat={floating.open}/>
+      <LayoutToolbar onFloat={floating.openWindow}/>
       <SnapshotSlots onCapture={(slot: string) => void captureSlot(slot)} onRestore={restoreWorkspace} busy={captureBusy} captureAvailable={!!previewRequest}/>
       {captureError && <p role="alert" className="inline-warning">{captureError}</p>}
       <PipelineNodeFlowBar selected={selectedNode} solo={solo} bypass={parameters.bypass} onSelect={setSelectedNode} onSolo={selectSolo} onBypass={bypassNode} busy={false} available={!!previewRequest}/>
@@ -716,6 +763,12 @@ export function VideoViewport({
             <span>📸</span> Snapshot
           </button>
 
+          {/* Detachable always-visible preview: in-app floating window, or the browser's Picture-in-Picture window */}
+          <button type="button" className={`hud-btn float-preview-btn ${floating.mode === 'window' ? 'active' : ''}`} aria-pressed={floating.mode === 'window'} onClick={floating.toggle}
+            title="Floating preview: stays visible on every screen (Shift+F, remappable)"><span>◳</span> Float</button>
+          {floating.supportsPip && <button type="button" className={`hud-btn pip-preview-btn ${floating.mode === 'pip' ? 'active' : ''}`} aria-pressed={floating.mode === 'pip'} onClick={() => void floating.openPip()}
+            title="Always-on-top Picture-in-Picture preview window (Shift+G, remappable)"><span>⧉</span> PiP</button>}
+
           {/* Fullscreen Toggle */}
           <button
             type="button"
@@ -756,7 +809,7 @@ export function VideoViewport({
             <div className="compare-host">
               <WorkstationCanvas fullBleed output={output} originalUrl={sourcePreview.source} swappedUrl={liveUrl || outputPreview.source}
                 mode={compMode} onModeChange={(next: string) => setCompMode(next as typeof compMode)} containerWidth={viewportSize.width} containerHeight={viewportSize.height}
-                mediaDimensions={mediaDims} onContextMenuPoint={handleCompareContextMenu}/>
+                mediaDimensions={mediaDims} onContextMenuPoint={handleCompareContextMenu} currentTime={time} fps={fps}/>
               {showFaceOverlays && <FaceOverlayCanvas videoRef={original} mediaDimensions={mediaDims} currentTime={time} sources={sources} fps={fps}
                 showOverlays showLandmarks={showLandmarks} showPose={showPose} interactive={false}/>}
             </div>
@@ -840,14 +893,14 @@ export function VideoViewport({
       /></DockPanel>
 
       {/* Target Face Selection Tray */}
-      <DockPanel id="tray" title="Face Tray"><FaceSelectionTray
-        currentTime={time}
+      <DockPanel id="tray" title="Face Tray"><LiveTime fallback={time} live={playing}>{liveTime => <FaceSelectionTray
+        currentTime={liveTime}
         sources={sources}
         onSeekTime={setTime}
         onAssignSource={onAssignSource}
         onUseFaceFromFrame={openMenuFromBar}
         canUseFaceFromFrame={!!target}
-      /></DockPanel>
+      />}</LiveTime></DockPanel>
       <DockPanel id="inspector" title="Inspector">{inspector ?? <p className="muted">Processing inspector</p>}</DockPanel>
       <DockPanel id="pose" title="3D Pose & Geometry">{posePanel ?? <p className="muted">Select a source identity to inspect geometry.</p>}</DockPanel>
       </DockArea>

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { EventConnection } from '../../events';
 import { buildPillModel, isPipelineFrame, formatElapsed } from './pillModel';
+import { publishPipeline } from '../../stores/telemetryStore';
 
 export const TELEMETRY_PATH = '/ws/telemetry';
 const telemetryUrl = () => `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}${TELEMETRY_PATH}`;
@@ -18,7 +19,7 @@ export default function PipelinePill({ url, makeSocket, now = Date.now, initialF
   const [tick, setTick] = useState(0);
 
   useEffect(() => {
-    const link = new EventConnection(url ?? telemetryUrl(), event => { if (isPipelineFrame(event)) setFrame(event); }, setConnection, makeSocket);
+    const link = new EventConnection(url ?? telemetryUrl(), event => { if (isPipelineFrame(event)) { setFrame(event); publishPipeline(event); } }, setConnection, makeSocket);
     link.start();
     return () => link.stop();
   }, [url, makeSocket]);

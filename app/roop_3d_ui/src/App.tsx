@@ -1,7 +1,10 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState, type ComponentType } from 'react';
 import { api, post, upload } from './api';
-import type { Capabilities, Config, Coverage, FaceSet, Inspection, Job, JobRequest, Probe, Project, Reconstruction, Telemetry, Track } from './contracts';
+import { renderProbe } from './utils/renderProbe';
+import type { Capabilities, Config, Coverage, FaceSet, Inspection, Job, JobRequest, Probe, Project, Reconstruction, Track } from './contracts';
 import { EventConnection } from './events';
+import { publishHardware } from './stores/telemetryStore';
+import { setPlayhead } from './stores/playheadStore';
 import { featureReason, jobActions, mappings, optionReason } from './state';
 import { SettingsInspector } from './SettingsInspector';
 import { VideoViewport, formatTime } from './VideoViewport';
@@ -29,9 +32,13 @@ const PreFlightLinterModal = PreFlightLinterModalComponent as unknown as Compone
 const PoseCoverageInspector = lazy(() => import('./ThreeViewport').then(module => ({ default: module.PoseCoverageInspector })));
 
 export default function App() {
+  renderProbe('App');
   const [caps, setCaps] = useState<Capabilities | null>(null), [config, setConfig] = useState<Config | null>(null);
-  const [sources, setSources] = useState<FaceSet[]>([]), [jobs, setJobs] = useState<Job[]>([]), [telemetry, setTelemetry] = useState<Telemetry | null>(null);
-  const [target, setTarget] = useState(''), [probe, setProbe] = useState<Probe | null>(null), [time, setTime] = useState(0), [keys, setKeys] = useState<number[]>([]);
+  const [sources, setSources] = useState<FaceSet[]>([]), [jobs, setJobs] = useState<Job[]>([]);
+  // `time` is the *committed* playhead (seek / step / pause). Per-tick playback time lives in `playheadStore`, and
+  // hardware telemetry in `telemetryStore`: neither is React state here, so neither re-renders the workstation.
+  const [target, setTarget] = useState(''), [probe, setProbe] = useState<Probe | null>(null), [time, setCommittedTime] = useState(0), [keys, setKeys] = useState<number[]>([]);
+  const setTime = useCallback((value: number) => { setCommittedTime(value); setPlayhead(value); }, []);
   const [inspection, setInspection] = useState<Inspection | null>(null), [selectedTrack, setSelectedTrack] = useState<string>('');
   const [sourceId, setSourceId] = useState(''), [coverage, setCoverage] = useState<Coverage | null>(null), [mesh, setMesh] = useState<Reconstruction | null>(null);
   const [identitySourceB, setIdentitySourceB] = useState('');
@@ -126,7 +133,7 @@ export default function App() {
   useEffect(() => {
     let refresh: ReturnType<typeof setTimeout> | undefined;
     const events = new EventConnection(`${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/api/v1/ws/events`, event => {
-      if (event.type === 'system.telemetry' && event.hardware) setTelemetry(event.hardware);
+      if (event.type === 'system.telemetry' && event.hardware) publishHardware(event.hardware);
       if (event.type.startsWith('job.') || event.type === 'stream.ready' || event.type === 'stream.gap') {
         if (!refresh) refresh = setTimeout(() => { refresh = undefined; void refreshJobs().catch(error => setError(error.message)); }, 120);
       }
@@ -259,7 +266,7 @@ export default function App() {
       <button className={`button small tour-button ${tourSeen() ? '' : 'fresh'}`} data-testid="header-tour-button" aria-haspopup="dialog" title="Four-step guide to the workstation" onClick={() => setTourOpen(true)}>How to Use</button>
       <div className="project-name"><input aria-label="Project name" maxLength={128} value={projectName} onChange={event => setProjectName(event.target.value)} /><span>{projectDirty ? 'UNSAVED' : 'SAVED'}</span></div>
       <span className="local-status"><i className={`dot ${connection === 'online' ? 'mint' : 'amber'}`}/>{connection === 'online' ? 'Local service' : connection}</span>
-      <PipelinePill telemetry={telemetry} activeJob={currentJob} />
+      <PipelinePill activeJob={currentJob} />
       <div role="group" aria-label="UI zoom" title="UI Zoom (Ctrl + / − / 0)" className="ui-zoom-group">
         <button type="button" onClick={() => bumpZoom(-0.05)} title="Zoom out (Ctrl −)" aria-label="Zoom out" className="zoom-btn">−</button>
         <button type="button" onClick={resetZoom} title="Reset zoom (Ctrl 0)" aria-label={`Reset zoom, ${Math.round(zoom * 100)}%`} className="zoom-reset-btn">{Math.round(zoom * 100)}%</button>
@@ -453,7 +460,7 @@ export default function App() {
         </div>
       )}
     </main></div></AppRouter>
-    <WorkstationScreens route={route} caps={caps} config={config} sources={sources} jobs={jobs} projects={projects} busy={!!busy} telemetry={telemetry} connection={connection} openProject={openProject} showJob={showJob} controlJob={controlJob} saveSettings={saveSettings} refreshJobs={refreshJobs} openLibrary={() => { setProjectsOpen(true); void refreshProjects(); }} latency={previewLatency} target={target} probe={probe} inspection={inspection} refreshProjects={refreshProjects} exportOptions={exportOptions} onExportChange={setExportOptions} meshBlend={parameters.pose_mode === 'mesh_blend'} onQueue={queue} canQueue={!reason('queue') && !!inspection && !!renderMappings().length && !busy} previewRequest={inspection && renderMappings().length ? request() : null} timestamp={time} themeName={themeName} onThemeChange={setThemeName} onStartTour={() => setTourOpen(true)}/>
+    <WorkstationScreens route={route} caps={caps} config={config} sources={sources} jobs={jobs} projects={projects} busy={!!busy} connection={connection} openProject={openProject} showJob={showJob} controlJob={controlJob} saveSettings={saveSettings} refreshJobs={refreshJobs} openLibrary={() => { setProjectsOpen(true); void refreshProjects(); }} latency={previewLatency} target={target} probe={probe} inspection={inspection} refreshProjects={refreshProjects} exportOptions={exportOptions} onExportChange={setExportOptions} meshBlend={parameters.pose_mode === 'mesh_blend'} onQueue={queue} canQueue={!reason('queue') && !!inspection && !!renderMappings().length && !busy} previewRequest={inspection && renderMappings().length ? request() : null} timestamp={time} themeName={themeName} onThemeChange={setThemeName} onStartTour={() => setTourOpen(true)}/>
     <footer className="app-footer"><span>ROOP 3D / LOCAL WORKSTATION</span><span>Observed identities. Explicit processing. Synthetic media.</span><span>API :{config?.port ?? '—'}</span></footer>
     {projectsOpen && <div className="modal-backdrop" onClick={() => setProjectsOpen(false)}><section role="dialog" aria-modal="true" aria-labelledby="projects-title" className="project-modal" onClick={event => event.stopPropagation()}><div className="panel-heading"><div><span className="eyebrow">VERSIONED .R3DP MANIFESTS</span><h2 id="projects-title">Project library</h2></div><button aria-label="Close projects" className="icon-button" onClick={() => setProjectsOpen(false)}>×</button></div><p className="muted">Reopening verifies target, inspection, FaceSet, and model hashes. Project files contain references and settings, never raw media.</p><button className="button" disabled={!!busy} onClick={() => projectInput.current?.click()}>Import .r3dp</button><input ref={projectInput} hidden type="file" accept=".r3dp,application/json" onChange={event => { importProject(event.target.files?.[0]); event.target.value = ''; }}/>{!projects.length && <p className="empty-note muted">No saved projects yet.</p>}{projects.map(item => <div key={item.project_id} className="saved-project"><div><strong>{item.name}</strong><small>{new Date(item.saved_at).toLocaleString()} · checkpoint {item.last_completed_frame >= 0 ? item.last_completed_frame : 'none'}</small></div><button className="button small" disabled={!!busy} onClick={() => openProject(item.project_id)}>Verify & open</button><a className="button small" href={`/api/v1/projects/${item.project_id}/download`} download>Export</a></div>)}{project?.checkpoint_job_id && <button className="button accent" disabled={!!busy || !!reason('queue')} onClick={() => void run('Verifying checkpoint continuation', async () => { const resumed = await post<Job>(`/projects/${project.project_id}/resume`, {}); setSelectedJob(resumed.job_id); await refreshJobs(); setProjectsOpen(false); })}>Verify & resume {project.name}</button>}</section></div>}
     <QuickTour open={tourOpen} onClose={() => setTourOpen(false)} onNavigate={route => { if (window.location.hash !== route) window.location.hash = route; }} />

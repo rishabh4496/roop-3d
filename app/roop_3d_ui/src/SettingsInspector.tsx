@@ -1,9 +1,11 @@
 import { useEffect, useState } from 'react';
+import { renderProbe } from './utils/renderProbe';
 import type { Capabilities, Config } from './contracts';
 import { optionReason } from './state';
 import NumericInput from './components/controls/NumericInput';
 export function SettingsInspector({ caps, config, save, busy, namespace = 'setting' }: { caps: Capabilities | null; config: Config | null; save: (value: Config) => void; busy: boolean; namespace?: string }) {
   const [draft, setDraft] = useState<Config>({});
+  renderProbe('SettingsInspector');
   useEffect(() => { if (config) setDraft(config); }, [config]);
   const properties = caps?.legal_parameter_bounds.properties ?? {};
   const update = (name: string, value: string | number | boolean) => setDraft(previous => ({ ...previous, [name]: value }));

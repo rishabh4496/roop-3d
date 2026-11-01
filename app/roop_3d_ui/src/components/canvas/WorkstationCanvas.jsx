@@ -1,6 +1,12 @@
 import NumericInput from '../controls/NumericInput';
 import React, { useRef, useState, useEffect, useCallback, useMemo } from 'react';
 import { calculateLetterbox } from '../../utils/letterbox';
+import WebGLViewport from './WebGLViewport';
+import { COLORMAPS, DIFF_NOISE_FLOOR, LOUPE_ZOOM, crossfadeValue, webgl2Available } from './webglModel';
+import { useFaceSelectionStore } from '../../useFaceSelectionStore';
+
+// The shader constants are the single source of truth; these re-exports keep the 2D-path API (and its tests) stable.
+export { DIFF_NOISE_FLOOR, LOUPE_ZOOM, crossfadeValue };
 
 export const MODES = [
   { id: 'wipe', label: 'Wipe (A/B)', icon: '◫' },
@@ -10,16 +16,7 @@ export const MODES = [
   { id: 'loupe', label: 'Loupe (3.5x)', icon: '⊕' },
 ];
 
-export const LOUPE_ZOOM = 3.5;
 const LOUPE_RADIUS = 90;
-/** Raw per-channel difference (0-255) below which a pixel counts as unchanged: JPEG preview noise, not the swap. */
-export const DIFF_NOISE_FLOOR = 3;
-
-/** Smooth 0 → 1 → 0 triangle-cosine used by the persistent crossfade. */
-export const crossfadeValue = (elapsedMs, periodSeconds) => {
-  const phase = ((elapsedMs / 1000) % periodSeconds) / periodSeconds;
-  return 0.5 - 0.5 * Math.cos(2 * Math.PI * phase);
-};
 
 /**
  * Pointer → media pixel coordinates with sub-pixel precision.
@@ -78,6 +75,7 @@ function useLoadedImage(url) {
  *   containerWidth?: number; containerHeight?: number; mediaDimensions?: { width: number; height: number };
  *   fullBleed?: boolean; now?: () => number;
  *   onContextMenuPoint?: (clientX: number, clientY: number) => void;
+ *   currentTime?: number; fps?: number; webgl?: boolean;
  * }} props
  */
 export default function WorkstationCanvas({
@@ -94,6 +92,9 @@ export default function WorkstationCanvas({
   fullBleed = false,
   now = () => performance.now(),
   onContextMenuPoint,
+  currentTime = 0,
+  fps = 30,
+  webgl = true,
 }) {
   const containerRef = useRef(null);
   const diffCanvasRef = useRef(null);
@@ -112,6 +113,15 @@ export default function WorkstationCanvas({
   const [fade, setFade] = useState(0);
   const [mousePos, setMousePos] = useState({ x: -1000, y: -1000, active: false });
   const [coords, setCoords] = useState(null);
+  // Stage 11: WebGL2 shader path (native-resolution textures, GPU diff / loupe / wipe / gizmo). Falls back to the DOM + 2D path.
+  const [gl2] = useState(webgl2Available);
+  const [glFailed, setGlFailed] = useState(false);
+  const [colormap, setColormap] = useState('inferno');
+  const [bicubic, setBicubic] = useState(false);
+  const [showGizmo, setShowGizmo] = useState(true);
+  const getFacesAtTimestamp = useFaceSelectionStore(state => state.getFacesAtTimestamp);
+  const detectedFaces = useFaceSelectionStore(state => state.detectedFaces);
+  const faces = useMemo(() => (detectedFaces?.length ? getFacesAtTimestamp(currentTime, fps) : []), [detectedFaces, currentTime, fps, getFacesAtTimestamp]);
 
   const letterbox = useMemo(
     () => calculateLetterbox(containerWidth, containerHeight, mediaDimensions.width, mediaDimensions.height),
@@ -122,15 +132,17 @@ export default function WorkstationCanvas({
     ? { left: letterbox.offsetX, top: letterbox.offsetY, width: letterbox.displayW, height: letterbox.displayH }
     : { left: 0, top: 0, width: containerWidth, height: containerHeight };
 
-  // Persistent crossfade: keeps cycling until paused, independent of which frame is showing.
+  const useGl = webgl && gl2 && !glFailed && fullBleed && Boolean(imageA) && stage.width > 0 && stage.height > 0;
+
+  // Persistent crossfade: keeps cycling until paused, independent of which frame is showing. (The shader path animates its own uniform.)
   useEffect(() => {
-    if (mode !== 'crossfade' || !fadePlaying || typeof requestAnimationFrame !== 'function') return undefined;
+    if (useGl || mode !== 'crossfade' || !fadePlaying || typeof requestAnimationFrame !== 'function') return undefined;
     let frame = 0;
     const started = now();
     const tick = () => { setFade(crossfadeValue(now() - started, fadeSeconds)); frame = requestAnimationFrame(tick); };
     frame = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(frame);
-  }, [mode, fadePlaying, fadeSeconds, now]);
+  }, [useGl, mode, fadePlaying, fadeSeconds, now]);
 
   const handlePointerMove = useCallback(event => {
     const container = containerRef.current;
@@ -168,7 +180,7 @@ export default function WorkstationCanvas({
 
   // Diff map: both frames resampled to the same grid, compared per pixel.
   useEffect(() => {
-    if (mode !== 'diff' || !hasOutput) return;
+    if (useGl || mode !== 'diff' || !hasOutput) return;
     const canvas = diffCanvasRef.current;
     if (!canvas || !imageA || !imageB) return;
     const width = Math.min(960, mediaDimensions.width), height = Math.max(1, Math.round(width * mediaDimensions.height / mediaDimensions.width));
@@ -190,11 +202,11 @@ export default function WorkstationCanvas({
       canvas.width = width; canvas.height = height;
       target.putImageData(out, 0, 0);
     } catch { /* tainted canvas (cross-origin media): leave the previous heat-map in place */ }
-  }, [mode, hasOutput, imageA, imageB, diffBoost, mediaDimensions.width, mediaDimensions.height]);
+  }, [useGl, mode, hasOutput, imageA, imageB, diffBoost, mediaDimensions.width, mediaDimensions.height]);
 
   // Loupe: 3.5x of the swapped frame (or the original when no swap exists), nearest-neighbour so pixels stay visible.
   useEffect(() => {
-    if (mode !== 'loupe' || !mousePos.active) return;
+    if (useGl || mode !== 'loupe' || !mousePos.active) return;
     const canvas = loupeCanvasRef.current, image = imageB ?? imageA;
     if (!canvas || !image || !stage.width || !stage.height) return;
     const context = canvas.getContext('2d');
@@ -215,7 +227,7 @@ export default function WorkstationCanvas({
     context.strokeStyle = '#00f5d4';
     context.lineWidth = 2.5;
     context.stroke();
-  }, [mode, mousePos, imageA, imageB, stage.left, stage.top, stage.width, stage.height]);
+  }, [useGl, mode, mousePos, imageA, imageB, stage.left, stage.top, stage.width, stage.height]);
 
   const overlayStyle = useMemo(() => {
     if (mode === 'wipe') {
@@ -266,6 +278,7 @@ export default function WorkstationCanvas({
         {mode === 'diff' && (
           <div className="diff-controls">
             <NumericInput label="Difference boost" value={diffBoost} min={1} max={8} step={.1} onChange={setDiffBoost} />
+            {useGl && <select aria-label="Diff colormap" className="diff-colormap" value={colormap} onChange={event => setColormap(event.target.value)}>{COLORMAPS.map(name => <option key={name} value={name}>{name[0].toUpperCase() + name.slice(1)}</option>)}</select>}
             <input type="range" min="1" max="8" step="0.5" value={diffBoost} onChange={e => setDiffBoost(parseFloat(e.target.value))}
               className="diff-boost-slider" title="Difference Sensitivity Boost" />
             <span className="control-val">{diffBoost.toFixed(1)}x</span>
@@ -281,11 +294,27 @@ export default function WorkstationCanvas({
           </div>
         )}
 
-        {mode === 'loupe' && <div className="loupe-controls"><span className="tiny-badge">3.5x SUB-PIXEL LENS</span></div>}
+        {mode === 'loupe' && <div className="loupe-controls"><span className="tiny-badge">3.5x SUB-PIXEL LENS</span>
+          {useGl && <span className="loupe-sampling" role="group" aria-label="Loupe sampling">
+            <button type="button" className={`preview-mode-btn ${bicubic ? '' : 'active'}`} aria-pressed={!bicubic} onClick={() => setBicubic(false)} title="Hardware bilinear sampling">Bilinear</button>
+            <button type="button" className={`preview-mode-btn ${bicubic ? 'active' : ''}`} aria-pressed={bicubic} onClick={() => setBicubic(true)} title="Catmull-Rom bicubic sampling (sharper at 3.5x)">Bicubic</button>
+          </span>}</div>}
+        {useGl && <div className="gizmo-controls">
+          <button type="button" className={`preview-mode-btn ${showGizmo ? 'active' : ''}`} aria-pressed={showGizmo} onClick={() => setShowGizmo(value => !value)} title="3D pose axes over each face's nose bridge">⌖ Pose gizmo</button>
+          {showGizmo && <span className="gizmo-legend" aria-label="Gizmo axes"><i style={{ background: '#ef4444' }}/>Pitch <i style={{ background: '#22c55e' }}/>Yaw <i style={{ background: '#3b82f6' }}/>Roll</span>}
+        </div>}
       </div>
 
       {/* The two real frames, aligned to the letterboxed media rectangle. */}
-      {(aUrl || bUrl) && (
+      {useGl && (
+        <div className="compare-stage webgl-stage" style={stageStyle}>
+          <WebGLViewport imageA={imageA} imageB={bUrl ? imageB : null} mode={mode} split={split} vertical={wipeOrientation === 'vertical'} mix={mode === 'blend' ? blendOpacity : fade}
+            gain={diffBoost} colormap={colormap} bicubic={bicubic} faces={faces} showGizmo={showGizmo} width={stage.width} height={stage.height}
+            pointer={{ x: mousePos.x - stage.left, y: mousePos.y - stage.top, active: mousePos.active }}
+            fadePlaying={fadePlaying} fadeSeconds={fadeSeconds} now={now} onFade={setFade} onUnsupported={() => setGlFailed(true)} />
+        </div>
+      )}
+      {!useGl && (aUrl || bUrl) && (
         <div className="compare-stage" style={stageStyle}>
           {aUrl && <img className="compare-a" src={aUrl} alt="Original frame" draggable={false} />}
           {bUrl && mode !== 'diff' && <img className="compare-b" src={bUrl} alt="Swapped frame" draggable={false} style={overlayStyle} />}
@@ -305,7 +334,7 @@ export default function WorkstationCanvas({
 
       {mode === 'diff' && hasOutput && (
         <div className="diff-canvas-layer" style={stageStyle}>
-          <canvas ref={diffCanvasRef} className="diff-canvas" />
+          {!useGl && <canvas ref={diffCanvasRef} className="diff-canvas" />}
           <div className="diff-legend">
             <span><i className="dot diff-cyan" />Minor Shift</span>
             <span><i className="dot diff-magenta" />Major Swap Difference</span>
@@ -313,9 +342,10 @@ export default function WorkstationCanvas({
         </div>
       )}
 
-      {mode === 'blend' && hasOutput && <div className="alpha-blend-layer" style={{ opacity: blendOpacity }} />}
+      {mode === 'blend' && hasOutput && !useGl && <div className="alpha-blend-layer" style={{ opacity: blendOpacity }} />}
 
-      {mode === 'loupe' && mousePos.active && (
+      {mode === 'loupe' && mousePos.active && useGl && <span className="loupe-badge gl-loupe-badge" style={{ left: mousePos.x + LOUPE_RADIUS - 24, top: mousePos.y + LOUPE_RADIUS - 6 }}>3.5x · {bicubic ? 'bicubic' : 'bilinear'}</span>}
+      {mode === 'loupe' && mousePos.active && !useGl && (
         <div className="magnifier-loupe" style={{ left: `${mousePos.x - LOUPE_RADIUS}px`, top: `${mousePos.y - LOUPE_RADIUS}px`, width: `${LOUPE_RADIUS * 2}px`, height: `${LOUPE_RADIUS * 2}px` }}>
           <canvas ref={loupeCanvasRef} className="loupe-canvas" />
           <span className="loupe-badge">3.5x</span>

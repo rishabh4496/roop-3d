@@ -1,7 +1,48 @@
 import CurveEditorTrack from './CurveEditorTrack';
+import { renderProbe } from '../../utils/renderProbe';
 import React, { useRef, useState, useEffect, useMemo, useCallback } from 'react';
 import { useFaceSelectionStore } from '../../useFaceSelectionStore';
 import { addChapter, adjacentChapter, chapterAt, loadChapters, removeChapter, renameChapter, saveChapters } from './chapters';
+import { getPlayhead, playheadStore, usePlayhead } from '../../stores/playheadStore';
+
+/**
+ * Stage 11 live-playhead leaves. `currentTime` (committed by seek / step / pause) drives the timeline's layout and
+ * logic; while `playing`, these small subscribers show the per-tick playhead from `playheadStore`, so a playback tick
+ * re-renders only the needle, timecode and frame counter, never the filmstrip, ruler, pose track or curve editor.
+ */
+const liveOr = (playing, committed) => time => (playing ? time : committed);
+function LiveTimecode({ currentTime, playing, fps, slice = 0 }) {
+  const time = usePlayhead(liveOr(playing, currentTime));
+  return formatTimecode(time, fps).slice(slice);
+}
+function LiveFrameCounter({ currentTime, playing, fps, total }) {
+  const frame = usePlayhead(time => Math.floor((playing ? time : currentTime) * fps));
+  return <>[F: {frame} / {total}]</>;
+}
+function LiveNeedle({ currentTime, playing, fps, duration, dragging }) {
+  const time = usePlayhead(liveOr(playing, currentTime));
+  const percent = Math.max(0, Math.min(100, (time / duration) * 100));
+  return (
+    <div className={`timeline-playhead-needle ${dragging ? 'dragging' : ''}`} style={{ left: `${percent}%` }} aria-label={`Playhead needle at ${formatTimecode(time, fps)}`}>
+      <div className="playhead-handle-head">
+        <span className="needle-head-arrow">▼</span>
+        <span className="needle-head-tag">{formatTimecode(time, fps).slice(3)}</span>
+      </div>
+      <div className="playhead-needle-line" />
+    </div>
+  );
+}
+function LiveScrubber({ currentTime, playing, duration, fps, disabled, onSeek }) {
+  const time = usePlayhead(liveOr(playing, currentTime));
+  return (
+    <input aria-label="Timeline scrubber" type="range" min="0" max={duration} step={1 / fps} value={Math.min(time, duration)} disabled={disabled}
+      className="timeline-sr-scrubber" onChange={event => { if (!disabled && onSeek) onSeek(+event.target.value); }} />
+  );
+}
+function LiveCurveEditor({ currentTime, playing, fps, ...props }) {
+  const frame = usePlayhead(time => Math.round((playing ? time : currentTime) * fps));
+  return <CurveEditorTrack frame={frame} {...props} />;
+}
 
 /**
  * Format seconds into standard SMPTE timecode (HH:MM:SS:FF).
@@ -241,6 +282,7 @@ export default function TimelineWorkstation({
 }) {
   const containerRef = useRef(null);
   const trackRef = useRef(null);
+  renderProbe('TimelineWorkstation');
   const trackInnerRef = useRef(null);
   const [trackWidth, setTrackWidth] = useState(1000);
   const [playbackRate, setPlaybackRate] = useState(1);
@@ -272,7 +314,10 @@ export default function TimelineWorkstation({
   // Chapters belong to the target clip: reload when it changes, persist on every edit.
   useEffect(() => { setChapters(loadChapters(target)); setRenamingChapter(null); }, [target]);
   const updateChapters = useCallback(next => { setChapters(next); saveChapters(target, next); }, [target]);
-  const currentChapter = chapterAt(chapters, currentTime);
+  // The chapter id is a primitive, so the timeline re-renders on a chapter boundary, not on every playback tick.
+  const currentChapterId = usePlayhead(time => chapterAt(chapters, playing ? time : currentTime)?.id ?? null);
+  const currentChapter = chapters.find(chapter => chapter.id === currentChapterId) ?? null;
+  const liveNow = () => (playing ? getPlayhead() : currentTime);
   const effectiveTrimEnd = trimEnd !== null && trimEnd !== undefined ? trimEnd : effectiveDuration;
 
   // Track container width via ResizeObserver
@@ -316,16 +361,16 @@ export default function TimelineWorkstation({
   const handleStepFrame = useCallback((step) => {
     if (disabled || !onSeek) return;
     const delta = step / effectiveFps;
-    const nextTime = Math.max(0, Math.min(effectiveDuration, currentTime + delta));
+    const nextTime = Math.max(0, Math.min(effectiveDuration, (playing ? getPlayhead() : currentTime) + delta));
     onSeek(nextTime);
-  }, [disabled, onSeek, effectiveFps, effectiveDuration, currentTime]);
+  }, [disabled, onSeek, effectiveFps, effectiveDuration, currentTime, playing]);
 
   // Second jumping controls (Jump -1s / +1s)
   const handleJumpSeconds = useCallback((deltaSec) => {
     if (disabled || !onSeek) return;
-    const nextTime = Math.max(0, Math.min(effectiveDuration, currentTime + deltaSec));
+    const nextTime = Math.max(0, Math.min(effectiveDuration, (playing ? getPlayhead() : currentTime) + deltaSec));
     onSeek(nextTime);
-  }, [disabled, onSeek, effectiveDuration, currentTime]);
+  }, [disabled, onSeek, effectiveDuration, currentTime, playing]);
 
   // Jump to Start / In Point
   const handleJumpStart = useCallback(() => {
@@ -388,23 +433,28 @@ export default function TimelineWorkstation({
   }, [activeDrag, getTimeFromPointer, onSeek, onTrimChange, trimStart, trimEnd, effectiveTrimEnd, effectiveFps, effectiveDuration]);
 
   // Auto-scroll track viewport to keep playhead in view when zoomed in
+  // While playing, the playhead is followed through a transient store subscription (no React render per tick).
   useEffect(() => {
-    if (timelineZoom <= 1 || !trackRef.current) return;
+    if (timelineZoom <= 1 || !trackRef.current) return undefined;
     const viewport = trackRef.current;
-    const needleX = (currentTime / effectiveDuration) * scaledTrackWidth;
-    const viewLeft = viewport.scrollLeft;
-    const viewRight = viewLeft + viewport.clientWidth;
-    if (needleX < viewLeft + 60 || needleX > viewRight - 60) {
-      viewport.scrollLeft = Math.max(0, needleX - viewport.clientWidth / 2);
-    }
-  }, [currentTime, effectiveDuration, scaledTrackWidth, timelineZoom]);
+    const follow = time => {
+      const needleX = (time / effectiveDuration) * scaledTrackWidth;
+      const viewLeft = viewport.scrollLeft;
+      const viewRight = viewLeft + viewport.clientWidth;
+      if (needleX < viewLeft + 60 || needleX > viewRight - 60) {
+        viewport.scrollLeft = Math.max(0, needleX - viewport.clientWidth / 2);
+      }
+    };
+    follow(currentTime);
+    return playing ? playheadStore.subscribeSelector(state => state.time, follow) : undefined;
+  }, [currentTime, playing, effectiveDuration, scaledTrackWidth, timelineZoom]);
 
   // Range loop playback
   useEffect(() => {
-    if (!playing || !isLooping) return;
-    if (currentTime >= effectiveTrimEnd - (1 / effectiveFps)) {
-      onSeek?.(trimStart);
-    }
+    if (!playing || !isLooping) return undefined;
+    const wrap = time => { if (time >= effectiveTrimEnd - (1 / effectiveFps)) onSeek?.(trimStart); };
+    wrap(currentTime);
+    return playheadStore.subscribeSelector(state => state.time, wrap);
   }, [currentTime, playing, isLooping, effectiveTrimEnd, trimStart, effectiveFps, onSeek]);
 
   // Ctrl+Wheel or Meta+Wheel to zoom timeline
@@ -427,13 +477,13 @@ export default function TimelineWorkstation({
   // Trim In / Out button shortcuts
   const handleMarkIn = () => {
     if (disabled || !onTrimChange) return;
-    const newStart = Math.min(currentTime, effectiveTrimEnd - (1 / effectiveFps));
+    const newStart = Math.min(liveNow(), effectiveTrimEnd - (1 / effectiveFps));
     onTrimChange(newStart, trimEnd);
   };
 
   const handleMarkOut = () => {
     if (disabled || !onTrimChange) return;
-    const newEnd = Math.max(currentTime, trimStart + (1 / effectiveFps));
+    const newEnd = Math.max(liveNow(), trimStart + (1 / effectiveFps));
     onTrimChange(trimStart, newEnd >= effectiveDuration ? null : newEnd);
   };
 
@@ -452,35 +502,8 @@ export default function TimelineWorkstation({
     onSeek(effectiveTrimEnd < effectiveDuration ? effectiveTrimEnd : effectiveDuration);
   }, [disabled, onSeek, effectiveTrimEnd, effectiveDuration]);
 
-  // NLE-style keyboard shortcuts: I (Mark In), O (Mark Out), Shift+I (Jump In), Shift+O (Jump Out), Alt+R (Reset Range)
-  useEffect(() => {
-    if (disabled || !target) return;
-    const handleKeyDown = (e) => {
-      if (e.target?.closest?.('input, textarea, select, [contenteditable="true"]')) return;
-      if (e.key === 'i' || e.key === 'I') {
-        if (e.shiftKey) {
-          e.preventDefault();
-          handleJumpIn();
-        } else if (!e.ctrlKey && !e.metaKey && !e.altKey) {
-          e.preventDefault();
-          handleMarkIn();
-        }
-      } else if (e.key === 'o' || e.key === 'O') {
-        if (e.shiftKey) {
-          e.preventDefault();
-          handleJumpOut();
-        } else if (!e.ctrlKey && !e.metaKey && !e.altKey) {
-          e.preventDefault();
-          handleMarkOut();
-        }
-      } else if ((e.key === 'r' || e.key === 'R') && (e.altKey || (e.shiftKey && e.altKey))) {
-        e.preventDefault();
-        handleResetTrim();
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [disabled, target, handleJumpIn, handleJumpOut, trimStart, effectiveTrimEnd, currentTime, effectiveDuration, effectiveFps, trimEnd, onTrimChange]);
+  // NLE keyboard shortcuts (mark / jump in-out, reset range) are handled by the central, remappable hotkey manager
+  // (`markIn`, `markOut`, `jumpIn`, `jumpOut`, `resetRange` in Hotkeys.tsx, bound in VideoViewport), not hardcoded here.
 
   // Timecode Ruler Major and Minor Ticks
   const rulerTicks = useMemo(() => {
@@ -566,8 +589,7 @@ export default function TimelineWorkstation({
     useFaceSelectionStore.getState().setActiveSelection(face.id);
   };
 
-  // Needles and handles percentages
-  const needlePercent = Math.max(0, Math.min(100, (currentTime / effectiveDuration) * 100));
+  // Trim handle percentages (the playhead needle is a live leaf: see LiveNeedle)
   const trimInPercent = Math.max(0, Math.min(100, (trimStart / effectiveDuration) * 100));
   const trimOutPercent = Math.max(0, Math.min(100, (effectiveTrimEnd / effectiveDuration) * 100));
 
@@ -685,12 +707,12 @@ export default function TimelineWorkstation({
               title="Click to jump to exact Timecode or Frame [HH:MM:SS:FF]"
               onClick={() => {
                 if (!disabled) {
-                  setTimecodeInput(formatTimecode(currentTime, effectiveFps));
+                  setTimecodeInput(formatTimecode(liveNow(), effectiveFps));
                   setIsEditingTimecode(true);
                 }
               }}
             >
-              {formatTimecode(currentTime, effectiveFps)}
+              <LiveTimecode currentTime={currentTime} playing={playing} fps={effectiveFps} />
             </span>
           )}
           <span className="tc-separator">/</span>
@@ -698,7 +720,7 @@ export default function TimelineWorkstation({
             {formatTimecode(effectiveDuration, effectiveFps)}
           </span>
           <span className="frame-counter">
-            [F: {Math.floor(currentTime * effectiveFps)} / {Math.floor(effectiveDuration * effectiveFps)}]
+            <LiveFrameCounter currentTime={currentTime} playing={playing} fps={effectiveFps} total={Math.floor(effectiveDuration * effectiveFps)} />
           </span>
         </div>
 
@@ -744,7 +766,7 @@ export default function TimelineWorkstation({
         {/* Chapter markers */}
         <div className="chapter-actions-group" role="group" aria-label="Chapters">
           <button type="button" className="chapter-btn add" disabled={disabled || !target} title="Add a chapter marker at the playhead"
-            onClick={() => updateChapters(addChapter(chapters, currentTime, { duration: effectiveDuration, fps: effectiveFps }))}>＋ Chapter</button>
+            onClick={() => updateChapters(addChapter(chapters, liveNow(), { duration: effectiveDuration, fps: effectiveFps }))}>＋ Chapter</button>
           <button type="button" className="chapter-btn prev" disabled={disabled || !adjacentChapter(chapters, currentTime, -1)} title="Previous chapter"
             onClick={() => { const chapter = adjacentChapter(chapters, currentTime, -1); if (chapter) onSeek?.(chapter.time); }}>⏮</button>
           <button type="button" className="chapter-btn next" disabled={disabled || !adjacentChapter(chapters, currentTime, 1)} title="Next chapter"
@@ -1190,36 +1212,14 @@ export default function TimelineWorkstation({
         )}
 
         {/* Drag-to-Scrub Playhead Needle */}
-        <div
-          className={`timeline-playhead-needle ${activeDrag === 'needle' ? 'dragging' : ''}`}
-          style={{ left: `${needlePercent}%` }}
-          aria-label={`Playhead needle at ${formatTimecode(currentTime, effectiveFps)}`}
-        >
-          <div className="playhead-handle-head">
-            <span className="needle-head-arrow">▼</span>
-            <span className="needle-head-tag">{formatTimecode(currentTime, effectiveFps).slice(3)}</span>
-          </div>
-          <div className="playhead-needle-line" />
-        </div>
+        <LiveNeedle currentTime={currentTime} playing={playing} fps={effectiveFps} duration={effectiveDuration} dragging={activeDrag === 'needle'} />
 
         {/* Fallback range input for full accessibility & test compliance */}
-        <input
-          aria-label="Timeline scrubber"
-          type="range"
-          min="0"
-          max={effectiveDuration}
-          step={1 / effectiveFps}
-          value={Math.min(currentTime, effectiveDuration)}
-          disabled={disabled || !target}
-          className="timeline-sr-scrubber"
-          onChange={(e) => {
-            if (!disabled && onSeek) onSeek(+e.target.value);
-          }}
-        />
+        <LiveScrubber currentTime={currentTime} playing={playing} fps={effectiveFps} duration={effectiveDuration} disabled={disabled || !target} onSeek={onSeek} />
         </div>
       </div>
 
-      <CurveEditorTrack frame={Math.round(currentTime * effectiveFps)} totalFrames={Math.max(1, Math.round(duration * effectiveFps))} parameters={parameters} disabled={disabled || !target} onSeekFrame={frame => onSeek?.(frame / effectiveFps)}/>
+      <LiveCurveEditor currentTime={currentTime} playing={playing} fps={effectiveFps} totalFrames={Math.max(1, Math.round(duration * effectiveFps))} parameters={parameters} disabled={disabled || !target} onSeekFrame={frame => onSeek?.(frame / effectiveFps)}/>
       {/* Timeline Footer Info */}
       <div className="timeline-workstation-foot">
         <span className="foot-left">

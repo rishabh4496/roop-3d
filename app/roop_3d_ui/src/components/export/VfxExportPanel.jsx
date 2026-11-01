@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { api, post, mediaURL } from '../../api';
 import { downloadText, exportFCPXML, exportEDL, exportOTIO } from '../../utils/nleExporter';
 import { buildZip } from '../facemgr/fszBuilder';
+import NumericInput from '../controls/NumericInput';
 
 export const DEFAULT_EXPORT = { baked_video: true, passes: [], finishing: { cube: null, grain: { size: 1, intensity: 0, shadows: 1, highlights: .5, seed: 0 }, provenance: 'none' } };
 const PASSES = [['alpha', 'Face-Canvas Alpha Matte'], ['occluder', 'Occluder / XSeg Matte Pass'], ['normal', '3D Normal Map Pass'], ['depth', '3D Depth Map Pass'], ['uv', 'UV Warped Face Pass']];
@@ -22,7 +23,7 @@ export function FinishingControls({ value, onChange, capabilities = null, disabl
     <p className="muted">{value.cube ? (lutName || 'Saved LUT loaded') : 'No LUT loaded'} · Display-referred RGB. Select a LUT matching your footage’s color space.</p>
     {value.cube && <button type="button" className="button" onClick={() => { onChange({ ...value, cube: null }); setLutName(''); }}>Remove LUT</button>}
     <div className="finishing-grid">{[['size', 'Grain Size', .5, 8, .1], ['intensity', 'Grain Intensity', 0, .2, .001], ['shadows', 'Shadow balance', 0, 2, .05], ['highlights', 'Highlight balance', 0, 2, .05], ['seed', 'Grain seed', 0, 2147483647, 1]].map(([name, label, min, max, step]) =>
-      <label key={name}>{label}<input type="number" aria-label={label} min={min} max={max} step={step} value={value.grain[name]} onChange={event => { const n = Number(event.target.value); if (Number.isFinite(n) && n >= min && n <= max && (name !== 'seed' || Number.isInteger(n))) changeGrain(name, n); }}/></label>)}</div>
+      <NumericInput key={name} label={label} min={min} max={max} step={step} integer={name === 'seed'} disabled={disabled} value={value.grain[name]} onChange={n => { if (n !== null) changeGrain(name, n); }}/>)}</div>
     <label>Provenance<select aria-label="Provenance" value={value.provenance} onChange={event => onChange({ ...value, provenance: event.target.value })}>
       <option value="none">Standard synthetic-media notice</option><option value="sha256">Embedded recipe hash + SHA-256 manifest</option>
       <option value="hmac-sha256" disabled={!capabilities?.['hmac-sha256']}>Keyed cryptographic manifest (local key required)</option>

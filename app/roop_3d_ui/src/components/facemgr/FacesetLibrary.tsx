@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { api, post } from '../../api';
 import type { FaceSet } from '../../contracts';
+import VirtualList from '../common/VirtualList';
 
 export interface FacesetLibraryProps {
   sources?: FaceSet[];
@@ -309,7 +310,7 @@ export default function FacesetLibrary({
                       {shown.length === 0 ? (
                         <p className="text-mini text-muted py-2 text-center">No match for “{filter}”.</p>
                       ) : (
-                        shown.map((e) => {
+                        <VirtualList items={shown} itemKey={(e) => e.faceset_id} estimateHeight={42} gap={0} aria-label="FaceSets" renderItem={(e) => {
                           const isActive = selected?.faceset_id === e.faceset_id;
                           return (
                             <div
@@ -383,7 +384,7 @@ export default function FacesetLibrary({
                               </span>
                             </div>
                           );
-                        })
+                        }} />
                       )}
                     </div>
                   </div>

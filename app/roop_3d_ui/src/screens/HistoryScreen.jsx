@@ -1,5 +1,6 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { api, post } from '../api';
+import VirtualList from '../components/common/VirtualList';
 
 export default function HistoryScreen({
   projects = [],
@@ -268,8 +269,9 @@ export default function HistoryScreen({
       </div>
 
       {/* Projects List */}
-      <div className="history-cards-grid">
-        {filteredProjects.map(item => {
+      <div className="history-cards-host">
+        <VirtualList items={filteredProjects} itemKey={item => item.project_id} estimateHeight={360} minColumnWidth={340} gap={16} aria-label="Saved projects"
+          renderItem={item => {
           const cp = item.checkpoint;
           const facesetId = item.face_mappings?.[0]?.faceset_id || cp?.faceset_ids?.[0] || 'Unknown';
           const provider = cp?.execution_provider || 'CPUExecutionProvider';
@@ -391,7 +393,7 @@ export default function HistoryScreen({
               </div>
             </div>
           );
-        })}
+        }} />
       </div>
 
       {!filteredProjects.length && (

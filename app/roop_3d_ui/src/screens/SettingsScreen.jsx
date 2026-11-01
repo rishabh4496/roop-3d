@@ -4,6 +4,13 @@ import { SettingsInspector } from '../SettingsInspector';
 import { HotkeyEditor } from '../components/controls/Hotkeys';
 import ThemeGallery from '../components/ThemeGallery';
 import { THEMES, themeByName, applyThemeToDom } from '../themes';
+import { useTelemetry } from '../stores/telemetryStore';
+
+/** Leaf subscriber: the Settings screen itself never re-renders when the telemetry store first learns the GPU. */
+function GpuName({ override }) {
+  const stored = useTelemetry(state => state.hardware?.gpus?.[0]?.name);
+  return <>{override ?? stored ?? 'CPU Host'}</>;
+}
 
 export default function SettingsScreen({
   caps,
@@ -175,7 +182,7 @@ export default function SettingsScreen({
                 </div>
                 <div>
                   <span className="muted">GPU Acceleration:</span>
-                  <strong> {telemetry?.gpus?.[0]?.name || 'CPU Host'}</strong>
+                  <strong> <GpuName override={telemetry?.gpus?.[0]?.name} /></strong>
                 </div>
               </div>
               <p className="muted">

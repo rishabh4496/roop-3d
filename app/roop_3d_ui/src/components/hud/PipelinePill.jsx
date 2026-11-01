@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import BottleneckFlamegraph from '../diagnostics/BottleneckFlamegraph';
+import { publishHardware, publishProgress, useTelemetry } from '../../stores/telemetryStore';
 
 /**
  * Standard 5-stage facial transformation pipeline stages.
@@ -91,15 +92,13 @@ export default function PipelinePill({
   defaultExpanded = false,
 }) {
   const [expanded, setExpanded] = useState(defaultExpanded);
-  const [liveTelemetry, setLiveTelemetry] = useState(telemetry);
-  const [liveProgress, setLiveProgress] = useState(null);
+  // Stage 11: hardware + progress come from the atomic telemetry store, so this pill (and only the components that
+  // subscribe to a slice) re-render per tick. `telemetry` stays as an explicit override for tests and storybook use.
+  const storedTelemetry = useTelemetry(state => state.hardware);
+  const liveProgress = useTelemetry(state => state.progress);
+  const liveTelemetry = telemetry ?? storedTelemetry;
   const [wsConnected, setWsConnected] = useState(false);
   const wsRef = useRef(null);
-
-  // Sync external telemetry prop
-  useEffect(() => {
-    if (telemetry) setLiveTelemetry(telemetry);
-  }, [telemetry]);
 
   // Connect to /ws/telemetry WebSocket
   useEffect(() => {
@@ -125,9 +124,9 @@ export default function PipelinePill({
           try {
             const data = JSON.parse(event.data);
             if (data.type === 'system.telemetry' && data.hardware) {
-              setLiveTelemetry(data.hardware);
+              publishHardware(data.hardware);
             } else if (data.type === 'job.progress') {
-              setLiveProgress(data);
+              publishProgress(data);
             }
           } catch {
             // Ignore malformed payloads

@@ -1,6 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import { api, post } from '../api';
 import { featureReason } from '../state';
+import NumericInput from '../components/controls/NumericInput';
 
 export const BUILTIN_RECIPES = [
   {
@@ -508,17 +509,10 @@ export default function BatchMatrixScreen({
         </p>
         {autoSplit && (
           <div className="split-options-grid">
-            <label className="setting-field">
-              <span>Max Segment Duration (seconds)</span>
-              <input
-                type="number"
-                min="5"
-                max="120"
-                step="1"
-                value={maxSegmentDuration}
-                onChange={e => setMaxSegmentDuration(parseFloat(e.target.value) || 15)}
-              />
-            </label>
+            <div className="setting-field">
+              <NumericInput label="Max Segment Duration (seconds)" min={5} max={120} step={1} value={maxSegmentDuration}
+                onChange={value => setMaxSegmentDuration(value ?? 15)} />
+            </div>
             <label className="setting-checkbox">
               <input
                 type="checkbox"
@@ -896,18 +890,8 @@ export default function BatchMatrixScreen({
                       placeholder="e.g. Extreme Sharpening"
                     />
                   </label>
-                  <label>
-                    <span>Restoration Blend (0.0 to 1.0):</span>
-                    <input
-                      type="number"
-                      step="0.05"
-                      min="0"
-                      max="1"
-                      style={{ width: '100%', marginTop: '4px' }}
-                      value={newRecipeRestoration}
-                      onChange={e => setNewRecipeRestoration(parseFloat(e.target.value) || 0)}
-                    />
-                  </label>
+                  <NumericInput label="Restoration Blend (0.0 to 1.0)" step={0.05} min={0} max={1} value={newRecipeRestoration}
+                    onChange={value => setNewRecipeRestoration(value ?? 0)} />
                   <label>
                     <span>Pose Mode:</span>
                     <select

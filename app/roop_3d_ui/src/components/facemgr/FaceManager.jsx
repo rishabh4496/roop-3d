@@ -1,5 +1,7 @@
 import { rankClusters, poseGrid } from './faceBank';
 import NumericInput from '../controls/NumericInput';
+import VirtualList from '../common/VirtualList';
+import { renderProbe } from '../../utils/renderProbe';
 import { useState, useEffect, useMemo, useRef } from 'react';
 import { Canvas } from '@react-three/fiber';
 import { OrbitControls } from '@react-three/drei';
@@ -71,6 +73,7 @@ export default function FaceManager({
   onAssignSource,
   onBackToWorkstation,
 }) {
+  renderProbe('FaceManager');
   // Input raw photos and extracted faces
   const [faces, setFaces] = useState(() => {
     if (initialFaces && initialFaces.length > 0) return initialFaces;
@@ -443,14 +446,13 @@ export default function FaceManager({
 
           {/* Identities List */}
           <div className="identities-scroll-list">
-            {clusters.map((person) => {
+            <VirtualList items={clusters} itemKey={person => person.id} estimateHeight={68} gap={8} aria-label="Identities" renderItem={(person) => {
               const isSelected = selectedPersonId === person.id;
               const isChecked = selectedForMerge.includes(person.id);
               const repFace = person.faces[0];
 
               return (
                 <div
-                  key={person.id}
                   className={`person-cluster-card ${isSelected ? 'active' : ''}`}
                   onClick={() => setSelectedPersonId(person.id)}
                 >
@@ -491,7 +493,7 @@ export default function FaceManager({
                   </div>
                 </div>
               );
-            })}
+            }} />
 
             {clusters.length === 0 && (
               <div className="empty-identities-hint">
@@ -583,19 +585,20 @@ export default function FaceManager({
                   </div>
 
                   <div className="bucket-faces-container">
-                    {facesInBucket.map((face) => (
-                      <div key={face.id} className="bucket-face-card">
-                        {face.thumbnailUrl ? (
-                          <img src={face.thumbnailUrl} alt="Face view" className="bucket-face-thumb" />
-                        ) : (
-                          <div className="bucket-face-fallback">◎</div>
-                        )}
-                        <div className="bucket-face-meta">
-                          <span>Y: <b>{(face.yaw || 0).toFixed(0)}°</b></span>
-                          <span>P: <b>{(face.pitch || 0).toFixed(0)}°</b></span>
+                    <VirtualList items={facesInBucket} itemKey={face => face.id} estimateHeight={64} gap={8} aria-label={`${b.title} face crops`}
+                      renderItem={(face) => (
+                        <div className="bucket-face-card">
+                          {face.thumbnailUrl ? (
+                            <img src={face.thumbnailUrl} alt="Face view" className="bucket-face-thumb" loading="lazy" decoding="async" />
+                          ) : (
+                            <div className="bucket-face-fallback">◎</div>
+                          )}
+                          <div className="bucket-face-meta">
+                            <span>Y: <b>{(face.yaw || 0).toFixed(0)}°</b></span>
+                            <span>P: <b>{(face.pitch || 0).toFixed(0)}°</b></span>
+                          </div>
                         </div>
-                      </div>
-                    ))}
+                      )} />
 
                     {isMissing && (
                       <div className="bucket-missing-slot">

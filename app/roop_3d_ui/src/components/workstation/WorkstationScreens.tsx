@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react';
 import AppRouter from '../../router/AppRouter';
 import { api, mediaURL, post } from '../../api';
-import type { Capabilities, Config, FaceSet, Inspection, Job, Probe, Project, Telemetry } from '../../contracts';
+import type { Capabilities, Config, FaceSet, Inspection, Job, Probe, Project } from '../../contracts';
+import { useTelemetry } from '../../stores/telemetryStore';
+import VirtualList from '../common/VirtualList';
 import { featureReason, jobActions } from '../../state';
 import { SettingsInspector } from '../../SettingsInspector';
 import { HotkeyEditor } from '../controls/Hotkeys';
@@ -18,7 +20,17 @@ const History = HistoryScreen as unknown as React.ComponentType<any>;
 const BottleneckFlamegraph = BottleneckFlamegraphComponent as unknown as React.ComponentType<any>;
 const SettingsScreen = SettingsScreenComponent as unknown as React.ComponentType<any>;
 
-type ProjectSummary = Pick<Project, 'project_id' | 'name' | 'saved_at' | 'last_completed_frame'>;
+/** Leaf subscriber: the only part of the Processing screen that re-renders when a hardware tick arrives. */
+function GpuReadout() {
+  const gpus = useTelemetry(state => state.hardware?.gpus);
+  return <>{gpus?.map(gpu => (
+    <span key={gpu.name}>
+      {gpu.name} · {(gpu.free_vram_mib / 1024).toFixed(1)} GB free
+    </span>
+  ))}</>;
+}
+
+type ProjectSummary =Pick<Project, 'project_id' | 'name' | 'saved_at' | 'last_completed_frame'>;
 type Props = {
   exportOptions?: ExportOptions;
   onExportChange?: (value: ExportOptions) => void;
@@ -34,7 +46,6 @@ type Props = {
   jobs: Job[];
   projects: ProjectSummary[];
   busy: boolean;
-  telemetry: Telemetry | null;
   connection: string;
   openProject: (id: string) => void;
   showJob: (job: Job) => void;
@@ -61,7 +72,6 @@ export default function WorkstationScreens(props: Props) {
     jobs,
     projects,
     busy,
-    telemetry,
     connection,
     openProject,
     showJob,
@@ -169,15 +179,13 @@ export default function WorkstationScreens(props: Props) {
           <h1>Live processing</h1>
           <div className="telemetry">
             <span>{connection} · local worker {caps?.rendering_worker_available ? 'available' : 'unavailable'}</span>
-            {telemetry?.gpus.map(gpu => (
-              <span key={gpu.name}>
-                {gpu.name} · {(gpu.free_vram_mib / 1024).toFixed(1)} GB free
-              </span>
-            ))}
+            <GpuReadout />
+
           </div>
           {!jobs.length && <p className="empty-note muted">Queue is empty.</p>}
-          {renderJobs.map(job => (
-            <div className="job" key={job.job_id}>
+          <VirtualList items={renderJobs} itemKey={job => job.job_id} estimateHeight={88} gap={0} aria-label="Render jobs"
+            renderItem={job => (
+            <div className="job">
               <button
                 className="job-select"
                 onClick={() => {
@@ -203,7 +211,7 @@ export default function WorkstationScreens(props: Props) {
                 </button>
               ))}
             </div>
-          ))}
+          )} />
           <BottleneckFlamegraph latency={latency} activeJob={renderJobs.find(job => job.state === 'running') || renderJobs[0] || null} />
           <h2>Measured preview stage timings</h2>
           {latency ? (
@@ -232,19 +240,19 @@ export default function WorkstationScreens(props: Props) {
         <main className="screen-page">
           <h1>Rendered outputs</h1>
           {!completed.length && <p className="muted empty-note">Completed renders appear here.</p>}
-          <div className="gallery-grid">
-            {completed.map(job => (
-              <button
-                className={`screen-card ${selectedOutput === job.job_id ? 'selected' : ''}`}
-                key={job.job_id}
-                onClick={() => setSelectedOutput(job.job_id)}
-              >
-                <strong>{job.output!.output_path.split(/[\\/]/).at(-1)}</strong>
-                <small>
-                  {job.output!.frames} frames · {job.job_id.slice(0, 8)}
-                </small>
-              </button>
-            ))}
+          <div className="gallery-grid-host">
+            <VirtualList items={completed} itemKey={job => job.job_id} estimateHeight={96} minColumnWidth={230} gap={16} aria-label="Rendered outputs"
+              renderItem={job => (
+                <button
+                  className={`screen-card ${selectedOutput === job.job_id ? 'selected' : ''}`}
+                  onClick={() => setSelectedOutput(job.job_id)}
+                >
+                  <strong>{job.output!.output_path.split(/[\\/]/).at(-1)}</strong>
+                  <small>
+                    {job.output!.frames} frames · {job.job_id.slice(0, 8)}
+                  </small>
+                </button>
+              )} />
           </div>
           {output?.output && (
             <section className="output-inspector">
@@ -278,7 +286,6 @@ export default function WorkstationScreens(props: Props) {
           config={config}
           saveSettings={saveSettings}
           busy={busy}
-          telemetry={telemetry}
           connection={connection}
           themeName={props.themeName}
           onThemeChange={props.onThemeChange}
