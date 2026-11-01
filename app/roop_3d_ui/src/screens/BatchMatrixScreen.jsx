@@ -32,6 +32,24 @@ export const BUILTIN_RECIPES = [
     name: 'Action / Motion Smoothing',
     description: 'Fast retarget, strict occlusion threshold, motion blur adaptation.',
     parameters: { pose_mode: 'retarget', restoration_blend: 0.30, eye_open_ratio: 1.0, mouth_open_ratio: 1.0, edge_feather_px: 3, erosion_px: 2, swap_weight: 0.95 }
+  },
+  {
+    id: 'codeformer_fidelity',
+    name: 'CodeFormer Fidelity Sweep',
+    description: 'CodeFormer scalar fidelity feed (w=0.85) mapped to CodeFormer training template.',
+    parameters: { pose_mode: 'retarget', restoration_blend: 0.70, codeformer_fidelity: 0.85, edge_feather_px: 3, erosion_px: 2, swap_weight: 1.0 }
+  },
+  {
+    id: 'ultramax_restoration',
+    name: 'UltraMax Deep Dynamic',
+    description: 'UltraMax registered model with dynamic preprocessing contract.',
+    parameters: { pose_mode: 'retarget', restoration_blend: 0.65, edge_feather_px: 2, erosion_px: 2, swap_weight: 1.0 }
+  },
+  {
+    id: 'frontalization_tps_sweep',
+    name: 'TPS Frontalization Sweep',
+    description: 'Canonical Stage 0 frontalization (0.75) and TPS expression transfer (0.80).',
+    parameters: { pose_mode: 'retarget', pose_frontalization: 0.75, tps_expression_weight: 0.80, restoration_blend: 0.40, swap_weight: 1.0 }
   }
 ];
 
@@ -69,6 +87,7 @@ export default function BatchMatrixScreen({
 
   // Strategy 3: Per-File Matrix (M Sources × N Targets)
   const [matrixSelection, setMatrixSelection] = useState([]);
+  const [outputNamingTemplate, setOutputNamingTemplate] = useState('{target}_{source}_{restorer}_{timestamp}.mp4');
 
   // Strategy 4: Recipe Matrix
   const [recipes, setRecipes] = useState(BUILTIN_RECIPES);
@@ -703,6 +722,23 @@ export default function BatchMatrixScreen({
               <button className="button small" onClick={clearMatrix}>Clear All</button>
               <button className="button small" onClick={invertMatrix}>Invert</button>
             </div>
+          </div>
+
+          <div className="naming-template-bar" style={{ margin: '12px 0' }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <span className="muted">Output Naming Template:</span>
+              <input
+                type="text"
+                className="input text"
+                value={outputNamingTemplate}
+                onChange={(e) => setOutputNamingTemplate(e.target.value)}
+                style={{ flex: 1, fontFamily: 'monospace', fontSize: '12px' }}
+                placeholder="{target}_{source}_{restorer}_{timestamp}.mp4"
+              />
+            </label>
+            <p className="muted" style={{ fontSize: '11px', marginTop: '4px' }}>
+              Supported tokens: <code>{'{target}'}</code>, <code>{'{source}'}</code>, <code>{'{restorer}'}</code>, <code>{'{timestamp}'}</code>
+            </p>
           </div>
 
           <div className="matrix-scroll-wrapper">

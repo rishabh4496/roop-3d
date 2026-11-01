@@ -95,6 +95,7 @@ def capabilities(request: Request) -> Capabilities:
         ("schema_version", "host", "port", "dev_cors", "max_body_bytes", "cache_root", "output_root", "model_search_paths", "diagnostics_level")},
         "disabled_parameters": {"remote_processing_enabled": "No remote adapter is configured", "synthetic_media_notice": "Synthetic media notice is required"},
         "job_states": [item.value for item in JobState],
+        "canonical_job_states": ["QUEUED", "PREFLIGHT", "PRESCANNING", "PREPASSING", "RENDERING", "MUXING", "PAUSED", "COMPLETED", "FAILED", "CANCELLED"],
         "job_controls": {"pause": ["queued", "preparing", "running"], "resume": ["paused", "interrupted"],
                          "cancel": ["queued", "preparing", "running", "pausing", "paused", "interrupted"]},
         "upload_chunk_bytes": min(CHUNK_BYTES, state.settings.max_body_bytes), "max_asset_bytes": MAX_ASSET_BYTES}

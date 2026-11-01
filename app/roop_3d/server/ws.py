@@ -5,7 +5,7 @@ import asyncio
 from contextlib import contextmanager
 from datetime import datetime, timezone
 import threading
-from typing import Annotated, Callable, Iterator, Literal, Union
+from typing import Annotated, Any, Callable, Iterator, Literal, Union
 
 from fastapi import WebSocket, WebSocketDisconnect
 from pydantic import Field, TypeAdapter
@@ -74,9 +74,20 @@ class StreamReadyEvent(EventBase):
     action: Literal["refresh_jobs"] = "refresh_jobs"
 
 
-Event = Annotated[Union[JobStateEvent, JobProgressEvent, TelemetryEvent, PipelineStatusEvent, StreamGapEvent, StreamReadyEvent],
+class QueueEvent(EventBase):
+    type: Literal["queue.event"] = "queue.event"
+    action: str = ""
+    job_id: str | None = None
+    state: str | None = None
+    data: dict[str, Any] = Field(default_factory=dict)
+
+
+QueueEvent.model_rebuild()
+
+Event = Annotated[Union[JobStateEvent, JobProgressEvent, TelemetryEvent, PipelineStatusEvent, StreamGapEvent, StreamReadyEvent, QueueEvent],
                   Field(discriminator="type")]
 EVENT_ADAPTER = TypeAdapter(Event)
+EVENT_ADAPTER.rebuild()
 
 
 class EventBroker:

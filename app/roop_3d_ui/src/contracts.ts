@@ -11,6 +11,44 @@ export interface Capabilities {
     job_controls: Record<string, string[]>; upload_chunk_bytes: number; max_asset_bytes: number };
 }
 export type JobState = 'queued' | 'preparing' | 'running' | 'pausing' | 'paused' | 'cancelling' | 'cancelled' | 'succeeded' | 'failed' | 'interrupted';
+export type CanonicalJobState = 'QUEUED' | 'PREFLIGHT' | 'PRESCANNING' | 'PREPASSING' | 'RENDERING' | 'MUXING' | 'PAUSED' | 'COMPLETED' | 'FAILED' | 'CANCELLED';
+
+export interface QueueSlice {
+  slice_id: string;
+  slice_index: number;
+  chunk_path: string;
+  rendered_chunk_path?: string | null;
+  start_seconds: number;
+  end_seconds?: number | null;
+  duration: number;
+  status: 'PENDING' | 'RENDERING' | 'COMPLETED' | 'FAILED';
+  error?: string | null;
+  retry_count: number;
+  frame_count?: number;
+}
+
+export interface QueueJob {
+  job_id: string;
+  name: string;
+  state: CanonicalJobState;
+  queue_order: number;
+  request: Record<string, any>;
+  progress: {
+    frame: number;
+    total_frames: number | null;
+    fps: number;
+    stage: string;
+    stage_latency_ms?: number;
+    stage_timings_ms?: Record<string, number>;
+  };
+  slices: QueueSlice[];
+  checkpoint_path?: string | null;
+  output?: Record<string, any> | null;
+  error_message?: string | null;
+  revision: number;
+  created_at: string;
+  updated_at: string;
+}
 export interface Mapping { track_id: string; faceset_id: string }
 export interface ExportOptions { baked_video: boolean; passes: string[]; finishing: { cube: string | null; grain: { size: number; intensity: number; shadows: number; highlights: number; seed: number }; provenance: string } }
 export interface JobRequest { identity_blend?: {method: 'slerp' | 'linear'; source_face_ids: string[]; weights?: number[]} | null; target_path: string; inspection_id: string; face_mappings: Mapping[]; processing: 'local'; remote_consent: false; trim_start_seconds: number | null; trim_end_seconds: number | null; mask_base64?: string | null; workstation_parameters?: WorkstationParameters | null; parameter_curves?: { tracks: Record<string, {frame: number; value: number; easing: string}[]> } | null; export?: ExportOptions | null; face_segments?: {cluster_id: string; track_id: string; start_frame: number; end_frame: number | null; role: string; faceset_id: string | null; source_view_index: number | null}[] | null }

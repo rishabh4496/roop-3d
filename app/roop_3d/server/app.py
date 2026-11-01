@@ -55,6 +55,8 @@ def create_app(settings: Settings | None = None, *, repo_root: Path | None = Non
     pipeline = PipelineTracker(events.publish, lambda: events.sequence)
     events.add_observer(pipeline.observe)
     jobs = JobStore(root, events.publish)
+    from roop_3d.queue_manager import QueueManager
+    queue = QueueManager(root, events.publish)
     engine_gate = EngineGate()
     catalog = ModelCatalog(cache_root=root, search_paths=lambda: app.state.settings.model_search_paths)
     media = MediaService(root, catalog, lambda: app.state.settings)
@@ -69,6 +71,7 @@ def create_app(settings: Settings | None = None, *, repo_root: Path | None = Non
         from roop_3d.models.native_libraries import register_native_libraries
         await run_in_threadpool(register_native_libraries)
         await run_in_threadpool(jobs.recover_interrupted)
+        await run_in_threadpool(queue.recover_on_startup)
         if worker is not None:
             worker.start()
 
@@ -104,6 +107,7 @@ def create_app(settings: Settings | None = None, *, repo_root: Path | None = Non
     app.state.share = share
     app.state.engine_gate = engine_gate
     app.state.jobs = jobs
+    app.state.queue = queue
     app.state.models = catalog
     app.state.media = media
     app.state.projects = ProjectStore(root, media, catalog, jobs)
@@ -171,10 +175,13 @@ def create_app(settings: Settings | None = None, *, repo_root: Path | None = Non
     from roop_3d.server.face_bank import router as face_bank_router
     app.include_router(face_bank_router)
     app.include_router(finishing_router)
+    from roop_3d.server.queue_routes import router as queue_router
+    app.include_router(queue_router)
     from roop_3d.server.api import benchmark_router
     app.include_router(benchmark_router)
     app.add_api_websocket_route("/ws/telemetry", event_stream)
     app.add_api_websocket_route("/ws/events", event_stream)
+    app.add_api_websocket_route("/ws/queue", event_stream)
     app.add_api_websocket_route("/ws/v1/pipeline/status", pipeline_status_stream)
 
     mount_workstation(app, root)
