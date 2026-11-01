@@ -156,3 +156,9 @@ The base server can boot even when a new machine has no completed audit report.
 Read [AGENTS.md](AGENTS.md) and [CONTRIBUTING.md](CONTRIBUTING.md) for future stages.
 Historical Stage 00/01 records under the Python audit package predate this split;
 current separation evidence is in [docs/STANDALONE_REPORT.md](docs/STANDALONE_REPORT.md).
+
+Stage 2 TensorRT provisioning, verified dynamic ONNX conversion, strict sessions,
+compilation telemetry and prebuild/benchmark commands are documented in
+[docs/TRT_STAGE2.md](docs/TRT_STAGE2.md). These tools preserve the existing
+reference inference paths; GPU performance and production-model parity require
+separate hardware runs.

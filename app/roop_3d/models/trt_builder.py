@@ -55,6 +55,8 @@ def configure_native_paths(root: Path) -> None:
 
 
 def trt_availability() -> TrtAvailability:
+    from roop_3d.models.native_libraries import register_native_libraries
+    register_native_libraries()
     import onnxruntime as ort
     if "TensorrtExecutionProvider" not in ort.get_available_providers():
         return TrtAvailability(False, None, "ORT does not advertise TensorRT EP")

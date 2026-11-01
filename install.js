@@ -12,6 +12,9 @@ module.exports = {
       on: [{ event: "/(ROOP3D_GUARD_ERROR|ModuleNotFoundError|error:)/", break: true }]
     }
   }, {
+    method: "script.start",
+    params: { uri: "torch.js" }
+  }, {
     // Reproducible frontend install (autogpt example: shell.run + path + npm). `npm ci` fails loudly on a stale lockfile.
     method: "shell.run",
     params: {

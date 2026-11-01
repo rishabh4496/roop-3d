@@ -1,0 +1,5 @@
+# NVIDIA runtime: ORT and conversion tools, plus pinned TensorRT CUDA 12:
+# tensorrt-cu12, tensorrt-cu12-libs, tensorrt-cu12-bindings (10.9.0.34).
+# Included lockfiles carry hashes. Non-NVIDIA installations use requirements.lock.
+-r requirements.lock
+-r requirements-trt.lock

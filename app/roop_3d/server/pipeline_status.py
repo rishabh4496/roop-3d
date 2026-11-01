@@ -8,7 +8,7 @@ nothing here invents a figure.
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
+import time
 import threading
 from typing import Callable
 
@@ -98,18 +98,23 @@ class PipelineTracker:
 
     # -- engine builds --------------------------------------------------------------
     def set_engine(self, state: EngineState, *, label: str | None = None, model: str | None = None,
-                   precision: str | None = None) -> None:
+                   precision: str | None = None, since: float | None = None) -> None:
         with self._lock:
-            since = self._engine["engine_since"]
+            previous_since = self._engine["engine_since"]
             if state == "IDLE":
                 self._engine = {"engine_state": "IDLE", "engine_label": None, "engine_model": None,
                                 "engine_precision": None, "engine_since": None}
             else:
-                if state != self._engine["engine_state"] or since is None:
-                    since = datetime.now(timezone.utc)
+                if since is None:
+                    since = time.time() if state != self._engine["engine_state"] or previous_since is None else previous_since
                 self._engine = {"engine_state": state, "engine_label": label, "engine_model": model,
                                 "engine_precision": precision, "engine_since": since}
         self._emit()
+
+    def compilation_event(self, payload: dict) -> None:
+        """Strict builder adapter shared by both WebSocket streams."""
+        self.set_engine(payload["engine_state"], label=payload["engine_label"], model=payload["engine_model"],
+                        precision=payload["engine_precision"], since=payload["engine_since"])
 
     def engine_observer(self, state: str, record: dict, precision: str) -> None:
         """`TensorRTBuilder(engine_observer=...)` adapter."""

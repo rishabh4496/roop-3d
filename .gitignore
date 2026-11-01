@@ -17,6 +17,7 @@ outputs/
 *.engine
 *.trt
 *.plan
+app/models/
 *.part
 *.log
 .env

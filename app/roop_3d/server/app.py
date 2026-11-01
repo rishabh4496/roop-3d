@@ -59,6 +59,8 @@ def create_app(settings: Settings | None = None, *, repo_root: Path | None = Non
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        from roop_3d.models.native_libraries import register_native_libraries
+        await run_in_threadpool(register_native_libraries)
         await run_in_threadpool(jobs.recover_interrupted)
         if worker is not None:
             worker.start()
@@ -87,6 +89,10 @@ def create_app(settings: Settings | None = None, *, repo_root: Path | None = Non
     app.state.root = root
     app.state.events = events
     app.state.pipeline = pipeline
+    # Construction is metadata-only; compilation is an explicit prepare/build operation.
+    from roop_3d.trt_session_builder import TensorRTSessionBuilder
+    app.state.trt_builder = TensorRTSessionBuilder(telemetry=pipeline.compilation_event,
+                                                 hardware_profile="12gb" if settings.hardware_profile == "12gb" else "6gb")
     app.state.share = share
     app.state.jobs = jobs
     app.state.models = catalog

@@ -61,7 +61,7 @@ class PipelineStatusEvent(EventBase):
     engine_label: str | None = None
     engine_model: str | None = None
     engine_precision: str | None = None
-    engine_since: datetime | None = None
+    engine_since: float | None = None
 
 
 class StreamGapEvent(EventBase):

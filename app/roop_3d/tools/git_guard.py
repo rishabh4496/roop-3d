@@ -13,7 +13,7 @@ class BoundaryError(RuntimeError):
 GENERATED_PARTS = {'.venv','venv','env','__pycache__','node_modules','.runtime','.pytest_cache','.cache','cache','outputs','dist','engines','trt_cache','.ruff_cache','.mypy_cache','logs'}
 GENERATED_SUFFIXES = {'.pyc','.pyo','.engine','.trt','.plan','.part','.onnx','.pth','.pt','.safetensors','.log'}
 GENERATED_FILES = {'protected_all_paths.json','stage00_verification.json','stage01_verification.json'}
-ROOT_FILES = {'AGENTS.md','README.md','CONTRIBUTING.md','.gitignore','.gitattributes','.roop3d-project.json','migration_source.json','pinokio.js','pinokio.json','start.js','install.js','update.js','reset.js','icon.svg'}
+ROOT_FILES = {'AGENTS.md','README.md','CONTRIBUTING.md','.gitignore','.gitattributes','.roop3d-project.json','migration_source.json','pinokio.js','pinokio.json','start.js','install.js','update.js','reset.js','torch.js','verify_trt_fps.py','icon.svg'}
 
 def allowed_path(value: str) -> bool:
     path=PurePosixPath(value)
