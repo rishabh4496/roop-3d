@@ -11,9 +11,11 @@ export const JOB_START_EVENT = 'roop3d:job-start';
 
 export type LivePayload = Record<string, unknown>;
 
-export function buildLivePayload({ request, time, fps, parameters, maskBase64, restorerAvailable }: {
+export function buildLivePayload({ request, time, fps, parameters, maskBase64, restorerAvailable, solo }: {
   request: JobRequest | null; time: number; fps: number; parameters: WorkstationParameters;
   maskBase64?: string | null; restorerAvailable: boolean;
+  /** `solo_node` buffer to return instead of the final composite (see PIPELINE_NODES[].buffer). */
+  solo?: string | null;
 }): LivePayload | null {
   if (!request || !request.face_mappings.length) return null;
   const restoring = restorerAvailable && parameters.restoration_blend > 0 && !parameters.bypass.includes('restorer');
@@ -23,6 +25,9 @@ export function buildLivePayload({ request, time, fps, parameters, maskBase64, r
     frame_index: Math.max(0, Math.round(time * fps)),
     face_mappings: request.face_mappings,
     frontalization_weight: parameters.pose_mode === 'mesh_blend' ? parameters.pose_strength : undefined,
+    pose_frontalization: parameters.pose_frontalization || undefined,
+    tps_expression_weight: parameters.tps_expression_weight || undefined,
+    solo_node: solo || undefined,
     occlusion: { erosion_px: parameters.erosion_px ?? 0, feather_px: parameters.feather_px },
     mask_base64: maskBase64 || request.mask_base64 || undefined,
     restorer: restoring ? 'gpen' : 'off',

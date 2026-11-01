@@ -25,7 +25,10 @@ export interface DetectedFace {
   landmarks68?: [number, number][];
   embedding?: number[];
   clusterId: string;
+  /** Legacy frame (pitch + = looking down). Prefer `pose3d` for anything shown to the user. */
   pose: { yaw: number; pitch: number; roll: number };
+  /** Standard frame (pitch + = looking up), when the server provided it. */
+  pose3d?: { yaw: number; pitch: number; roll: number };
   confidence?: number;
   thumbnailUrl?: string;
 }
@@ -101,6 +104,8 @@ export interface DetectedFaceItem {
   landmarks5: [number, number][];
   confidence: number;
   pose: { yaw: number; pitch: number; roll: number };
+  pose3d?: { yaw: number; pitch: number; roll: number };
+  pose_cell?: string;
   thumbnail_base64: string;
 }
 

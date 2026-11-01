@@ -57,7 +57,7 @@ describe('Use Face From Frame', () => {
     expect(url).toBe('/api/v1/faces/extract_from_frame');
     expect(JSON.parse(init.body)).toEqual({ target_media_path: TARGET, frame_index: 5, face_index: 1, destination: 'source_gallery' }); // 0.2 s at 25 fps; "face 2" is index 1
     expect(onSourceExtracted).toHaveBeenCalledWith({ faceset_id: 'Frame_1a2b3c4d', name: 'Frame 5 · face 1', item_count: 1 });
-    expect(host.querySelector('.detection-inline-notice')!.textContent).toContain('right / down');
+    expect(host.querySelector('.face-toast')!.textContent).toContain('right / down');
   });
 
   it('reports a failed extraction without selecting anything', async () => {
@@ -67,9 +67,9 @@ describe('Use Face From Frame', () => {
     await act(async () => { (host.querySelector('.use-as-source-btn') as HTMLButtonElement).click(); });
     await flush();
     expect(onSourceExtracted).not.toHaveBeenCalled();
-    expect(host.querySelector('.detection-inline-notice')!.textContent).toContain('0 detected face');
+    expect(host.querySelector('.face-toast.error')!.textContent).toContain('0 detected face');
     await flush(4100);
-    expect(host.querySelector('.detection-inline-notice')).toBeNull();
+    expect(host.querySelector('.face-toast')).toBeNull();
     expect((host.querySelector('.use-as-source-btn') as HTMLButtonElement).disabled).toBe(false);
   });
 

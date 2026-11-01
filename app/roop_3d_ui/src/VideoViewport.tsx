@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
-import { extractFaceFromFrame, mediaURL } from './api';
+import { mediaURL, postLivePreview } from './api';
 import { PreviewURL } from './state';
 import type { FaceSet, Probe, Inspection, FrameFaceDetectionResponse } from './contracts';
 import { useFaceSelectionStore } from './useFaceSelectionStore';
@@ -13,8 +13,15 @@ import type { ReactNode } from 'react';
 import type { JobRequest } from './contracts';
 import { post } from './api';
 import PipelineNodeFlowBar from './components/workstation/PipelineNodeFlowBar';
-import ParameterSweepModal from './components/workstation/ParameterSweepModal';
-import { DEFAULT_PARAMETERS, PIPELINE_NODES, type WorkstationParameters, type PreviewResult } from './components/workstation/pipeline';
+import ContactSheetModal, { type Patch } from './components/workstation/ContactSheetModal';
+import SettingControl from './components/controls/SettingControl';
+import { PANELS, settingValue, settingsOf, type PanelId } from './components/controls/settingsRegistry';
+import FaceContextMenu, { type FaceMenuTarget } from './components/canvas/FaceContextMenu';
+import { useFaceExtraction } from './components/canvas/useFaceExtraction';
+import { facePose } from './components/canvas/poseHud';
+import { calculateLetterbox, mapBoxToPixels } from './utils/letterbox';
+import { leftToRightRank } from './utils/poseCells';
+import { DEFAULT_PARAMETERS, PIPELINE_NODES, nodeBuffer, type WorkstationParameters } from './components/workstation/pipeline';
 import { DockArea, DockPanel, LayoutToolbar } from './components/workstation/WorkspaceLayouts';
 import { FloatingPreviewMedia, useFloatingPreview } from './components/workstation/FloatingPreview';
 import { useShortcutActions } from './components/controls/Hotkeys';
@@ -26,6 +33,14 @@ import SnapshotSlots, { SnapshotViewport } from './components/workstation/Snapsh
 import { panAnchoredAt } from './utils/zoomPan';
 import { buildLivePayload, downloadBlob, previewFilename, useLiveSwapPreview } from './livePreview';
 import LiveSwapStatus from './components/workstation/LiveSwapStatus';
+
+/** Snapshot slots keep a self-contained image, so convert the preview PNG before its object URL is revoked. */
+async function blobToDataUrl(blob: Blob): Promise<string> {
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  let binary = '';
+  for (let at = 0; at < bytes.length; at += 0x8000) binary += String.fromCharCode(...bytes.subarray(at, at + 0x8000));
+  return `data:${blob.type.startsWith('image/') ? blob.type : 'image/png'};base64,${btoa(binary)}`;
+}
 
 function usePreview(path: string, time: number, playing: boolean) {
   const [source, setSource] = useState('');
@@ -64,7 +79,7 @@ export function VideoViewport({
   active = true, parameters = DEFAULT_PARAMETERS, setParameters = () => {}, previewRequest = null,
   inspector, posePanel, restorerAvailable = false, onPreviewLatency,
   maskBase64 = null, captureWorkspace = () => ({}), restoreWorkspace = () => {},
-  onInspectionUpdate, onSourceExtracted,
+  onInspectionUpdate, onSourceExtracted, activeSourceId = '',
 }: {
   target: string;
   output: string;
@@ -94,6 +109,8 @@ export function VideoViewport({
   onInspectionUpdate?: (inspection: Inspection) => void;
   /** Called with the FaceSet created by "Use as source" so the workspace can make it the active source face. */
   onSourceExtracted?: (faceset: FaceSet) => void;
+  /** Source FaceSet currently selected in the workspace: "Add to .fsz Faceset" extends it. */
+  activeSourceId?: string;
 }) {
   const [detectingFaces, setDetectingFaces] = useState(false);
   const [detectionNotice, setDetectionNotice] = useState('');
@@ -125,24 +142,7 @@ export function VideoViewport({
       setDetectingFaces(false);
     }
   }, [target, time, detectingFaces, onInspectionUpdate]);
-  const [extractingSource, setExtractingSource] = useState(false);
   const [sourceFaceNumber, setSourceFaceNumber] = useState(1);
-  const handleUseAsSource = useCallback(async () => {
-    if (!target || extractingSource) return;
-    setExtractingSource(true);
-    setDetectionNotice('');
-    try {
-      const frame = Math.max(0, Math.round(time * parseFps(probe?.fps_rational, 30)));
-      const result = await extractFaceFromFrame({ target_media_path: target, frame_index: frame, face_index: sourceFaceNumber - 1, destination: 'source_gallery' });
-      if (result.active_source) onSourceExtracted?.({ faceset_id: result.active_source.faceset_id, name: result.active_source.name, item_count: 1 });
-      setDetectionNotice(`Source face added (${result.face.pose_cell.replace('_', ' / ')}).`);
-    } catch (err: any) {
-      setDetectionNotice(err.message || 'Could not extract a face from this frame.');
-    } finally {
-      setExtractingSource(false);
-      setTimeout(() => setDetectionNotice(''), 4000);
-    }
-  }, [target, extractingSource, time, probe?.fps_rational, sourceFaceNumber, onSourceExtracted]);
   const original = useRef<HTMLVideoElement>(null), processed = useRef<HTMLVideoElement>(null);
   const viewportRef = useRef<HTMLDivElement>(null);
 
@@ -150,7 +150,7 @@ export function VideoViewport({
   const [playbackError, setPlaybackError] = useState('');
 
   // Comparison & Masking Modes
-  const [compMode, setCompMode] = useState<'wipe' | 'diff' | 'blend' | 'loupe'>('wipe');
+  const [compMode, setCompMode] = useState<'wipe' | 'crossfade' | 'diff' | 'blend' | 'loupe'>('wipe');
   const [isMaskEditing, setIsMaskEditing] = useState(false);
   const [viewportSize, setViewportSize] = useState({ width: 0, height: 0 });
   const history = useHistoryStore(), [historyOpen, setHistoryOpen] = useState(false), [captureBusy, setCaptureBusy] = useState(false), [captureError, setCaptureError] = useState('');
@@ -159,58 +159,58 @@ export function VideoViewport({
   const effectiveParameters = evaluateParameters(parameters, history.curves, currentFrame);
   const editParameter = (field: string, value: number) => { const curve = Object.keys(CURVE_PARAMETERS).find(name => CURVE_PARAMETERS[name].field === field); if (curve && history.curves[curve]?.length) history.editCurves({ ...history.curves, [curve]: upsertKey(history.curves[curve], { frame: currentFrame, value, easing: 'linear' }) }, 'Edit animated parameter', `parameter-${field}`); else setParameters({ ...parameters, [field]: value }); };
   const [selectedNode, setSelectedNode] = useState('final'), [solo, setSolo] = useState<string | null>(null);
-  const [sweepOpen, setSweepOpen] = useState(false), [previewBusy, setPreviewBusy] = useState(false), [previewError, setPreviewError] = useState('');
-  const [preview, setPreview] = useState<{ key: string; result: PreviewResult } | null>(null);
+  const [sweepPanel, setSweepPanel] = useState<PanelId | null>(null);
+  const fps = parseFps(probe?.fps_rational, 30);
   const previewKey = JSON.stringify({ request: previewRequest, timestamp: time, parameters });
-  const result = preview?.key === previewKey ? preview.result : null;
   useEffect(() => { captureAbort.current?.abort(); setCaptureBusy(false); return () => captureAbort.current?.abort(); }, [previewKey]);
   useEffect(() => { if (history.previewSlot || history.comparison) { setPlaying(false); original.current?.pause(); processed.current?.pause(); } }, [history.previewSlot, history.comparison]);
   const captureSlot = async (slot: string) => {
-    if (!previewRequest || captureBusy) return;
+    const payload = buildLivePayload({ request: previewRequest, time, fps, parameters, maskBase64, restorerAvailable, solo: 'final' });
+    if (!payload || captureBusy) return;
     const controller = new AbortController(); captureAbort.current = controller; const workspace = captureWorkspace();
     setCaptureBusy(true); setCaptureError(''); setPlaying(false); original.current?.pause(); processed.current?.pause();
     try {
-      const rendered = result ?? await post<PreviewResult>('/workstation/preview', { request: previewRequest, timestamp: time, parameters }, { signal: controller.signal });
+      const rendered = await postLivePreview(payload, { signal: controller.signal });
       if (controller.signal.aborted) return;
-      if (!rendered.buffers.final) throw new Error('No rendered composite is available for this frame');
-      useHistoryStore.getState().captureSlot(slot, { image: rendered.buffers.final, frame: rendered.frame_index, timestamp: rendered.timestamp, workspace });
+      useHistoryStore.getState().captureSlot(slot, { image: await blobToDataUrl(rendered.blob), frame: rendered.meta?.frame_index ?? currentFrame, timestamp: time, workspace });
     } catch (error) { if ((error as Error).name !== 'AbortError') setCaptureError((error as Error).message); }
     finally { if (captureAbort.current === controller) setCaptureBusy(false); }
   };
-  const previewBody = useRef({ request: previewRequest, timestamp: time, parameters });
-  previewBody.current = { request: previewRequest, timestamp: time, parameters };
   const editFingerprint = JSON.stringify({ parameters, curves: history.curves, maskBase64, roles: previewRequest?.face_segments, finishing: previewRequest?.export });
   const previousEdit = useRef(editFingerprint);
   useEffect(() => {
     if (previousEdit.current === editFingerprint) return;
     previousEdit.current = editFingerprint;
-    if (active && previewRequest) { history.live(); setSolo(previous => previous ?? 'final'); }
+    if (active && previewRequest) history.live();   // an edit leaves any snapshot comparison; the live preview re-renders on its own
   }, [editFingerprint, active, previewRequest]);
-  useEffect(() => { if (active && previewRequest && (previewRequest.export?.finishing.cube || previewRequest.export?.finishing.grain.intensity)) setSolo('final'); }, [active, previewRequest?.export?.finishing]);
   const latencyCallback = useRef(onPreviewLatency); latencyCallback.current = onPreviewLatency;
-  useEffect(() => {
-    if (!solo || !active || !previewBody.current.request || preview?.key === previewKey) { setPreviewBusy(false); return; }
-    const controller = new AbortController(); let live = true;
-    setPreviewBusy(true); setPreviewError(''); setPlaying(false); original.current?.pause(); processed.current?.pause();
-    const timer = setTimeout(() => {
-      void post<PreviewResult>('/workstation/preview', previewBody.current, { signal: controller.signal }).then(response => {
-        if (live) { setPreview({ key: previewKey, result: response }); if (response.latency) latencyCallback.current?.(response.latency); }
-      }).catch(error => { if (live && error.name !== 'AbortError') setPreviewError(error.message); }).finally(() => { if (live) setPreviewBusy(false); });
-    }, 180);
-    return () => { live = false; controller.abort(); clearTimeout(timer); };
-  }, [previewKey, solo, active, preview?.key]);
-  useEffect(() => { if (!active) { setPlaying(false); setSweepOpen(false); original.current?.pause(); processed.current?.pause(); } }, [active]);
+  useEffect(() => { if (!active) { setPlaying(false); setSweepPanel(null); original.current?.pause(); processed.current?.pause(); } }, [active]);
   const selectSolo = (node: string) => { if (PIPELINE_NODES.find(item => item.id === node)?.unavailable || !previewRequest) return; history.live(); setSolo(previous => previous === node ? null : node); setIsMaskEditing(false); };
-  const bypassNode = (node: string) => { if (node !== 'restorer' && node !== 'color') return; setParameters({ ...parameters, bypass: parameters.bypass.includes(node) ? parameters.bypass.filter(item => item !== node) : [...parameters.bypass, node] }); setSolo('final'); setIsMaskEditing(false); };
+  const bypassNode = (node: string) => { if (node !== 'restorer') return; setParameters({ ...parameters, bypass: parameters.bypass.includes(node) ? parameters.bypass.filter(item => item !== node) : [...parameters.bypass, node] }); setSolo('final'); setIsMaskEditing(false); };
 
   const sourcePreview = usePreview(enabled && active ? target : '', time, playing);
   const outputPreview = usePreview(enabled && active ? output : '', time, playing);
-  // Real swapped frame for the current playhead + every edit, via POST /api/preview (debounced, 503-aware).
+  // The real swapped frame (or, when a node is soloed, that stage's buffer) from POST /api/preview: debounced, 503-aware.
   const [liveSwap, setLiveSwap] = useState(true);
-  const live = useLiveSwapPreview(active && enabled && liveSwap && !playing && !solo && !isMaskEditing
-    ? buildLivePayload({ request: previewRequest, time, fps: parseFps(probe?.fps_rational, 30), parameters, maskBase64, restorerAvailable })
+  const live = useLiveSwapPreview(active && enabled && liveSwap && !playing && !isMaskEditing
+    ? buildLivePayload({ request: previewRequest, time, fps, parameters, maskBase64, restorerAvailable, solo: nodeBuffer(solo) })
     : null);
-  const floatingImage = history.previewSlot ? history.slots[history.previewSlot]?.image : solo ? result?.buffers[solo] : live.url || outputPreview.source || sourcePreview.source;
+  useEffect(() => { if (live.meta?.latency) latencyCallback.current?.(live.meta.latency); }, [live.meta]);
+  // Only show a live image that is the buffer currently asked for: never the previous node's output while a new one loads.
+  const liveFresh = !!live.url && (live.meta?.solo_node ?? 'final') === (nodeBuffer(solo) ?? 'final');
+  const liveUrl = liveFresh ? live.url : null, liveBlob = liveFresh ? live.blob : null;
+  const [viewMode, setViewMode] = useState<'side' | 'compare'>('side');
+  const [showLandmarks, setShowLandmarks] = useState(true), [showPose, setShowPose] = useState(true);
+  const [faceMenu, setFaceMenu] = useState<FaceMenuTarget | null>(null);
+  const extraction = useFaceExtraction({ target, frameIndex: currentFrame, activeSourceId: activeSourceId || null, onSourceExtracted, onRefreshPreview: live.retry });
+  const activeSourceName = sources.find(item => item.faceset_id === activeSourceId)?.name ?? null;
+  const openFaceMenu = useCallback((menu: { faceRank: number; pose: FaceMenuTarget['pose']; x: number; y: number }) => setFaceMenu({ x: menu.x, y: menu.y, faceRank: menu.faceRank, pose: menu.pose }), []);
+  const openMenuFromBar = useCallback((anchor: { x: number; y: number }) => {
+    const store = useFaceSelectionStore.getState(), faces = store.getFacesAtTimestamp(time, fps);
+    const face = faces.find(item => item.id === store.activeSelection) ?? faces[0];
+    setFaceMenu({ ...anchor, faceRank: face ? leftToRightRank(faces, face) : 0, pose: face ? facePose(face) : null });
+  }, [time, fps]);
+  const floatingImage = history.previewSlot ? history.slots[history.previewSlot]?.image : liveUrl || outputPreview.source || sourcePreview.source;
   const floating = useFloatingPreview(<FloatingPreviewMedia image={floatingImage} path={solo ? '' : output || target} time={time} playing={playing && !solo} label={solo ? `SOLO · ${solo}` : output ? 'OUTPUT' : 'SOURCE'}/>);
 
   const updateViewportSize = useCallback(() => {
@@ -238,9 +238,20 @@ export function VideoViewport({
     catch { setPlaybackError('Browser playback is unavailable for this codec. Use frame previews to inspect it.'); }
   };
   const seek = (value: number) => { original.current?.pause(); processed.current?.pause(); setPlaying(false); setTime(Math.max(0, Math.min(duration, value))); };
-  useShortcutActions({ play: target ? () => void toggle() : undefined, previous: () => seek(time - 1 / parseFps(probe?.fps_rational, 30)), next: () => seek(time + 1 / parseFps(probe?.fps_rational, 30)), markIn: () => onTrimChange?.(time, trimEnd !== null && trimEnd <= time ? null : trimEnd), markOut: () => { if (time > trimStart) onTrimChange?.(trimStart, time); }, solo: () => selectSolo(selectedNode), bypass: () => bypassNode(selectedNode), sweep: () => { if (previewRequest) setSweepOpen(true); }, floating: floating.open }, active && !sweepOpen);
+  useShortcutActions({ play: target ? () => void toggle() : undefined, previous: () => seek(time - 1 / parseFps(probe?.fps_rational, 30)), next: () => seek(time + 1 / parseFps(probe?.fps_rational, 30)), markIn: () => onTrimChange?.(time, trimEnd !== null && trimEnd <= time ? null : trimEnd), markOut: () => { if (time > trimStart) onTrimChange?.(trimStart, time); }, solo: () => selectSolo(selectedNode), bypass: () => bypassNode(selectedNode), sweep: () => { if (previewRequest) setSweepPanel('geometry'); }, floating: floating.open }, active && !sweepPanel);
 
   const mediaDims = probe ? { width: probe.width, height: probe.height } : { width: 1920, height: 1080 };
+  const handleCompareContextMenu = useCallback((clientX: number, clientY: number) => {
+    const rect = viewportRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const letterbox = calculateLetterbox(rect.width, rect.height, mediaDims.width, mediaDims.height);
+    const store = useFaceSelectionStore.getState(), faces = store.getFacesAtTimestamp(time, fps);
+    const x = clientX - rect.left, y = clientY - rect.top;
+    const hit = faces.find(face => { const box = mapBoxToPixels(face.bbox, letterbox); return x >= box.x - 4 && x <= box.x + box.w + 4 && y >= box.y - 4 && y <= box.y + box.h + 4; });
+    if (!hit) return;
+    store.setActiveSelection(hit.id);
+    setFaceMenu({ x: clientX, y: clientY, faceRank: leftToRightRank(faces, hit), pose: facePose(hit) });
+  }, [time, fps, mediaDims.width, mediaDims.height]);
 
   // Preview Box zoom, pan, grid, peek, and display state
   const [previewZoom, setPreviewZoom] = useState(1);
@@ -296,24 +307,22 @@ export function VideoViewport({
   // Swapped-preview download: a click handler builds the blob URL itself, so the saved name and type never
   // depend on an `<a download>` attribute surviving a data/blob URL round trip.
   const handleDownloadLive = useCallback(() => {
-    if (!live.blob) {
+    if (!liveBlob) {
       setSnapshotNotice('No swapped preview is available to download yet.');
       setTimeout(() => setSnapshotNotice(''), 3000);
       return;
     }
-    downloadBlob(live.blob, previewFilename());
+    downloadBlob(liveBlob, previewFilename());
     setSnapshotNotice('Swapped preview downloaded');
     setTimeout(() => setSnapshotNotice(''), 3000);
-  }, [live.blob]);
+  }, [liveBlob]);
 
   // Frame snapshot download
   const handleDownloadSnapshot = useCallback(() => {
     try {
-      if (!solo && !showSourcePeek && live.blob && !live.stale) { handleDownloadLive(); return; }
+      if (!showSourcePeek && liveBlob && !live.stale) { handleDownloadLive(); return; }
       let dataUrl = '';
-      if (solo && result?.buffers[solo]) {
-        dataUrl = result.buffers[solo];
-      } else if (showSourcePeek && sourcePreview.source) {
+      if (showSourcePeek && sourcePreview.source) {
         dataUrl = sourcePreview.source;
       } else if (output && outputPreview.source) {
         dataUrl = outputPreview.source;
@@ -353,7 +362,7 @@ export function VideoViewport({
       setSnapshotNotice(err.message || 'Snapshot download failed');
       setTimeout(() => setSnapshotNotice(''), 3000);
     }
-  }, [solo, result, showSourcePeek, sourcePreview.source, outputPreview.source, output, time, live.blob, live.stale, handleDownloadLive]);
+  }, [showSourcePeek, sourcePreview.source, outputPreview.source, output, time, liveBlob, live.stale, handleDownloadLive]);
 
   // Viewport pan & zoom handlers
   const handleViewportPointerDown = (e: React.PointerEvent) => {
@@ -418,7 +427,7 @@ export function VideoViewport({
     const isShowingSourcePeek = isOutput && showSourcePeek;
     const activePath = isShowingSourcePeek ? target : path;
     const activeResult = isShowingSourcePeek ? sourcePreview : result;
-    const showLive = isOutput && !isShowingSourcePeek && !playing && !!live.url;
+    const showLive = isOutput && !isShowingSourcePeek && !playing && !!liveUrl;
 
     return (
       <div
@@ -452,6 +461,9 @@ export function VideoViewport({
                 sources={sources}
                 onAssignSource={onAssignSource}
                 showOverlays={showFaceOverlays}
+                showLandmarks={showLandmarks}
+                showPose={showPose}
+                onFaceContextMenu={openFaceMenu}
               />
             )}
             {isShowingSourcePeek && (
@@ -470,7 +482,7 @@ export function VideoViewport({
         {showLive && (
           <img
             className={`frame-preview live-swap-preview ${live.stale ? 'stale' : ''}`}
-            src={live.url!}
+            src={liveUrl!}
             alt={`Live swapped preview at ${time.toFixed(2)} seconds`}
           />
         )}
@@ -488,11 +500,11 @@ export function VideoViewport({
       <LayoutToolbar onFloat={floating.open}/>
       <SnapshotSlots onCapture={(slot: string) => void captureSlot(slot)} onRestore={restoreWorkspace} busy={captureBusy} captureAvailable={!!previewRequest}/>
       {captureError && <p role="alert" className="inline-warning">{captureError}</p>}
-      <PipelineNodeFlowBar selected={selectedNode} solo={solo} bypass={parameters.bypass} onSelect={setSelectedNode} onSolo={selectSolo} onBypass={bypassNode} busy={previewBusy} available={!!previewRequest}/>
+      <PipelineNodeFlowBar selected={selectedNode} solo={solo} bypass={parameters.bypass} onSelect={setSelectedNode} onSolo={selectSolo} onBypass={bypassNode} busy={false} available={!!previewRequest}/>
       <div className="viewport-toolbar">
         <span className="eyebrow">WORKSTATION MEDIA INSPECTOR</span>
         <button className="button small" disabled={!history.past.length} onClick={history.undo}>Undo</button><button className="button small" disabled={!history.future.length} onClick={history.redo}>Redo</button><button className="button small" onClick={() => setHistoryOpen(true)}>Edit history ({history.past.length})</button>
-        <button className="button small" disabled={!previewRequest} onClick={() => { setPlaying(false); original.current?.pause(); processed.current?.pause(); setSweepOpen(true); }}>Parameter Sweep</button>
+        <button className="button small" disabled={!previewRequest} onClick={() => { setPlaying(false); original.current?.pause(); processed.current?.pause(); setSweepPanel('geometry'); }}>3×3 Sweep</button>
         <button
           type="button"
           className={`button small use-face-frame-btn ${detectingFaces ? 'busy' : ''}`}
@@ -505,12 +517,13 @@ export function VideoViewport({
         <span className="use-as-source-group" role="group" aria-label="Use a face from this frame as the source">
           <input type="number" min={1} max={16} value={sourceFaceNumber} aria-label="Face number, left to right" title="Which face in this frame (1 = leftmost)"
             onChange={event => setSourceFaceNumber(Math.max(1, Math.min(16, Math.round(Number(event.target.value)) || 1)))}/>
-          <button type="button" className={`button small use-as-source-btn ${extractingSource ? 'busy' : ''}`} disabled={!target || extractingSource}
-            onClick={() => void handleUseAsSource()} title="Extract this face (aligned crop, ArcFace embedding, 3D pose) and make it the active source face">
-            <span>🧑</span> {extractingSource ? 'Extracting…' : 'Use as source'}
+          <button type="button" className={`button small use-as-source-btn ${extraction.busy ? 'busy' : ''}`} disabled={!target || extraction.busy}
+            onClick={() => void extraction.run('source_gallery', { faceRank: sourceFaceNumber - 1 })} title="Extract this face (aligned crop, ArcFace embedding, 3D pose) and make it the active source face">
+            <span>🧑</span> {extraction.busy ? 'Extracting…' : 'Use as source'}
           </button>
         </span>
         {detectionNotice && <span className="detection-inline-notice">{detectionNotice}</span>}
+        {extraction.toast && <span className={`face-toast ${extraction.toast.kind}`} role="status">{extraction.toast.text}</span>}
         {solo && <button className="button small" onClick={() => setSolo(null)}>Exit solo · {solo}</button>}
 
         {/* Mask Editing Mode Toggle */}
@@ -664,6 +677,15 @@ export function VideoViewport({
             </button>
           )}
 
+          {/* 3D pose & landmark HUD toggles, and the full-bleed comparison canvas */}
+          <button type="button" className={`hud-btn ${showLandmarks ? 'active' : ''}`} aria-pressed={showLandmarks} onClick={() => setShowLandmarks(value => !value)}
+            title="5-point ArcFace landmarks on every detected face"><span>⁙</span> Landmarks</button>
+          <button type="button" className={`hud-btn ${showPose ? 'active' : ''}`} aria-pressed={showPose} onClick={() => setShowPose(value => !value)}
+            title="Live yaw / pitch / roll in degrees (pitch + = looking up) on every detected face"><span>↻</span> Pose</button>
+          <button type="button" className={`hud-btn compare-toggle ${viewMode === 'compare' ? 'active' : ''}`} aria-pressed={viewMode === 'compare'} disabled={playing}
+            onClick={() => setViewMode(mode => (mode === 'compare' ? 'side' : 'compare'))}
+            title="Full-bleed comparison canvas: wipe, crossfade, alpha blend, diff map and 3.5x loupe"><span>◫</span> Compare</button>
+
           {/* Live swapped preview: on/off + PNG download (click handler, blob URL) */}
           <button
             type="button"
@@ -677,7 +699,7 @@ export function VideoViewport({
           <button
             type="button"
             className="hud-btn live-download-btn"
-            disabled={!live.blob}
+            disabled={!liveBlob}
             onClick={handleDownloadLive}
             title="Download the swapped preview frame as a PNG"
           >
@@ -713,8 +735,8 @@ export function VideoViewport({
 
         <SnapshotViewport/>
         {solo && <div className="solo-viewport" role="region" aria-label={`${solo} intermediate buffer`}>
-          {result?.buffers[solo] ? <img src={result.buffers[solo]} alt={`${solo} execution buffer at frame ${result.frame_index}`}/> : <p role="status">{previewError || (previewBusy ? 'Rendering real pipeline buffers…' : 'No buffer is available at this frame')}</p>}
-          <span className="pane-label">SOLO · {solo} · {result ? `frame ${result.frame_index}` : formatTime(time)}</span>
+          {liveUrl ? <img src={liveUrl} className={live.stale ? 'stale' : ''} alt={`${solo} stage output at frame ${live.meta?.frame_index ?? currentFrame}`}/> : <p role="status">{live.error || (live.status === 'busy' ? `GPU busy (${live.stage}); retrying` : live.status === 'loading' ? 'Rendering this stage…' : 'No buffer is available at this frame')}</p>}
+          <span className="pane-label">SOLO · {PIPELINE_NODES.find(node => node.id === solo)?.label ?? solo} · frame {live.meta?.frame_index ?? currentFrame}</span>
         </div>}
 
         <div
@@ -730,24 +752,19 @@ export function VideoViewport({
             transition: isPanning ? 'none' : 'transform 0.12s cubic-bezier(0.2, 0, 0, 1)',
           }}
         >
-          {pane(target, sourcePreview, false)}
-          {!isMaskEditing && pane(output, outputPreview, true)}
-
-          {/* Workstation Comparison Canvas (Wipe, Diff Map, Alpha Blend, Magnifier Loupe) */}
-          {!isMaskEditing && !solo && (
-            <WorkstationCanvas
-              target={target}
-              output={output}
-              targetMediaRef={original}
-              outputMediaRef={processed}
-              sourcePreviewUrl={sourcePreview.source}
-              outputPreviewUrl={outputPreview.source}
-              mode={compMode}
-              onModeChange={setCompMode}
-              containerWidth={viewportSize.width}
-              containerHeight={viewportSize.height}
-              mediaDimensions={mediaDims}
-            />
+          {viewMode === 'compare' && !playing && !isMaskEditing && !solo ? (
+            <div className="compare-host">
+              <WorkstationCanvas fullBleed output={output} originalUrl={sourcePreview.source} swappedUrl={liveUrl || outputPreview.source}
+                mode={compMode} onModeChange={(next: string) => setCompMode(next as typeof compMode)} containerWidth={viewportSize.width} containerHeight={viewportSize.height}
+                mediaDimensions={mediaDims} onContextMenuPoint={handleCompareContextMenu}/>
+              {showFaceOverlays && <FaceOverlayCanvas videoRef={original} mediaDimensions={mediaDims} currentTime={time} sources={sources} fps={fps}
+                showOverlays showLandmarks={showLandmarks} showPose={showPose} interactive={false}/>}
+            </div>
+          ) : (
+            <>
+              {pane(target, sourcePreview, false)}
+              {!isMaskEditing && pane(output, outputPreview, true)}
+            </>
           )}
 
           {/* Manual & Occlusion Mask Editor Overlay */}
@@ -765,20 +782,36 @@ export function VideoViewport({
       </div>
 
       {playbackError && <p className="inline-warning">{playbackError}</p>}
-      {previewError && <p className="inline-warning" role="alert">{previewError}<button className="button small" onClick={() => { setPreview(null); setSolo(null); setTimeout(() => setSolo(selectedNode), 0); }}>Retry preview</button></p>}
-      {solo && result?.notes.map(note => <p className="muted buffer-note" key={note}>{note}</p>)}
-      <div className="preview-parameters">
-        <label className="numeric-control">Pose correction method<select aria-label="Pose correction method" value={parameters.pose_mode ?? 'retarget'} onChange={event => setParameters({ ...parameters, pose_mode: event.target.value as 'retarget' | 'mesh_blend' })}><option value="mesh_blend">2.5D / 3D mesh blend (canonical proxy)</option><option value="retarget">Reference LivePortrait retarget</option></select></label>
-        <NumericInput label="Swap weight" value={effectiveParameters.swap_weight ?? 1} min={0} max={1} step={.01} onChange={value => editParameter('swap_weight', value ?? 1)}/>
-        <NumericInput label="Mask erosion (px)" value={effectiveParameters.erosion_px ?? 0} min={-32} max={32} step={1} onChange={value => editParameter('erosion_px', value ?? 0)}/>
-        <NumericInput label="Restorer blend" value={effectiveParameters.restoration_blend} min={0} max={1} step={.01} disabled={!restorerAvailable} title={restorerAvailable ? 'Local GPEN' : 'GPEN weights unavailable'} onChange={value => editParameter('restoration_blend', value ?? 0)}/>
-        <NumericInput label="Mask feather (px)" value={effectiveParameters.feather_px} min={0} max={64} step={.1} onChange={value => editParameter('feather_px', value ?? 0)}/>
-        <NumericInput label="Color match strength" value={effectiveParameters.color_strength} min={0} max={1} step={.01} onChange={value => editParameter('color_strength', value ?? 0)}/>
-        <NumericInput label={parameters.pose_mode === 'mesh_blend' ? '2.5D → 3D pose blend' : 'Reference retarget strength'} value={effectiveParameters.pose_strength} min={0} max={1} step={.01} onChange={value => editParameter('pose_strength', value ?? 0)}/>
+      {solo && live.status === 'error' && <p className="inline-warning" role="alert">{live.error}<button className="button small" onClick={live.retry}>Retry preview</button></p>}
+      {solo && live.meta?.notes.map(note => <p className="muted buffer-note" key={note}>{note}</p>)}
+      <div className="parameter-panels">
+        {(Object.keys(PANELS) as PanelId[]).map(panel => (
+          <fieldset key={panel} className={`parameter-panel panel-${panel}`}>
+            <legend>{PANELS[panel].title}</legend>
+            <p className="muted panel-hint">{PANELS[panel].hint}</p>
+            {panel === 'geometry' && <label className="numeric-control">Pose correction method<select aria-label="Pose correction method" value={parameters.pose_mode ?? 'retarget'} onChange={event => setParameters({ ...parameters, pose_mode: event.target.value as 'retarget' | 'mesh_blend' })}><option value="mesh_blend">2.5D / 3D mesh blend (canonical proxy)</option><option value="retarget">Reference LivePortrait retarget</option></select></label>}
+            {settingsOf(panel).map(spec => (
+              <SettingControl key={spec.id} spec={spec} label={spec.id === 'pose_strength' && parameters.pose_mode !== 'mesh_blend' ? 'Reference retarget strength' : undefined}
+                value={settingValue(spec, effectiveParameters)} onChange={value => editParameter(spec.id, value)}
+                disabled={spec.id === 'restoration_blend' && !restorerAvailable} disabledReason="GPEN weights are unavailable, so the restorer cannot run."/>
+            ))}
+            <button type="button" className="button small sweep-btn" disabled={!previewRequest} aria-label={`3×3 Sweep for ${PANELS[panel].title}`}
+              onClick={() => { setPlaying(false); original.current?.pause(); processed.current?.pause(); setSweepPanel(panel); }}>3×3 Sweep</button>
+          </fieldset>
+        ))}
       </div>
       {floating.portal}
       {historyOpen && <HistoryDrawer onClose={() => setHistoryOpen(false)}/>}
-      {sweepOpen && <ParameterSweepModal request={previewRequest} timestamp={time} parameters={parameters} onApply={setParameters} onClose={() => setSweepOpen(false)} restorerAvailable={restorerAvailable}/>}
+      {faceMenu && <FaceContextMenu target={faceMenu} activeSourceName={activeSourceName} busy={extraction.busy} onClose={() => setFaceMenu(null)}
+        onChoose={(destination, menu) => { setFaceMenu(null); void extraction.run(destination, menu); }}/>}
+      {sweepPanel && <ContactSheetModal panel={sweepPanel} parameters={parameters} frameLabel={`Frame ${currentFrame} · ${time.toFixed(3)} s`}
+        payloadFor={(patch: Patch) => {
+          const { fidelity_weight: _inactive, ...applied } = patch;
+          const sweeping = 'restoration_blend' in applied;
+          return buildLivePayload({ request: previewRequest, time, fps, restorerAvailable, maskBase64, solo: 'final',
+            parameters: { ...parameters, ...applied, bypass: sweeping ? parameters.bypass.filter(item => item !== 'restorer') : parameters.bypass } });
+        }}
+        onApply={(patch: Patch) => { const { fidelity_weight: _inactive, ...applied } = patch; setParameters({ ...parameters, ...applied }); }} onClose={() => setSweepPanel(null)}/>}
       <DockArea>
 
       {/* Video Editor-Grade Workstation Timeline */}
@@ -812,6 +845,8 @@ export function VideoViewport({
         sources={sources}
         onSeekTime={setTime}
         onAssignSource={onAssignSource}
+        onUseFaceFromFrame={openMenuFromBar}
+        canUseFaceFromFrame={!!target}
       /></DockPanel>
       <DockPanel id="inspector" title="Inspector">{inspector ?? <p className="muted">Processing inspector</p>}</DockPanel>
       <DockPanel id="pose" title="3D Pose & Geometry">{posePanel ?? <p className="muted">Select a source identity to inspect geometry.</p>}</DockPanel>

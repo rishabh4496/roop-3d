@@ -3,7 +3,7 @@ import { act, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { expect, it, vi } from 'vitest';
 import { VideoViewport } from './VideoViewport';
-import { DEFAULT_PARAMETERS } from './components/workstation/pipeline';
+import { DEFAULT_PARAMETERS, PIPELINE_NODES } from './components/workstation/pipeline';
 import type { JobRequest } from './contracts';
 import useHistoryStore from './stores/useHistoryStore';
 
@@ -13,48 +13,77 @@ vi.mock('./components/canvas/MaskBrushOverlay', () => ({ default: () => null }))
 vi.mock('./components/tray/FaceSelectionTray', () => ({ default: () => null }));
 vi.mock('./components/timeline/TimelineWorkstation', () => ({ default: () => <div>Timeline</div>, parseFps: () => 25 }));
 
-it('renders real solo buffers in the main viewport, returns to comparison, and discards stale frame results', async () => {
+const REQUEST: JobRequest = { target_path: 'local.mp4', inspection_id: 'a'.repeat(32), face_mappings: [{ track_id: 'track_0000', faceset_id: 'alice' }], processing: 'local', remote_consent: false, trim_start_seconds: null, trim_end_seconds: null };
+const png = () => new Uint8Array([137, 80, 78, 71]);
+const previewReply = (frame: number, soloNode = 'final') => new Response(png(), { status: 200, headers: { 'Content-Type': 'image/png', 'X-Preview-Cache': 'MISS', 'X-Preview-Meta': JSON.stringify({ frame_index: frame, solo_node: soloNode, faces: [], applied: [], unsupported: [], notes: ['Matte uses the reference BiSeNet parser.'], latency: {} }) } });
+const previewBodies = (fetch: ReturnType<typeof vi.fn>) => fetch.mock.calls.filter(([url]) => url === '/api/preview').map(([, init]) => JSON.parse(init.body));
+
+it('solos a pipeline node through POST /api/preview solo_node, returns to the composite, and discards stale frame results', async () => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
   vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
+  let urls = 0; URL.createObjectURL = vi.fn(() => `blob:solo-${++urls}`); URL.revokeObjectURL = vi.fn();
   vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(() => {});
   vi.useFakeTimers();
-  const replies: Array<{ resolve: (value: unknown) => void; signal: AbortSignal }> = [];
-  const fetch = vi.fn((_url, init) => new Promise(resolve => replies.push({ resolve, signal: init.signal })));
+  const replies: Array<{ resolve: (value: Response) => void; signal: AbortSignal }> = [];
+  const fetch = vi.fn((url: string, init: RequestInit) => url === '/api/preview'
+    ? new Promise<Response>(resolve => replies.push({ resolve, signal: init.signal as AbortSignal }))
+    : Promise.resolve(new Response('', { status: 404 })));
   vi.stubGlobal('fetch', fetch);
   const host = document.createElement('div'); document.body.append(host); const root = createRoot(host);
-  const request: JobRequest = { target_path: 'local.mp4', inspection_id: 'a'.repeat(32), face_mappings: [{ track_id: 'track_0000', faceset_id: 'alice' }], processing: 'local', remote_consent: false, trim_start_seconds: null, trim_end_seconds: null };
-  const props = { target: '', output: '', setTime: vi.fn(), duration: 3, enabled: false, keys: [], previewRequest: request, parameters: DEFAULT_PARAMETERS };
+  const props = { target: '', output: '', setTime: vi.fn(), duration: 3, enabled: true, keys: [], previewRequest: REQUEST, parameters: DEFAULT_PARAMETERS };
   try {
     await act(async () => root.render(<VideoViewport {...props} time={1}/>));
-    await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Solo XSeg / Occluder Matte"]')!.click());
-    await act(async () => vi.advanceTimersByTime(200)); expect(fetch).toHaveBeenCalledOnce();
-    await act(async () => replies[0].resolve({ ok: true, json: async () => ({ buffers: { matte: 'data:image/jpeg;base64,AQ==' }, frame_index: 25, timestamp: 1, parameters: DEFAULT_PARAMETERS, notes: [] }) }));
-    expect(host.querySelector('.solo-viewport img')?.getAttribute('src')).toBe('data:image/jpeg;base64,AQ==');
-    await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Solo XSeg / Occluder Matte"]')!.click());
-    expect(host.querySelector('.solo-viewport')).toBeNull(); expect(host.textContent).toContain('Comparison canvas');
+    await act(async () => { await vi.advanceTimersByTimeAsync(200); });
+    expect(previewBodies(fetch)[0].solo_node).toBeUndefined();              // not soloed: the final composite
+    await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Solo Occlusion & Seam Mask"]')!.click());
+    await act(async () => { await vi.advanceTimersByTimeAsync(200); });
+    expect(previewBodies(fetch).at(-1)).toMatchObject({ solo_node: 'matte', frame_index: 25 });
+    await act(async () => { replies.at(-1)!.resolve(previewReply(25, 'matte')); await vi.advanceTimersByTimeAsync(0); });
+    expect(host.querySelector('.solo-viewport img')?.getAttribute('src')).toMatch(/^blob:solo-/);
+    expect(host.querySelector('.solo-viewport .pane-label')?.textContent).toContain('Occlusion & Seam Mask');
+    expect(host.textContent).toContain('Matte uses the reference BiSeNet parser.');
+    await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Solo Occlusion & Seam Mask"]')!.click());
+    expect(host.querySelector('.solo-viewport')).toBeNull();
     await act(async () => root.render(<VideoViewport {...props} time={2}/>));
-    await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Solo Face Swapper"]')!.click());
-    await act(async () => vi.advanceTimersByTime(200));
-    await act(async () => root.render(<VideoViewport {...props} time={3}/>)); expect(replies[1].signal.aborted).toBe(true);
-    await act(async () => replies[1].resolve({ ok: true, json: async () => ({ buffers: { swapper: 'stale' }, notes: [] }) }));
-    expect(host.querySelector('.solo-viewport img')).toBeNull();
+    await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Solo Raw Swap"]')!.click());
+    await act(async () => { await vi.advanceTimersByTimeAsync(200); });
+    const stale = replies.at(-1)!;
+    expect(previewBodies(fetch).at(-1)).toMatchObject({ solo_node: 'swapper' });
+    await act(async () => root.render(<VideoViewport {...props} time={3}/>));
+    expect(stale.signal.aborted).toBe(true);
+    await act(async () => { stale.resolve(previewReply(50, 'swapper')); await vi.advanceTimersByTimeAsync(0); });
+    expect(host.querySelector('.solo-viewport img')).toBeNull();            // the aborted frame's late answer is never shown
   } finally { await act(async () => root.unmount()); host.remove(); vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks(); }
+});
+
+it('offers exactly the six pipeline stages and maps each to its server buffer', async () => {
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+  vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
+  const host = document.createElement('div'); document.body.append(host); const root = createRoot(host);
+  try {
+    await act(async () => root.render(<VideoViewport target="" output="" time={0} setTime={() => {}} duration={0} enabled={false} keys={[]} previewRequest={REQUEST}/>));
+    const names = [...host.querySelectorAll('.pipeline-node .node-select')].map(node => node.textContent?.replace(/^\d{2}/, ''));
+    expect(names).toEqual(['Input', '3D Pose & TPS Grid', 'Raw Swap', 'Occlusion & Seam Mask', 'Restorer', 'Final Output']);
+    expect(PIPELINE_NODES.map(node => node.buffer)).toEqual(['detector', 'pose', 'swapper', 'matte', 'restorer', 'final']);
+  } finally { await act(async () => root.unmount()); host.remove(); vi.unstubAllGlobals(); }
 });
 
 it('captures a rendered final composite and full settings into a snapshot slot', async () => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true }); useHistoryStore.getState().reset();
   vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
   vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(() => {});
-  const fetch = vi.fn(async () => ({ ok: true, json: async () => ({ buffers: { final: 'data:image/jpeg;base64,AQ==' }, frame_index: 25, timestamp: 1, notes: [], parameters: DEFAULT_PARAMETERS }) }));
+  const fetch = vi.fn(async () => previewReply(25));
   vi.stubGlobal('fetch', fetch);
   const host = document.createElement('div'); document.body.append(host); const root = createRoot(host);
-  const request: JobRequest = { target_path: 'local.mp4', inspection_id: 'a'.repeat(32), face_mappings: [{ track_id: 'track_0000', faceset_id: 'alice' }], processing: 'local', remote_consent: false, trim_start_seconds: null, trim_end_seconds: null };
   const workspace = { parameters: DEFAULT_PARAMETERS, maskBase64: 'mask-state', curves: { swap_weight: [] }, faces: { assignments: {} } };
   try {
-    await act(async () => root.render(<VideoViewport target="" output="" time={1} setTime={() => {}} duration={2} enabled={false} keys={[]} previewRequest={request} captureWorkspace={() => workspace}/>));
+    await act(async () => root.render(<VideoViewport target="" output="" time={1} setTime={() => {}} duration={2} enabled={false} keys={[]} previewRequest={REQUEST} captureWorkspace={() => workspace}/>));
     await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Capture snapshot A"]')!.click());
-    expect(fetch).toHaveBeenCalledOnce();
-    expect(useHistoryStore.getState().slots.A).toMatchObject({ frame: 25, image: 'data:image/jpeg;base64,AQ==', workspace });
+    await vi.waitFor(() => expect(useHistoryStore.getState().slots.A).toBeTruthy());
+    expect(previewBodies(fetch)).toHaveLength(1);
+    expect(previewBodies(fetch)[0]).toMatchObject({ solo_node: 'final', frame_index: 25 });
+    expect(useHistoryStore.getState().slots.A).toMatchObject({ frame: 25, workspace });
+    expect(useHistoryStore.getState().slots.A!.image).toMatch(/^data:/);     // self-contained: survives the preview URL being revoked
     expect(host.querySelector('[aria-label="Snapshot A"]')).toBeTruthy();
   } finally { await act(async () => root.unmount()); host.remove(); vi.unstubAllGlobals(); vi.restoreAllMocks(); }
 });

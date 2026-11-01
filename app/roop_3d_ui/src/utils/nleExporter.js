@@ -1,6 +1,8 @@
 /** Frame ranges are half-open; URLs point to local media, never API streaming URLs. */
 const integer = (n, name) => { if (!Number.isSafeInteger(n) || n < 0) throw new Error(`Invalid ${name}`); return n; };
 const xml = value => String(value).replace(/[<>&"']/g, c => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;', "'": '&apos;' }[c]));
+// Intentionally matches control characters: it strips them from values written into line-oriented NLE files.
+// eslint-disable-next-line no-control-regex
 const line = value => String(value).replace(/[\r\n\x00-\x1f]/g, ' ');
 export function frameRate(value) {
   const parts = String(value).split('/');

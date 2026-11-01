@@ -1,24 +1,23 @@
-export type WorkstationParameters = { restoration_blend: number; feather_px: number; color_strength: number; pose_strength: number; pose_mode?: 'retarget' | 'mesh_blend'; swap_weight?: number; erosion_px?: number; bypass: ('restorer' | 'color')[] };
-export const DEFAULT_PARAMETERS: WorkstationParameters = { restoration_blend: 0, feather_px: 5, color_strength: .65, pose_strength: .35, pose_mode: 'mesh_blend', swap_weight: 1, erosion_px: 0, bypass: [] };
-export const SWEEP_PARAMETERS = {
-  restoration_blend: { label: 'Restorer blend', min: 0, max: 1, values: [.25, .5, .75] },
-  feather_px: { label: 'Mask feather (px)', min: 0, max: 64, values: [0, 5, 10] },
-  color_strength: { label: 'Color match strength', min: 0, max: 1, values: [.25, .5, .75] },
-  pose_strength: { label: '2.5D → 3D pose blend', min: 0, max: 1, values: [0, .5, 1] },
+export type WorkstationParameters = {
+  restoration_blend: number; feather_px: number; color_strength: number; pose_strength: number; pose_mode?: 'retarget' | 'mesh_blend';
+  swap_weight?: number; erosion_px?: number; bypass: ('restorer' | 'color')[];
+  /** Pre-swap 3D pose frontalization, 0..1 (Stage 5). Omitted until the user touches it, so older requests keep their identity. */
+  pose_frontalization?: number;
+  /** TPS expression warp toward the target frame, 0..1 (Stage 5). */
+  tps_expression_weight?: number;
 };
-export type AxisName = keyof typeof SWEEP_PARAMETERS;
-export function sweepAxis(parameter: AxisName, text: string) {
-  const values = text.split(',').map(item => item.trim() ? Number(item) : NaN), bounds = SWEEP_PARAMETERS[parameter];
-  if (values.length !== 3 || new Set(values).size !== 3 || values.some(value => !Number.isFinite(value) || value < bounds.min || value > bounds.max)) throw new Error(`${bounds.label} requires 3 distinct values within ${bounds.min}–${bounds.max}`);
-  return { parameter, values };
-}
-export const PIPELINE_NODES = [
-  { id: 'source', label: 'Source FaceSet' }, { id: 'detector', label: 'Target Detector' },
-  { id: 'pose', label: '3D Pose & Landmarks', note: 'Observed landmarks; mesh mode overlays the fitted canonical 3D proxy' },
-  { id: 'swapper', label: 'Face Swapper' }, { id: 'matte', label: 'XSeg / Occluder Matte', note: 'Reference BiSeNet / landmark hull matte; XSeg unavailable' },
-  { id: 'restorer', label: 'Face Restorer', optional: true, note: 'Local GPEN adapter; UltraMax / CodeFormer unavailable' },
-  { id: 'color', label: 'Color & Grain Match', optional: true, note: 'Reference LAB color match' },
-  { id: 'grain', label: 'Grain Closer', optional: true, unavailable: 'No grain adapter is configured' },
-  { id: 'final', label: 'Final Composite' },
+export const DEFAULT_PARAMETERS: WorkstationParameters = { restoration_blend: 0, feather_px: 5, color_strength: .65, pose_strength: .35, pose_mode: 'mesh_blend', swap_weight: 1, erosion_px: 0, bypass: [] };
+
+/** `buffer` is the `solo_node` that `POST /api/preview` returns for this stage. */
+export type PipelineNode = { id: string; label: string; buffer: string; note?: string; optional?: boolean; unavailable?: string };
+export const PIPELINE_NODES: PipelineNode[] = [
+  { id: 'input', label: 'Input', buffer: 'detector', note: 'Target frame with the detector\'s face boxes' },
+  { id: 'pose', label: '3D Pose & TPS Grid', buffer: 'pose', note: 'Landmarks, yaw/pitch/roll and the fitted 3D proxy / TPS warp mesh' },
+  { id: 'swap', label: 'Raw Swap', buffer: 'swapper', note: 'The swapped face before masking, restoring or grading' },
+  { id: 'matte', label: 'Occlusion & Seam Mask', buffer: 'matte', note: 'Black-and-white blend mask (reference BiSeNet / landmark hull; XSeg unavailable)' },
+  { id: 'restorer', label: 'Restorer', buffer: 'restorer', optional: true, note: 'Local GPEN adapter; CodeFormer / UltraMax unavailable' },
+  { id: 'final', label: 'Final Output', buffer: 'final', note: 'The composite exactly as a render would write it' },
 ];
+export const nodeBuffer = (id: string | null): string | null => PIPELINE_NODES.find(node => node.id === id)?.buffer ?? null;
+
 export type PreviewResult = { frame_index: number; timestamp: number; notes: string[]; buffers: Record<string, string>; latency?: Record<string, number>; parameters: WorkstationParameters };

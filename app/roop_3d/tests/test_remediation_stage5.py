@@ -516,7 +516,7 @@ class FakeDetector:
 
     def detect(self, image, threshold):
         self.calls += 1
-        return list(self.faces), {}
+        return list(self.faces), {"model_id": "fixture-detector", "sha256": "0" * 64}
 
 
 class FakeRecognizer:
@@ -695,3 +695,21 @@ def test_exported_archive_round_trips_many_degenerate_embeddings_through_the_val
     back = FaceSetReader(SimpleNamespace(), cache_root=tmp_path / "cache").read(archive, faceset_id="many")
     assert len(back.views) == 40
     assert all(np.allclose(a.embedding, b.embedding, atol=1e-6) and (a.yaw, a.pitch) == (b.yaw, b.pitch) for a, b in zip(back.views, views))
+
+
+def test_frame_detections_carry_a_standard_frame_pose_beside_the_legacy_one(tmp_path, monkeypatch):
+    """The UI's pose HUD reads `pose3d` (pitch + = up); `pose` stays legacy (pitch + = down) for existing clients."""
+    app, service, request = extraction_app(tmp_path, monkeypatch)
+    detector = FakeDetector([detection(28.0, Pose3D(yaw=28, pitch=-16, roll=0)), detection(68.0, Pose3D(yaw=-5, pitch=12, roll=0))])
+    detector.catalog = SimpleNamespace(recognizer=lambda: {"model_id": "fixture-recognizer", "sha256": "1" * 64})
+    app.state.media.detector = detector
+    with TestClient(app, base_url=BASE) as client:
+        response = client.post("/api/v1/media/detect-frame-faces", json={"path": request["target_path"], "frame_index": 3})
+        assert response.status_code == 200, response.text
+        faces = response.json()["faces"]
+        assert len(faces) == 2
+        looking_down, looking_up = faces
+        assert looking_down["pose3d"]["pitch"] == pytest.approx(-16, abs=0.5) and looking_down["pose"]["pitch"] == pytest.approx(16, abs=0.5)
+        assert looking_up["pose3d"]["pitch"] == pytest.approx(12, abs=0.5) and looking_up["pose"]["pitch"] == pytest.approx(-12, abs=0.5)
+        assert looking_down["pose3d"]["yaw"] == looking_down["pose"]["yaw"] == pytest.approx(28, abs=0.5)
+        assert [looking_down["pose_cell"], looking_up["pose_cell"]] == ["right_down", "center_up"]

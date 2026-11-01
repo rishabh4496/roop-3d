@@ -1,9 +1,9 @@
 import React, { useEffect, useState } from 'react';
 
 export const SCREENS = [
-  ['home', 'Dashboard'], ['faceswap', 'Workstation'], ['batch', 'Batch Matrix'],
-  ['processing', 'Processing'], ['facemgr', 'Face Manager'], ['extras', 'Extras'],
-  ['gallery', 'Gallery'], ['history', 'History'], ['settings', 'Settings'],
+  ['home', 'Home'], ['faceswap', 'Face Swap'], ['batch', 'Batch Matrix'],
+  ['processing', 'Processing'], ['facemgr', 'Face Manager'], ['extras', 'Editor'],
+  ['gallery', 'Outputs'], ['history', 'History'], ['settings', 'Settings'],
 ];
 export function normalizeRoute(hash) {
   const route = String(hash || '').split('?')[0].replace(/\/$/, '');

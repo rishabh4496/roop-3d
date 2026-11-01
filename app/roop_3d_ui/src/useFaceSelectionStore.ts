@@ -407,6 +407,7 @@ let state: FaceSelectionStoreState = {
       landmarks5: f.landmarks5,
       confidence: f.confidence,
       pose: f.pose,
+      pose3d: f.pose3d,
       thumbnailUrl: f.thumbnail_base64 ? `data:image/jpeg;base64,${f.thumbnail_base64}` : undefined,
     }));
     const existingMap = new Map(state.detectedFaces.map(f => [f.id, f]));

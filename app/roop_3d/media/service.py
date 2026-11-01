@@ -17,7 +17,7 @@ import numpy as np
 
 from roop_3d.audit.isolation import sha256_file, safe_path
 from roop_3d.core.errors import DomainError
-from roop_3d.core.pose import as_legacy_triplet
+from roop_3d.core.pose import as_legacy_triplet, as_pose3d, pose_cell
 from roop_3d.core.settings import Settings, runtime_path
 from roop_3d.core.storage import atomic_json
 from roop_3d.media.detector import Detector
@@ -250,6 +250,7 @@ class MediaService:
             thumb_b64 = base64.b64encode(jpg).decode("ascii") if success else ""
 
             yaw, pitch, roll = geometric_pose(points)
+            pose3d = as_pose3d((yaw, pitch, roll))
 
             track_id = f"track_{track_start_idx + idx:04d}"
             bbox_norm = [float(x1 / width), float(y1 / height), float(x2 / width), float(y2 / height)]
@@ -263,7 +264,8 @@ class MediaService:
                 "bbox": bbox_norm,
                 "landmarks5": landmarks5_norm,
                 "confidence": 0.98,
-                "pose": {"yaw": yaw, "pitch": pitch, "roll": roll},
+                "pose": {"yaw": yaw, "pitch": pitch, "roll": roll},   # legacy frame (pitch + = down), kept for existing clients
+                "pose3d": pose3d.model_dump(), "pose_cell": pose_cell(pose3d).name,   # standard frame (pitch + = up)
                 "thumbnail_base64": thumb_b64,
             }
             faces_output.append(face_item)

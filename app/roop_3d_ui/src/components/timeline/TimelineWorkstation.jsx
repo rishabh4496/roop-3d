@@ -1,6 +1,7 @@
 import CurveEditorTrack from './CurveEditorTrack';
 import React, { useRef, useState, useEffect, useMemo, useCallback } from 'react';
 import { useFaceSelectionStore } from '../../useFaceSelectionStore';
+import { addChapter, adjacentChapter, chapterAt, loadChapters, removeChapter, renameChapter, saveChapters } from './chapters';
 
 /**
  * Format seconds into standard SMPTE timecode (HH:MM:SS:FF).
@@ -243,6 +244,8 @@ export default function TimelineWorkstation({
   const trackInnerRef = useRef(null);
   const [trackWidth, setTrackWidth] = useState(1000);
   const [playbackRate, setPlaybackRate] = useState(1);
+  const [chapters, setChapters] = useState(() => loadChapters(target));
+  const [renamingChapter, setRenamingChapter] = useState(null);
   const [isPoseTrackExpanded, setIsPoseTrackExpanded] = useState(true);
   const [activeDrag, setActiveDrag] = useState(null); // 'needle' | 'trim-in' | 'trim-out' | null
   const [hoverTime, setHoverTime] = useState(null);
@@ -266,6 +269,10 @@ export default function TimelineWorkstation({
 
   const effectiveFps = Math.max(1, fps || 30);
   const effectiveDuration = Math.max(0.1, duration || 1);
+  // Chapters belong to the target clip: reload when it changes, persist on every edit.
+  useEffect(() => { setChapters(loadChapters(target)); setRenamingChapter(null); }, [target]);
+  const updateChapters = useCallback(next => { setChapters(next); saveChapters(target, next); }, [target]);
+  const currentChapter = chapterAt(chapters, currentTime);
   const effectiveTrimEnd = trimEnd !== null && trimEnd !== undefined ? trimEnd : effectiveDuration;
 
   // Track container width via ResizeObserver
@@ -734,6 +741,17 @@ export default function TimelineWorkstation({
           </div>
         </div>
 
+        {/* Chapter markers */}
+        <div className="chapter-actions-group" role="group" aria-label="Chapters">
+          <button type="button" className="chapter-btn add" disabled={disabled || !target} title="Add a chapter marker at the playhead"
+            onClick={() => updateChapters(addChapter(chapters, currentTime, { duration: effectiveDuration, fps: effectiveFps }))}>＋ Chapter</button>
+          <button type="button" className="chapter-btn prev" disabled={disabled || !adjacentChapter(chapters, currentTime, -1)} title="Previous chapter"
+            onClick={() => { const chapter = adjacentChapter(chapters, currentTime, -1); if (chapter) onSeek?.(chapter.time); }}>⏮</button>
+          <button type="button" className="chapter-btn next" disabled={disabled || !adjacentChapter(chapters, currentTime, 1)} title="Next chapter"
+            onClick={() => { const chapter = adjacentChapter(chapters, currentTime, 1); if (chapter) onSeek?.(chapter.time); }}>⏭</button>
+          {currentChapter && <span className="chapter-current" title="Current chapter">{currentChapter.label}</span>}
+        </div>
+
         {/* Range In / Out Trim Buttons */}
         <div className="trim-actions-group">
           <button
@@ -904,6 +922,29 @@ export default function TimelineWorkstation({
               style={{ left: `${tick.ratio}%` }}
             >
               {tick.isMajor && <span className="tick-label">{tick.label}</span>}
+            </div>
+          ))}
+        </div>
+
+        {/* Chapter markers on the ruler: click to seek, double-click to rename, × to remove */}
+        <div className="chapter-markers-layer" aria-label="Chapter markers">
+          {chapters.map(chapter => (
+            <div key={chapter.id} className={`chapter-marker ${currentChapter?.id === chapter.id ? 'current' : ''}`} style={{ left: `${Math.min(100, (chapter.time / effectiveDuration) * 100)}%` }}>
+              {renamingChapter === chapter.id ? (
+                <input className="chapter-rename" aria-label="Chapter name" autoFocus defaultValue={chapter.label} maxLength={48}
+                  onBlur={event => { updateChapters(renameChapter(chapters, chapter.id, event.target.value)); setRenamingChapter(null); }}
+                  onKeyDown={event => { if (event.key === 'Enter') event.currentTarget.blur(); if (event.key === 'Escape') setRenamingChapter(null); }} />
+              ) : (
+                <>
+                  <button type="button" className="chapter-flag" title={`${chapter.label} · ${formatTimecode(chapter.time, effectiveFps)} (double-click to rename)`}
+                    aria-label={`Chapter ${chapter.label} at ${formatTimecode(chapter.time, effectiveFps)}`}
+                    onClick={event => { event.stopPropagation(); if (!disabled) onSeek?.(chapter.time); }} onDoubleClick={event => { event.stopPropagation(); setRenamingChapter(chapter.id); }}>
+                    ⚑ <span>{chapter.label}</span>
+                  </button>
+                  <button type="button" className="chapter-remove" aria-label={`Remove chapter ${chapter.label}`}
+                    onClick={event => { event.stopPropagation(); updateChapters(removeChapter(chapters, chapter.id)); }}>×</button>
+                </>
+              )}
             </div>
           ))}
         </div>

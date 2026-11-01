@@ -1,59 +1,12 @@
 import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { useFaceSelectionStore } from '../../useFaceSelectionStore';
 import { api } from '../../api';
+import { drawPoseHud, facePose } from './poseHud';
+import { leftToRightRank } from '../../utils/poseCells';
 export const FACE_ROLES = { swap: { label: 'Swap Target', color: '#91e6c9' }, ignore: { label: 'Reference Guide', color: '#60a5fa' }, exclude: { label: 'Exclude (Never Swap)', color: '#fb7185' } };
 
-/**
- * Calculates letterbox / contain coordinates for sub-pixel accuracy.
- */
-export function calculateLetterbox(containerW, containerH, mediaW, mediaH) {
-  if (!containerW || !containerH || !mediaW || !mediaH) {
-    return { displayW: containerW || 0, displayH: containerH || 0, offsetX: 0, offsetY: 0 };
-  }
-  const mediaAspect = mediaW / mediaH;
-  const containerAspect = containerW / containerH;
-
-  let displayW, displayH, offsetX, offsetY;
-  if (containerAspect > mediaAspect) {
-    displayH = containerH;
-    displayW = containerH * mediaAspect;
-    offsetX = (containerW - displayW) / 2;
-    offsetY = 0;
-  } else {
-    displayW = containerW;
-    displayH = containerW / mediaAspect;
-    offsetX = 0;
-    offsetY = (containerH - displayH) / 2;
-  }
-
-  return { displayW, displayH, offsetX, offsetY };
-}
-
-/**
- * Sub-pixel letterbox coordinate mapping for normalized bounding box [x1, y1, x2, y2].
- */
-export function mapBoxToPixels(bbox, letterbox) {
-  const [x1, y1, x2, y2] = bbox;
-  const { displayW, displayH, offsetX, offsetY } = letterbox;
-  return {
-    x: offsetX + x1 * displayW,
-    y: offsetY + y1 * displayH,
-    w: Math.max(2, (x2 - x1) * displayW),
-    h: Math.max(2, (y2 - y1) * displayH),
-  };
-}
-
-/**
- * Maps a normalized point [px, py] to visual pixels.
- */
-export function mapPointToPixels(point, letterbox) {
-  const [px, py] = point;
-  const { displayW, displayH, offsetX, offsetY } = letterbox;
-  return {
-    x: offsetX + px * displayW,
-    y: offsetY + py * displayH,
-  };
-}
+import { calculateLetterbox, mapBoxToPixels, mapPointToPixels } from '../../utils/letterbox';
+export { calculateLetterbox, mapBoxToPixels, mapPointToPixels };
 
 /**
  * Canvas Interactive Overlay for target face detection and selection.
@@ -67,6 +20,10 @@ export function mapPointToPixels(point, letterbox) {
  *   onExtractFaces?: () => void;
  *   detecting?: boolean;
  *   showOverlays?: boolean;
+ *   showLandmarks?: boolean;
+ *   showPose?: boolean;
+ *   interactive?: boolean;
+ *   onFaceContextMenu?: (menu: { face: any; faceRank: number; pose: { yaw: number; pitch: number; roll: number } | null; x: number; y: number }) => void;
  * }} props
  */
 export default function FaceOverlayCanvas({
@@ -79,6 +36,10 @@ export default function FaceOverlayCanvas({
   onExtractFaces,
   detecting = false,
   showOverlays = true,
+  showLandmarks = true,
+  showPose = true,
+  interactive = true,
+  onFaceContextMenu,
 }) {
   const canvasRef = useRef(null);
   const containerRef = useRef(null);
@@ -309,6 +270,15 @@ export default function FaceOverlayCanvas({
       ctx.fillStyle = role.color; ctx.fillText(role.label, badgeX + 6, badgeY + 12); ctx.restore();
     }
 
+    // 3D pose & landmark HUD: 5-point ArcFace dots and a live yaw/pitch/roll badge on every detected face.
+    drawPoseHud(ctx, visibleFaces, {
+      mapPoint: point => mapPointToPixels(point, letterbox),
+      mapBox: box => mapBoxToPixels(box, letterbox),
+      bounds: { offsetX: letterbox.offsetX, offsetY: letterbox.offsetY, width: letterbox.displayW, height: letterbox.displayH },
+      landmarks: showLandmarks,
+      pose: showPose,
+    });
+
     ctx.restore();
   }, [
     visibleFaces,
@@ -319,6 +289,8 @@ export default function FaceOverlayCanvas({
     targetClusters,
     assignments,
     sources,
+    showLandmarks,
+    showPose,
   ]);
 
   // Mouse move: Hit testing for hover
@@ -439,7 +411,22 @@ export default function FaceOverlayCanvas({
         onMouseMove={handleMouseMove}
         onMouseLeave={handleMouseLeave}
         onClick={handleClick}
-        onContextMenu={event => { event.preventDefault(); handleClick(event); }}
+        onContextMenu={event => {
+          event.preventDefault();
+          const rect = event.currentTarget.getBoundingClientRect();
+          const hit = visibleFaces.find(face => {
+            const box = mapBoxToPixels(face.bbox, letterbox);
+            const x = event.clientX - rect.left, y = event.clientY - rect.top;
+            return x >= box.x - 4 && x <= box.x + box.w + 4 && y >= box.y - 4 && y <= box.y + box.h + 4;
+          });
+          if (hit && onFaceContextMenu) {
+            setActiveSelection(hit.id);
+            setPopover(null);
+            onFaceContextMenu({ face: hit, faceRank: leftToRightRank(visibleFaces, hit), pose: facePose(hit), x: event.clientX, y: event.clientY });
+          } else {
+            handleClick(event);
+          }
+        }}
         tabIndex={0}
         aria-label="Detected face bounding boxes"
         onKeyDown={event => { if (event.key !== 'ContextMenu' && !(event.shiftKey && event.key === 'F10')) return; const face = visibleFaces.find(face => face.id === activeSelection) ?? visibleFaces[0]; if (!face) return; event.preventDefault(); const coords = mapBoxToPixels(face.bbox, letterbox); setPopover({ ...coords, face, cluster: targetClusters.find(cluster => cluster.id === face.clusterId) }); }}
@@ -447,7 +434,7 @@ export default function FaceOverlayCanvas({
           width: '100%',
           height: '100%',
           display: 'block',
-          pointerEvents: 'auto',
+          pointerEvents: interactive ? 'auto' : 'none',
         }}
       />
 

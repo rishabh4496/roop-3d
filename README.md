@@ -175,3 +175,7 @@ HTTP 503 busy contract and the preview-vs-Start model mutex are documented in
 Stage 5 (unified `Pose3D` and 5-point estimator, the Stage 0 3x3 pose matrix and identity guard, 3D pose
 frontalization, TPS expression warping and `POST /api/faces/extract_from_frame`) is documented in
 [docs/POSE_STAGE5.md](docs/POSE_STAGE5.md).
+
+Stage 6 (nine deep-linked routes, the 3-step run-bar pill, full-bleed comparison canvas, pose HUD, on-canvas
+"Use Face From Frame" menu, six-node buffer soloing, self-documenting settings and the 3×3 sweep) is documented in
+[docs/WORKSTATION_STAGE6.md](docs/WORKSTATION_STAGE6.md).

@@ -11,6 +11,8 @@ import TargetFaceCard from './TargetFaceCard';
  *   fps?: number;
  *   onSeekTime?: (time: number) => void;
  *   onAssignSource?: (clusterId: string, sourceId: string | null) => void;
+ *   onUseFaceFromFrame?: (anchor: { x: number; y: number }) => void;
+ *   canUseFaceFromFrame?: boolean;
  * }} props
  */
 export default function FaceSelectionTray({
@@ -19,7 +21,17 @@ export default function FaceSelectionTray({
   fps = 30,
   onSeekTime,
   onAssignSource,
+  onUseFaceFromFrame,
+  canUseFaceFromFrame = true,
 }) {
+  // Opens the same menu as right-clicking a face on the canvas, anchored under this button.
+  const useFaceButton = onUseFaceFromFrame && (
+    <button type="button" className="button small use-face-from-frame-action" disabled={!canUseFaceFromFrame} aria-haspopup="menu"
+      title="Extract a face from the current frame: use it as the source, add it to a FaceSet, or lock it as a target identity"
+      onClick={event => { const box = event.currentTarget.getBoundingClientRect(); onUseFaceFromFrame({ x: box.left, y: box.bottom + 4 }); }}>
+      <span aria-hidden="true">🎯</span> Use Face From Frame
+    </button>
+  );
   const targetClusters = useFaceSelectionStore(s => s.targetClusters);
   const assignments = useFaceSelectionStore(s => s.assignments);
   const activeSelection = useFaceSelectionStore(s => s.activeSelection);
@@ -66,6 +78,7 @@ export default function FaceSelectionTray({
         <div className="tray-empty-hint">
           <span className="tray-symbol">◎</span>
           <span>No target faces detected yet. Inspect target faces to identify identities in the video.</span>
+          {useFaceButton}
         </div>
       </div>
     );
@@ -79,6 +92,7 @@ export default function FaceSelectionTray({
           <span className="tray-count-badge">{targetClusters.length} detected</span>
         </div>
         <div className="tray-scrub-status">
+          {useFaceButton}
           <span className="muted">
             {activeClusterIds.size > 0
               ? `${activeClusterIds.size} visible in current frame`
