@@ -7,13 +7,13 @@ function layout(order: PanelId[], widths: number[], collapsed: PanelId[] = [], f
   return { order, floating, panels: Object.fromEntries(order.map((id, i) => [id, { collapsed: collapsed.includes(id), width: widths[i], height: id === 'pose' ? 470 : 340 }])) as Layout['panels'] };
 }
 export const PRESETS: Record<string, Layout> = {
-  'Standard Workstation': layout(['timeline', 'tray', 'inspector', 'pose'], [100, 100, 50, 50]),
-  '3D Pose Focus': layout(['pose', 'inspector', 'timeline', 'tray'], [70, 30, 100, 100], ['tray']),
-  'Masking & VFX': layout(['inspector', 'timeline', 'tray', 'pose'], [100, 100, 100, 50], ['pose']),
+  'Standard': layout(['timeline', 'tray', 'inspector', 'pose'], [100, 100, 50, 50]),
+  '3D Pose & Geometry Pro': layout(['pose', 'inspector', 'timeline', 'tray'], [70, 30, 100, 100], ['tray']),
+  'Masking & VFX Compositor': layout(['inspector', 'timeline', 'tray', 'pose'], [100, 100, 100, 50], ['pose']),
   'Dual Monitor Floating Preview': layout(['timeline', 'inspector', 'pose', 'tray'], [100, 50, 50, 100], [], true),
 };
 export function validLayout(value: unknown): Layout {
-  const fallback = PRESETS['Standard Workstation'];
+  const fallback = PRESETS['Standard'];
   if (!value || typeof value !== 'object') return structuredClone(fallback);
   const v = value as Layout;
   if (!Array.isArray(v.order) || v.order.length !== 4 || new Set(v.order).size !== 4 || v.order.some(id => !PANEL_IDS.includes(id))) return structuredClone(fallback);
@@ -23,7 +23,7 @@ export function validLayout(value: unknown): Layout {
 export function movePanel(order: PanelId[], from: PanelId, to: PanelId) {
   const next = order.filter(id => id !== from); next.splice(order.indexOf(to), 0, from); return next;
 }
-const LayoutContext = createContext<{ value: Layout; set: (v: Layout) => void }>({ value: PRESETS['Standard Workstation'], set: () => {} });
+const LayoutContext = createContext<{ value: Layout; set: (v: Layout) => void }>({ value: PRESETS['Standard'], set: () => {} });
 export function WorkspaceLayoutProvider({ children }: { children: ReactNode }) {
   const [value, set] = useState(() => { try { return validLayout(JSON.parse(localStorage.getItem('roop3d-layout-v1') ?? 'null')); } catch { return validLayout(null); } });
   useEffect(() => { try { localStorage.setItem('roop3d-layout-v1', JSON.stringify(value)); } catch { /* In-memory layout still works. */ } }, [value]);
@@ -32,12 +32,12 @@ export function WorkspaceLayoutProvider({ children }: { children: ReactNode }) {
 export function LayoutToolbar({ onFloat }: { onFloat: () => void }) {
   const { value, set } = useContext(LayoutContext);
   const [custom, setCustom] = useState<Record<string, Layout>>(() => { try { const saved = JSON.parse(localStorage.getItem('roop3d-custom-layouts-v1') ?? '{}'); return Object.fromEntries(Object.entries(saved).slice(0, 30).map(([name, item]) => [name, validLayout(item)])); } catch { return {}; } });
-  const [name, setName] = useState(''), [message, setMessage] = useState(''), [selected, setSelected] = useState('Standard Workstation');
+  const [name, setName] = useState(''), [message, setMessage] = useState(''), [selected, setSelected] = useState('Standard');
   const store = (next: Record<string, Layout>) => { setCustom(next); try { localStorage.setItem('roop3d-custom-layouts-v1', JSON.stringify(next)); setMessage('Layout saved'); } catch { setMessage('Browser storage unavailable; layout saved for this session'); } };
   return <div className="layout-toolbar"><label>Workspace <select aria-label="Workspace layout" value={selected} onChange={e => { const key = e.target.value, next = validLayout(PRESETS[key] ?? custom[key]); set(next); setSelected(key); if (next.floating) onFloat(); }}>{Object.keys(PRESETS).map(key => <option key={key}>{key}</option>)}{Object.keys(custom).map(key => <option key={key}>{key}</option>)}</select></label>
     <input aria-label="Custom layout name" placeholder="Name this layout" maxLength={60} value={name} onChange={e => setName(e.target.value)} />
     <button className="button small" disabled={!name.trim() || !!PRESETS[name.trim()] || Object.keys(custom).length >= 30 && !custom[name.trim()]} onClick={() => { const key = name.trim(); store({ ...custom, [key]: structuredClone(value) }); setSelected(key); setName(''); }}>Save layout</button>
-    <button className="button small" disabled={!custom[selected]} onClick={() => { const next = { ...custom }; delete next[selected]; store(next); setSelected('Standard Workstation'); set(validLayout(null)); }}>Delete saved</button>
+    <button className="button small" disabled={!custom[selected]} onClick={() => { const next = { ...custom }; delete next[selected]; store(next); setSelected('Standard'); set(validLayout(null)); }}>Delete saved</button>
     <button className="button small" onClick={onFloat}>Floating Preview ↗</button><small role="status">{message}</small>
   </div>;
 }

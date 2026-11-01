@@ -274,6 +274,16 @@ def preflight_lint(request: Request, value: PreFlightLintRequest | None = None) 
     return run_preflight_lint(request.app.state.root, request.app.state, val)
 
 
+class OptimizeModelsRequest(Contract):
+    models: list[str] | None = None
+
+
+@router.post("/system/optimize-models")
+def optimize_models_route(request: Request, value: OptimizeModelsRequest | None = None) -> dict:
+    from roop_3d.server.diagnostics import optimize_models
+    return optimize_models(request.app.state, (value.models if value else None))
+
+
 @router.post("/system/benchmark")
 def run_benchmark(request: Request, value: BenchmarkRequest | None = None) -> dict:
     from roop_3d.server.diagnostics import BenchmarkRequest as BReq, run_synthetic_benchmark

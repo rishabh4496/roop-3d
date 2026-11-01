@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
+import BottleneckFlamegraph from '../diagnostics/BottleneckFlamegraph';
 
 /**
  * Standard 5-stage facial transformation pipeline stages.
@@ -301,6 +302,11 @@ export default function PipelinePill({
                 );
               })}
             </div>
+          </div>
+
+          {/* Measured per-frame stage breakdown (Decode … Encode) */}
+          <div className="hud-card hud-flamegraph-card" data-testid="hud-flamegraph">
+            <BottleneckFlamegraph compact timings={liveProgress?.stage_timings_ms} activeJob={activeJob} />
           </div>
 
           {/* Real-Time Bottleneck Indicator */}

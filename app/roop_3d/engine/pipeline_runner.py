@@ -6,11 +6,13 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from fractions import Fraction
 import hashlib
+import io
 import json
 from pathlib import Path
 import re
 import time
 from typing import Literal
+import zipfile
 
 import cv2
 import numpy as np
@@ -56,6 +58,41 @@ class PipelineCheckpoint(Contract):
     execution_provider: str = Field(default="CPUExecutionProvider")
     completed_segment: int = Field(default=-1, ge=-1, strict=True)
     total_segments: int | None = Field(default=None, ge=1, strict=True)
+    # Exact request inputs, 3D pose/Stage 0 matrix settings and hardware state, so a project can be resumed after a restart.
+    inputs: dict = Field(default_factory=dict)
+    pose_settings: dict = Field(default_factory=dict)
+    hardware_state: dict = Field(default_factory=dict)
+
+
+CHECKPOINT_NPZ_FORMAT = "roop3d.checkpoint.npz/1"
+
+
+def checkpoint_npz_bytes(checkpoint: PipelineCheckpoint) -> bytes:
+    """NPZ twin of checkpoint.json: the JSON manifest plus every pose-cache vector as an exact float64 array."""
+    manifest = json.dumps({"format": CHECKPOINT_NPZ_FORMAT, "checkpoint": checkpoint.model_dump(mode="json")},
+                          sort_keys=True, allow_nan=False).encode("utf-8")
+    arrays = {"manifest": np.frombuffer(manifest, np.uint8)}
+    for index, (key, values) in enumerate(sorted(checkpoint.pose_cache.items())):
+        arrays[f"pose_cache_{index:05d}"] = np.asarray(values, np.float64)
+    arrays["pose_cache_keys"] = np.frombuffer(json.dumps(sorted(checkpoint.pose_cache)).encode("utf-8"), np.uint8)
+    buffer = io.BytesIO()
+    np.savez(buffer, **arrays)
+    return buffer.getvalue()
+
+
+def read_checkpoint_npz(data: bytes) -> PipelineCheckpoint:
+    """Load and validate an NPZ checkpoint (no pickles); raises ValueError when it is not a valid checkpoint."""
+    try:
+        with np.load(io.BytesIO(data), allow_pickle=False) as archive:
+            manifest = json.loads(archive["manifest"].tobytes().decode("utf-8"))
+            keys = json.loads(archive["pose_cache_keys"].tobytes().decode("utf-8"))
+            cache = {key: [float(v) for v in archive[f"pose_cache_{index:05d}"]] for index, key in enumerate(keys)}
+    except (OSError, EOFError, KeyError, ValueError, zipfile.BadZipFile) as error:
+        raise ValueError("Invalid NPZ checkpoint") from error
+    if manifest.get("format") != CHECKPOINT_NPZ_FORMAT:
+        raise ValueError("Unsupported NPZ checkpoint format")
+    value = PipelineCheckpoint.model_validate({**manifest["checkpoint"], "pose_cache": cache})
+    return value
 
 
 class PipelinePaused(Exception):
@@ -171,6 +208,7 @@ class MasterPipelineRunner:
             binary_payload.extend(len(mask_bytes).to_bytes(4, "big"))
             binary_payload.extend(mask_bytes)
         atomic_bytes(self.root, bin_rel, bytes(binary_payload))
+        atomic_bytes(self.root, f"roop_3d/.runtime/jobs/{checkpoint.job_id}/checkpoint.npz", checkpoint_npz_bytes(checkpoint))
 
     def _checkpoint(self, checkpoint: PipelineCheckpoint, *, completed_frame: int | None = None,
                     profile: RuntimeProfile | None = None, retry_profile: RuntimeProfile | None = None,
@@ -290,6 +328,9 @@ class MasterPipelineRunner:
             "keyframe_curves": curves_dict,
             "manual_mask": record.request.mask_base64,
             "execution_provider": "CPUExecutionProvider",
+            "inputs": self._checkpoint_inputs(record),
+            "pose_settings": self._pose_settings(record, {**sources, **edit_plan.documents}),
+            "hardware_state": self._hardware_state(settings),
         })
         self._write_checkpoint(checkpoint)
         workdir = owned(self.root, f"roop_3d/.runtime/jobs/{record.job_id}/frames")
@@ -298,6 +339,42 @@ class MasterPipelineRunner:
         by_track = {track_id: sources[track_id] for track_id in numeric_ids}
         return PreparedPipeline(target, digest, total, by_track, labels_to_ids,
                                 tuple(faceset_ids), checkpoint, settings, edit_plan)
+
+    @staticmethod
+    def _checkpoint_inputs(record: JobRecord) -> dict:
+        request = record.request
+        return {"target_path": request.target_path, "inspection_id": request.inspection_id,
+                "face_mappings": [item.model_dump(mode="json") for item in request.face_mappings]}
+
+    @staticmethod
+    def _pose_settings(record: JobRecord, documents: Mapping[int, FaceSetDocument]) -> dict:
+        """Pose/TPS parameters plus the Stage 0 3x3 pose-matrix fingerprint of every mapped FaceSet."""
+        parameters = record.request.workstation_parameters
+        values = parameters.model_dump(mode="json") if parameters is not None else {}
+        keep = ("pose_mode", "pose_strength", "pose_frontalization", "tps_expression_weight")
+        matrices: dict[str, dict] = {}
+        from roop_3d.faceset import pose_matrix
+        for document in {item.faceset_id: item for item in documents.values()}.values():
+            try:
+                matrix = pose_matrix.preflight(document)
+            except Exception:  # Matrix evidence is advisory; a checkpoint must still be written.
+                matrix = None
+            if matrix is not None:
+                matrices[document.faceset_id] = {"fingerprint": matrix.fingerprint, "mode": matrix.mode,
+                                                 "populated": matrix.populated, "filled": matrix.filled}
+        return {**{key: values[key] for key in keep if key in values}, "pose_matrices": matrices}
+
+    @staticmethod
+    def _hardware_state(settings: Settings) -> dict:
+        try:
+            from roop_3d.core.hardware import probe_hardware
+            hardware = probe_hardware(settings)
+        except Exception:
+            return {"probe": "UNAVAILABLE"}
+        return {"probe": hardware.gpu_probe_state, "gpus": [{"name": gpu.name, "total_vram_mib": gpu.total_vram_mib,
+                                                               "free_vram_mib": gpu.free_vram_mib} for gpu in hardware.gpus],
+                "advertised_providers": hardware.advertised_providers or [], "preferred_provider": settings.preferred_provider,
+                "hardware_profile": settings.hardware_profile, "execution_threads": settings.execution_threads}
 
     @staticmethod
     def _control_signal(control: Callable[[], object]) -> type[Exception] | None:
@@ -317,6 +394,22 @@ class MasterPipelineRunner:
         if signal is not None:
             self._checkpoint(checkpoint, completed_frame=completed_frame)
             raise signal()
+
+    @staticmethod
+    def _stage_timings(result, session, decode_ms: float, encode_ms: float) -> dict[str, float]:
+        """Measured per-stage milliseconds for one frame; a stage the engine did not time is omitted."""
+        def number(value) -> float | None:
+            return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) and value >= 0 and value == value and value != float('inf') else None
+        latency = getattr(result, 'latency', None)
+        timing = getattr(getattr(session, 'compositor', None), 'last_timing', None) or {}
+        found: dict[str, float | None] = {
+            'decode': number(decode_ms), 'detection': number(getattr(latency, 'detection_ms', None)),
+            'inswapper': number(getattr(latency, 'swap_ms', None)), 'masking': number(timing.get('masking')),
+            'restorer': number(timing.get('restorer')), 'encode': number(encode_ms)}
+        retarget, projection = number(getattr(latency, 'retarget_ms', None)), number(getattr(latency, 'projection_ms', None))
+        if retarget is not None or projection is not None:
+            found['pose_tps'] = (retarget or 0.0) + (projection or 0.0)
+        return {key: round(value, 3) for key, value in found.items() if value is not None}
 
     def _save_frame(self, job_id: str, index: int, image: np.ndarray, expected_shape: tuple[int, ...]) -> None:
         if image.dtype != np.uint8 or image.shape != expected_shape:
@@ -388,8 +481,10 @@ class MasterPipelineRunner:
 
             reader = VideoReader(target, hardware="auto")
             frames = reader.frames()
+            iteration_end = time.perf_counter()
             try:
                 for decoded in frames:
+                    decode_ms = (time.perf_counter() - iteration_end) * 1000
                     self._check_control(control, checkpoint, last_completed)
                     expected_shape = decoded.image.shape
                     frame_started = time.perf_counter()
@@ -422,16 +517,20 @@ class MasterPipelineRunner:
                     mapped_seen.update(item.track_id for item in result.replacements if item.track_id in numeric_ids)
                     decoded_count += 1
                     if decoded.index > checkpoint.completed_frame:
+                        encode_began = time.perf_counter()
                         self._save_frame(record.job_id, decoded.index, output, expected_shape)
+                        encode_ms = (time.perf_counter() - encode_began) * 1000
                         last_completed = decoded.index
                         completed = decoded.index + 1
                         elapsed = max(time.monotonic() - started, 1e-6)
                         report_progress(JobProgress(frame=completed, total_frames=total_frames,
-                            fps=completed / elapsed, stage="render", stage_latency_ms=(time.perf_counter() - frame_started) * 1000))
+                            fps=completed / elapsed, stage="render", stage_latency_ms=(time.perf_counter() - frame_started) * 1000,
+                            stage_timings_ms=self._stage_timings(result, session, decode_ms, encode_ms)))
                         if completed % self.checkpoint_every == 0:
                             checkpoint = self._checkpoint(checkpoint, completed_frame=last_completed,
                                                           profile=admission.profile)
                     self._check_control(control, checkpoint, last_completed)
+                    iteration_end = time.perf_counter()
             finally:
                 frames.close()
             if decoded_count == 0:

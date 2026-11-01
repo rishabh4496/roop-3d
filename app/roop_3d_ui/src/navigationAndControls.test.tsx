@@ -81,7 +81,7 @@ it('saves named panel positions, sizes and collapsed states and restores them af
   await act(async () => root.unmount()); root = createRoot(host); await mount(<Layout/>);
   expect(host.querySelector('[aria-label="Expand Timeline"]')).toBeTruthy();
   expect(host.querySelector<HTMLInputElement>('.dock-content input')!.value).toBe('keep this draft');
-  expect(validLayout({ order: ['pose'] })).toEqual(PRESETS['Standard Workstation']);
+  expect(validLayout({ order: ['pose'] })).toEqual(PRESETS['Standard']);
 });
 
 it('shares live preview content with a secondary window and closes it on teardown', async () => {

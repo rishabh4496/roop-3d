@@ -5,7 +5,7 @@ import { useHotkeys } from '../controls/Hotkeys';
 /** @param {any} props */
 export default function PipelineNodeFlowBar({ selected, solo, bypass = [], onSelect, onSolo, onBypass, busy = false, available = true }) {
   const { keys } = useHotkeys();
-  return <div className="pipeline-flow" role="region" aria-label="Visual execution pipeline">{PIPELINE_NODES.map((node, index) => <React.Fragment key={node.id}>
+  return <div className="pipeline-flow" data-tour="pipeline-bar" role="region" aria-label="Visual execution pipeline">{PIPELINE_NODES.map((node, index) => <React.Fragment key={node.id}>
     {index > 0 && <span className="pipeline-arrow" aria-hidden="true">→</span>}
     <div className={`pipeline-node ${selected === node.id ? 'selected' : ''} ${solo === node.id ? 'solo' : ''} ${bypass.includes(node.id) ? 'bypassed' : ''}`}>
       <button className="node-select" aria-pressed={selected === node.id} onClick={() => onSelect(node.id)} title={node.unavailable ?? node.note ?? node.label}><small>{String(index + 1).padStart(2, '0')}</small>{node.label}</button>

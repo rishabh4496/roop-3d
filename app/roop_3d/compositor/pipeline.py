@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import time
 from typing import Mapping
 from collections.abc import Callable
 
@@ -57,6 +58,7 @@ class FrameCompositor:
         self.restorer = restorer
         self.temporal = temporal or TemporalSmoother()
         self.frames_composited = 0
+        self.last_timing: dict[str, float] = {}
 
     @staticmethod
     def _crop_to_frame(frame: np.ndarray, inverse: np.ndarray, shape: tuple[int, int]) -> np.ndarray:
@@ -102,6 +104,7 @@ class FrameCompositor:
         active_tracks = set(landmarks_by_track) | {item.track_id for item in replacements}
         self.temporal.begin_frame(frame_index, active_track_ids=active_tracks, scene_cut=scene_cut)
         output = frame.copy()
+        compose_began, restorer_seconds = time.perf_counter(), 0.0
         for replacement in sorted(replacements, key=lambda item: item.track_id):
             crop = np.asarray(replacement.image)
             if crop.dtype != np.uint8 or crop.ndim != 3 or crop.shape[2] != 3:
@@ -150,8 +153,10 @@ class FrameCompositor:
             if options.restoration_blend > 0:
                 if self.restorer is None:
                     raise DomainError("RESTORER_UNAVAILABLE", "A positive restoration blend requires an explicit local restorer", 503)
+                restore_began = time.perf_counter()
                 restored = self.restorer.restore(crop)
                 enhanced = blend_restored_roi(crop, restored, alpha, options.restoration_blend)
+                restorer_seconds += time.perf_counter() - restore_began
 
             lip_result = lip_sync_results.get(replacement.track_id)
             if observer is not None:
@@ -181,6 +186,10 @@ class FrameCompositor:
             output = fuse_crop(output, harmonized, temporal.inverse, effective_alpha,
                                mode=options.mode, levels=options.pyramid_levels)
         self.frames_composited += 1
+        total_ms = (time.perf_counter() - compose_began) * 1000
+        restorer_ms = restorer_seconds * 1000
+        # Masking = parser + matte + occluders + colour/temporal/fusion work that is not the restorer.
+        self.last_timing = {"masking": max(0.0, total_ms - restorer_ms), "restorer": restorer_ms}
         return output
 
     def capability(self) -> dict:

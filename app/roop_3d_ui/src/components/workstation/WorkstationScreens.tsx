@@ -49,6 +49,7 @@ type Props = {
   refreshProjects?: () => Promise<void>;
   themeName?: string;
   onThemeChange?: (name: string) => void;
+  onStartTour?: () => void;
 };
 
 export default function WorkstationScreens(props: Props) {
@@ -127,6 +128,8 @@ export default function WorkstationScreens(props: Props) {
         <main className="screen-page">
           <span className="eyebrow">LOCAL CREATIVE WORKSPACE</span>
           <h1>Dashboard</h1>
+          <p className="muted">New here? Take the four-step tour: source face, target tracking, live preview, then the render queue.</p>
+          <button className="button accent tour-start" data-testid="home-tour-button" onClick={() => props.onStartTour?.()}>How to Use · Quick Tour</button>
           <div className="dashboard-cards">
             <a href="#/faceswap" className="screen-card">
               <h2>Start a scene →</h2>
@@ -201,7 +204,7 @@ export default function WorkstationScreens(props: Props) {
               ))}
             </div>
           ))}
-          <BottleneckFlamegraph latency={latency} activeJob={renderJobs[0] || null} />
+          <BottleneckFlamegraph latency={latency} activeJob={renderJobs.find(job => job.state === 'running') || renderJobs[0] || null} />
           <h2>Measured preview stage timings</h2>
           {latency ? (
             Object.entries(latency).map(([stage, ms]) => (

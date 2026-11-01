@@ -2244,3 +2244,17 @@ body {
 .sweep-cell .sweep-pending { display: grid; place-items: center; min-height: 120px; color: var(--muted); font-size: 11px; }
 .sweep-cell .sweep-caption { display: block; padding: 4px; font-size: 9px; color: var(--muted); }
 .sweep-cell img { width: 100%; display: block; }
+
+/* Stage 7: quick tour, lint actions, flamegraph source line */
+.tour-button{font-weight:600;text-transform:none}.tour-button.fresh{border-color:var(--accent);color:var(--accent)}.tour-start{margin:14px 0 6px}
+.tour-layer{position:fixed;inset:0;z-index:60;pointer-events:none}
+.tour-dim{position:absolute;inset:0;background:#020909a8}
+.tour-spotlight{position:absolute;border:2px solid var(--accent);border-radius:8px;box-shadow:0 0 0 9999px #020909a8;transition:top .2s,left .2s,width .2s,height .2s;pointer-events:none}
+.tour-card{position:absolute;right:24px;bottom:24px;width:min(420px,calc(100vw - 32px));max-height:calc(100vh - 48px);overflow:auto;pointer-events:auto;background:var(--surface);color:var(--text);border:1px solid var(--line);border-radius:10px;box-shadow:var(--shadow);padding:18px 20px;display:flex;flex-direction:column;gap:10px}
+.tour-card header{display:flex;align-items:center;justify-content:space-between}.tour-card h2{margin:0;font-size:17px}.tour-card ul{margin:0;padding-left:18px;display:flex;flex-direction:column;gap:7px;font-size:12px;line-height:1.55}
+.tour-illustration{color:var(--accent);display:flex;justify-content:center;padding:6px 0;background:var(--raised);border-radius:6px}.tour-note{display:block}
+.tour-dots{display:flex;gap:7px;justify-content:center;list-style:none;margin:2px 0;padding:0}.tour-dots button{width:10px;height:10px;padding:0;border-radius:50%;border:1px solid var(--accent);background:transparent}.tour-dots button.active{background:var(--accent)}
+.tour-card footer{display:flex;justify-content:flex-end;gap:8px}
+@media(max-width:700px){.tour-card{right:16px;left:16px;bottom:16px;width:auto}}
+.check-action-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:8px}
+.flamegraph-source{margin:2px 0 8px}.hud-flamegraph-card{padding:0}

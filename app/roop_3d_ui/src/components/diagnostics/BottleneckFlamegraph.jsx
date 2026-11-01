@@ -1,17 +1,8 @@
 import React, { useState, useEffect, useMemo } from 'react';
+import { FLAME_STAGES, resolveStageTimings } from './stageTimings';
 
-// Default 9-stage pipeline definition
-export const PIPELINE_STAGES = [
-  { id: 'frame_decode', label: 'Frame Decode', hw: 'NVDEC / CPU', defaultMs: 2.1, color: '#38bdf8' },
-  { id: 'smart_skip_roi', label: 'Smart-Skip / ROI Prepass', hw: 'CPU Motion Flow', defaultMs: 1.4, color: '#2dd4bf' },
-  { id: 'insightface_det', label: 'InsightFace Detection', hw: 'TensorRT / ONNX (YOLOv8-Face)', defaultMs: 6.8, color: '#818cf8' },
-  { id: 'mesh_pose_solve', label: '3D Mesh & Pose Solve', hw: 'LivePortrait Keypoints', defaultMs: 5.2, color: '#a78bfa' },
-  { id: 'swapper_inference', label: 'Swapper Inference', hw: 'inswapper_128 (FP32 Graph)', defaultMs: 9.6, color: '#f43f5e' },
-  { id: 'mask_xseg', label: 'Mask & XSeg', hw: 'BiSeNet / Occluder Mask', defaultMs: 4.1, color: '#fb923c' },
-  { id: 'restorer_inference', label: 'Restorer (TRT/ONNX)', hw: 'GPEN-512 / CodeFormer', defaultMs: 14.5, color: '#f59e0b' },
-  { id: 'grain_color_match', label: 'Grain & Color Match', hw: 'Reinhard / Alpha Blending', defaultMs: 2.8, color: '#10b981' },
-  { id: 'nvenc_encode', label: 'NVENC Encode', hw: 'FFmpeg NVENC Hardware', defaultMs: 3.2, color: '#06b6d4' },
-];
+// Measured stages come from the backend (see stageTimings.js); nothing is defaulted.
+export const PIPELINE_STAGES = FLAME_STAGES;
 
 export const DEFAULT_TEMPORAL_SETTINGS = {
   filter: 'one_euro', // 'one_euro' | 'kalman' | 'none'
@@ -24,6 +15,7 @@ export const DEFAULT_TEMPORAL_SETTINGS = {
 
 export default function BottleneckFlamegraph({
   latency = null,
+  timings = null,
   activeJob = null,
   compact = false,
   onTemporalChange = null,
@@ -40,57 +32,50 @@ export default function BottleneckFlamegraph({
   });
   const [temporalSavedNotice, setTemporalSavedNotice] = useState(false);
 
-  // Compute timings from latency props or defaults
-  const stageData = useMemo(() => {
-    return PIPELINE_STAGES.map(stage => {
-      let ms = stage.defaultMs;
-      if (latency && typeof latency === 'object') {
-        // Try exact match or case-insensitive partial match
-        if (typeof latency[stage.id] === 'number') {
-          ms = latency[stage.id];
-        } else {
-          const matchKey = Object.keys(latency).find(
-            k => k.toLowerCase().replace(/[^a-z0-9]/g, '') === stage.id.toLowerCase().replace(/[^a-z0-9]/g, '')
-          );
-          if (matchKey && typeof latency[matchKey] === 'number') {
-            ms = latency[matchKey];
-          }
-        }
-      }
-      return {
-        ...stage,
-        ms: Math.max(0.1, Number(ms.toFixed(2))),
-      };
-    });
-  }, [latency]);
+  // Real measurements only: explicit timings, else the job's live per-frame breakdown, else a preview capture.
+  const resolved = useMemo(() => resolveStageTimings({ timings, job: activeJob, latency }), [timings, activeJob, latency]);
 
-  const totalMs = useMemo(() => {
-    return Number(stageData.reduce((acc, s) => acc + s.ms, 0).toFixed(2));
-  }, [stageData]);
+  const stageData = useMemo(
+    () => FLAME_STAGES.map(stage => ({ ...stage, ms: resolved.values[stage.id] === null ? null : Number(resolved.values[stage.id].toFixed(2)) })),
+    [resolved],
+  );
+  const measured = useMemo(() => stageData.filter(stage => stage.ms !== null), [stageData]);
+  const hasData = measured.length > 0;
 
-  const fps = useMemo(() => {
-    return totalMs > 0 ? (1000 / totalMs).toFixed(1) : '0';
-  }, [totalMs]);
+  const totalMs = useMemo(() => Number(measured.reduce((acc, s) => acc + s.ms, 0).toFixed(2)), [measured]);
 
-  // Identify bottleneck
+  const fps = useMemo(() => (totalMs > 0 ? (1000 / totalMs).toFixed(1) : '0'), [totalMs]);
+
+  // Identify bottleneck among stages that were actually measured
   const primaryBottleneck = useMemo(() => {
-    if (!stageData.length) return null;
-    return stageData.reduce((max, s) => (s.ms > max.ms ? s : max), stageData[0]);
-  }, [stageData]);
+    if (!measured.length) return null;
+    return measured.reduce((max, s) => (s.ms > max.ms ? s : max), measured[0]);
+  }, [measured]);
+
+  const sourceLabel = {
+    live: 'Live per-frame timings',
+    job: `Live per-frame timings · job ${activeJob?.job_id?.slice(0, 8) ?? ''} · frame ${activeJob?.progress?.frame ?? 0}`,
+    preview: 'Preview capture timings (detection, pose and swap only)',
+    none: 'No measured timings yet',
+  }[resolved.source];
 
   const bottleneckAdvice = useMemo(() => {
     if (!primaryBottleneck) return '';
     switch (primaryBottleneck.id) {
-      case 'restorer_inference':
+      case 'restorer':
         return 'Restorer consumes the largest portion of frame budget. Enabling TensorRT FP16 execution engine can reduce restorer latency by up to 55%.';
-      case 'swapper_inference':
+      case 'inswapper':
         return 'Swapper graph is the primary constraint. Ensure GPU execution provider is selected and input face resolution matches 128x128.';
-      case 'insightface_det':
-        return 'InsightFace detector is taking significant time. Enable Motion-Compensated ROI Frame Reuse in Temporal Controls to skip full-frame scans.';
-      case 'mesh_pose_solve':
-        return '3D Pose Solve is active on all frames. Adjusting landmark smoothing or switching from volumetric blend to retarget can yield speedups.';
-      case 'nvenc_encode':
-        return 'NVENC encoding latency elevated. Check FFmpeg preset (p1-p4) or rate control mode in Settings.';
+      case 'detection':
+        return 'Detection is taking significant time. Enable Motion-Compensated ROI Frame Reuse in Temporal Controls to skip full-frame scans.';
+      case 'pose_tps':
+        return '3D Pose / TPS is active on all frames. Lower TPS expression weight or switch from mesh blend to retarget for a speedup.';
+      case 'masking':
+        return 'Masking and colour fusion dominate the frame. Reduce edge feather, or disable relighting and the face parser for a faster matte.';
+      case 'decode':
+        return 'Decode is the slowest stage. Use hardware decoding (NVDEC) or transcode the target to an intra-frame format.';
+      case 'encode':
+        return 'Encode is elevated. Check the FFmpeg preset (p1-p4) or rate control mode in Settings.';
       default:
         return `${primaryBottleneck.label} is currently the primary stage bottleneck (${primaryBottleneck.ms} ms, ${((primaryBottleneck.ms / totalMs) * 100).toFixed(1)}% of frame budget).`;
     }
@@ -154,12 +139,12 @@ export default function BottleneckFlamegraph({
           {/* Top Metrics Row */}
           <div className="flamegraph-metrics-row">
             <div className="metric-pill">
-              <small>Total Frame Latency</small>
-              <strong>{totalMs} ms</strong>
+              <small>Measured Frame Latency</small>
+              <strong>{hasData ? `${totalMs} ms` : '—'}</strong>
             </div>
             <div className="metric-pill">
               <small>Effective Throughput</small>
-              <strong className="mint">{fps} FPS</strong>
+              <strong className="mint">{hasData ? `${fps} FPS` : '—'}</strong>
             </div>
             <div className="metric-pill highlight">
               <small>Primary Bottleneck</small>
@@ -172,6 +157,8 @@ export default function BottleneckFlamegraph({
               </div>
             )}
           </div>
+
+          <p className="muted flamegraph-source" data-testid="flamegraph-source">{sourceLabel}</p>
 
           {/* Primary Bottleneck Advisory */}
           {primaryBottleneck && (
@@ -191,7 +178,7 @@ export default function BottleneckFlamegraph({
               <span className="muted">{totalMs} ms total span</span>
             </div>
             <div className="stacked-timeline-bar" role="progressbar" aria-label="Stacked frame stage timeline">
-              {stageData.map(stage => {
+              {measured.map(stage => {
                 const pct = totalMs > 0 ? (stage.ms / totalMs) * 100 : 0;
                 return (
                   <div
@@ -212,11 +199,12 @@ export default function BottleneckFlamegraph({
           {/* Horizontal Flamegraph Stage Rows */}
           <div className="flamegraph-stages-list">
             {stageData.map((stage, idx) => {
-              const pct = totalMs > 0 ? (stage.ms / totalMs) * 100 : 0;
+              const isMeasured = stage.ms !== null;
+              const pct = isMeasured && totalMs > 0 ? (stage.ms / totalMs) * 100 : 0;
               const isBottleneck = primaryBottleneck?.id === stage.id;
               const isSelected = selectedStageId === stage.id;
-              const maxMs = Math.max(...stageData.map(s => s.ms), 1);
-              const barWidthPct = (stage.ms / maxMs) * 100;
+              const maxMs = Math.max(...measured.map(s => s.ms), 1);
+              const barWidthPct = isMeasured ? (stage.ms / maxMs) * 100 : 0;
 
               return (
                 <div
@@ -242,8 +230,14 @@ export default function BottleneckFlamegraph({
                   </div>
 
                   <div className="stage-timing">
-                    <span className="stage-ms"><strong>{stage.ms}</strong> ms</span>
-                    <span className="stage-pct muted">({pct.toFixed(1)}%)</span>
+                    {isMeasured ? (
+                      <>
+                        <span className="stage-ms"><strong>{stage.ms}</strong> ms</span>
+                        <span className="stage-pct muted">({pct.toFixed(1)}%)</span>
+                      </>
+                    ) : (
+                      <span className="stage-ms muted" title="This stage was not timed on the active backend or yet">not measured</span>
+                    )}
                     {isBottleneck && <span className="badge-warning">BOTTLENECK</span>}
                   </div>
                 </div>
@@ -264,11 +258,11 @@ export default function BottleneckFlamegraph({
               <div className="inspector-grid">
                 <div>
                   <span className="muted">Stage Execution Time:</span>
-                  <strong> {selectedStage.ms} ms</strong>
+                  <strong> {selectedStage.ms === null ? 'not measured' : `${selectedStage.ms} ms`}</strong>
                 </div>
                 <div>
                   <span className="muted">Frame Budget Share:</span>
-                  <strong> {((selectedStage.ms / totalMs) * 100).toFixed(1)}%</strong>
+                  <strong> {selectedStage.ms === null || totalMs <= 0 ? '—' : `${((selectedStage.ms / totalMs) * 100).toFixed(1)}%`}</strong>
                 </div>
                 <div>
                   <span className="muted">Hardware Accelerator:</span>
@@ -277,7 +271,7 @@ export default function BottleneckFlamegraph({
                 <div>
                   <span className="muted">Pipeline Status:</span>
                   <strong className={primaryBottleneck?.id === selectedStage.id ? 'amber' : 'mint'}>
-                    {primaryBottleneck?.id === selectedStage.id ? 'Primary Bottleneck' : 'Nominal'}
+                    {selectedStage.ms === null ? 'Unmeasured' : primaryBottleneck?.id === selectedStage.id ? 'Primary Bottleneck' : 'Nominal'}
                   </strong>
                 </div>
               </div>

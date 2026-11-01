@@ -172,34 +172,46 @@ describe('Pre-Flight Render Linter Modal', () => {
 });
 
 describe('Per-Frame Bottleneck Flamegraph & Temporal Controls', () => {
-  it('renders 9 pipeline stages and highlights primary bottleneck', async () => {
-    const mockLatency = {
-      frame_decode: 2.5,
-      smart_skip_roi: 1.2,
-      insightface_det: 6.5,
-      mesh_pose_solve: 5.0,
-      swapper_inference: 9.8,
-      mask_xseg: 4.0,
-      restorer_inference: 15.2,
-      grain_color_match: 3.1,
-      nvenc_encode: 3.5,
-    };
+  it('shows the seven measured stages from live timings and flags the slowest as the bottleneck', async () => {
+    const timings = { decode: 2.5, detection: 6.5, pose_tps: 5.0, inswapper: 9.8, masking: 4.0, restorer: 15.2, encode: 3.5 };
 
-    await mount(<Flamegraph latency={mockLatency} />);
+    await mount(<Flamegraph timings={timings} />);
 
     expect(host.querySelector('.bottleneck-flamegraph-container')).toBeTruthy();
     expect(host.textContent).toContain('Pipeline Bottleneck Flamegraph');
-
-    // Verify all 9 stages are present
+    expect(PIPELINE_STAGES.map(stage => stage.label)).toEqual(['Decode', 'Detection', '3D Pose / TPS', 'Inswapper', 'Masking', 'Restorer', 'Encode']);
     for (const stage of PIPELINE_STAGES) {
       expect(host.querySelector(`[data-testid="flamegraph-stage-${stage.id}"]`)).toBeTruthy();
-      expect(host.textContent).toContain(stage.label);
     }
-
-    // Verify Restorer is highlighted as primary bottleneck
-    expect(host.textContent).toContain('Restorer (TRT/ONNX)');
-    expect(host.textContent).toContain('15.2 ms');
+    expect(host.querySelector('[data-testid="flamegraph-stage-restorer"]')!.textContent).toContain('15.2');
+    expect(host.querySelector('[data-testid="flamegraph-stage-restorer"]')!.className).toContain('bottleneck');
+    expect(host.textContent).toContain('46.5 ms'); // measured total = sum of the seven stages
     expect(host.textContent).toContain('BOTTLENECK');
+    expect(host.textContent).not.toContain('not measured');
+  });
+
+  it('never invents numbers: with no measurements every stage reads "not measured"', async () => {
+    await mount(<Flamegraph />);
+    expect(host.querySelector('[data-testid="flamegraph-source"]')!.textContent).toContain('No measured timings yet');
+    expect(host.querySelectorAll('.stage-ms.muted')).toHaveLength(7);
+    expect(host.textContent).not.toContain('BOTTLENECK');
+    expect(host.textContent).not.toMatch(/\d+(\.\d+)? ms \(/);
+  });
+
+  it('prefers the running job’s per-frame timings and leaves unmeasured stages blank', async () => {
+    const job = { job_id: 'abcdef1234567890', state: 'running', progress: { frame: 12, stage_timings_ms: { decode: 1.2, inswapper: 8, encode: 2 } } };
+    await mount(<Flamegraph activeJob={job} latency={{ detection_ms: 99 }} />);
+    expect(host.querySelector('[data-testid="flamegraph-source"]')!.textContent).toContain('job abcdef12');
+    expect(host.querySelector('[data-testid="flamegraph-stage-inswapper"]')!.textContent).toContain('8');
+    expect(host.querySelector('[data-testid="flamegraph-stage-detection"]')!.textContent).toContain('not measured'); // preview value ignored
+    expect(host.querySelector('[data-testid="flamegraph-stage-restorer"]')!.textContent).toContain('not measured');
+  });
+
+  it('maps preview-capture latency onto detection, pose/TPS and swap only', async () => {
+    await mount(<Flamegraph latency={{ detection_ms: 6, swap_ms: 9, retarget_ms: 3, projection_ms: 1.5, total_ms: 40 }} />);
+    expect(host.querySelector('[data-testid="flamegraph-source"]')!.textContent).toContain('Preview capture');
+    expect(host.querySelector('[data-testid="flamegraph-stage-pose_tps"]')!.textContent).toContain('4.5');
+    expect(host.querySelector('[data-testid="flamegraph-stage-masking"]')!.textContent).toContain('not measured');
   });
 
   it('switches to Temporal Tracking & Flicker Control tab and adjusts parameters', async () => {

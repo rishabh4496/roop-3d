@@ -16,6 +16,7 @@ import numpy as np
 
 from roop_3d.audit.isolation import sha256_file
 from roop_3d.core.errors import DomainError
+from roop_3d.core.stage_timing import StageTimings
 from roop_3d.core.storage import atomic_json, owned
 from roop_3d.hardware_streamer import (FrameMetadata, NvdecFrameSource, SharedMemoryFrameRing,
                                       NVHardwareVideoWriter, SegmentWorkspace)
@@ -26,7 +27,8 @@ from roop_3d.render_policy import RenderPolicy
 class StreamingProcessor:
     def __init__(self, root: Path, project_id: str, source: Path, *, detect, track, pipeline,
                  policy: RenderPolicy = RenderPolicy(), identity=None, emit=None,
-                 check=lambda: None, progress=lambda *_: None):
+                 check=lambda: None, progress=lambda *_: None, timings: StageTimings | None = None):
+        self.timings = timings if timings is not None else StageTimings()
         self.root, self.project_id, self.source = root, project_id, source
         self.detect, self.track, self.pipeline, self.policy = detect, track, pipeline, policy
         self.identity, self.emit, self.check, self.progress = identity or {}, emit, check, progress
@@ -83,9 +85,12 @@ class StreamingProcessor:
                     raise ValueError("Concurrent rendering requires independent worker pipeline/buffer ownership")
                 local.pipeline = factory() if callable(factory) else self.pipeline
             batch = getattr(local.pipeline, "process_batch", None)
-            if callable(batch) and all(len(v) == 1 for v in faces_by_frame):
-                return batch(frames, faces_by_frame)
-            return [local.pipeline.process(frame, faces) if faces else frame for frame, faces in zip(frames, faces_by_frame)]
+            # Swap, optional decoupled restore and host bridges are awaited together here, so this stage
+            # is reported as the whole batch time per frame rather than split into guessed shares.
+            with self.timings.measure("inswapper", count=max(1, len(frames))):
+                if callable(batch) and all(len(v) == 1 for v in faces_by_frame):
+                    return batch(frames, faces_by_frame)
+                return [local.pipeline.process(frame, faces) if faces else frame for frame, faces in zip(frames, faces_by_frame)]
         def submit_bundle():
             nonlocal bundle_frames, bundle_faces, bundle_metadata
             if bundle_frames:
@@ -104,7 +109,8 @@ class StreamingProcessor:
                     writer = NVHardwareVideoWriter(workspace.next_path(), source.shape, source.rate,
                         hardware=self.policy.hardware_profile != "cpu", strict=self.policy.strict_nvenc,
                         lut_path=lut_path, lut_bake=lut_bake)
-                writer.write(output)
+                with self.timings.measure("encode"):
+                    writer.write(output)
                 decoded += 1
                 self.progress(decoded, locked.total_frames, decoded / max(1e-6, time.perf_counter() - started))
                 if decoded % self.policy.segment_frames == 0:
@@ -113,9 +119,11 @@ class StreamingProcessor:
         try:
             while True:
                 self.check()
+                lease_began = time.perf_counter()
                 with ring.lease() as item:
                     if item is None:
                         break
+                    self.timings.add("decode", (time.perf_counter() - lease_began) * 1000)
                     frame, metadata = item
                     if metadata.index != submitted:
                         raise RuntimeError("Frame transport reordered or dropped source frames")
@@ -274,11 +282,12 @@ def make_stream_runner(root, catalog, media, settings_provider, *, pipeline_trac
                     else:
                         pipeline = GpuBatchPipeline(selected_session, embeddings, max_batch=settings.stream_batch_size,
                             hardware_profile=admission.profile, restorer=restorer, execution_threads=settings.execution_threads)
+                timings = StageTimings()
                 def detect(image):
-                    with context.activate():
+                    with context.activate(), timings.measure("detection"):
                         return detector.detect(image)[0]
                 def track(image):
-                    with context.activate():
+                    with context.activate(), timings.measure("detection"):
                         return [(v.track_id, v.observation.box, v.observation.landmarks5) for v in tracker.process(image)
                                 if v.track_id in embeddings]
                 mark_running()
@@ -288,11 +297,11 @@ def make_stream_runner(root, catalog, media, settings_provider, *, pipeline_trac
                     range_padding=settings.sparse_interval, segment_frames=settings.stream_segment_frames)
                 destination = owned(self.root, f"{settings.output_root}/roop3d_{record.job_id}_{time.time_ns()}.mp4")
                 processor = StreamingProcessor(self.root, record.job_id, prepared.target, detect=detect, track=track,
-                    pipeline=pipeline, policy=policy, emit=emit, check=check,
+                    pipeline=pipeline, policy=policy, emit=emit, check=check, timings=timings,
                     identity={"request": self._request_digest(record), "settings": settings.model_dump(),
                               "model_sha256": model.record["sha256"]},
                     progress=lambda frame, total, fps: report_progress(__import__("roop_3d.jobs.schema", fromlist=["JobProgress"]).JobProgress(
-                        frame=frame, total_frames=total, fps=fps, stage="render")))
+                        frame=frame, total_frames=total, fps=fps, stage="render", stage_timings_ms=timings.take())))
                 metadata = processor.run(destination, audio=settings.audio_policy == "copy")
                 relative = destination.relative_to(self.root).as_posix()
                 manifest_path = relative + ".manifest.json"

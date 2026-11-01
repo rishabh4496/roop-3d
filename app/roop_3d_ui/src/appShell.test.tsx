@@ -48,3 +48,26 @@ it('undoes parameter changes and mask strokes through the integrated Ctrl+Z / Ct
     expect(JSON.parse(host.querySelector('[data-workspace]')!.textContent!).parameters.swap_weight).toBe(.2);
   } finally { await act(async () => root.unmount()); host.remove(); }
 });
+
+it('opens the Quick Tour from the header and from #/home, walks all four steps, and logs zero console errors', async () => {
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true }); localStorage.clear(); location.hash = '#/home';
+  const errors = vi.spyOn(console, 'error');
+  const host = document.createElement('div'); document.body.append(host); const root = createRoot(host);
+  const named = (label: string) => [...host.querySelectorAll('button')].find(button => button.textContent?.includes(label))!;
+  try {
+    await act(async () => root.render(<HotkeyProvider><WorkspaceLayoutProvider><App/></WorkspaceLayoutProvider></HotkeyProvider>));
+    expect(host.querySelector('[data-testid="header-tour-button"]')?.textContent).toBe('How to Use');
+    expect(host.querySelector('[data-testid="home-tour-button"]')).toBeTruthy();
+    await act(async () => (host.querySelector('[data-testid="home-tour-button"]') as HTMLElement).click());
+    expect(host.querySelector('[role="dialog"][aria-labelledby="tour-title"]')).toBeTruthy();
+    expect(location.hash).toBe('#/faceswap');                       // the tour moves to the workstation for step 1
+    for (let step = 0; step < 3; step++) await act(async () => named('Next').click());
+    expect(host.querySelector('.tour-card')?.getAttribute('data-step')).toBe('render');
+    await act(async () => named('Done').click());
+    expect(host.querySelector('[data-testid="quick-tour"]')).toBeNull();
+    await act(async () => (host.querySelector('[data-testid="header-tour-button"]') as HTMLElement).click());
+    expect(host.querySelector('.tour-card')?.getAttribute('data-step')).toBe('source'); // header button restarts the tour
+    await act(async () => (host.querySelector('[aria-label="Close tour"]') as HTMLElement).click());
+    expect(errors.mock.calls.map(call => String(call[0]))).toEqual([]);
+  } finally { errors.mockRestore(); await act(async () => root.unmount()); host.remove(); }
+});

@@ -39,6 +39,201 @@ class BenchmarkRequest(Contract):
     thread_counts: list[int] = Field(default_factory=lambda: [1, 2, 4, 8])
 
 
+TRT = "TensorrtExecutionProvider"
+POSE_MATRIX_POPULATED_MIN = 5       # of 9 cells with real support => "already populated"
+FRONTALIZATION_OVERCORRECT = 0.5    # strictly above this with a populated matrix over-corrects angles
+HIGH_RES_MIN_EDGE = 1080            # shortest edge, pixels, treated as "high-resolution" video
+LOW_VRAM_MIB = 4096
+HIGH_THREADS = 4
+
+
+def _check(check_id: str, name: str, message: str) -> dict[str, Any]:
+    return {"id": check_id, "name": name, "status": "PASS", "message": message, "details": []}
+
+
+def trt_selected(settings, hw) -> bool:
+    """TensorRT is selected explicitly, or `auto` would resolve to it on a verified NVIDIA GPU."""
+    if not hw.gpus:
+        return False
+    return settings.preferred_provider == TRT or (
+        settings.preferred_provider == "auto" and TRT in (hw.advertised_providers or []))
+
+
+def missing_dynamic_models(state) -> list[dict[str, str]]:
+    """Registry swapper models that have neither a `<stem>_dynamic.onnx` build nor a verified `.batch.onnx` export."""
+    from roop_3d.models.dynamic_shapes import static_batch_reason
+    from roop_3d.audit.project_paths import project_root
+    try:
+        records = state.models.records()
+    except Exception:
+        return []
+    names = {record["name"] for record in records}
+    models_dir = project_root() / "app/models"
+    missing = []
+    for record in records:
+        name = record["name"]
+        if record.get("role") != "swapper" and not name.startswith("inswapper_128"):
+            continue
+        if not name.endswith(".onnx") or name.endswith("_dynamic.onnx") or name.endswith(".batch.onnx"):
+            continue
+        stem = name[:-len(".onnx")]
+        if static_batch_reason(name) or f"{stem}.batch.onnx" in names or (models_dir / f"{stem}_dynamic.onnx").is_file():
+            continue
+        missing.append({"model": name, "expected": f"{stem}_dynamic.onnx"})
+    return missing
+
+
+def _populated_pose_matrices(state, mappings) -> list[dict[str, Any]]:
+    """Mapped FaceSets whose Stage 0 3x3 pose matrix has at least POSE_MATRIX_POPULATED_MIN real cells."""
+    from roop_3d.faceset import pose_matrix
+    from roop_3d.faceset.faceset_reader import FaceSetReader
+    found, seen = [], set()
+    reader = FaceSetReader(state.models, cache_root=state.root / "roop_3d/.runtime/cache")
+    for mapping in mappings:
+        fid = mapping.get("faceset_id", "")
+        if not fid or fid in seen:
+            continue
+        seen.add(fid)
+        for relative in (f"roop_3d/outputs/facesets/{fid}.fsz", f"roop_3d/.runtime/facesets/{fid}.fsz"):
+            try:
+                path = owned(state.root, relative)
+                if not path.is_file():
+                    continue
+                matrix = pose_matrix.preflight(reader.read(path, fid))
+            except Exception:
+                break
+            if matrix is not None and matrix.populated >= POSE_MATRIX_POPULATED_MIN:
+                found.append({"faceset_id": fid, "populated": matrix.populated, "filled": matrix.filled})
+            break
+    return found
+
+
+def _target_geometry(state, payload: "PreFlightLintRequest") -> tuple[int, int]:
+    """(shortest edge px, most simultaneous tracked faces); 0 for whatever the media probe / inspection cannot tell."""
+    edge = 0
+    try:
+        probe = state.media.probe(payload.target_path)
+        sizes = [v for v in (getattr(probe, "width", 0), getattr(probe, "height", 0)) if isinstance(v, int) and v > 0]
+        edge = min(sizes) if len(sizes) == 2 else 0
+    except Exception:
+        pass
+    faces = 0
+    if payload.inspection_id:
+        try:
+            path = owned(state.root, f"roop_3d/.runtime/inspections/{payload.inspection_id}.json")
+            tracks = json.loads(path.read_text("utf-8")).get("tracks", []) if path.is_file() else []
+            spans = [(t["first_frame"], t["last_frame"]) for t in tracks if isinstance(t.get("first_frame"), int) and isinstance(t.get("last_frame"), int)]
+            faces = max((sum(1 for s, e in spans if s <= start <= e) for start, _ in spans), default=0)
+        except Exception:
+            pass
+    return edge, faces
+
+
+def _configuration_checks(root: Path, state, payload: PreFlightLintRequest, hw) -> list[dict[str, Any]]:
+    settings = state.settings
+    params = payload.workstation_parameters or {}
+    out: list[dict[str, Any]] = []
+
+    # a. TensorRT without dynamic-shape models.
+    trt = _check("trt_dynamic_models", "TensorRT Dynamic-Shape Models", "TensorRT dynamic-shape requirements are satisfied.")
+    if trt_selected(settings, hw):
+        missing = missing_dynamic_models(state)
+        if missing:
+            trt["status"] = "WARN"
+            trt["message"] = ("TensorRT is selected but dynamic-shape (_dynamic.onnx) models are missing; engines would fall back to "
+                              "static batch-1 profiles. Convert them once to enable the batched profiles.")
+            trt["details"] = [f"{item['model']} -> {item['expected']} not found" for item in missing]
+            trt["action"] = {"id": "optimize_models", "label": "Convert & Optimize Now", "method": "POST",
+                             "endpoint": "/system/optimize-models", "models": [item["model"] for item in missing]}
+    else:
+        trt["message"] = "TensorRT is not the selected provider on a verified NVIDIA GPU; dynamic-shape conversion is not required."
+    out.append(trt)
+
+    # b. Frontalization over-correcting an already-populated 3x3 pose matrix.
+    front = _check("frontalization_vs_pose_matrix", "Pose Frontalization vs 3x3 Pose Matrix",
+                   "Frontalization strength is compatible with the loaded pose matrices.")
+    try:
+        strength = float(params.get("pose_frontalization", 0) or 0)
+    except (TypeError, ValueError):
+        strength = 0.0
+    if strength > FRONTALIZATION_OVERCORRECT:
+        populated = _populated_pose_matrices(state, payload.face_mappings)
+        if populated:
+            front["status"] = "WARN"
+            front["message"] = (f"Pose frontalization {strength:.2f} exceeds {FRONTALIZATION_OVERCORRECT:.1f} while a populated 3x3 pose matrix "
+                                "already supplies a pose-matched reference; the angle can be corrected twice and look over-rotated.")
+            front["details"] = [f"FaceSet '{item['faceset_id']}': {item['populated']}/9 cells populated" for item in populated]
+            front["action"] = {"id": "set_parameter", "label": f"Lower frontalization to {FRONTALIZATION_OVERCORRECT:.1f}",
+                               "parameter": "pose_frontalization", "value": FRONTALIZATION_OVERCORRECT}
+    out.append(front)
+
+    # c. UltraMax without the small-crop native bypass on high-resolution multi-face video.
+    ultra = _check("ultramax_crop_bypass", "UltraMax Crop Bypass", "UltraMax configuration is safe for this target.")
+    if settings.face_restoration_policy == "ultramax":
+        edge, faces = _target_geometry(state, payload)
+        bypass = settings.ultramax_native_bypass and settings.ultramax_min_pixels <= 320
+        if not bypass and edge >= HIGH_RES_MIN_EDGE and faces > 1:
+            ultra["status"] = "WARN"
+            ultra["message"] = (f"UltraMax is enabled without the <=320px native crop bypass on {edge}p video with {faces} simultaneous faces; "
+                                "every small crop is up-scaled and restored, which multiplies restorer cost and softens distant faces.")
+            ultra["details"] = [f"ultramax_native_bypass={settings.ultramax_native_bypass}, ultramax_min_pixels={settings.ultramax_min_pixels}"]
+            ultra["action"] = {"id": "set_setting", "label": "Enable <=320px crop bypass",
+                               "settings": {"ultramax_native_bypass": True, "ultramax_min_pixels": 320}}
+        elif not bypass:
+            ultra["details"] = ["Crop bypass is off, but the target is not high-resolution multi-face video."]
+    else:
+        ultra["message"] = "UltraMax restoration is not enabled."
+    out.append(ultra)
+
+    # d. Low VRAM with many execution threads.
+    threads = _check("vram_threads", "VRAM vs Execution Threads", "Execution threads fit the available VRAM.")
+    gpu = hw.gpus[0] if hw.gpus else None
+    if gpu and gpu.free_vram_mib < LOW_VRAM_MIB and settings.execution_threads >= HIGH_THREADS:
+        recommended, source = _recommended_threads(state, gpu.free_vram_mib)
+        threads["status"] = "WARN"
+        threads["message"] = (f"Only {gpu.free_vram_mib} MiB VRAM is free on {gpu.name} with {settings.execution_threads} execution threads; "
+                              f"each worker holds its own session and buffers. Recommended: {recommended} thread(s) ({source}).")
+        threads["recommended_threads"] = recommended
+        threads["action"] = {"id": "set_setting", "label": f"Use {recommended} thread(s)",
+                             "settings": {"execution_threads": recommended}}
+    out.append(threads)
+    return out
+
+
+def _recommended_threads(state, free_vram_mib: int) -> tuple[int, str]:
+    """Measured recommendation from /api/v1/settings/benchmark_threads when available, else a VRAM-based bound."""
+    try:
+        snapshot = state.thread_benchmark.snapshot()
+        best = snapshot.get("recommendation") or {}
+        value = best.get("execution_threads")
+        if snapshot.get("state") == "DONE" and isinstance(value, int) and 1 <= value <= 8:
+            return min(value, max(1, state.settings.execution_threads - 1)), "measured by benchmark_threads"
+    except Exception:
+        pass
+    return max(1, min(2, free_vram_mib // 2048)), "conservative bound; run benchmark_threads for a measured value"
+
+
+def optimize_models(state, models: list[str] | None = None) -> dict[str, Any]:
+    """Convert registry swapper models to verified `_dynamic.onnx` builds (the lint's one-click fix)."""
+    from roop_3d.models import dynamic_shapes
+    wanted = {item["model"] for item in missing_dynamic_models(state)}
+    if models:
+        wanted &= set(models)
+    results = []
+    records = {record["name"]: record for record in state.models.records()}
+    for name in sorted(wanted):
+        try:
+            source = state.models._path(records[name])
+            destination = dynamic_shapes.convert(source)
+            results.append({"model": name, "state": "CONVERTED", "output": destination.name})
+        except dynamic_shapes.StaticBatchRequired as error:
+            results.append({"model": name, "state": "STATIC_BATCH_1", "reason": str(error)})
+        except Exception as error:
+            results.append({"model": name, "state": "FAILED", "reason": f"{type(error).__name__}: {error}"[:300]})
+    return {"converted": sum(1 for r in results if r["state"] == "CONVERTED"), "results": results,
+            "remaining": missing_dynamic_models(state)}
+
+
 def run_preflight_lint(root: Path, state, payload: PreFlightLintRequest) -> dict[str, Any]:
     checks: list[dict[str, Any]] = []
     settings = state.settings
@@ -186,6 +381,9 @@ def run_preflight_lint(root: Path, state, payload: PreFlightLintRequest) -> dict
         encoder_check["details"].append("NVENC encoder unavailable; pipeline will use software libx264 encoding with full fidelity.")
 
     checks.append(encoder_check)
+
+    # Stage 27 checks a-d: configuration-vs-hardware conflicts that are cheap to detect before a render starts.
+    checks.extend(_configuration_checks(root, state, payload, hw))
 
     overall_status = "FAIL" if any(c["status"] == "FAIL" for c in checks) else (
         "WARN" if any(c["status"] == "WARN" for c in checks) else "PASS"

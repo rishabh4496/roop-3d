@@ -10,6 +10,7 @@ import uuid
 from pydantic import Field, field_validator, model_validator
 
 from roop_3d.core.errors import DomainError
+from roop_3d.core.stage_timing import validate_timings
 from roop_3d.core.settings import Contract
 from roop_3d.core.workstation import WorkstationParameters
 from roop_3d.core.animation import ParameterCurves, FaceSegment
@@ -112,6 +113,15 @@ class JobProgress(Contract):
     fps: float = Field(default=0, ge=0)
     stage: str = Field(default="queued", min_length=1, max_length=64)
     stage_latency_ms: float = Field(default=0, ge=0)
+    # Measured mean milliseconds per stage for the latest reporting window; unmeasured stages are absent.
+    stage_timings_ms: dict[str, float] = Field(default_factory=dict)
+
+    @field_validator("stage_timings_ms", mode="before")
+    @classmethod
+    def known_stage_timings(cls, value):
+        if not isinstance(value, dict):
+            raise ValueError("stage_timings_ms must be an object")
+        return validate_timings(value)
 
     @model_validator(mode="after")
     def frame_bounds(self) -> "JobProgress":

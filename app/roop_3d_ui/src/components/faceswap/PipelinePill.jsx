@@ -35,7 +35,7 @@ export default function PipelinePill({ url, makeSocket, now = Date.now, initialF
   const state = model.banner ? model.banner.kind : model.muxing ? 'muxing' : model.idle ? 'idle' : 'running';
 
   return (
-    <section className={`run-pill ${state}`} data-state={state} data-connection={connection} aria-label="Pipeline run status">
+    <section className={`run-pill ${state}`} data-tour="run-pill" data-state={state} data-connection={connection} aria-label="Pipeline run status">
       {model.banner && (
         <div className="compile-banner" role="alert">
           <strong>{model.banner.title}</strong>

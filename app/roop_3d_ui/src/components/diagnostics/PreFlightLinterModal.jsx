@@ -11,8 +11,12 @@ export default function PreFlightLinterModal({
   workstationParameters = null,
   maskBase64 = null,
   hardware = null,
+  onApplySettings = null,
+  onApplyParameter = null,
 }) {
   const [loading, setLoading] = useState(true);
+  const [refreshKey, setRefreshKey] = useState(0);
+  const [actionState, setActionState] = useState({});
   const [linterData, setLinterData] = useState(null);
   const [lintError, setLintError] = useState('');
   const [skipLinterNextTime, setSkipLinterNextTime] = useState(false);
@@ -44,7 +48,34 @@ export default function PreFlightLinterModal({
       });
 
     return () => { active = false; };
-  }, [isOpen, targetPath, inspectionId, faceMappings, workstationParameters, maskBase64]);
+  }, [isOpen, targetPath, inspectionId, faceMappings, workstationParameters, maskBase64, refreshKey]);
+
+  // One-click fixes offered by individual checks; the lint re-runs afterwards so the result is verified, not assumed.
+  const runAction = async check => {
+    const action = check.action;
+    if (!action) return;
+    const patch = value => setActionState(previous => ({ ...previous, [check.id]: value }));
+    patch({ busy: true, message: '', error: false });
+    try {
+      if (action.id === 'optimize_models') {
+        const result = await post(action.endpoint, { models: action.models });
+        const failed = (result.results || []).filter(item => item.state !== 'CONVERTED');
+        patch({ busy: false, error: failed.length > 0, message: `${result.converted} model(s) converted` + (failed.length ? `; ${failed.map(item => `${item.model}: ${item.state}`).join(', ')}` : '.') });
+      } else if (action.id === 'set_setting' && onApplySettings) {
+        await onApplySettings(action.settings);
+        patch({ busy: false, error: false, message: 'Setting applied.' });
+      } else if (action.id === 'set_parameter' && onApplyParameter) {
+        onApplyParameter(action.parameter, action.value);
+        patch({ busy: false, error: false, message: 'Parameter updated.' });
+      } else {
+        patch({ busy: false, error: true, message: 'This fix is not available from here.' });
+        return;
+      }
+      setRefreshKey(value => value + 1);
+    } catch (error) {
+      patch({ busy: false, error: true, message: error?.message || 'The fix failed.' });
+    }
+  };
 
   if (!isOpen) return null;
 
@@ -97,7 +128,7 @@ export default function PreFlightLinterModal({
                     ? 'Critical issues detected. Resolve errors before rendering.'
                     : hasWarnings
                     ? 'Warnings flagged. Pipeline can proceed with automated guardrails.'
-                    : 'All 4 pre-flight validation gates passed cleanly.'}
+                    : `All ${checks.length} pre-flight validation gates passed cleanly.`}
                 </small>
               </div>
               <span className={`status-badge-pill ${linterData.status.toLowerCase()}`}>
@@ -122,6 +153,23 @@ export default function PreFlightLinterModal({
                         <li key={idx}><small>{item}</small></li>
                       ))}
                     </ul>
+                  )}
+                  {check.action && (
+                    <div className="check-action-row">
+                      <button
+                        className="button small accent"
+                        data-testid={`lint-action-${check.id}`}
+                        disabled={!!actionState[check.id]?.busy}
+                        onClick={() => runAction(check)}
+                      >
+                        {actionState[check.id]?.busy ? 'Working…' : check.action.label}
+                      </button>
+                      {actionState[check.id]?.message && (
+                        <small role={actionState[check.id].error ? 'alert' : 'status'} className={actionState[check.id].error ? 'inline-warning' : 'muted'}>
+                          {actionState[check.id].message}
+                        </small>
+                      )}
+                    </div>
                   )}
                   {check.id === 'vram_headroom' && check.estimated_vram_mib && (
                     <div className="vram-meter-box">

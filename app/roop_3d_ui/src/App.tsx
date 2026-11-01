@@ -21,6 +21,8 @@ import PreFlightLinterModalComponent from './components/diagnostics/PreFlightLin
 import { DEFAULT_EXPORT } from './components/export/VfxExportPanel';
 import type { ExportOptions } from './contracts';
 import FacesetLibrary from './components/facemgr/FacesetLibrary';
+import QuickTour from './components/tour/QuickTour';
+import { tourSeen } from './components/tour/tourSteps';
 import ThemeGallery from './components/ThemeGallery';
 import { THEMES, themeByName, applyThemeToDom } from './themes';
 const PreFlightLinterModal = PreFlightLinterModalComponent as unknown as ComponentType<any>;
@@ -38,6 +40,7 @@ export default function App() {
   const [trimStart, setTrimStart] = useState(0), [trimEnd, setTrimEnd] = useState<number | null>(null), [includeCheckpoint, setIncludeCheckpoint] = useState(false);
   const [maskBase64, setMaskRaw] = useState<string | null>(null);
   const [linterOpen, setLinterOpen] = useState(false);
+  const [tourOpen, setTourOpen] = useState(false);
   const [busy, setBusy] = useState(''), [error, setError] = useState(''), [notice, setNotice] = useState(''), [uploadProgress, setUploadProgress] = useState(0);
   const [themeName, setThemeName] = useState(() => localStorage.getItem('roop3d-theme-name') ?? 'Default');
   const [themeGalleryOpen, setThemeGalleryOpen] = useState(false);
@@ -248,6 +251,7 @@ export default function App() {
   const checkpointAllowed = !!currentJob && jobActions(caps, currentJob.state).includes('resume');
   return <div className="workstation">
     <header className="app-header"><a className="brand" href="#/home" aria-label="Roop 3D home"><span className="brand-mark">R<span>3</span></span><strong>roop<span>3D</span></strong></a><span className="header-divider"/><span className="workspace-label">VIDEO WORKSTATION</span>
+      <button className={`button small tour-button ${tourSeen() ? '' : 'fresh'}`} data-testid="header-tour-button" aria-haspopup="dialog" title="Four-step guide to the workstation" onClick={() => setTourOpen(true)}>How to Use</button>
       <div className="project-name"><input aria-label="Project name" maxLength={128} value={projectName} onChange={event => setProjectName(event.target.value)} /><span>{projectDirty ? 'UNSAVED' : 'SAVED'}</span></div>
       <span className="local-status"><i className={`dot ${connection === 'online' ? 'mint' : 'amber'}`}/>{connection === 'online' ? 'Local service' : connection}</span>
       <PipelinePill telemetry={telemetry} activeJob={currentJob} />
@@ -317,7 +321,7 @@ export default function App() {
       />
     </AppRouter>
     <AppRouter route={route} screen="faceswap">
-      <div className="workstation-body"><aside className="asset-sidebar"><div className="section-title"><span>ASSET LIBRARY</span><span className="muted">01</span></div><div className="asset-actions"><button className="button full primary-soft" disabled={!!reason('uploads') || !!busy} title={reason('uploads') ?? ''} onClick={() => fileInput.current?.click()}>＋ Import target video</button><input ref={fileInput} hidden type="file" accept=".mp4,.mov,.mkv,.avi,.webm,.m4v,.ts" onChange={event => { importAsset(event.target.files?.[0]); event.target.value = ''; }} /></div>
+      <div className="workstation-body"><aside className="asset-sidebar" data-tour="source"><div className="section-title"><span>ASSET LIBRARY</span><span className="muted">01</span></div><div className="asset-actions"><button className="button full primary-soft" disabled={!!reason('uploads') || !!busy} title={reason('uploads') ?? ''} onClick={() => fileInput.current?.click()}>＋ Import target video</button><input ref={fileInput} hidden type="file" accept=".mp4,.mov,.mkv,.avi,.webm,.m4v,.ts" onChange={event => { importAsset(event.target.files?.[0]); event.target.value = ''; }} /></div>
       <div className={`target-asset ${target ? 'loaded' : ''}`}><span className="asset-symbol">▤</span><div><strong>{target ? target.split('/').at(-1) : 'No target loaded'}</strong><small>{probe ? `${probe.width} × ${probe.height} · ${probe.fps_rational ?? '?'} fps` : 'Your files stay on this machine'}</small></div></div>
       <div className="section-title spaced"><span>SOURCE IDENTITIES</span><span>{sources.length.toString().padStart(2, '0')}</span></div>
       <FacesetLibrary
@@ -414,7 +418,7 @@ export default function App() {
           ) : 'Full clip'}
         </span>
       </div>
-      <section className="face-inspector"><div className="panel-heading"><div><span className="eyebrow">TARGET FACE INSPECTOR</span><h2>Assign an identity</h2></div><button className="button" disabled={!target || !!reason('face_inspection') || !!busy} title={reason('face_inspection') ?? ''} onClick={inspect}>{inspection ? 'Reinspect faces' : 'Inspect target faces'}</button></div>
+      <section className="face-inspector" data-tour="tracks"><div className="panel-heading"><div><span className="eyebrow">TARGET FACE INSPECTOR</span><h2>Assign an identity</h2></div><button className="button" disabled={!target || !!reason('face_inspection') || !!busy} title={reason('face_inspection') ?? ''} onClick={inspect}>{inspection ? 'Reinspect faces' : 'Inspect target faces'}</button></div>
         {!inspection ? <div className="mapping-empty"><span>◎</span><p>Inspect the target to find persistent face tracks.<small>Then map each track to an observed source FaceSet.</small></p></div> : <><div className="inspection-meta"><span>{inspection.tracks.length} detected tracks</span><span>Identity continuity is estimated</span>{inspection.truncated && <strong>Bounded sample — truncated</strong>}</div>{inspection.warnings.map(warning => <p key={warning} className="inline-warning">{warning}</p>)}
           <div className="track-list">{inspection.tracks.map(track => <div className={`track-card ${selectedTrack === track.track_id ? 'active' : ''}`} key={track.track_id}>
             <button className="track-select" aria-label={`Inspect ${track.track_id}`} onClick={() => { setSelectedTrack(track.track_id); setTime(track.first_timestamp_seconds); if (assigned[track.track_id]) setSourceId(assigned[track.track_id]); }}>{track.thumbnail_base64 ? <img src={`data:${track.thumbnail_mime};base64,${track.thumbnail_base64}`} alt={`${track.track_id} detected face`}/> : <span className="track-fallback">◎</span>}<span><strong>{track.track_id.replace('track_', 'Face ')}</strong><small>Frames {track.first_frame}–{track.last_frame}</small><small>{formatTime(track.first_timestamp_seconds)} → {formatTime(track.last_timestamp_seconds)}</small></span></button><span className="mapping-arrow">→</span><label className="mapping-choice"><span>Source identity</span><select aria-label={`Identity for ${track.track_id}`} value={assigned[track.track_id] ?? ''} disabled={!sources.length} onChange={event => { const nextVal = event.target.value; setAssigned(previous => ({ ...previous, [track.track_id]: nextVal })); useFaceSelectionStore.getState().assignSource(track.track_id, nextVal || null); setSourceId(nextVal); }}><option value="">Keep original</option>{sources.map(source => <option key={source.faceset_id} value={source.faceset_id}>{source.name}</option>)}</select></label></div>)}</div></>}
@@ -441,9 +445,10 @@ export default function App() {
         </div>
       )}
     </main></div></AppRouter>
-    <WorkstationScreens route={route} caps={caps} config={config} sources={sources} jobs={jobs} projects={projects} busy={!!busy} telemetry={telemetry} connection={connection} openProject={openProject} showJob={showJob} controlJob={controlJob} saveSettings={saveSettings} refreshJobs={refreshJobs} openLibrary={() => { setProjectsOpen(true); void refreshProjects(); }} latency={previewLatency} target={target} probe={probe} inspection={inspection} refreshProjects={refreshProjects} exportOptions={exportOptions} onExportChange={setExportOptions} meshBlend={parameters.pose_mode === 'mesh_blend'} onQueue={queue} canQueue={!reason('queue') && !!inspection && !!renderMappings().length && !busy} previewRequest={inspection && renderMappings().length ? request() : null} timestamp={time} themeName={themeName} onThemeChange={setThemeName}/>
+    <WorkstationScreens route={route} caps={caps} config={config} sources={sources} jobs={jobs} projects={projects} busy={!!busy} telemetry={telemetry} connection={connection} openProject={openProject} showJob={showJob} controlJob={controlJob} saveSettings={saveSettings} refreshJobs={refreshJobs} openLibrary={() => { setProjectsOpen(true); void refreshProjects(); }} latency={previewLatency} target={target} probe={probe} inspection={inspection} refreshProjects={refreshProjects} exportOptions={exportOptions} onExportChange={setExportOptions} meshBlend={parameters.pose_mode === 'mesh_blend'} onQueue={queue} canQueue={!reason('queue') && !!inspection && !!renderMappings().length && !busy} previewRequest={inspection && renderMappings().length ? request() : null} timestamp={time} themeName={themeName} onThemeChange={setThemeName} onStartTour={() => setTourOpen(true)}/>
     <footer className="app-footer"><span>ROOP 3D / LOCAL WORKSTATION</span><span>Observed identities. Explicit processing. Synthetic media.</span><span>API :{config?.port ?? '—'}</span></footer>
     {projectsOpen && <div className="modal-backdrop" onClick={() => setProjectsOpen(false)}><section role="dialog" aria-modal="true" aria-labelledby="projects-title" className="project-modal" onClick={event => event.stopPropagation()}><div className="panel-heading"><div><span className="eyebrow">VERSIONED .R3DP MANIFESTS</span><h2 id="projects-title">Project library</h2></div><button aria-label="Close projects" className="icon-button" onClick={() => setProjectsOpen(false)}>×</button></div><p className="muted">Reopening verifies target, inspection, FaceSet, and model hashes. Project files contain references and settings, never raw media.</p><button className="button" disabled={!!busy} onClick={() => projectInput.current?.click()}>Import .r3dp</button><input ref={projectInput} hidden type="file" accept=".r3dp,application/json" onChange={event => { importProject(event.target.files?.[0]); event.target.value = ''; }}/>{!projects.length && <p className="empty-note muted">No saved projects yet.</p>}{projects.map(item => <div key={item.project_id} className="saved-project"><div><strong>{item.name}</strong><small>{new Date(item.saved_at).toLocaleString()} · checkpoint {item.last_completed_frame >= 0 ? item.last_completed_frame : 'none'}</small></div><button className="button small" disabled={!!busy} onClick={() => openProject(item.project_id)}>Verify & open</button><a className="button small" href={`/api/v1/projects/${item.project_id}/download`} download>Export</a></div>)}{project?.checkpoint_job_id && <button className="button accent" disabled={!!busy || !!reason('queue')} onClick={() => void run('Verifying checkpoint continuation', async () => { const resumed = await post<Job>(`/projects/${project.project_id}/resume`, {}); setSelectedJob(resumed.job_id); await refreshJobs(); setProjectsOpen(false); })}>Verify & resume {project.name}</button>}</section></div>}
+    <QuickTour open={tourOpen} onClose={() => setTourOpen(false)} onNavigate={route => { if (window.location.hash !== route) window.location.hash = route; }} />
     <PreFlightLinterModal
       isOpen={linterOpen}
       onClose={() => setLinterOpen(false)}
@@ -454,6 +459,8 @@ export default function App() {
       workstationParameters={parameters}
       maskBase64={maskBase64}
       hardware={caps}
+      onApplySettings={(values: Config) => { if (config) saveSettings({ ...config, ...values }); }}
+      onApplyParameter={(name: string, value: number) => setParameters({ ...parameters, [name]: value })}
     />
     {themeGalleryOpen && (
       <div className="modal-backdrop" onClick={() => setThemeGalleryOpen(false)}>
