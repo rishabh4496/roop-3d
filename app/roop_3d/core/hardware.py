@@ -69,6 +69,14 @@ class Hardware(BaseModel):
     nvdec_available: bool | None = None
     nvenc_available: bool | None = None
     codec_hardware_state: Literal["FFMPEG_REGISTRATION_ONLY", "UNKNOWN"] = "UNKNOWN"
+    # Stage 15: Intel QSV and OpenVINO hardware detection
+    qsv_available: bool | None = None
+    ffmpeg_qsv_encoders: list[str] = Field(default_factory=list)
+    ffmpeg_qsv_decoders: list[str] = Field(default_factory=list)
+    openvino_available: bool = False
+    openvino_version: str | None = None
+    openvino_devices: list[str] = Field(default_factory=list)
+    heterogeneous_split_mode: bool = False
 
 
 def effective_vram_budget(total: int, free: int, settings: Settings) -> int:
@@ -127,6 +135,7 @@ def _summarize(result: Hardware) -> None:
     if result.ffmpeg_probe_state == "VERIFIED_LOCAL":
         result.nvdec_available = bool(result.ffmpeg_nvdec_decoders)
         result.nvenc_available = bool(result.ffmpeg_nvenc_encoders)
+        result.qsv_available = bool(result.ffmpeg_qsv_decoders or result.ffmpeg_qsv_encoders)
         result.codec_hardware_state = "FFMPEG_REGISTRATION_ONLY"
 
 
@@ -236,10 +245,22 @@ def probe_hardware(settings: Settings | None = None) -> Hardware:
             decoders = _run([result.ffmpeg_path, "-hide_banner", "-decoders"])
             result.ffmpeg_nvenc_encoders = sorted(set(re.findall(r"\b\w+_nvenc\b", encoders)))
             result.ffmpeg_nvdec_decoders = sorted(set(re.findall(r"\b\w+_cuvid\b", decoders)))
+            result.ffmpeg_qsv_encoders = sorted(set(re.findall(r"\b\w+_qsv\b", encoders)))
+            result.ffmpeg_qsv_decoders = sorted(set(re.findall(r"\b\w+_qsv\b", decoders)))
             result.ffmpeg_probe_state = "VERIFIED_LOCAL"
         except (OSError, subprocess.SubprocessError):
             result.probe_notes.append("FFmpeg codec inventory probe failed")
     _summarize(result)
+    try:
+        from roop_3d.openvino_coprocessor import get_openvino_device_info
+        ov_info = get_openvino_device_info()
+        result.openvino_available = ov_info.get("available", False)
+        result.openvino_devices = ov_info.get("devices", [])
+        result.openvino_version = ov_info.get("version")
+    except Exception:
+        result.probe_notes.append("OpenVINO hardware probe unavailable")
+    if settings:
+        result.heterogeneous_split_mode = getattr(settings, "heterogeneous_split_mode", False)
     result.probe_notes.append("Codec registration does not prove usable NVENC/NVDEC hardware")
     result.probe_notes.append("No inference sessions created; GPU execution is unverified")
     return result

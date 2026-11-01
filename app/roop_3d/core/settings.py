@@ -39,6 +39,11 @@ class Settings(Contract):
     temporal_beta: float = Field(default=.04, ge=0, le=10)
     temporal_d_cutoff: float = Field(default=1, gt=0, le=120)
     pose_hysteresis_degrees: float = Field(default=2.5, ge=0, lt=10)
+    # Stage 15: Heterogeneous Intel + NVIDIA hybrid execution scheduler
+    heterogeneous_split_mode: bool = False
+    openvino_device: str = "AUTO:GPU,NPU,CPU"
+    qsv_offload_enabled: bool = False
+    auxiliary_offload_enabled: bool = True
 
     schema_version: Literal[2] = 2
     execution_mode: Literal["swap", "volumetric", "hybrid", "diffusion_vfx"] = "swap"
