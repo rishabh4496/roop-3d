@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
-import { mediaURL } from './api';
+import { extractFaceFromFrame, mediaURL } from './api';
 import { PreviewURL } from './state';
 import type { FaceSet, Probe, Inspection, FrameFaceDetectionResponse } from './contracts';
 import { useFaceSelectionStore } from './useFaceSelectionStore';
@@ -64,7 +64,7 @@ export function VideoViewport({
   active = true, parameters = DEFAULT_PARAMETERS, setParameters = () => {}, previewRequest = null,
   inspector, posePanel, restorerAvailable = false, onPreviewLatency,
   maskBase64 = null, captureWorkspace = () => ({}), restoreWorkspace = () => {},
-  onInspectionUpdate,
+  onInspectionUpdate, onSourceExtracted,
 }: {
   target: string;
   output: string;
@@ -92,6 +92,8 @@ export function VideoViewport({
   captureWorkspace?: () => any;
   restoreWorkspace?: (value: any) => void;
   onInspectionUpdate?: (inspection: Inspection) => void;
+  /** Called with the FaceSet created by "Use as source" so the workspace can make it the active source face. */
+  onSourceExtracted?: (faceset: FaceSet) => void;
 }) {
   const [detectingFaces, setDetectingFaces] = useState(false);
   const [detectionNotice, setDetectionNotice] = useState('');
@@ -123,6 +125,24 @@ export function VideoViewport({
       setDetectingFaces(false);
     }
   }, [target, time, detectingFaces, onInspectionUpdate]);
+  const [extractingSource, setExtractingSource] = useState(false);
+  const [sourceFaceNumber, setSourceFaceNumber] = useState(1);
+  const handleUseAsSource = useCallback(async () => {
+    if (!target || extractingSource) return;
+    setExtractingSource(true);
+    setDetectionNotice('');
+    try {
+      const frame = Math.max(0, Math.round(time * parseFps(probe?.fps_rational, 30)));
+      const result = await extractFaceFromFrame({ target_media_path: target, frame_index: frame, face_index: sourceFaceNumber - 1, destination: 'source_gallery' });
+      if (result.active_source) onSourceExtracted?.({ faceset_id: result.active_source.faceset_id, name: result.active_source.name, item_count: 1 });
+      setDetectionNotice(`Source face added (${result.face.pose_cell.replace('_', ' / ')}).`);
+    } catch (err: any) {
+      setDetectionNotice(err.message || 'Could not extract a face from this frame.');
+    } finally {
+      setExtractingSource(false);
+      setTimeout(() => setDetectionNotice(''), 4000);
+    }
+  }, [target, extractingSource, time, probe?.fps_rational, sourceFaceNumber, onSourceExtracted]);
   const original = useRef<HTMLVideoElement>(null), processed = useRef<HTMLVideoElement>(null);
   const viewportRef = useRef<HTMLDivElement>(null);
 
@@ -482,6 +502,14 @@ export function VideoViewport({
         >
           <span>🎯</span> {detectingFaces ? 'Detecting Faces…' : 'Use Face from this Frame'}
         </button>
+        <span className="use-as-source-group" role="group" aria-label="Use a face from this frame as the source">
+          <input type="number" min={1} max={16} value={sourceFaceNumber} aria-label="Face number, left to right" title="Which face in this frame (1 = leftmost)"
+            onChange={event => setSourceFaceNumber(Math.max(1, Math.min(16, Math.round(Number(event.target.value)) || 1)))}/>
+          <button type="button" className={`button small use-as-source-btn ${extractingSource ? 'busy' : ''}`} disabled={!target || extractingSource}
+            onClick={() => void handleUseAsSource()} title="Extract this face (aligned crop, ArcFace embedding, 3D pose) and make it the active source face">
+            <span>🧑</span> {extractingSource ? 'Extracting…' : 'Use as source'}
+          </button>
+        </span>
         {detectionNotice && <span className="detection-inline-notice">{detectionNotice}</span>}
         {solo && <button className="button small" onClick={() => setSolo(null)}>Exit solo · {solo}</button>}
 

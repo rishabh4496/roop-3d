@@ -7,6 +7,7 @@ import numpy as np
 
 from roop_3d.engine.runtime import OrtModel, RuntimeConfig, image_bgr, tensor
 from roop_3d.core.errors import DomainError
+from roop_3d.core.pose import legacy_pose_5pt
 from roop_3d.engine.volumetric.preprocess import landmark_crop, transform_points
 from roop_3d.models.catalog import ModelCatalog
 
@@ -53,15 +54,7 @@ class DenseLandmarks:
 
 
 def geometric_pose(points5: np.ndarray) -> tuple[float, float, float]:
-    """Return yaw/pitch/roll estimates, not calibrated 3D reconstruction."""
-    left, right, nose, mouth_left, mouth_right = np.asarray(points5, np.float64)
-    eye_vector = right - left
-    distance = max(np.linalg.norm(eye_vector), 1e-6)
-    across = eye_vector / distance
-    down = np.array((-across[1], across[0]))
-    eye_center, mouth_center = (left + right) / 2, (mouth_left + mouth_right) / 2
-    relative = nose - eye_center
-    yaw = np.clip(np.dot(relative, across) / distance * 110, -90, 90)
-    face_height = max(np.dot(mouth_center - eye_center, down), 1e-6)
-    pitch = np.clip((np.dot(relative, down) / face_height - 0.55) * 100, -60, 60)
-    return float(yaw), float(pitch), math.degrees(math.atan2(eye_vector[1], eye_vector[0]))
+    """Yaw/pitch/roll estimate in the legacy frame (pitch + = down); not calibrated 3D reconstruction.
+
+    Thin wrapper over the single shared estimator `core.pose.estimate_pose_5pt`."""
+    return legacy_pose_5pt(points5)

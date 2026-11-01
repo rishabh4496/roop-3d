@@ -38,6 +38,19 @@ export async function postLivePreview(payload: unknown, init: RequestInit = {}):
   try { meta = JSON.parse(response.headers.get('X-Preview-Meta') ?? 'null'); } catch { meta = null; }
   return { blob: await response.blob(), meta, cached: response.headers.get('X-Preview-Cache') === 'HIT' };
 }
+export type FacePose = { yaw: number; pitch: number; roll: number };
+export type ExtractedFace = { face_id: string; frame_index: number; face_index: number; pose: FacePose; pose_cell: string; embedding_dim: number; thumbnail_base64: string };
+export type ExtractFromFrameResult = {
+  destination: 'source_gallery' | 'active_faceset' | 'target_cluster';
+  face: ExtractedFace;
+  active_source?: { faceset_id: string; name: string };
+  faceset?: { faceset_id: string; name: string; item_count: number };
+  inserted?: { view_index: number; pose_cell: string };
+  cluster?: { rank: number; created: boolean };
+};
+/** Stage 5 "Use Face From Frame": face numbers are 0-based, counted left to right in that frame. */
+export const extractFaceFromFrame = (body: { target_media_path: string; frame_index: number; face_index: number; destination: ExtractFromFrameResult['destination']; faceset_name?: string }) =>
+  post<ExtractFromFrameResult>('/faces/extract_from_frame', body);
 export const mediaURL = (path: string) => `/api/v1/media/content?${new URLSearchParams({ path })}`;
 export async function upload(file: File, capabilities: Capabilities, progress: (value: number) => void, signal: AbortSignal) {
   if (file.size > capabilities.workstation.max_asset_bytes) throw new Error('This file exceeds the advertised upload limit.');

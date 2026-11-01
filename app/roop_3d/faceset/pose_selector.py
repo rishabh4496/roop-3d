@@ -10,6 +10,7 @@ from typing import Any
 import numpy as np
 
 from roop_3d.core.errors import DomainError
+from roop_3d.core.pose import as_legacy_triplet
 from roop_3d.faceset.schemas import FaceSetDocument, FaceView, ReferenceMatch
 
 
@@ -55,22 +56,26 @@ class PoseSelector:
 
     def select_best_reference(
         self,
-        target_yaw: float,
-        target_pitch: float,
+        target_yaw: Any,
+        target_pitch: float | None = None,
         target_roll: float = 0.0,
         target_expression: float | dict[str, float] | None = None,
     ) -> ReferenceMatch:
         """Query the best matching real observed source view for conditioning.
 
         Args:
-            target_yaw: Target head yaw in degrees [-90, +90].
-            target_pitch: Target head pitch in degrees [-60, +60].
+            target_yaw: Target head yaw in degrees [-90, +90], **or** a whole pose (2-/3-tuple, array, dict or
+                `Pose3D`) when `target_pitch` is omitted. Whole poses are sanitised, so mixed tuple lengths
+                from different producers cannot crash the matcher.
+            target_pitch: Target head pitch in degrees [-60, +60] in the stored (legacy, + = down) frame.
             target_roll: Target head roll in degrees [-180, +180].
             target_expression: Openness float (0.0 to 1.0) or expression dictionary.
 
         Returns:
             ReferenceMatch containing crop bytes, landmarks, match confidence, and metadata.
         """
+        if target_pitch is None:
+            target_yaw, target_pitch, target_roll = as_legacy_triplet(target_yaw)
         # Clamp target angles to physical bounds
         clamped_yaw = max(-90.0, min(90.0, float(target_yaw)))
         clamped_pitch = max(-60.0, min(60.0, float(target_pitch)))

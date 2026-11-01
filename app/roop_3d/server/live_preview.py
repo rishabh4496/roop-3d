@@ -96,8 +96,9 @@ class LivePreviewPayload(Contract):
     cluster_index: int | None = Field(default=None, ge=0, le=63)
     identity_blend: IdentityBlendSpec | None = None
     # geometry
-    frontalization_weight: float | None = Field(default=None, ge=0, le=1)
-    tps_expression_weight: float | None = Field(default=None, ge=0, le=1)
+    frontalization_weight: float | None = Field(default=None, ge=0, le=1)   # 2.5D -> 3D mesh blend (post-swap projection)
+    pose_frontalization: float | None = Field(default=None, ge=0, le=1)     # pre-swap 3D pose normalisation (Stage 5)
+    tps_expression_weight: float | None = Field(default=None, ge=0, le=1)   # TPS expression warp (Stage 5)
     # mask
     occlusion: OcclusionSettings = OcclusionSettings()
     mask_base64: str | None = Field(default=None, max_length=12_000_000)
@@ -161,8 +162,6 @@ class LivePreviewPayload(Contract):
     def unsupported(self) -> list[str]:
         """Accepted-but-inert fields: the engine has no corresponding control. Never silently dropped."""
         items = []
-        if self.tps_expression_weight is not None:
-            items.append("tps_expression_weight")  # TPS is the 0-end of frontalization_weight, not a separate knob
         if "fidelity_weight" in self.model_fields_set:
             items.append("fidelity_weight")  # only CodeFormer exposes a fidelity input; GPEN has none
         return items
@@ -426,6 +425,10 @@ class LivePreviewService:
                                   "pose_mode": "mesh_blend" if payload.frontalization_weight is not None else "retarget"}
         if payload.frontalization_weight is not None:
             values["pose_strength"] = payload.frontalization_weight
+        if payload.pose_frontalization is not None:
+            values["pose_frontalization"] = payload.pose_frontalization
+        if payload.tps_expression_weight is not None:
+            values["tps_expression_weight"] = payload.tps_expression_weight
         parameters = WorkstationParameters.model_validate(values)
 
         mask = payload.mask_base64
@@ -468,6 +471,10 @@ class LivePreviewService:
         applied = ["swap_weight", "color_strength", "mask_erosion_px", "mask_feather_px"]
         if payload.frontalization_weight is not None:
             applied.append("frontalization_weight")
+        if payload.pose_frontalization:
+            applied.append("pose_frontalization")
+        if payload.tps_expression_weight:
+            applied.append("tps_expression_weight")
         if payload.restorer == "gpen":
             applied.append("restorer:gpen")
         if payload.mask_base64 or payload.mask_strokes:

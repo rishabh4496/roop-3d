@@ -29,6 +29,7 @@ from roop_3d.server.workstation import router as workstation_router
 from roop_3d.server.workstation_preview import PreviewService, router as preview_router
 from roop_3d.server.api import mount_workstation
 from roop_3d.server.engine_gate import EngineBusy, EngineGate
+from roop_3d.server.face_extract import FaceExtractService, router as face_extract_router
 from roop_3d.server.live_preview import LivePreviewService, busy_response, router as live_preview_router
 from roop_3d.media.service import MediaService
 from roop_3d.models.catalog import ModelCatalog
@@ -112,6 +113,7 @@ def create_app(settings: Settings | None = None, *, repo_root: Path | None = Non
     app.state.thread_benchmark = ThreadBenchmark()
     app.state.previews = PreviewService(app.state)
     app.state.live_previews = LivePreviewService(app.state)
+    app.state.face_extract = FaceExtractService(app.state)
 
     def envelope(request: Request, code: str, message: str, status: int) -> JSONResponse:
         return JSONResponse({"error": {"code": code, "message": message,
@@ -165,6 +167,7 @@ def create_app(settings: Settings | None = None, *, repo_root: Path | None = Non
     app.include_router(workstation_router)
     app.include_router(preview_router)
     app.include_router(live_preview_router)
+    app.include_router(face_extract_router)
     app.include_router(finishing_router)
     from roop_3d.server.api import benchmark_router
     app.include_router(benchmark_router)

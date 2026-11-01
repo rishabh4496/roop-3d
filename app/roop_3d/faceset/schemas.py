@@ -73,6 +73,9 @@ class FaceSetV2Manifest(Contract):
     pose_bins: dict[str, dict[str, Any]]
     sources: list[dict[str, Any]]
     provenance: dict[str, Any]
+    # Stage 0 index of the 3x3 (yaw x pitch) pose matrix: cell name -> member view indices. Informational:
+    # readers always recompute the frozen vectors, so a stale or missing section cannot change a render.
+    pose_matrix: dict[str, Any] | None = None
 
 
 class ReferenceMatch(Contract):

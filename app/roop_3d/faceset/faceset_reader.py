@@ -24,6 +24,8 @@ import numpy as np
 from roop_3d.audit.isolation import safe_path
 from roop_3d.audit.project_paths import application_root
 from roop_3d.core.errors import DomainError
+from roop_3d.core.pose import as_legacy_triplet, legacy_pose_5pt
+from roop_3d.faceset.pose_matrix import cell_members
 from roop_3d.faceset.pose_selector import classify_pose_bin
 from roop_3d.faceset.recognizer import Recognizer
 from roop_3d.faceset.schemas import (
@@ -128,6 +130,12 @@ class FaceSetReader:
             emb_raw = None
             if isinstance(src.get("identity"), dict):
                 emb_raw = src["identity"].get("arcface_embedding") or src["identity"].get("normalized_embedding") or src["identity"].get("embedding")
+                name = src["identity"].get("embedding_file")
+                if emb_raw is None and isinstance(name, str) and re.fullmatch(r"[A-Za-z0-9_.-]{1,64}\.json", name):
+                    try:  # written by export_v2: one small entry per view, so the manifest never scales with view count
+                        emb_raw = json.loads(archive.read(name).decode("utf-8"))
+                    except (KeyError, UnicodeDecodeError, json.JSONDecodeError):
+                        emb_raw = None
             elif isinstance(src.get("identity"), list) and len(src["identity"]) == 512:
                 emb_raw = src["identity"]
 
@@ -147,12 +155,12 @@ class FaceSetReader:
             # Extract pose
             pose = src.get("pose")
             geom = src.get("geometry", {})
-            if pose and len(pose) >= 3:
-                yaw, pitch, roll = float(pose[0]), float(pose[1]), float(pose[2])
-            else:
-                yaw = float(geom.get("yaw", 0.0))
-                pitch = float(geom.get("pitch", 0.0))
-                roll = float(geom.get("roll", 0.0))
+            # Archives hold legacy-frame poses in 2-, 3-list or dict form; the sanitizer accepts all of them.
+            try:
+                yaw, pitch, roll = as_legacy_triplet(pose if pose else
+                                                     {"yaw": geom.get("yaw", 0.0), "pitch": geom.get("pitch", 0.0), "roll": geom.get("roll", 0.0)})
+            except DomainError:
+                yaw = pitch = roll = 0.0
 
             yaw = max(-90.0, min(90.0, yaw))
             pitch = max(-60.0, min(60.0, pitch))
@@ -348,25 +356,8 @@ class FaceSetReader:
             x1, y1, x2, y2 = float(box[0]), float(box[1]), float(box[2]), float(box[3])
             lm_pts = tuple((float(pt[0]), float(pt[1])) for pt in landmarks)
 
-            # Pose estimation from 5 landmarks
-            dx = float(landmarks[1][0] - landmarks[0][0])
-            dy = float(landmarks[1][1] - landmarks[0][1])
-            roll = float(math.degrees(math.atan2(dy, dx)))
-
-            eye_dist = math.hypot(dx, dy)
-            eye_mid = (landmarks[0] + landmarks[1]) / 2.0
-            if eye_dist > 1e-5:
-                eye_u = np.array([dx, dy]) / eye_dist
-                proj = float(np.dot(landmarks[2] - eye_mid, eye_u))
-                yaw = float(np.clip((proj / (eye_dist * 0.5)) * 55.0, -90.0, 90.0))
-
-                mouth_mid = (landmarks[3] + landmarks[4]) / 2.0
-                face_h = math.hypot(mouth_mid[0] - eye_mid[0], mouth_mid[1] - eye_mid[1])
-                down_u = np.array([-eye_u[1], eye_u[0]])
-                nose_down = float(np.dot(landmarks[2] - eye_mid, down_u))
-                pitch = float(np.clip(((nose_down / max(1e-5, face_h)) - 0.55) * 100.0, -60.0, 60.0))
-            else:
-                yaw, pitch = 0.0, 0.0
+            # One shared 5-point estimator (core.pose); legacy frame because FaceView stores pitch + = down.
+            yaw, pitch, roll = legacy_pose_5pt(landmarks)
 
             # Recognizer embedding using aligned face
             emb = self.recognizer.embed(img, landmarks)
@@ -622,6 +613,8 @@ def export_v2(
             {
                 "source_index": v.index,
                 "filename": f"{v.index}.png",
+                # Per-source identity (a separate small entry) so a project-written archive re-reads without the recognizer.
+                "identity": {"embedding_file": f"{v.index}.embedding.json"},
                 "pose": [v.yaw, v.pitch, v.roll],
                 "geometry": {
                     "bbox": list(v.bbox),
@@ -642,6 +635,14 @@ def export_v2(
             "pipeline": "roop_3d_stage04",
             "source_archive_sha256": document.source_sha256,
             "archive_format": document.archive_format,
+            "pose_convention": "legacy: pitch positive = looking down",
+        },
+        pose_matrix={
+            "schema": "roop.pose_matrix.v1",
+            "yaw_edges_deg": [-15.0, 15.0],
+            "pitch_edges_deg": [-10.0, 10.0],
+            "pitch_positive": "up",
+            "cells": cell_members(document),
         },
     )
 
@@ -653,12 +654,15 @@ def export_v2(
     try:
         with zipfile.ZipFile(tmp_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
             # 1. Write metadata.json
-            meta_json = json.dumps(manifest.model_dump(by_alias=True), indent=2).encode("utf-8")
+            # Compact: pretty-printed per-view geometry is so repetitive that ~35+ views trip the archive validator's
+            # zip-bomb compression-ratio check when this project's own archive is read back.
+            meta_json = json.dumps(manifest.model_dump(by_alias=True), separators=(",", ":")).encode("utf-8")
             zf.writestr("metadata.json", meta_json)
 
-            # 2. Write images
+            # 2. Write images, and each view's embedding as its own small entry (see the reader)
             for view in document.views:
                 zf.writestr(f"{view.index}.png", view.image_bytes)
+                zf.writestr(f"{view.index}.embedding.json", json.dumps([float(x) for x in view.embedding], separators=(",", ":")))
 
         # Atomic replace
         tmp_path.replace(target_path)

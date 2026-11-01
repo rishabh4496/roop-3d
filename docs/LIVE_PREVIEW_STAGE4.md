@@ -41,7 +41,7 @@ cannot serve stale pixels. LRU bounds: 128 entries / 192 MiB.
 `/api/<x>` is served from `/api/v1/<x>` by the existing alias middleware.
 
 * `POST /api/preview`: render one frame. Body below. Returns `image/png`; metadata is in the
-  `X-Preview-Meta` JSON header (`faces` with `box`, `landmarks5`, `yaw`, `pitch`, `roll`; `applied`;
+  `X-Preview-Meta` JSON header (`faces` with `box`, `landmarks5`, `yaw`, `pitch` (+ = up since Stage 5), `roll`; `applied`;
   `unsupported`; `latency`), plus `X-Preview-Cache: HIT|MISS`, `X-Preview-Config-Hash`,
   `X-Preview-Frame-Index`. `?response=json` returns the metadata plus a base64 PNG instead.
 * `GET /api/target/preview?config=<hash>&frame_index=N` (or `&timestamp=S`): same, for a configuration
@@ -80,7 +80,7 @@ Only controls the engine really has are applied; the rest are accepted, hashed, 
 | `occlusion`, `mask_*`, `swap_weight`, `color_strength`, `bypass`, `solo_node` | Applied. |
 | `restorer: gpen` + `restoration_blend` | Applied (requires GPEN weights). |
 | `restorer: codeformer/gfpgan/ultramax` | `422 RESTORER_UNAVAILABLE`: no verified adapter in the preview compositor. |
-| `tps_expression_weight` | Reported as `unsupported`: TPS is the 0-end of `frontalization_weight`, there is no separate knob. |
+| `tps_expression_weight` | Applied since Stage 5 (TPS expression warp, see [POSE_STAGE5.md](POSE_STAGE5.md)); `pose_frontalization` (pre-swap 3D frontalization) was added there too. |
 | `fidelity_weight` | Reported as `unsupported`: only CodeFormer exposes a fidelity input and it is not wired into the preview compositor. |
 
 ## Client (`app/roop_3d_ui`)

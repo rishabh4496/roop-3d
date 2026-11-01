@@ -2,17 +2,23 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import logging
 from pathlib import Path
 from collections.abc import Mapping
-from typing import BinaryIO, Iterator
+from typing import Any, BinaryIO, Iterator
 import numpy as np
 
 from roop_3d.core.errors import DomainError
+from roop_3d.core.pose import as_pose3d
 from roop_3d.engine.runtime import OrtModel, RuntimeConfig, tensor
-from roop_3d.engine.volumetric.preprocess import AlignedCrop, aligned_crop
+from roop_3d.engine.volumetric.preprocess import AlignedCrop, aligned_crop, transform_points
+from roop_3d.faceset import pose_matrix as stage0
 from roop_3d.faceset.pose_selector import PoseSelector
 from roop_3d.faceset.schemas import FaceSetDocument
 from roop_3d.models.catalog import ModelCatalog
+from roop_3d.reconstruction.frontalization import frontalize_crop
+
+log = logging.getLogger("roop3d.stage0")
 
 
 def _varint(stream: BinaryIO) -> int:
@@ -110,6 +116,8 @@ class IdentitySwapper:
         self.sources_by_track: dict[int, FaceSetDocument] = {}
         self.canonical_by_track: dict[int, np.ndarray] = {}
         self._selectors: dict[int, PoseSelector] = {}
+        self._matrices: dict[int | None, stage0.PoseMatrix | None] = {}
+        self._logged_cells: set[tuple[int | None, int]] = set()
 
     def prepare_session(self, source: FaceSetDocument, *,
                         sources_by_track: Mapping[int, FaceSetDocument] | None = None) -> None:
@@ -131,6 +139,10 @@ class IdentitySwapper:
             self.sources_by_track = mapped
             self.canonical_by_track = canonical_by_track
             self._selectors = {track_id: PoseSelector(document) for track_id, document in mapped.items()}
+            # Stage 0 pre-flight: freeze the 3x3 pose matrix of every source before any frame is rendered.
+            self._logged_cells = set()
+            self._matrices = {None: stage0.preflight(source)}
+            self._matrices.update({track_id: stage0.preflight(document) for track_id, document in mapped.items()})
         except BaseException:
             self.release_session()
             raise
@@ -140,32 +152,67 @@ class IdentitySwapper:
         self.sources_by_track[track_id] = document
         self.canonical_by_track[track_id] = unit_embedding(np.asarray(document.canonical_embedding))
         self._selectors[track_id] = PoseSelector(document)
+        self._matrices[track_id] = stage0.preflight(document)
 
-    def infer_frame(self, image: np.ndarray, landmarks5: np.ndarray, *, pose: tuple[float, float, float] = (0, 0, 0),
-                    reference_blend: float = 0.15, track_id: int | None = None) -> SwapResult:
+    def reference_embedding(self, track_id: int | None, pose: Any, reference_blend: float = 0.15
+                            ) -> tuple[np.ndarray, int, float]:
+        """The identity vector for a target pose: (unit embedding, reference view index, reference weight).
+
+        `pose` may be a 2-/3-tuple, array, dict or `Pose3D` (legacy frame unless it is a `Pose3D`). With Stage 0 on,
+        the reference vector is an O(1) lookup in the frozen pose matrix; otherwise the per-frame `PoseSelector`
+        search is used (ROOP_STAGE0=0, or a portfolio with no usable pose spread).
+        """
+        if self.source is None or self.canonical is None:
+            raise DomainError("SESSION_NOT_PREPARED", "Prepare identity source before inference", 409)
+        target = as_pose3d(pose)
+        source = self.sources_by_track.get(track_id, self.source) if track_id is not None else self.source
+        canonical = self.canonical_by_track.get(track_id, self.canonical) if track_id is not None else self.canonical
+        matrix = self._matrices.get(track_id) if track_id in self._matrices else self._matrices.get(None)
+        if matrix is not None:
+            entry = matrix.lookup(target)
+            marker = (track_id, entry.cell.index)
+            if marker not in self._logged_cells:
+                self._logged_cells.add(marker)
+                log.info("[Stage0] lookup track=%s yaw=%.1f pitch=%.1f roll=%.1f -> cell=%s view=%d%s", track_id, target.yaw,
+                         target.pitch, target.roll, entry.cell.name, entry.view_index,
+                         f" (filled from {entry.filled_from.name})" if entry.filled else "")
+            else:
+                log.debug("[Stage0] lookup track=%s -> cell=%s view=%d", track_id, entry.cell.name, entry.view_index)
+            weight, view_vector, index = reference_blend * entry.confidence, entry.vector, entry.view_index
+        else:
+            selector = self._selectors.get(track_id) if track_id is not None else None
+            if selector is None:
+                selector = PoseSelector(source)
+            match = selector.select_best_reference(target.legacy_tuple())
+            view = next(v for v in source.views if v.index == match.view_index)
+            weight, view_vector, index = reference_blend * match.confidence, np.asarray(view.embedding), match.view_index
+        return unit_embedding(canonical * (1 - weight) + unit_embedding(np.asarray(view_vector)) * weight), index, weight
+
+    def infer_frame(self, image: np.ndarray, landmarks5: np.ndarray, *, pose: Any = (0, 0, 0),
+                    reference_blend: float = 0.15, track_id: int | None = None, frontalization: float = 0.0) -> SwapResult:
         if self.model is None or self.source is None or self.canonical is None or self.projection is None:
             raise DomainError("SESSION_NOT_PREPARED", "Prepare identity source before inference", 409)
         if not 0 <= reference_blend <= 0.25:
             raise ValueError("Pose reference weight must be within 0..0.25")
+        if not np.isfinite(frontalization) or not 0 <= frontalization <= 1:
+            raise ValueError("Pose frontalization must be within 0..1")
         if track_id is not None and (type(track_id) is not int or track_id < 0):
             raise ValueError("track_id must be a nonnegative integer")
-        source = self.sources_by_track.get(track_id, self.source) if track_id is not None else self.source
-        selector = self._selectors.get(track_id) if track_id is not None else None
-        if selector is None:
-            selector = PoseSelector(source)
-        match = selector.select_best_reference(*pose)
-        view = next(v for v in source.views if v.index == match.view_index)
-        weight = reference_blend * match.confidence
-        canonical = self.canonical_by_track.get(track_id, self.canonical) if track_id is not None else self.canonical
-        assert canonical is not None
-        embedding = unit_embedding(canonical * (1 - weight) + unit_embedding(np.asarray(view.embedding)) * weight)
+        embedding, view_index, weight = self.reference_embedding(track_id, pose, reference_blend)
         projected = unit_embedding(embedding @ self.projection).reshape(1, 512)
         aligned = aligned_crop(image, landmarks5, 128)
-        blob = aligned.image[:, :, ::-1].transpose(2, 0, 1)[None].astype(np.float32) / 255
+        model_input, flat = aligned.image, None
+        if frontalization > 0:
+            # Reduce severe profile mismatch before inswapper_128 sees the crop; undone on the output below.
+            flat = frontalize_crop(aligned.image, transform_points(np.asarray(landmarks5, np.float64), aligned.matrix), frontalization)
+            model_input = flat.image
+        blob = model_input[:, :, ::-1].transpose(2, 0, 1)[None].astype(np.float32) / 255
         result = self.model.run({"target": np.ascontiguousarray(blob), "source": projected})["output"]
         tensor(result, (1, 3, 128, 128))
         bgr = np.clip(result[0].transpose(1, 2, 0)[:, :, ::-1] * 255, 0, 255).astype(np.uint8)
-        return SwapResult(bgr, aligned, match.view_index, weight)
+        if flat is not None:
+            bgr = flat.restore(bgr)
+        return SwapResult(bgr, aligned, view_index, weight)
 
     def release_session(self) -> None:
         if self.model is not None:
@@ -174,3 +221,5 @@ class IdentitySwapper:
         self.sources_by_track.clear()
         self.canonical_by_track.clear()
         self._selectors.clear()
+        self._matrices.clear()
+        self._logged_cells.clear()

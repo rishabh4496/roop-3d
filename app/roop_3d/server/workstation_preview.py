@@ -19,6 +19,7 @@ from pydantic import Field, model_validator
 from starlette.concurrency import run_in_threadpool
 
 from roop_3d.core.errors import DomainError
+from roop_3d.core.pose import as_pose3d
 from roop_3d.core.settings import Contract
 from roop_3d.core.workstation import WorkstationParameters
 from roop_3d.faceset.identity_blend import IdentityBlendSpec, blend_documents
@@ -92,10 +93,10 @@ def face_readouts(result) -> list[dict]:
     for tracked in result.observations:
         face = tracked.observation
         landmarks = getattr(face, 'landmarks5', None)
-        yaw, pitch, roll = (float(v) for v in face.pose)
+        pose = as_pose3d(face.pose)  # standard frame: pitch > 0 looks up
         faces.append({'track_id': int(tracked.track_id), 'box': [float(v) for v in np.asarray(face.box).tolist()],
                       'landmarks5': np.asarray(landmarks, float).tolist() if landmarks is not None else None,
-                      'yaw': yaw, 'pitch': pitch, 'roll': roll})
+                      'yaw': pose.yaw, 'pitch': pose.pitch, 'roll': pose.roll})
     return faces
 
 
@@ -294,7 +295,7 @@ class PreviewService:
                 cv2.rectangle(detection, (x1, y1), (x2, y2), (80, 245, 180), 2)
                 for point in face.landmarks106:
                     cv2.circle(pose, tuple(np.rint(point).astype(int)), 2, (80, 245, 180), -1)
-                cv2.putText(pose, 'Y/P/R ' + '/'.join(f'{p:.1f}' for p in face.pose),
+                cv2.putText(pose, 'Y/P/R ' + '/'.join(f'{p:.1f}' for p in as_pose3d(face.pose).as_tuple()),
                             (max(0, x1), max(20, y1)), cv2.FONT_HERSHEY_SIMPLEX, .6, (80, 245, 180), 2)
             buffers.update(detector=detection, pose=pose)
             if value.request.export and {'normal', 'depth'} & set(value.request.export.passes):

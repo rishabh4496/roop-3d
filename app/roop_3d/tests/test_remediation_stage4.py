@@ -73,7 +73,8 @@ def test_post_preview_returns_swapped_pixels_with_face_metadata(tmp_path, monkey
         meta = json.loads(response.headers["x-preview-meta"])
         face = meta["faces"][0]
         assert face["box"] == [18, 18, 42, 42] and len(face["landmarks5"]) == 5
-        assert (face["yaw"], face["pitch"], face["roll"]) == (12.5, -3.0, 1.5)
+        # raw tracker tuples are legacy-frame (pitch + = down); the API reports the standard frame (pitch + = up)
+        assert (face["yaw"], face["pitch"], face["roll"]) == (12.5, 3.0, 1.5)
         assert meta["media_id"] == payload["inspection_id"] and meta["frame_index"] == 2
         assert "swap_weight" in meta["applied"] and meta["unsupported"] == []
         # JSON envelope carries the same pixels
@@ -341,8 +342,8 @@ def test_unsupported_controls_are_reported_not_silently_dropped(tmp_path, monkey
         response = client.post("/api/preview", json=payload)
         assert response.status_code == 200, response.text
         meta = json.loads(response.headers["x-preview-meta"])
-        assert set(meta["unsupported"]) == {"tps_expression_weight", "fidelity_weight"}
-        assert "frontalization_weight" in meta["applied"] and meta["solo_node"] == "matte"
+        assert set(meta["unsupported"]) == {"fidelity_weight"}  # tps_expression_weight became a real control in Stage 5
+        assert {"frontalization_weight", "tps_expression_weight"} <= set(meta["applied"]) and meta["solo_node"] == "matte"
         assert decode(response).ndim == 3  # the matte buffer, not the composite
         final = client.post("/api/preview", json={**payload, "solo_node": "final"})
         assert final.content != response.content
@@ -442,7 +443,8 @@ def test_multi_source_payload_builds_a_blended_identity(tmp_path, monkeypatch):
             document = _faceset(faceset_id)
             if faceset_id == "bob":
                 vector = tuple([0.0, 1.0] + [0.0] * 510)
-                document = document.model_copy(update={"canonical_embedding": vector, "medoid_embedding": vector})
+                view = document.views[0].model_copy(update={"embedding": vector})  # views must agree with the identity (Stage 0 guard)
+                document = document.model_copy(update={"canonical_embedding": vector, "medoid_embedding": vector, "views": (view,)})
             return document
 
     from roop_3d.engine.pipeline_runner import MasterPipelineRunner as real_runner

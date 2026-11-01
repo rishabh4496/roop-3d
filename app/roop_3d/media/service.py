@@ -17,6 +17,7 @@ import numpy as np
 
 from roop_3d.audit.isolation import sha256_file, safe_path
 from roop_3d.core.errors import DomainError
+from roop_3d.core.pose import as_legacy_triplet
 from roop_3d.core.settings import Settings, runtime_path
 from roop_3d.core.storage import atomic_json
 from roop_3d.media.detector import Detector
@@ -140,7 +141,7 @@ class MediaService:
                     for face in tracked:
                         observation = face.observation
                         box = observation.box
-                        yaw, pitch, roll = observation.pose
+                        yaw, pitch, roll = pose = as_legacy_triplet(observation.pose)
                         if face.track_id not in records:
                             if len(records) >= 64:
                                 complete = False
@@ -156,8 +157,8 @@ class MediaService:
                         else:
                             item = records[face.track_id]
                             item.update(last=index, last_at=at, count=item["count"] + 1)
-                            item["pose_min"] = np.minimum(item["pose_min"], observation.pose).tolist()
-                            item["pose_max"] = np.maximum(item["pose_max"], observation.pose).tolist()
+                            item["pose_min"] = np.minimum(item["pose_min"], pose).tolist()
+                            item["pose_max"] = np.maximum(item["pose_max"], pose).tolist()
                     if frame.key_frame or index == 0:
                         samples += 1
                     if (not complete or decoded >= request.max_decoded_frames or samples >= request.max_samples

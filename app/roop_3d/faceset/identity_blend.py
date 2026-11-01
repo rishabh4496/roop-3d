@@ -105,7 +105,13 @@ def blend_documents(documents: Sequence[FaceSetDocument], spec: IdentityBlendSpe
     canonical = blend_embeddings([d.canonical_embedding for d in documents], weights, method=spec.method, dials=dials)
     medoid = blend_embeddings([d.medoid_embedding for d in documents], weights, method=spec.method, dials=dials)
     primary = documents[int(np.argmax(weights))]
+    metadata = {**primary.metadata, "identity_blend": spec.model_dump(mode="json")}
+    metadata.pop("stage0", None)
+    # Stage 0: blend per pose cell (same recipe, identity-guarded) so render-time lookups stay O(1).
+    from roop_3d.faceset import pose_matrix as stage0
+    if stage0.stage0_enabled() and all(stage0.is_indexable(item) for item in documents):
+        metadata["stage0"] = stage0.build_blended_matrix(documents, spec).to_json()
     return primary.model_copy(update={
         "canonical_embedding": tuple(float(x) for x in canonical),
         "medoid_embedding": tuple(float(x) for x in medoid),
-        "metadata": {**primary.metadata, "identity_blend": spec.model_dump(mode="json")}})
+        "metadata": metadata})

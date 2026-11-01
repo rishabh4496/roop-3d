@@ -2163,3 +2163,7 @@ body {
 .live-swap-status.ready { color: var(--accent); }
 .live-swap-status .live-swap-unsupported { color: #dfb977; pointer-events: auto; }
 .live-swap-retry { pointer-events: auto; background: none; border: 0; padding: 0; color: inherit; text-decoration: underline; font-size: 10px; }
+
+/* "Use as source" (POST /api/faces/extract_from_frame) */
+.use-as-source-group { display: inline-flex; align-items: center; gap: 4px; }
+.use-as-source-group input { width: 46px; padding: 4px 6px; font-size: 10px; }

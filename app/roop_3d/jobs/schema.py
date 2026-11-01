@@ -70,7 +70,7 @@ class JobRequest(Contract):
         value = self.model_dump(mode="json")
         if self.workstation_parameters:
             # Preserve fingerprints of requests saved before these opt-in controls existed.
-            for field in ('swap_weight', 'erosion_px'):
+            for field in ('swap_weight', 'erosion_px', 'pose_frontalization', 'tps_expression_weight'):
                 if field not in self.workstation_parameters.model_fields_set:
                     value['workstation_parameters'].pop(field, None)
         for name in ("trim_start_seconds", "trim_end_seconds", "mask_base64", "workstation_parameters", "parameter_curves", "face_segments", "export"):

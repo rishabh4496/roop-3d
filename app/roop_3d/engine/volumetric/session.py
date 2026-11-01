@@ -24,6 +24,7 @@ from roop_3d.models.catalog import ModelCatalog
 from roop_3d.engine.resources import guarded, register
 from roop_3d.compositor.pipeline import CompositeOptions, FrameCompositor
 from roop_3d.engine.audio_sync.lip_sync_adapter import LipSyncAdapter, LipSyncFrameInput
+from roop_3d.reconstruction.expression_tps import apply_expression_to_crop
 from roop_3d.reconstruction.pose_blend import PoseBlendProjector, PoseBlendResult
 
 
@@ -117,7 +118,8 @@ class ReferencePipeline:
                 raise
 
     @guarded
-    def infer_frame(self, image: np.ndarray, *, strength: float = 0.35, pose_blend: float | None = None) -> FrameResult:
+    def infer_frame(self, image: np.ndarray, *, strength: float = 0.35, pose_blend: float | None = None,
+                    frontalization: float = 0.0, tps_expression: float = 0.0) -> FrameResult:
         with self.lock:
             if not self.prepared or self.tracker is None:
                 raise DomainError("SESSION_NOT_PREPARED", "Prepare a source before frame inference", 409)
@@ -126,6 +128,9 @@ class ReferencePipeline:
                 raise ValueError("Retargeting strength must be within 0..1")
             if pose_blend is not None and (not np.isfinite(pose_blend) or not 0 <= pose_blend <= 1):
                 raise ValueError('Mesh pose blend must be within 0..1')
+            for name, amount in (('Pose frontalization', frontalization), ('TPS expression weight', tps_expression)):
+                if not np.isfinite(amount) or not 0 <= amount <= 1:
+                    raise ValueError(f'{name} must be within 0..1')
             began = time.perf_counter()
             faces = self.tracker.process(image, include203=self.portrait.available and pose_blend is None)
             detection_end = time.perf_counter()
@@ -137,7 +142,7 @@ class ReferencePipeline:
                 face = tracked.observation
                 at = time.perf_counter()
                 swap = self.swapper.infer_frame(image, face.landmarks5, pose=face.pose,
-                                                track_id=tracked.track_id)
+                                                track_id=tracked.track_id, frontalization=frontalization)
                 swap_seconds += time.perf_counter() - at
                 if self.portrait.available and pose_blend is None:
                     at = time.perf_counter()
@@ -153,6 +158,12 @@ class ReferencePipeline:
                     retarget_seconds += time.perf_counter() - at
                 else:
                     generated, inverse, method = swap.image, swap.alignment.inverse, "identity_swap"
+                if tps_expression > 0:
+                    at = time.perf_counter()
+                    warp = apply_expression_to_crop(generated, inverse, face.landmarks106, tps_expression, self._detect_landmarks106)
+                    if warp.applied:
+                        generated, method = warp.image, method + '_tps_expression'
+                    projection_seconds += time.perf_counter() - at
                 projection = None
                 if pose_blend is not None:
                     at = time.perf_counter()
@@ -169,6 +180,13 @@ class ReferencePipeline:
             self.last_latency = StageLatency((detection_end - began) * 1000, swap_seconds * 1000,
                                              retarget_seconds * 1000, (ended - began) * 1000, projection_seconds * 1000)
             return FrameResult(faces, tuple(replacements), self.last_latency, self.tracker.scene_cut)
+
+    def _detect_landmarks106(self, crop: np.ndarray) -> np.ndarray | None:
+        """106 dense landmarks of a generated crop (the crop is a tight face, so the box is the whole image)."""
+        if self.tracker is None:
+            return None
+        h, w = crop.shape[:2]
+        return self.tracker.dense.infer106(crop, np.array((0, 0, w, h), np.float32))
 
     def capability(self) -> dict:
         return {"prepared": self.prepared, "frames_processed": self.frames_processed,
