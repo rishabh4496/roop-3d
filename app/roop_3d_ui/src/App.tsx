@@ -39,6 +39,37 @@ export default function App() {
   const [busy, setBusy] = useState(''), [error, setError] = useState(''), [notice, setNotice] = useState(''), [uploadProgress, setUploadProgress] = useState(0);
   const [themeName, setThemeName] = useState(() => localStorage.getItem('roop3d-theme-name') ?? 'Default');
   const [themeGalleryOpen, setThemeGalleryOpen] = useState(false);
+  const [zoom, setZoom] = useState(() => {
+    const v = parseFloat(localStorage.getItem('roop3d_zoom') || '1');
+    return Number.isFinite(v) && v >= 0.5 && v <= 1.6 ? v : 1;
+  });
+  const bumpZoom = useCallback((d: number) => setZoom(z => Math.min(1.6, Math.max(0.5, Math.round((z + d) * 20) / 20))), []);
+  const resetZoom = useCallback(() => setZoom(1), []);
+  useEffect(() => {
+    (document.documentElement.style as any).zoom = String(zoom);
+    localStorage.setItem('roop3d_zoom', String(zoom));
+  }, [zoom]);
+  useEffect(() => {
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.ctrlKey || e.metaKey) {
+        if (e.key === '=' || e.key === '+') { e.preventDefault(); bumpZoom(0.05); }
+        else if (e.key === '-' || e.key === '_') { e.preventDefault(); bumpZoom(-0.05); }
+        else if (e.key === '0') { e.preventDefault(); resetZoom(); }
+      }
+    };
+    const handleWheel = (e: WheelEvent) => {
+      if (e.ctrlKey || e.metaKey) {
+        e.preventDefault();
+        bumpZoom(e.deltaY < 0 ? 0.05 : -0.05);
+      }
+    };
+    window.addEventListener('keydown', handleKey);
+    window.addEventListener('wheel', handleWheel, { passive: false });
+    return () => {
+      window.removeEventListener('keydown', handleKey);
+      window.removeEventListener('wheel', handleWheel);
+    };
+  }, [bumpZoom, resetZoom]);
   const route = useHashRoute();
   const [exportOptions, setExportOptions] = useState<ExportOptions>(DEFAULT_EXPORT);
   const [parameters, setParametersRaw] = useState<WorkstationParameters>({ ...DEFAULT_PARAMETERS });
@@ -217,8 +248,48 @@ export default function App() {
       <div className="project-name"><input aria-label="Project name" maxLength={128} value={projectName} onChange={event => setProjectName(event.target.value)} /><span>{projectDirty ? 'UNSAVED' : 'SAVED'}</span></div>
       <span className="local-status"><i className={`dot ${connection === 'online' ? 'mint' : 'amber'}`}/>{connection === 'online' ? 'Local service' : connection}</span>
       <PipelinePill telemetry={telemetry} activeJob={currentJob} />
-      <button className="icon-button" aria-label="Open Theme Gallery" title="Choose UI Theme & Styles" onClick={() => setThemeGalleryOpen(true)}>🎨</button>
-      <button className="icon-button" aria-label={`Switch to ${themeByName(themeName).mode === 'dark' ? 'light' : 'dark'} theme`} onClick={() => setThemeName(themeByName(themeName).mode === 'dark' ? 'Glass Light' : 'Default')}>{themeByName(themeName).mode === 'dark' ? '☀' : '◐'}</button>
+      <div role="group" aria-label="UI zoom" title="UI Zoom (Ctrl + / − / 0)" className="ui-zoom-group">
+        <button type="button" onClick={() => bumpZoom(-0.05)} title="Zoom out (Ctrl −)" aria-label="Zoom out" className="zoom-btn">−</button>
+        <button type="button" onClick={resetZoom} title="Reset zoom (Ctrl 0)" aria-label={`Reset zoom, ${Math.round(zoom * 100)}%`} className="zoom-reset-btn">{Math.round(zoom * 100)}%</button>
+        <button type="button" onClick={() => bumpZoom(0.05)} title="Zoom in (Ctrl +)" aria-label="Zoom in" className="zoom-btn">+</button>
+      </div>
+      <div className="header-theme-group" title="Active Interface Theme">
+        <span className="theme-badge-label">THEME:</span>
+        <select
+          aria-label="Select Theme"
+          value={themeName}
+          onChange={e => setThemeName(e.target.value)}
+          className="theme-dropdown-select"
+        >
+          <optgroup label="Dark Themes">
+            {THEMES.filter(t => t.mode === 'dark').map(t => (
+              <option key={t.name} value={t.name}>{t.name}</option>
+            ))}
+          </optgroup>
+          <optgroup label="Light Themes">
+            {THEMES.filter(t => t.mode === 'light').map(t => (
+              <option key={t.name} value={t.name}>{t.name}</option>
+            ))}
+          </optgroup>
+        </select>
+        <button
+          type="button"
+          className="button small theme-gallery-btn"
+          title="Open visual swatch cards for all 37 themes"
+          onClick={() => setThemeGalleryOpen(true)}
+        >
+          🎨 Swatches
+        </button>
+        <button
+          type="button"
+          className="icon-button"
+          aria-label={`Switch to ${themeByName(themeName).mode === 'dark' ? 'light' : 'dark'} theme`}
+          title={`Quick toggle: ${themeByName(themeName).mode === 'dark' ? 'Light mode' : 'Dark mode'}`}
+          onClick={() => setThemeName(themeByName(themeName).mode === 'dark' ? 'Glass Light' : 'Default')}
+        >
+          {themeByName(themeName).mode === 'dark' ? '☀' : '◐'}
+        </button>
+      </div>
       <button className="button" disabled={!!reason('projects') || !!busy} title={reason('projects') ?? ''} onClick={() => { setProjectsOpen(true); void refreshProjects(); }}>Projects</button><button className="button" disabled={!!reason('projects') || !inspection || !!busy} onClick={saveProject}>Save project</button>
     </header>
     <Navigation route={route}/>
@@ -283,7 +354,62 @@ export default function App() {
         });
         if (facesetId) setSourceId(facesetId);
       }}/>
-      <div className="trim-bar"><span className="eyebrow">EXPORT RANGE</span><NumericInput label="Trim start seconds" value={trimStart} min={0} max={Math.max(0, (trimEnd ?? probe?.duration_seconds ?? 86400) - .01)} step={.01} disabled={!!reason('trim') || !target} onChange={value => setTrimStart(value ?? 0)} /><NumericInput label="Trim end seconds" value={trimEnd} nullable placeholder="Full clip" min={trimStart + .01} max={probe?.duration_seconds ?? 86400} step={.01} disabled={!!reason('trim') || !target} onChange={setTrimEnd} /></div>
+      <div className="trim-bar">
+        <span className="eyebrow">EXPORT RANGE</span>
+        <button
+          type="button"
+          className="trim-btn jump-in"
+          disabled={!target}
+          onClick={() => setTime(trimStart)}
+          title="Jump playhead to In Point [Shift+I]"
+        >
+          ⏮ In
+        </button>
+        <button
+          type="button"
+          className="trim-btn mark-in"
+          disabled={!target}
+          onClick={() => setTrimStart(Math.max(0, Math.min(time, (trimEnd ?? probe?.duration_seconds ?? 86400) - 0.01)))}
+          title="Set In Point to current playhead [I]"
+        >
+          [ In
+        </button>
+        <NumericInput label="Trim start seconds" value={trimStart} min={0} max={Math.max(0, (trimEnd ?? probe?.duration_seconds ?? 86400) - .01)} step={.01} disabled={!!reason('trim') || !target} onChange={value => setTrimStart(value ?? 0)} />
+        <NumericInput label="Trim end seconds" value={trimEnd} nullable placeholder="Full clip" min={trimStart + .01} max={probe?.duration_seconds ?? 86400} step={.01} disabled={!!reason('trim') || !target} onChange={setTrimEnd} />
+        <button
+          type="button"
+          className="trim-btn mark-out"
+          disabled={!target}
+          onClick={() => setTrimEnd(Math.max(trimStart + 0.01, Math.min(time, probe?.duration_seconds ?? 86400)))}
+          title="Set Out Point to current playhead [O]"
+        >
+          Out ]
+        </button>
+        <button
+          type="button"
+          className="trim-btn jump-out"
+          disabled={!target}
+          onClick={() => setTime(trimEnd ?? probe?.duration_seconds ?? 0)}
+          title="Jump playhead to Out Point [Shift+O]"
+        >
+          Out ⏭
+        </button>
+        {(trimStart > 0 || trimEnd != null) && (
+          <button
+            type="button"
+            className="trim-btn reset"
+            onClick={() => { setTrimStart(0); setTrimEnd(null); }}
+            title="Reset range to full clip [Alt+R]"
+          >
+            Reset Range
+          </button>
+        )}
+        <span className="range-summary-pill" title="Active export range duration">
+          {probe?.duration_seconds ? (
+            `${Math.max(0, ((trimEnd ?? probe.duration_seconds) - trimStart)).toFixed(2)}s · ${Math.round(Math.max(0, ((trimEnd ?? probe.duration_seconds) - trimStart)) * (probe.fps_rational ? (parseInt(probe.fps_rational.split('/')[0], 10) / (parseInt(probe.fps_rational.split('/')[1], 10) || 1)) || 30 : 30))} frames`
+          ) : 'Full clip'}
+        </span>
+      </div>
       <section className="face-inspector"><div className="panel-heading"><div><span className="eyebrow">TARGET FACE INSPECTOR</span><h2>Assign an identity</h2></div><button className="button" disabled={!target || !!reason('face_inspection') || !!busy} title={reason('face_inspection') ?? ''} onClick={inspect}>{inspection ? 'Reinspect faces' : 'Inspect target faces'}</button></div>
         {!inspection ? <div className="mapping-empty"><span>◎</span><p>Inspect the target to find persistent face tracks.<small>Then map each track to an observed source FaceSet.</small></p></div> : <><div className="inspection-meta"><span>{inspection.tracks.length} detected tracks</span><span>Identity continuity is estimated</span>{inspection.truncated && <strong>Bounded sample — truncated</strong>}</div>{inspection.warnings.map(warning => <p key={warning} className="inline-warning">{warning}</p>)}
           <div className="track-list">{inspection.tracks.map(track => <div className={`track-card ${selectedTrack === track.track_id ? 'active' : ''}`} key={track.track_id}>
@@ -311,7 +437,7 @@ export default function App() {
         </div>
       )}
     </main></div></AppRouter>
-    <WorkstationScreens route={route} caps={caps} config={config} sources={sources} jobs={jobs} projects={projects} busy={!!busy} telemetry={telemetry} connection={connection} openProject={openProject} showJob={showJob} controlJob={controlJob} saveSettings={saveSettings} refreshJobs={refreshJobs} openLibrary={() => { setProjectsOpen(true); void refreshProjects(); }} latency={previewLatency} target={target} probe={probe} inspection={inspection} refreshProjects={refreshProjects} exportOptions={exportOptions} onExportChange={setExportOptions} meshBlend={parameters.pose_mode === 'mesh_blend'} onQueue={queue} canQueue={!reason('queue') && !!inspection && !!renderMappings().length && !busy} previewRequest={inspection && renderMappings().length ? request() : null} timestamp={time}/>
+    <WorkstationScreens route={route} caps={caps} config={config} sources={sources} jobs={jobs} projects={projects} busy={!!busy} telemetry={telemetry} connection={connection} openProject={openProject} showJob={showJob} controlJob={controlJob} saveSettings={saveSettings} refreshJobs={refreshJobs} openLibrary={() => { setProjectsOpen(true); void refreshProjects(); }} latency={previewLatency} target={target} probe={probe} inspection={inspection} refreshProjects={refreshProjects} exportOptions={exportOptions} onExportChange={setExportOptions} meshBlend={parameters.pose_mode === 'mesh_blend'} onQueue={queue} canQueue={!reason('queue') && !!inspection && !!renderMappings().length && !busy} previewRequest={inspection && renderMappings().length ? request() : null} timestamp={time} themeName={themeName} onThemeChange={setThemeName}/>
     <footer className="app-footer"><span>ROOP 3D / LOCAL WORKSTATION</span><span>Observed identities. Explicit processing. Synthetic media.</span><span>API :{config?.port ?? '—'}</span></footer>
     {projectsOpen && <div className="modal-backdrop" onClick={() => setProjectsOpen(false)}><section role="dialog" aria-modal="true" aria-labelledby="projects-title" className="project-modal" onClick={event => event.stopPropagation()}><div className="panel-heading"><div><span className="eyebrow">VERSIONED .R3DP MANIFESTS</span><h2 id="projects-title">Project library</h2></div><button aria-label="Close projects" className="icon-button" onClick={() => setProjectsOpen(false)}>×</button></div><p className="muted">Reopening verifies target, inspection, FaceSet, and model hashes. Project files contain references and settings, never raw media.</p><button className="button" disabled={!!busy} onClick={() => projectInput.current?.click()}>Import .r3dp</button><input ref={projectInput} hidden type="file" accept=".r3dp,application/json" onChange={event => { importProject(event.target.files?.[0]); event.target.value = ''; }}/>{!projects.length && <p className="empty-note muted">No saved projects yet.</p>}{projects.map(item => <div key={item.project_id} className="saved-project"><div><strong>{item.name}</strong><small>{new Date(item.saved_at).toLocaleString()} · checkpoint {item.last_completed_frame >= 0 ? item.last_completed_frame : 'none'}</small></div><button className="button small" disabled={!!busy} onClick={() => openProject(item.project_id)}>Verify & open</button><a className="button small" href={`/api/v1/projects/${item.project_id}/download`} download>Export</a></div>)}{project?.checkpoint_job_id && <button className="button accent" disabled={!!busy || !!reason('queue')} onClick={() => void run('Verifying checkpoint continuation', async () => { const resumed = await post<Job>(`/projects/${project.project_id}/resume`, {}); setSelectedJob(resumed.job_id); await refreshJobs(); setProjectsOpen(false); })}>Verify & resume {project.name}</button>}</section></div>}
     <PreFlightLinterModal

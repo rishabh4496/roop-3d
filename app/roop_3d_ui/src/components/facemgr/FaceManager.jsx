@@ -14,6 +14,7 @@ import {
 import { generateFibonacciSphere, projectViewsToLattice, FaceSetOrientationSphere } from '../three/PoseGeometryViewer';
 import { useFaceSelectionStore } from '../../useFaceSelectionStore';
 import { post } from '../../api';
+import FacesetLibrary from './FacesetLibrary';
 
 /**
  * Extract face views from an inspection track payload.
@@ -381,6 +382,24 @@ export default function FaceManager({
           <span className="stat-pill highlight"><b>{coverageStats.percentage}%</b> 3D Coverage</span>
         </div>
 
+        {/* View Mode Switcher */}
+        <div className="facemgr-mode-toggle" role="tablist">
+          <button
+            type="button"
+            className={`tab-btn ${activeTab === 'builder' ? 'active' : ''}`}
+            onClick={() => setActiveTab('builder')}
+          >
+            ❖ 3D Studio
+          </button>
+          <button
+            type="button"
+            className={`tab-btn ${activeTab === 'library' ? 'active' : ''}`}
+            onClick={() => setActiveTab('library')}
+          >
+            📁 FaceSet Library ({sources?.length || 0})
+          </button>
+        </div>
+
         {/* Top Actions */}
         <div className="facemgr-top-actions">
           <button
@@ -419,8 +438,27 @@ export default function FaceManager({
         </div>
       )}
 
-      {/* 2. Main Workstation Body: 3-Column Split */}
-      <div className="facemgr-body">
+      {activeTab === 'library' ? (
+        <div className="facemgr-library-view" style={{ padding: '24px', maxWidth: '960px', margin: '0 auto' }}>
+          <div className="panel-heading" style={{ marginBottom: '16px' }}>
+            <div>
+              <span className="eyebrow">PERSISTENT .FSZ IDENTITIES</span>
+              <h2>FaceSet Library ({sources.length})</h2>
+            </div>
+          </div>
+          <p className="muted" style={{ marginBottom: '20px' }}>
+            Browse, search, import, rename, delete and manage your multi-angle .fsz FaceSets on local disk.
+          </p>
+          <FacesetLibrary
+            sources={sources}
+            onRefreshSources={onRefreshSources}
+            onSelectSource={onAssignSource ? (id) => onAssignSource('primary', id) : undefined}
+            notify={(msg, type) => setStatusNotice(msg)}
+          />
+        </div>
+      ) : (
+        /* 2. Main Workstation Body: 3-Column Split */
+        <div className="facemgr-body">
         {/* Left Column: Person Clustering & Grouping */}
         <aside className="facemgr-identities-panel" aria-label="Person Grouping and Clustering">
           <div className="panel-subhead">
@@ -636,6 +674,7 @@ export default function FaceManager({
           </div>
         </aside>
       </div>
+      )}
     </div>
   );
 }

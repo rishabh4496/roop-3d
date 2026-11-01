@@ -47,6 +47,8 @@ type Props = {
   probe?: Probe | null;
   inspection?: Inspection | null;
   refreshProjects?: () => Promise<void>;
+  themeName?: string;
+  onThemeChange?: (name: string) => void;
 };
 
 export default function WorkstationScreens(props: Props) {
@@ -275,6 +277,8 @@ export default function WorkstationScreens(props: Props) {
           busy={busy}
           telemetry={telemetry}
           connection={connection}
+          themeName={props.themeName}
+          onThemeChange={props.onThemeChange}
         />
       </AppRouter>
     </>

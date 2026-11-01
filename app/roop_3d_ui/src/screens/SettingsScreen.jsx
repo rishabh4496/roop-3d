@@ -12,16 +12,23 @@ export default function SettingsScreen({
   busy = false,
   telemetry = null,
   connection = 'local',
+  themeName,
+  onThemeChange,
 }) {
   const [activeTab, setActiveTab] = useState('preferences'); // 'preferences' | 'diagnostics'
-  const [currentTheme, setCurrentTheme] = useState(() => localStorage.getItem('roop3d-theme-name') || 'Default');
+  const [localTheme, setLocalTheme] = useState(() => localStorage.getItem('roop3d-theme-name') || 'Default');
+  const currentTheme = themeName || localTheme;
 
   const handleThemeChange = (name) => {
-    setCurrentTheme(name);
-    const t = themeByName(name);
-    applyThemeToDom(t);
-    localStorage.setItem('roop3d-theme-name', name);
-    localStorage.setItem('roop3d-theme', t.mode);
+    setLocalTheme(name);
+    if (onThemeChange) {
+      onThemeChange(name);
+    } else {
+      const t = themeByName(name);
+      applyThemeToDom(t);
+      localStorage.setItem('roop3d-theme-name', name);
+      localStorage.setItem('roop3d-theme', t.mode);
+    }
   };
 
   // Benchmark state

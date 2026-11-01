@@ -2009,3 +2009,131 @@ body {
   border-color: var(--accent);
   color: var(--accent);
 }
+
+/* =========================================================================
+   App-Level UI Zoom & Header Theme Controls
+   ========================================================================= */
+.ui-zoom-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
+  background: var(--raised, #182022);
+  border: 1px solid var(--line, #2c3638);
+  border-radius: 6px;
+  padding: 2px 4px;
+}
+.ui-zoom-group .zoom-btn {
+  background: transparent;
+  border: 0;
+  color: var(--text, #dce4e4);
+  font-size: 14px;
+  font-weight: bold;
+  width: 22px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.ui-zoom-group .zoom-btn:hover {
+  background: var(--soft, #222d30);
+  color: var(--accent);
+}
+.ui-zoom-group .zoom-reset-btn {
+  background: transparent;
+  border: 0;
+  color: var(--muted, #8d9c9f);
+  font-size: 11px;
+  font-family: monospace;
+  font-weight: 600;
+  min-width: 44px;
+  text-align: center;
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 4px;
+  transition: color 0.15s, background 0.15s;
+}
+.ui-zoom-group .zoom-reset-btn:hover {
+  color: var(--text, #dce4e4);
+  background: var(--soft, #222d30);
+}
+
+.header-theme-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--raised, #182022);
+  border: 1px solid var(--line, #2c3638);
+  border-radius: 6px;
+  padding: 3px 6px;
+}
+.header-theme-group .theme-badge-label {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.8px;
+  color: var(--muted, #8d9c9f);
+}
+.header-theme-group .theme-dropdown-select {
+  background: var(--surface, #111719);
+  color: var(--text, #dce4e4);
+  border: 1px solid var(--line, #2c3638);
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 6px;
+  cursor: pointer;
+  outline: none;
+}
+.header-theme-group .theme-dropdown-select:focus {
+  border-color: var(--accent);
+}
+.header-theme-group .theme-gallery-btn {
+  padding: 3px 8px;
+  font-size: 11px;
+  min-height: 24px;
+}
+
+.range-summary-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 8px;
+  font-size: 10px;
+  font-family: monospace;
+  font-weight: 600;
+  border-radius: 4px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  color: var(--accent);
+  margin-left: auto;
+}
+
+.facemgr-mode-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 2px 4px;
+}
+.facemgr-mode-toggle .tab-btn {
+  background: transparent;
+  border: 0;
+  border-radius: 4px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  padding: 5px 10px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.facemgr-mode-toggle .tab-btn:hover {
+  color: var(--text);
+  background: var(--raised);
+}
+.facemgr-mode-toggle .tab-btn.active {
+  color: var(--accent);
+  background: var(--soft);
+  font-weight: 700;
+}

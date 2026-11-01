@@ -11,5 +11,11 @@ module.exports = {
       message: ["uv pip sync --require-hashes app/roop_3d/requirements.lock", "python -B tools/project_admin.py mark-ready"],
       on: [{ event: "/(ROOP3D_GUARD_ERROR|ModuleNotFoundError|error:)/", break: true }]
     }
+  }, {
+    method: "shell.run",
+    params: {
+      path: "app/roop_3d_ui",
+      message: ["npm run build"]
+    }
   }]
 }
