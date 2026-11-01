@@ -272,6 +272,29 @@ class NvdecFrameSource:
                 except ProcessLookupError:
                     pass
 
+    def gpu_frames(self, *, device=0, statistics=False):
+        """Explicit CUDA RGB leases; host-oriented frames() remains the fallback.
+
+        A CUDA caller must explicitly choose the existing host pipeline after an
+        unavailable backend. Never silently change a yielded frame's residence.
+        """
+        from roop_3d.nv_video_codec import NvVideoDecoder
+        if not self.hardware:
+            raise ValueError("CUDA frames require hardware decode")
+        count = 0
+        decoder = NvVideoDecoder(self.path, device=device, statistics=statistics)
+        for frame in decoder.frames():
+            if self._cancelled.is_set():
+                return
+            if count >= self.expected_frames or tuple(frame.tensor.shape) != self.shape:
+                raise RuntimeError("GPU decoder frame count/shape mismatch")
+            self.backend = decoder.backend
+            yield frame, FrameMetadata(count, count, self.rate.denominator, self.rate.numerator,
+                                        count in self.keyframes)
+            count += 1
+        if count != self.expected_frames:
+            raise RuntimeError("GPU decoder returned a truncated stream")
+
     def frames(self):
         emitted = 0
         attempts = [True] if self.strict else ([True, False] if self.hardware else [False])
@@ -304,6 +327,11 @@ class NvdecFrameSource:
 
 
 class NVHardwareVideoWriter:
+    @staticmethod
+    def from_cuda(destination, shape, rate, **kwargs):
+        from roop_3d.nv_video_codec import NvVideoEncoder
+        return NvVideoEncoder(destination, shape, rate, **kwargs)
+
     def __init__(self, destination: Path, shape: tuple[int, int, int], rate: Fraction, *,
                  codec: str = "h264_nvenc", hardware: bool = True, strict: bool = False,
                  lut_path: Path | None = None, lut_bake: bool = False):

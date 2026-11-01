@@ -36,11 +36,14 @@ class TensorRTBuildError(RuntimeError):
 
 def precision_for(model: str | Path, environ: Mapping[str, str] | None = None) -> str:
     env = os.environ if environ is None else environ
+    from roop_3d.trt_fp8_builder import HEAVY_RESTORERS, model_name
+    name = model_name(model)
+    if name == "inswapper_128":
+        return "FP32"
     if env.get("ROOP_TRT_FP16") == "0":
         return "FP32"
-    name = Path(model).stem.casefold().removesuffix("_dynamic").removesuffix(".batch")
-    if name == "inswapper_128" and env.get("ROOP_SWAP_FP16") != "1":
-        return "FP32"
+    if env.get("ROOP_TRT_FP8") == "1" and name in HEAVY_RESTORERS:
+        return "FP8"
     return "FP16"
 
 
@@ -108,7 +111,9 @@ class TensorRTSessionBuilder:
     def build(self, model_path: str | Path, *, profile: BatchProfile | None = None,
               shapes: dict[str, tuple[int, ...]] | None = None,
               canary_inputs: Callable[[int], dict[str, np.ndarray]] | None = None,
-              selected_provider: str = TRT, compute_stream: int | None = None):
+              selected_provider: str = TRT, compute_stream: int | None = None,
+              fp8_model_path: str | Path | None = None,
+              fp8_validate: Callable[[object], bool] | None = None):
         # Explicit TRT selection is strict even without an environment flag.
         if selected_provider != TRT:
             raise TensorRTBuildError("The strict TensorRT builder requires TensorrtExecutionProvider"
@@ -118,6 +123,12 @@ class TensorRTSessionBuilder:
         import onnxruntime as ort
         path = model_source(Path(model_path))
         model = onnx.load(path, load_external_data=False)
+        from roop_3d.trt_fp8_builder import model_name, validate_swapper_fp32, HEAVY_RESTORERS
+        if model_name(path) == "inswapper_128":
+            try:
+                validate_swapper_fp32(model)
+            except ValueError as error:
+                raise TensorRTBuildError(str(error)) from error
         if any(v.data_location == onnx.TensorProto.EXTERNAL for v in model.graph.initializer):
             raise TensorRTBuildError("External tensor data needs separately verified registry support")
         reason = static_batch_reason(path.name)
@@ -128,6 +139,36 @@ class TensorRTSessionBuilder:
         if TRT not in ort.get_available_providers():
             raise TensorRTBuildError("ONNX Runtime does not advertise TensorRT; CPU fallback is forbidden")
         precision = precision_for(path)
+        reference_digest = sha256_file(path)[1]
+        fp8_evidence = None
+        if precision == "FP8" and fp8_model_path is None:
+            raise TensorRTBuildError("FP8 needs a separately calibrated E4M3FN Q/DQ ONNX artifact")
+        if fp8_model_path is not None:
+            if model_name(path) not in HEAVY_RESTORERS:
+                raise TensorRTBuildError("FP8 is restricted to the four heavy restorers; inswapper is FP32 only")
+            if not callable(fp8_validate):
+                raise TensorRTBuildError("FP8 requires an explicit reference parity acceptance callback")
+            from roop_3d.trt_fp8_builder import validate_fp8_graph
+            try:
+                import torch
+                import tensorrt
+            except (ImportError, OSError) as error:
+                raise TensorRTBuildError(f"Optional FP8 native backend unavailable: {error}") from error
+            candidate = owned_path(Path(fp8_model_path))
+            if candidate == path or not candidate.is_file():
+                raise TensorRTBuildError("FP8 artifact must be a separate owned ONNX file")
+            quantized = onnx.load(candidate, load_external_data=False)
+            if any(v.data_location == onnx.TensorProto.EXTERNAL for v in quantized.graph.initializer):
+                raise TensorRTBuildError("FP8 external tensor data is not admitted")
+            try:
+                fp8_evidence = validate_fp8_graph(quantized, path.name,
+                    torch.cuda.get_device_capability(0), tensorrt.__version__)
+            except ValueError as error:
+                raise TensorRTBuildError(str(error)) from error
+            if input_shapes(model, profile.optimum, shapes) != input_shapes(quantized, profile.optimum, shapes):
+                raise TensorRTBuildError("FP8 graph input shapes differ from the reference")
+            validate_profile(quantized, profile)
+            path, model, precision = candidate, quantized, "FP8"
         cache = cache_directory()
         # Keep native/JIT temporary writes within the checkout as well.
         from roop_3d.models.trt_builder import configure_native_paths
@@ -140,6 +181,8 @@ class TensorRTSessionBuilder:
             raise TensorRTBuildError("Packaged tensorrt-cu12-libs is missing; run the NVIDIA installer") from None
         identity = {"model": sha256_file(path)[1], "precision": precision, "profiles": shape_sets,
                     "ort": ort.__version__, "trt": trt_version, "workspace_mib": self.workspace_mib}
+        if fp8_evidence:
+            identity.update(reference_model=reference_digest, fp8=fp8_evidence)
         prefix = "roop3d_" + hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()[:32]
         provider_options = {
             "device_id": 0, "trt_fp16_enable": precision == "FP16", "trt_int8_enable": False,
@@ -212,6 +255,8 @@ class TensorRTSessionBuilder:
                 providers = {e.get("args", {}).get("provider") for e in events if e.get("cat") == "Node"}
                 if "CPUExecutionProvider" in providers or TRT not in providers:
                     raise TensorRTBuildError(f"Canary node placement failed strict TensorRT checks: {sorted(p for p in providers if p)}")
+                if fp8_evidence and fp8_validate(session) is not True:
+                    raise TensorRTBuildError("FP8 failed reference output parity acceptance")
                 if cold:
                     LOG.info("TensorRT engine compile duration model=%s precision=%s seconds=%.9f scope=session_and_first_run",
                              path.name, precision, compile_seconds)

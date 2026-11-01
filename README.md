@@ -181,3 +181,7 @@ Stage 6 (nine deep-linked routes, the 3-step run-bar pill, full-bleed comparison
 [docs/WORKSTATION_STAGE6.md](docs/WORKSTATION_STAGE6.md).
 
 Stage 8 (Stage 25 parameter curves, timestamped One-Euro stabilization, CodeFormer fidelity, animated Slerp, durable person banks and the 3x3 archive studio) is documented in [docs/REMEDIATION_STAGE8.md](docs/REMEDIATION_STAGE8.md).
+
+Stage 14 optional NVIDIA codec/CV-CUDA adapters, temporal flow propagation and
+explicit FP8 admission are documented in [docs/REMEDIATION_STAGE14.md](docs/REMEDIATION_STAGE14.md).
+Native CV-CUDA/TensorRT hardware acceptance remains pending.

@@ -10,6 +10,9 @@ def make_repo(root: Path) -> None:
     (root/'.roop3d-project.json').write_text(json.dumps({'app_id':'roop-3d','repository':'rishabh4496/roop-3d'}),encoding='utf-8')
 
 def test_boundary_accepts_only_independent_app_source() -> None:
+    assert allowed_path('app/tests/test_nv_cvcuda_pipeline.py')
+    assert allowed_path('app/tests/pytest.ini')
+    assert not allowed_path('app/tests/unapproved.py')
     for path in ('app/roop_3d/server/app.py','app/roop_3d_ui/src/main.tsx','start.js','pinokio.js','.gitignore','torch.js','verify_trt_fps.py'):
         assert allowed_path(path)
     for path in ('app/legacy.py','face_engine/models.py','react-ui/src/App.jsx','../roop-ultimate/app/settings.py','app/roop_3d/.venv/x','app/roop_3d/.env','app/roop_3d/weights.onnx','app/roop_3d/x.engine','app/roop_3d/../legacy.py','app/roop_3d_ui/node_modules/x','app/roop_3d/audit/protected_all_paths.json','unapproved.js','verify_trt_fps.engine','app/models/trt_cache/model.engine'):

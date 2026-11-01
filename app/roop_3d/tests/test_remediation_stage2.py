@@ -39,7 +39,7 @@ def graph(*, dynamic=False, codeformer=False, fixed_reshape=True):
 @pytest.mark.parametrize("name", ["inswapper_128.onnx", "inswapper_128_dynamic.onnx", "INSWAPPER_128_DYNAMIC.ONNX"])
 def test_swapper_fp32_overflow_guard(name):
     assert precision_for(name, {}) == "FP32"
-    assert precision_for(name, {"ROOP_SWAP_FP16": "1"}) == "FP16"
+    assert precision_for(name, {"ROOP_SWAP_FP16": "1"}) == "FP32"
     assert precision_for(name, {"ROOP_SWAP_FP16": "1", "ROOP_TRT_FP16": "0"}) == "FP32"
 
 
@@ -217,10 +217,14 @@ def test_strict_environment_cannot_select_cpu(monkeypatch):
 
 def test_precision_and_profile_cache_are_separate(fake_trt, monkeypatch):
     state, path = fake_trt
+    # Stage 14 removes the swapper FP16 override; use an enhancer for this test.
+    enhancer = path.with_name("RestoreFormer_Plus_Plus_dynamic.onnx")
+    enhancer.write_bytes(path.read_bytes())
+    path = enhancer
     builder = TensorRTSessionBuilder()
     builder.build(path)
     prefix = builder.last_build["engine_prefix"]
-    monkeypatch.setenv("ROOP_SWAP_FP16", "1")
+    monkeypatch.setenv("ROOP_TRT_FP16", "0")
     builder.build(path)
     assert builder.last_build["engine_prefix"] != prefix
     assert not builder.last_build["cache_hit"]
