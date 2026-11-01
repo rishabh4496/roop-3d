@@ -18,7 +18,8 @@ from roop_3d.trt_session_builder import BatchProfile, TensorRTSessionBuilder
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("model", type=Path)
+    parser.add_argument("model", type=Path, nargs="?")
+    parser.add_argument("--benchmark-compositor", action="store_true")
     parser.add_argument("--batch", type=int, choices=(1, 4, 8), default=1)
     parser.add_argument("--iterations", type=int, default=50)
     parser.add_argument("--hardware-profile", choices=("6gb", "12gb"), default="6gb")
@@ -28,6 +29,11 @@ def main() -> int:
     try:
         if args.iterations < 1:
             raise ValueError("Iterations must be positive")
+        if args.benchmark_compositor:
+            from roop_3d.tools.benchmark_compositor import benchmark_compositor
+            return benchmark_compositor(iterations=args.iterations, hardware_profile=args.hardware_profile)
+        if args.model is None:
+            raise ValueError("A model path or --benchmark-compositor is required")
         profile = BatchProfile((1,), 1) if static_batch_reason(args.model.name) else BatchProfile()
         if args.batch not in profile.batches:
             raise ValueError("Static model benchmark requires --batch 1")

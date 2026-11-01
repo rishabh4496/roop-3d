@@ -270,7 +270,10 @@ def make_stream_runner(root, catalog, media, settings_provider, *, pipeline_trac
                         restorer = DecoupledRestorer(lambda: OnnxFaceRestorer(catalog, config, spec), spec,
                             workers=settings.restorer_threads, pool_size=settings.restorer_pool_size,
                             cuda=admission.profile != "cpu", ultramax_native_bypass=settings.ultramax_native_bypass,
-                            ultramax_min_pixels=settings.ultramax_min_pixels)
+                            ultramax_min_pixels=settings.ultramax_min_pixels,
+                            cuda_provider=('TensorrtExecutionProvider' if settings.preferred_provider == 'TensorrtExecutionProvider'
+                                           else 'CUDAExecutionProvider'),
+                            hardware_profile=admission.profile if admission.profile != 'cpu' else '6gb')
                     selected_session = model.session
                     if settings.preferred_provider == "TensorrtExecutionProvider":
                         from roop_3d.trt_session_builder import TensorRTSessionBuilder

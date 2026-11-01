@@ -196,7 +196,7 @@ class OrtValueRunner:
 class GpuBatchPipeline:
     backend = "CUDA_IOBINDING"
     def __init__(self, session, embeddings: Mapping[int, np.ndarray], *, max_batch=4, hardware_profile="6gb", restorer=None,
-                 execution_threads=1):
+                 execution_threads=1, compositor_options=None, device_masker_factory=None):
         if not session.get_providers() or session.get_providers()[0] not in ("CUDAExecutionProvider", "TensorrtExecutionProvider"):
             raise ValueError("GPU pipeline requires an activated GPU provider")
         if not 1 <= max_batch <= 8 or hardware_profile not in ("6gb", "12gb") or not 1 <= execution_threads <= 8:
@@ -205,16 +205,26 @@ class GpuBatchPipeline:
         self.hardware_profile = hardware_profile
         self.restorer = restorer
         self.execution_threads = execution_threads
+        self.compositor_options, self.device_masker_factory = compositor_options, device_masker_factory
         self.context = CudaWorkerContext()
         self._graphs = {}
         self._swap = {}
         self._lock = threading.RLock()
         self._frame = None
+        self._resident = None
+        import os
+        if os.environ.get("ROOP_GPU_COMPOSITOR") == "1" or compositor_options is not None:
+            from roop_3d.gpu_compositor import resident_swap_pipeline, CompositorOptions
+            self._resident = resident_swap_pipeline(session, embeddings, hardware_profile=hardware_profile,
+                execution_threads=execution_threads, restorer=restorer, masker_factory=device_masker_factory,
+                options=compositor_options if compositor_options is not None else CompositorOptions())
+            self.backend = self._resident.backend
 
     def fork_worker(self):
         return GpuBatchPipeline(self.session, self.embeddings, max_batch=self.max_batch,
                                 hardware_profile=self.hardware_profile, restorer=self.restorer,
-                                execution_threads=self.execution_threads)
+                                execution_threads=self.execution_threads, compositor_options=self.compositor_options,
+                                device_masker_factory=self.device_masker_factory)
 
     def _graph(self, height, width, count, compose, multi_frame=False):
         key = height, width, count, compose, multi_frame
@@ -234,6 +244,8 @@ class GpuBatchPipeline:
         return self._graphs[key]
 
     def process_batch(self, frames, faces_by_frame):
+        if self._resident is not None:
+            return self._resident.process_batch(frames, faces_by_frame)
         if any(len(v) != 1 for v in faces_by_frame) or len({v.shape for v in frames}) != 1:
             return [self.process(frame, faces) for frame, faces in zip(frames, faces_by_frame)]
         with self._lock, self.context.activate():
@@ -272,6 +284,8 @@ class GpuBatchPipeline:
             return [np.clip(v.transpose(1, 2, 0)[:, :, ::-1] * 255, 0, 255).round().astype(np.uint8) for v in result]
 
     def process(self, frame, faces):
+        if self._resident is not None:
+            return self._resident.process(frame, faces)
         if not faces:
             return frame
         with self._lock, self.context.activate():

@@ -183,16 +183,91 @@ class OnnxFaceRestorer:
 
 class DecoupledRestorer:
     def __init__(self, factory, spec: RestorerSpec, *, workers=1, pool_size=2, cuda=False,
-                 ultramax_native_bypass=True, ultramax_min_pixels=320):
+                 ultramax_native_bypass=True, ultramax_min_pixels=320,
+                 cuda_provider='CUDAExecutionProvider', hardware_profile='6gb'):
         if not 1 <= workers <= 8 or not 1 <= pool_size <= 32 or ultramax_min_pixels < 1:
             raise ValueError("Invalid restoration pool limits")
         self.factory, self.spec, self.cuda = factory, spec, cuda
+        if cuda_provider not in ('CUDAExecutionProvider', 'TensorrtExecutionProvider') or hardware_profile not in ('6gb', '12gb'):
+            raise ValueError('Invalid CUDA restorer provider/profile')
+        self.cuda_provider, self.hardware_profile = cuda_provider, hardware_profile
         self.bypass, self.threshold = ultramax_native_bypass, ultramax_min_pixels
         self.executor = ThreadPoolExecutor(max_workers=workers, thread_name_prefix="roop3d-restorer")
         self.slots, self.local = threading.BoundedSemaphore(pool_size), threading.local()
         self.instances, self.lock = [], threading.Lock()
         self.watchdog = MaskSeamWatchdog()
         self.closed = False
+
+    def cuda_adapter(self, stream):
+        """Worker-owned device restoration, preserving explicit training geometry.
+
+        This opt-in adapter uses the registered graph's actual I/O metadata and
+        normalization contract. It never calls the host restore/submit path.
+        """
+        import torch
+        from roop_3d.engine.runtime import OrtModel
+        from roop_3d.gpu_compositor import TorchIOBinding, stream_session, warp, invert_affine
+        from roop_3d.vectorized_pipeline import crop_matrix
+        adapter = self.factory()
+        if not isinstance(adapter, OnnxFaceRestorer):
+            raise ValueError('CUDA restoration requires the registered ONNX restorer adapter')
+        adapter.model = OrtModel(adapter.catalog, self.spec.model_name, adapter.config)
+        with self.lock:
+            self.instances.append(adapter)
+        if self.cuda_provider == 'TensorrtExecutionProvider':
+            from roop_3d.trt_session_builder import TensorRTSessionBuilder, BatchProfile
+            session = TensorRTSessionBuilder(hardware_profile=self.hardware_profile).build(
+                adapter.model.path, profile=BatchProfile((1,), 1), compute_stream=stream.cuda_stream)
+        else:
+            session = stream_session(adapter.model.session, stream)
+        adapter.model.session = session
+        runner = TorchIOBinding(session, stream)
+        image_inputs = [v for v in session.get_inputs() if len(v.shape) == 4]
+        image_outputs = [v for v in session.get_outputs() if len(v.shape) == 4 and v.shape[1:] == [3, self.spec.size, self.spec.size]]
+        dtypes = {'tensor(float)': torch.float32, 'tensor(float16)': torch.float16, 'tensor(double)': torch.float64}
+        if (len(image_inputs) != 1 or len(image_outputs) != 1
+                or image_inputs[0].shape[1:] != [3, self.spec.size, self.spec.size]
+                or image_inputs[0].type not in dtypes or image_outputs[0].type not in dtypes):
+            raise ValueError('CUDA restorer image contract is unsupported')
+        image_input, image_output = image_inputs[0], image_outputs[0]
+        auxiliary = {}
+        with torch.cuda.stream(stream):
+            for value in session.get_inputs():
+                if value.name == image_input.name:
+                    continue
+                if (value.name not in ('w', 'fidelity_weight') or value.type not in dtypes
+                        or any(type(d) is not int or d < 1 for d in value.shape)):
+                    raise ValueError('Unknown CUDA restorer auxiliary input contract')
+                auxiliary[value.name] = torch.full(value.shape, adapter.fidelity_weight,
+                                                   dtype=dtypes[value.type], device=stream.device)
+
+        def restore(image, face):
+            if self.closed or adapter.model._stat() != adapter.model._identity:
+                raise ValueError('CUDA restorer is closed or its model changed')
+            if self.spec.name == 'ultramax' and self.bypass:
+                native = min(max(0, face.box[2] - face.box[0]), max(0, face.box[3] - face.box[1]))
+                if native <= self.threshold:
+                    return image
+            crop = crop_matrix(face.landmarks5, image.shape[-1])
+            points = face.landmarks5 @ crop[:, :2].T + crop[:, 2]
+            matrix = torch.as_tensor(similarity(points, self.spec.template * self.spec.size / 512),
+                                     device=image.device, dtype=image.dtype)[None]
+            aligned = warp(image, invert_affine(matrix), (self.spec.size, self.spec.size))
+            values = aligned * 2 - 1 if self.spec.normalization == 'minus_one_one' else aligned
+            values = values.to(dtypes[image_input.type]).contiguous()
+            output = runner.run({image_input.name: values, **auxiliary},
+                {image_output.name: ((1, 3, self.spec.size, self.spec.size), dtypes[image_output.type])})[image_output.name].float()
+            if self.spec.normalization == 'minus_one_one':
+                output = (output + 1) * .5
+            output = output.clamp(0, 1)
+            if self.spec.name in ('ultramax', 'gpen_realistic'):
+                coefficients = image.new_tensor((.299, .587, .114))[None, :, None, None]
+                output = (aligned + ((output - aligned) * coefficients).sum(1, keepdim=True)).clamp(0, 1)
+            restored = warp(output, matrix, image.shape[-2:])
+            support = warp(warp(torch.ones_like(image[:, :1]), invert_affine(matrix),
+                                (self.spec.size, self.spec.size)), matrix, image.shape[-2:]).clamp(0, 1)
+            return restored * support + image * (1 - support)
+        return restore
 
     def submit(self, image, landmarks5, native_box, face_id, *, native_shape=None):
         box = np.asarray(native_box, np.float64).copy()

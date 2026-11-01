@@ -108,7 +108,7 @@ class TensorRTSessionBuilder:
     def build(self, model_path: str | Path, *, profile: BatchProfile | None = None,
               shapes: dict[str, tuple[int, ...]] | None = None,
               canary_inputs: Callable[[int], dict[str, np.ndarray]] | None = None,
-              selected_provider: str = TRT):
+              selected_provider: str = TRT, compute_stream: int | None = None):
         # Explicit TRT selection is strict even without an environment flag.
         if selected_provider != TRT:
             raise TensorRTBuildError("The strict TensorRT builder requires TensorrtExecutionProvider"
@@ -165,6 +165,11 @@ class TensorRTSessionBuilder:
         cuda_options = {"use_tf32": False, "arena_extend_strategy": "kSameAsRequested",
                         "cudnn_conv_use_max_workspace": False,
                         "gpu_mem_limit": cuda_memory_budget(self.hardware_profile, self.workspace_mib * 1048576)}
+        if compute_stream is not None:
+            if type(compute_stream) is not int or compute_stream <= 0:
+                raise TensorRTBuildError('A non-default CUDA compute stream pointer is required')
+            provider_options['user_compute_stream'] = str(compute_stream)
+            cuda_options['user_compute_stream'] = str(compute_stream)
         with self._lock, exclusive(application_root(), "roop_3d/.runtime/strict-trt-build.lock"):
             # Validate existing cache descendants before handing a writable directory to native code.
             for child in cache.rglob("*"):
