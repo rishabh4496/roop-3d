@@ -39,13 +39,15 @@ class Recognizer:
     def embed(self, image: np.ndarray, landmarks: np.ndarray | None = None) -> np.ndarray:
         record = self.catalog.recognizer()
         with self._lock:
-            data = self.catalog.verified_bytes(record)
             if self._session is None or self._session_sha != record["sha256"]:
-                import onnxruntime as ort
-                options = ort.SessionOptions()
-                options.intra_op_num_threads = 2
-                self._session = (self._session_factory(record) if self._session_factory is not None else
-                                 ort.InferenceSession(data, sess_options=options, providers=["CPUExecutionProvider"]))
+                if self._session_factory is not None:
+                    self._session = self._session_factory(record)
+                else:
+                    data = self.catalog.verified_bytes(record)
+                    import onnxruntime as ort
+                    options = ort.SessionOptions()
+                    options.intra_op_num_threads = 2
+                    self._session = ort.InferenceSession(data, sess_options=options, providers=["CPUExecutionProvider"])
                 self._session_sha = record["sha256"]
                 self._input_name = self._session.get_inputs()[0].name
                 self._output_name = self._session.get_outputs()[0].name

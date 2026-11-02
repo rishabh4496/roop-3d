@@ -92,7 +92,7 @@ class OrtModel:
     """
 
     def __new__(cls, catalog: ModelCatalog, name: str, config: RuntimeConfig = RuntimeConfig()):
-        if config.model_factory is not None:
+        if config.model_factory is not None and config.model_factory is not cls:
             return config.model_factory(catalog, name, config)
         return super().__new__(cls)
 
@@ -105,6 +105,12 @@ class OrtModel:
         if self.record["graph"].get("external_data"):
             raise DomainError("MODEL_GRAPH_UNSUPPORTED", "External tensor references are not supported by this adapter", 422)
         self.path = catalog._path(self.record)
+        if config.provider == "CUDAExecutionProvider" and name == "liveportrait_warping_spade.onnx":
+            try:
+                from roop_3d.models.stage16 import prepare_generator
+                self.path = prepare_generator(catalog)[0]
+            except Exception:
+                pass
         self._identity = self._stat()
         options = ort.SessionOptions()
         options.intra_op_num_threads, options.inter_op_num_threads = config.cpu_threads, 1
@@ -122,13 +128,21 @@ class OrtModel:
             if config.provider not in ort.get_available_providers():
                 raise DomainError("PROVIDER_UNAVAILABLE", "Requested CUDA provider is unavailable", 503)
             ort.preload_dlls()
-            divisor = {"inswapper_128.onnx": 4, "inswapper_128.batch.onnx": 4,
-                       "inswapper_128_dynamic.onnx": 4, "gpen_bfr_512.onnx": 4,
-                       "GPEN-BFR-512.onnx": 4, "CodeFormerv0.1.onnx": 3, "codeformer.fp16.onnx": 8,
-                       "scrfd_2.5g_kps.onnx": 32, "det_10g.onnx": 16,
-                       "liveportrait_warping_spade.onnx": 2,
-                       "liveportrait_motion_extractor.onnx": 8, "liveportrait_landmark.onnx": 16,
-                       "2d106det.onnx": 32, "liveportrait_appearance_feature_extractor.onnx": 64}.get(name, 192)
+            divisor = {
+                "inswapper_128.onnx": 4, "inswapper_128.batch.onnx": 4,
+                "inswapper_128_dynamic.onnx": 4, "gpen_bfr_512.onnx": 4,
+                "GPEN-BFR-512.onnx": 4, "CodeFormerv0.1.onnx": 3, "codeformer.fp16.onnx": 8,
+                "scrfd_2.5g_kps.onnx": 32, "scrfd_10g_bnkps.onnx": 16, "det_10g.onnx": 16,
+                "w600k_r50.onnx": 16, "bisenet_resnet_34.onnx": 16, "face_parser.onnx": 16,
+                "liveportrait_warping_spade.onnx": 2,
+                "liveportrait_motion_extractor.onnx": 8, "liveportrait_motion_extractor.batch.onnx": 8,
+                "liveportrait_landmark.onnx": 16, "2d106det.onnx": 32, "landmark_203.onnx": 32,
+                "liveportrait_appearance_feature_extractor.onnx": 32,
+                "liveportrait_appearance_feature_extractor.batch.onnx": 32,
+                "liveportrait_stitching.onnx": 32, "liveportrait_stitching.batch.onnx": 32,
+                "liveportrait_stitching_eye.onnx": 32, "liveportrait_stitching_eye.batch.onnx": 32,
+                "liveportrait_stitching_lip.onnx": 32,
+            }.get(name, 32)
             providers = [(config.provider, {"gpu_mem_limit": config.gpu_budget_bytes // divisor,
                                            "arena_extend_strategy": "kSameAsRequested"}), "CPUExecutionProvider"]
         retry_reason = None
@@ -150,6 +164,8 @@ class OrtModel:
     def _switch_to_cpu(self, reason: str) -> None:
         import onnxruntime as ort
         self.session = None
+        self.path = self.catalog._path(self.record)
+        self._identity = self._stat()
         self.catalog.verify(self.record)
         try:
             self.session = ort.InferenceSession(str(self.path), sess_options=self._options, providers=["CPUExecutionProvider"])
@@ -253,6 +269,9 @@ class SessionFacade:
 
 
 def session_factory(catalog: ModelCatalog, config: RuntimeConfig):
-    if config.model_factory is None:
+    factory = config.model_factory
+    if factory is None and config.provider == "CUDAExecutionProvider":
+        factory = OrtModel
+    if factory is None:
         return None
-    return lambda record: SessionFacade(config.model_factory(catalog, record["name"], config))
+    return lambda record: SessionFacade(factory(catalog, record["name"], config))
