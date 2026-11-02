@@ -7,11 +7,21 @@ import numpy as np
 from roop_3d.core.errors import DomainError
 
 
-def blend_restored_roi(image: np.ndarray, restored: np.ndarray, face_mask: np.ndarray, blend: float) -> np.ndarray:
-    """Blend an enhancer result inside the facial mask, preserving outside pixels."""
+def blend_restored_roi(image: np.ndarray, restored: np.ndarray, face_mask: np.ndarray, blend: float,
+                       protect: np.ndarray | None = None) -> np.ndarray:
+    """Blend an enhancer result inside the facial mask, preserving outside pixels.
+
+    ``protect`` (0..1, optional) removes the restorer's influence where it must not rewrite pixels:
+    eyes, brows, lips, mouth interior and teeth (Stage 5 restoration guard).
+    """
     source = np.asarray(image)
     enhanced = np.asarray(restored)
     mask = np.asarray(face_mask, dtype=np.float32)
+    if protect is not None:
+        guard = np.asarray(protect, dtype=np.float32)
+        if guard.shape != mask.shape or not np.isfinite(guard).all():
+            raise DomainError("RESTORATION_INPUT_INVALID", "Restoration protection map must match the face mask", 422)
+        mask = mask * (1.0 - np.clip(guard, 0.0, 1.0))
     if (source.ndim != 3 or source.shape[2] != 3 or enhanced.shape != source.shape
             or mask.shape != source.shape[:2] or not np.isfinite(source).all()
             or not np.isfinite(enhanced).all() or not np.isfinite(mask).all()):

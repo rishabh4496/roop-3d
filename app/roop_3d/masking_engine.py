@@ -6,6 +6,14 @@ Composes four GPU-resident layers:
 3. Neural foreground occluder (xseg_3.onnx) preserving hands, hair strands, microphones, and props.
 4. Text-prompted CLIPSeg mask (clipseg_rd64_refined.onnx) for user-prompted custom object protection.
 Includes independent per-face, per-thread watchdog seam tracking.
+
+STATUS (Stage 5 audit): this module is a *mask-combination helper*, not an inference engine, and it is not on the
+compositor's call path (only ``tests/test_model_registry.py`` imports it). It never loads BiSeNet, XSeg or CLIPSeg:
+``generate_semantic_mask`` / ``generate_xseg_occlusion_mask`` consume arrays the caller already computed, and
+``generate_clipseg_prompt_mask`` draws a caller-supplied rectangle (``simulated_activation_box``); there is no
+CLIPSeg runtime in this repository, so a text prompt alone returns an empty mask. Do not treat it as evidence that
+text-prompted segmentation exists. Real inference lives in ``compositor/masks.py`` (BiSeNet),
+``compositor/occlusion_model.py`` (XSeg / face occluder) and ``compositor/occlusion_analysis.py`` (unified analysis).
 """
 from __future__ import annotations
 

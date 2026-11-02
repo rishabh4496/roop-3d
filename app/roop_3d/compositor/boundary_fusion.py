@@ -85,6 +85,17 @@ def fuse_crop(frame: np.ndarray, crop: np.ndarray, inverse: np.ndarray, mask: np
     except ValueError:
         raise ValueError("Unknown boundary fusion mode") from None
     source, alpha = warp_crop(crop, inverse, target.shape, mask)
+    return fuse_warped(target, source, alpha, mode=blend_mode, levels=levels)
+
+
+def fuse_warped(target: np.ndarray, source: np.ndarray, alpha: np.ndarray, *,
+                mode: BlendMode | str = BlendMode.FEATHER, levels: int = 4, linear_light: bool = False) -> np.ndarray:
+    """Blend an already frame-space ``source``/``alpha`` pair into ``target`` (uint8 BGR).
+
+    ``linear_light`` blends the feather mode in linear light (sRGB decoded) instead of gamma space.
+    Pixels outside the dilated alpha support are returned byte-identical.
+    """
+    blend_mode = BlendMode(mode)
     margin = max(2, (2 ** max(1, min(levels, 8))) if blend_mode == BlendMode.MULTI_BAND else 2)
     bounds = _bounds(alpha, margin)
     if bounds is None:
@@ -106,6 +117,9 @@ def fuse_crop(frame: np.ndarray, crop: np.ndarray, inverse: np.ndarray, mask: np
                 mixed = target_roi.astype(np.float32) * (1 - alpha_roi[..., None]) + cloned.astype(np.float32) * alpha_roi[..., None]
             except cv2.error:
                 mixed = target_roi.astype(np.float32) * (1 - alpha_roi[..., None]) + source_roi.astype(np.float32) * alpha_roi[..., None]
+    elif linear_light:
+        from roop_3d.compositor.quality import blend_linear_light
+        mixed = blend_linear_light(target_roi, np.clip(source_roi, 0, 255).astype(np.uint8), alpha_roi)
     else:
         mixed = target_roi.astype(np.float32) * (1 - alpha_roi[..., None]) + source_roi.astype(np.float32) * alpha_roi[..., None]
     # Pyramid reconstruction and Poisson gradients can spread beyond nonzero alpha.

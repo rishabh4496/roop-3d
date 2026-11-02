@@ -103,6 +103,23 @@ it('offers mesh blending and an explicitly separate reference retarget mode', as
   } finally { await act(async () => root.unmount()); host.remove(); vi.unstubAllGlobals(); vi.restoreAllMocks(); }
 });
 
+it('offers an explicit, opt-in robust occlusion mode that older requests never carry', async () => {
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true }); useHistoryStore.getState().reset();
+  vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
+  vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(() => {});
+  let latest: typeof DEFAULT_PARAMETERS = DEFAULT_PARAMETERS;
+  function Workstation() { const [parameters, setParameters] = useState(DEFAULT_PARAMETERS); latest = parameters; return <VideoViewport target="" output="" time={0} setTime={() => {}} duration={0} enabled={false} keys={[]} parameters={parameters} setParameters={setParameters}/>; }
+  const host = document.createElement('div'); document.body.append(host); const root = createRoot(host);
+  try {
+    await act(async () => root.render(<Workstation/>));
+    const select = host.querySelector<HTMLSelectElement>('[aria-label="Occlusion handling"]')!;
+    expect(select.value).toBe('standard');
+    expect(DEFAULT_PARAMETERS.occlusion_mode).toBeUndefined();            // omitted until touched: stored requests keep the standard path
+    await act(async () => { Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')!.set!.call(select, 'robust'); select.dispatchEvent(new Event('change', { bubbles: true })); });
+    expect(latest.occlusion_mode).toBe('robust');
+  } finally { await act(async () => root.unmount()); host.remove(); vi.unstubAllGlobals(); vi.restoreAllMocks(); }
+});
+
 it('solos 3D Normal Map and 3D Relighting nodes through POST /api/preview', async () => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
   vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });

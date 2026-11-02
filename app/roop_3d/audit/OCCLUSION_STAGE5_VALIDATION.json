@@ -1,0 +1,567 @@
+{
+  "stage": "5-occlusion-compositor",
+  "generated_by": "tools/occlusion_acceptance.py + tests",
+  "models": {
+    "bisenet_resnet_34.onnx": {
+      "sha256": "4a0b8c958a3c938913bd06a8365dbb3c8761afba6ecbf0d14b3b1f77eb230c96",
+      "size_bytes": 93632546,
+      "weights": "VERIFIED_LOCAL",
+      "inference": "VERIFIED_LOCAL (executed in this stage on real frames)",
+      "provenance": "UNKNOWN",
+      "license": "UNKNOWN"
+    },
+    "xseg_3.onnx": {
+      "sha256": "48ccd7e8541e159a5a754ec9e62df2f12065f7df8f9af842c1750342c6533559",
+      "size_bytes": 70327709,
+      "weights": "VERIFIED_LOCAL",
+      "inference": "VERIFIED_LOCAL (executed in this stage on real frames)",
+      "provenance": "UNKNOWN",
+      "license": "UNKNOWN"
+    },
+    "face_occluder.onnx": {
+      "sha256": "ad9bfb90510790711a429935f846eaba2dcf2935d9afc2bda7349f5bfb92a104",
+      "size_bytes": 70324403,
+      "weights": "VERIFIED_LOCAL",
+      "inference": "VERIFIED_LOCAL (executed in this stage on real frames)",
+      "provenance": "UNKNOWN",
+      "license": "UNKNOWN"
+    }
+  },
+  "calibration": {
+    "bisenet_vs_xseg_iou_40_real_crops": {
+      "zero_one": {
+        "mean": 0.478,
+        "median": 0.622
+      },
+      "imagenet": {
+        "mean": 0.692,
+        "median": 0.901
+      }
+    },
+    "xseg_vs_face_occluder_285_real_crops": {
+      "median_iou": 0.921,
+      "p10_iou": 0.691
+    },
+    "scene_cut_registered_correlation": {
+      "same_content_shifted": 0.96,
+      "unrelated_content": "0.22-0.40",
+      "threshold": 0.6
+    },
+    "note": "exploratory samples of local footage; not retained"
+  },
+  "release_sweep_flicker_vs_face_area": {
+    "note": "occlusion_release tuned on the same clips; see doc",
+    "chosen": 0.75
+  },
+  "tests": {
+    "full_suite": "897 passed, 10 skipped, 1 failed (test bug, fixed)",
+    "stage_files_rerun": "67 passed",
+    "vitest": "302 passed",
+    "npm_build": "exit 0",
+    "isolation_audit": "ok"
+  },
+  "acceptance": {
+    "provider": "CPUExecutionProvider",
+    "probe": "target's own aligned crop, green tint, colour matching off",
+    "paint_delta": 14,
+    "scenarios": {
+      "hand_over_face": {
+        "description": "Folded hands / fingers held in front of a face",
+        "status": "TESTED_ON_REAL_FOOTAGE",
+        "clip": {
+          "media": "5256",
+          "first_frame": 10800,
+          "frames": 10
+        },
+        "faces_per_frame": [
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1
+        ],
+        "tracker_scene_cuts": [],
+        "mean_face_speed_px": 2.56,
+        "metrics": {
+          "standard": {
+            "leak_outside_face": 0.0637,
+            "occluded_pixels_painted": 0.9414,
+            "flicker": 0.2153,
+            "flicker_vs_face_area": 0.1079,
+            "painted_px_mean": 7375.2,
+            "ms_per_face": 247.9
+          },
+          "robust": {
+            "leak_outside_face": 0.0674,
+            "occluded_pixels_painted": 0.0001,
+            "flicker": 0.3861,
+            "flicker_vs_face_area": 0.075,
+            "painted_px_mean": 2981.4,
+            "ms_per_face": 542.6
+          }
+        },
+        "robust_tiers": {
+          "neural": 2,
+          "full": 8
+        },
+        "robust_reasons": {
+          "PARSER_TRUST_WARMUP": 2,
+          "FACE_MOSTLY_HIDDEN": 10
+        },
+        "robust_temporal_resets": {},
+        "montage": "hand_over_face.png",
+        "natural_montage": "hand_over_face_natural.png"
+      },
+      "hair_in_front_of_face": {
+        "description": "Hair strands crossing cheeks and eyes",
+        "status": "TESTED_ON_REAL_FOOTAGE",
+        "clip": {
+          "media": "5256",
+          "first_frame": 13200,
+          "frames": 10
+        },
+        "faces_per_frame": [
+          1,
+          2,
+          2,
+          2,
+          2,
+          1,
+          1,
+          1,
+          1,
+          1
+        ],
+        "tracker_scene_cuts": [],
+        "mean_face_speed_px": 7.07,
+        "metrics": {
+          "standard": {
+            "leak_outside_face": 0.0596,
+            "occluded_pixels_painted": 0.3779,
+            "flicker": 0.6578,
+            "flicker_vs_face_area": 0.1443,
+            "painted_px_mean": 5836.9,
+            "ms_per_face": 238.0
+          },
+          "robust": {
+            "leak_outside_face": 0.0026,
+            "occluded_pixels_painted": 0.2573,
+            "flicker": 0.705,
+            "flicker_vs_face_area": 0.1486,
+            "painted_px_mean": 5437.1,
+            "ms_per_face": 601.0
+          }
+        },
+        "robust_tiers": {
+          "neural": 12,
+          "full": 2
+        },
+        "robust_reasons": {
+          "PARSER_LOW_CONFIDENCE": 5,
+          "FACE_MOSTLY_HIDDEN": 1,
+          "PARSER_TRUST_WARMUP": 4,
+          "HULL_IMPLAUSIBLE_USING_NETWORKS": 3
+        },
+        "robust_temporal_resets": {},
+        "montage": "hair_in_front_of_face.png",
+        "natural_montage": "hair_in_front_of_face_natural.png"
+      },
+      "glasses": {
+        "description": "Spectacles / tinted glasses on a face",
+        "status": "TESTED_ON_REAL_FOOTAGE",
+        "clip": {
+          "media": "5256",
+          "first_frame": 7800,
+          "frames": 10
+        },
+        "faces_per_frame": [
+          2,
+          2,
+          2,
+          2,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1
+        ],
+        "tracker_scene_cuts": [
+          0
+        ],
+        "mean_face_speed_px": 3.55,
+        "metrics": {
+          "standard": {
+            "leak_outside_face": 0.0126,
+            "occluded_pixels_painted": 0.1586,
+            "flicker": 0.1794,
+            "flicker_vs_face_area": 0.0951,
+            "painted_px_mean": 7327.7,
+            "ms_per_face": 209.7
+          },
+          "robust": {
+            "leak_outside_face": 0.0,
+            "occluded_pixels_painted": 0.0053,
+            "flicker": 0.22,
+            "flicker_vs_face_area": 0.0742,
+            "painted_px_mean": 6596.5,
+            "ms_per_face": 500.1
+          }
+        },
+        "robust_tiers": {
+          "neural": 4,
+          "full": 10
+        },
+        "robust_reasons": {
+          "PARSER_TRUST_WARMUP": 4,
+          "FACE_MOSTLY_HIDDEN": 4,
+          "OCCLUDED_BY_NEARER_FACE": 4
+        },
+        "robust_temporal_resets": {
+          "SCENE_CUT": 2
+        },
+        "montage": "glasses.png",
+        "natural_montage": "glasses_natural.png"
+      },
+      "fast_movement": {
+        "description": "Largest measured face displacement among candidate clips",
+        "status": "TESTED_ON_REAL_FOOTAGE",
+        "clip": {
+          "media": "5256",
+          "first_frame": 3900,
+          "frames": 10
+        },
+        "faces_per_frame": [
+          2,
+          2,
+          2,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1
+        ],
+        "tracker_scene_cuts": [],
+        "mean_face_speed_px": 12.11,
+        "metrics": {
+          "standard": {
+            "leak_outside_face": 0.0363,
+            "occluded_pixels_painted": 0.1197,
+            "flicker": 0.4648,
+            "flicker_vs_face_area": 0.1809,
+            "painted_px_mean": 4505.4,
+            "ms_per_face": 217.1
+          },
+          "robust": {
+            "leak_outside_face": 0.008,
+            "occluded_pixels_painted": 0.0643,
+            "flicker": 0.4432,
+            "flicker_vs_face_area": 0.1697,
+            "painted_px_mean": 3719.0,
+            "ms_per_face": 483.7
+          }
+        },
+        "robust_tiers": {
+          "neural": 8,
+          "full": 5
+        },
+        "robust_reasons": {
+          "PARSER_TRUST_WARMUP": 5,
+          "OCCLUDED_BY_NEARER_FACE": 3,
+          "FACE_MOSTLY_HIDDEN": 1,
+          "PARSER_DISAGREES_WITH_NETWORKS": 3
+        },
+        "robust_temporal_resets": {},
+        "montage": "fast_movement.png",
+        "natural_montage": "fast_movement_natural.png"
+      },
+      "microphone_crossing_mouth": {
+        "description": "A microphone moving across the mouth",
+        "status": "NOT_COVERED",
+        "reason": "no real footage of this event was found in the local media; synthetic unit tests only"
+      },
+      "multiple_interacting_subjects": {
+        "description": "Two faces in close contact",
+        "status": "TESTED_ON_REAL_FOOTAGE",
+        "clip": {
+          "media": "5256",
+          "first_frame": 14400,
+          "frames": 10
+        },
+        "faces_per_frame": [
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          2
+        ],
+        "tracker_scene_cuts": [],
+        "mean_face_speed_px": 4.19,
+        "metrics": {
+          "standard": {
+            "leak_outside_face": 0.027,
+            "occluded_pixels_painted": 0.2638,
+            "flicker": 1.1454,
+            "flicker_vs_face_area": 0.2474,
+            "painted_px_mean": 15262.9,
+            "ms_per_face": 206.7
+          },
+          "robust": {
+            "leak_outside_face": 0.0048,
+            "occluded_pixels_painted": 0.0091,
+            "flicker": 0.077,
+            "flicker_vs_face_area": 0.043,
+            "painted_px_mean": 21319.2,
+            "ms_per_face": 590.2
+          }
+        },
+        "robust_tiers": {
+          "neural": 3,
+          "full": 8
+        },
+        "robust_reasons": {
+          "PARSER_TRUST_WARMUP": 3,
+          "OCCLUDED_BY_NEARER_FACE": 1
+        },
+        "robust_temporal_resets": {},
+        "montage": "multiple_interacting_subjects.png",
+        "natural_montage": "multiple_interacting_subjects_natural.png"
+      },
+      "dark_lighting": {
+        "description": "Darkest face crop among candidate clips",
+        "status": "TESTED_ON_REAL_FOOTAGE",
+        "clip": {
+          "media": "5256",
+          "first_frame": 24450,
+          "frames": 10
+        },
+        "faces_per_frame": [
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2
+        ],
+        "tracker_scene_cuts": [],
+        "mean_face_speed_px": 4.58,
+        "metrics": {
+          "standard": {
+            "leak_outside_face": 0.0233,
+            "occluded_pixels_painted": 0.0,
+            "flicker": 0.0511,
+            "flicker_vs_face_area": 0.027,
+            "painted_px_mean": 21878.2,
+            "ms_per_face": 180.2
+          },
+          "robust": {
+            "leak_outside_face": 0.0,
+            "occluded_pixels_painted": 0.0006,
+            "flicker": 0.0724,
+            "flicker_vs_face_area": 0.0453,
+            "painted_px_mean": 26120.3,
+            "ms_per_face": 505.3
+          }
+        },
+        "robust_tiers": {
+          "neural": 12,
+          "full": 8
+        },
+        "robust_reasons": {
+          "PARSER_DISAGREES_WITH_NETWORKS": 9,
+          "OCCLUDED_BY_NEARER_FACE": 10,
+          "PARSER_TRUST_WARMUP": 3
+        },
+        "robust_temporal_resets": {},
+        "montage": "dark_lighting.png",
+        "natural_montage": "dark_lighting_natural.png"
+      },
+      "side_profile": {
+        "description": "Face in profile",
+        "status": "TESTED_ON_REAL_FOOTAGE",
+        "clip": {
+          "media": "03de",
+          "first_frame": 6750,
+          "frames": 10
+        },
+        "faces_per_frame": [
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1
+        ],
+        "tracker_scene_cuts": [],
+        "mean_face_speed_px": 4.17,
+        "metrics": {
+          "standard": {
+            "leak_outside_face": 0.0346,
+            "occluded_pixels_painted": null,
+            "flicker": 4.5484,
+            "flicker_vs_face_area": 0.0895,
+            "painted_px_mean": 13532.6,
+            "ms_per_face": 201.1
+          },
+          "robust": {
+            "leak_outside_face": 0.0,
+            "occluded_pixels_painted": null,
+            "flicker": 0.0457,
+            "flicker_vs_face_area": 0.0285,
+            "painted_px_mean": 79041.3,
+            "ms_per_face": 722.0
+          }
+        },
+        "robust_tiers": {
+          "neural": 2,
+          "full": 8
+        },
+        "robust_reasons": {
+          "PARSER_TRUST_WARMUP": 2,
+          "PARTIALLY_OUTSIDE_FRAME": 6
+        },
+        "robust_temporal_resets": {},
+        "montage": "side_profile.png",
+        "natural_montage": "side_profile_natural.png"
+      },
+      "motion_blur": {
+        "description": "Motion-blurred face",
+        "status": "TESTED_ON_REAL_FOOTAGE",
+        "clip": {
+          "media": "03de",
+          "first_frame": 10650,
+          "frames": 10
+        },
+        "faces_per_frame": [
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          1
+        ],
+        "tracker_scene_cuts": [
+          0
+        ],
+        "mean_face_speed_px": 6.76,
+        "metrics": {
+          "standard": {
+            "leak_outside_face": 0.5528,
+            "occluded_pixels_painted": 0.0219,
+            "flicker": 3.6635,
+            "flicker_vs_face_area": 0.0468,
+            "painted_px_mean": 312.0,
+            "ms_per_face": 170.2
+          },
+          "robust": {
+            "leak_outside_face": 0.0098,
+            "occluded_pixels_painted": 0.0101,
+            "flicker": 0.2577,
+            "flicker_vs_face_area": 0.1203,
+            "painted_px_mean": 3594.5,
+            "ms_per_face": 444.5
+          }
+        },
+        "robust_tiers": {
+          "neural": 9,
+          "full": 10
+        },
+        "robust_reasons": {
+          "PARSER_TRUST_WARMUP": 5,
+          "PARSER_DISAGREES_WITH_NETWORKS": 4,
+          "FACE_MOSTLY_HIDDEN": 1
+        },
+        "robust_temporal_resets": {
+          "SCENE_CUT": 2
+        },
+        "montage": "motion_blur.png",
+        "natural_montage": "motion_blur_natural.png"
+      },
+      "rapid_scene_transition": {
+        "description": "A real shot change inside the clip",
+        "status": "TESTED_ON_REAL_FOOTAGE",
+        "clip": {
+          "media": "03de",
+          "first_frame": 11812,
+          "frames": 10
+        },
+        "faces_per_frame": [
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1
+        ],
+        "tracker_scene_cuts": [],
+        "mean_face_speed_px": 0.31,
+        "metrics": {
+          "standard": {
+            "leak_outside_face": 0.0407,
+            "occluded_pixels_painted": null,
+            "flicker": 0.2075,
+            "flicker_vs_face_area": 0.184,
+            "painted_px_mean": 101723.5,
+            "ms_per_face": 198.3
+          },
+          "robust": {
+            "leak_outside_face": 0.0123,
+            "occluded_pixels_painted": null,
+            "flicker": 0.2846,
+            "flicker_vs_face_area": 0.1894,
+            "painted_px_mean": 91083.8,
+            "ms_per_face": 668.8
+          }
+        },
+        "robust_tiers": {
+          "neural": 4,
+          "full": 6
+        },
+        "robust_reasons": {
+          "PARSER_TRUST_WARMUP": 4
+        },
+        "robust_temporal_resets": {},
+        "montage": "rapid_scene_transition.png",
+        "natural_montage": "rapid_scene_transition_natural.png"
+      }
+    }
+  },
+  "not_covered": [
+    "microphone_crossing_mouth: no real footage in local media"
+  ],
+  "criteria": {
+    "no_background_contamination": "partly",
+    "no_visible_mask_boundaries": "partly",
+    "no_floating_facial_edges": "partly",
+    "no_loss_of_legitimate_foreground": "hands/glasses/face yes, hair no",
+    "no_temporal_flicker": "not met"
+  }
+}

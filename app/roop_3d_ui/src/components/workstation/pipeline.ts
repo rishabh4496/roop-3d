@@ -7,6 +7,8 @@ export type WorkstationParameters = {
   pose_frontalization?: number;
   /** TPS expression warp toward the target frame, 0..1 (Stage 5). */
   tps_expression_weight?: number;
+  /** Compositor occlusion strategy. Omitted until the user touches it, so older requests keep the standard path. */
+  occlusion_mode?: 'standard' | 'robust';
   /** Stage 17 3D Relighting parameters. */
   relight_strength?: number;
   specular_sheen?: number;

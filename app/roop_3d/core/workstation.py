@@ -24,6 +24,10 @@ class WorkstationParameters(Contract):
     # geometry; 'reenactment_3d' = source identity geometry + target expression. Every mode falls back deterministically
     # to the proven path when its geometry is not reliable.
     render_mode: Literal['standard', 'pose_3d', 'reenactment_3d'] = 'standard'
+    # Stage 5 compositor: 'standard' = the original face/occluder masks; 'robust' = unified face + occlusion analysis,
+    # flow-aware temporal matte, depth-ordered multi-face compositing and frame-space matte/texture refinement.
+    # Missing models are reported through the compositor capability, never simulated.
+    occlusion_mode: Literal['standard', 'robust'] = 'standard'
     # Stage 17: 3D Spherical Harmonics relighting, specular skin sheen, and cast shadow preservation.
     relight: bool = False
     relight_strength: float = Field(default=0.8, ge=0, le=1)
@@ -36,7 +40,7 @@ class WorkstationParameters(Contract):
     @model_serializer(mode='wrap')
     def compatible_serialization(self, handler):
         value = handler(self)
-        for field in ('color_method', 'restorer_model', 'identity_blend_t', 'fidelity_weight', 'swap_weight', 'erosion_px', 'pose_mode', 'pose_frontalization', 'tps_expression_weight', 'render_mode'):
+        for field in ('color_method', 'restorer_model', 'identity_blend_t', 'fidelity_weight', 'swap_weight', 'erosion_px', 'pose_mode', 'pose_frontalization', 'tps_expression_weight', 'render_mode', 'occlusion_mode'):
             if field not in self.model_fields_set:
                 value.pop(field, None)
         return value
@@ -67,6 +71,7 @@ class WorkstationParameters(Contract):
         return CompositeOptions(color_method=self.color_method, fidelity_weight=self.fidelity_weight, restoration_blend=0 if 'restorer' in self.bypass else self.restoration_blend,
                                 feather_px=self.feather_px,
                                 swap_weight=self.swap_weight, erosion_px=self.erosion_px,
+                                occlusion_mode=self.occlusion_mode,
                                 color_strength=0 if 'color' in self.bypass else self.color_strength,
                                 relight=self.relight,
                                 relight_strength=self.relight_strength,
