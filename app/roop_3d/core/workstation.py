@@ -20,6 +20,10 @@ class WorkstationParameters(Contract):
     # Pre-swap 3D pose frontalization (reduces profile mismatch before inswapper_128) and TPS expression warping.
     pose_frontalization: float = Field(default=0, ge=0, le=1)
     tps_expression_weight: float = Field(default=0, ge=0, le=1)
+    # Stage 4 render mode: 'standard' = existing identity swap; 'pose_3d' = swap projected on the SOURCE identity's own
+    # geometry; 'reenactment_3d' = source identity geometry + target expression. Every mode falls back deterministically
+    # to the proven path when its geometry is not reliable.
+    render_mode: Literal['standard', 'pose_3d', 'reenactment_3d'] = 'standard'
     # Stage 17: 3D Spherical Harmonics relighting, specular skin sheen, and cast shadow preservation.
     relight: bool = False
     relight_strength: float = Field(default=0.8, ge=0, le=1)
@@ -32,7 +36,7 @@ class WorkstationParameters(Contract):
     @model_serializer(mode='wrap')
     def compatible_serialization(self, handler):
         value = handler(self)
-        for field in ('color_method', 'restorer_model', 'identity_blend_t', 'fidelity_weight', 'swap_weight', 'erosion_px', 'pose_mode', 'pose_frontalization', 'tps_expression_weight'):
+        for field in ('color_method', 'restorer_model', 'identity_blend_t', 'fidelity_weight', 'swap_weight', 'erosion_px', 'pose_mode', 'pose_frontalization', 'tps_expression_weight', 'render_mode'):
             if field not in self.model_fields_set:
                 value.pop(field, None)
         return value
@@ -47,7 +51,16 @@ class WorkstationParameters(Contract):
             options['tps_expression'] = self.tps_expression_weight
         if self.identity_blend_t is not None:
             options['identity_blend_t'] = self.identity_blend_t
+        if self.render_mode != 'standard':
+            options['render_mode'] = self.render_mode
         return options
+
+    def session_options(self) -> dict[str, str]:
+        """Extra `prepare_session` arguments; empty for the standard mode so older sessions keep working unchanged."""
+        return {'render_mode': self.render_mode} if self.render_mode != 'standard' else {}
+
+    def uses_mesh_projection(self) -> bool:
+        return self.pose_mode == 'mesh_blend' or self.render_mode == 'pose_3d'
 
     def composite_options(self):
         from roop_3d.compositor.pipeline import CompositeOptions

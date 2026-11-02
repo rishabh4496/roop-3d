@@ -401,7 +401,7 @@ class MasterPipelineRunner:
         """Pose/TPS parameters plus the Stage 0 3x3 pose-matrix fingerprint of every mapped FaceSet."""
         parameters = record.request.workstation_parameters
         values = parameters.model_dump(mode="json") if parameters is not None else {}
-        keep = ("pose_mode", "pose_strength", "pose_frontalization", "tps_expression_weight")
+        keep = ("pose_mode", "pose_strength", "pose_frontalization", "tps_expression_weight", "render_mode")
         matrices: dict[str, dict] = {}
         from roop_3d.faceset import pose_matrix
         for document in {item.faceset_id: item for item in documents.values()}.values():
@@ -511,7 +511,8 @@ class MasterPipelineRunner:
                 raise signal()
             session.prepare_session(base_source, track_ids=numeric_ids,
                                     sources_by_track=source_by_track,
-                                    retarget='off' if record.request.parameters_at(0).pose_mode == 'mesh_blend' else 'auto',
+                                    retarget='off' if record.request.parameters_at(0).uses_mesh_projection() else 'auto',
+                                    **record.request.parameters_at(0).session_options(),
                                     **(prepared.tracking or {}))
             if prepared.identity_guard is not None:
                 from roop_3d.identity.guard import IdentityRunReport

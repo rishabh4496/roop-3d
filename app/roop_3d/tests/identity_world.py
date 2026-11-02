@@ -88,12 +88,16 @@ def camera(subject: Subject, yaw: float, pitch: float, roll: float):
 
 
 def render(subject: Subject, yaw: float, pitch: float = 0.0, roll: float = 0.0, *, light: float = 1.0,
-           cast: tuple[float, float, float] = (1.0, 1.0, 1.0), seed: int = 0) -> np.ndarray:
-    """Painter's-algorithm render of the textured ground-truth mesh over a noisy neutral background."""
+           cast: tuple[float, float, float] = (1.0, 1.0, 1.0), seed: int = 0, cam=None, shape=None,
+           vertices: np.ndarray | None = None) -> np.ndarray:
+    """Painter's-algorithm render of the textured ground-truth mesh over a noisy neutral background.
+
+    `cam=(rot, scale, t)` overrides the fixed camera, `shape=(h, w)` the canvas, `vertices` the geometry (all optional)."""
     rng = np.random.default_rng(1000 + seed)
-    img = np.clip(rng.normal(95, 10, (IMG_H, IMG_W, 3)), 0, 255).astype(np.uint8)
-    rot, scale, t = camera(subject, yaw, pitch, roll)
-    verts = subject.mesh.vertices.astype(np.float64)
+    height, width = shape if shape is not None else (IMG_H, IMG_W)
+    img = np.clip(rng.normal(95, 10, (height, width, 3)), 0, 255).astype(np.uint8)
+    rot, scale, t = cam if cam is not None else camera(subject, yaw, pitch, roll)
+    verts = (subject.mesh.vertices if vertices is None else vertices).astype(np.float64)
     cam = verts @ rot.T
     xy = scale * cam[:, :2] + t
     depth = cam[:, 2]
@@ -108,7 +112,7 @@ def render(subject: Subject, yaw: float, pitch: float = 0.0, roll: float = 0.0, 
         dst = xy[tri].astype(np.float32)
         x0, y0 = np.floor(dst.min(axis=0)).astype(int) - 1
         x1, y1 = np.ceil(dst.max(axis=0)).astype(int) + 1
-        x0, y0, x1, y1 = max(x0, 0), max(y0, 0), min(x1, IMG_W), min(y1, IMG_H)
+        x0, y0, x1, y1 = max(x0, 0), max(y0, 0), min(x1, width), min(y1, height)
         if x1 <= x0 or y1 <= y0:
             continue
         m = cv2.getAffineTransform(subject.uv_raster[tri].astype(np.float32), dst - np.array([x0, y0], np.float32))

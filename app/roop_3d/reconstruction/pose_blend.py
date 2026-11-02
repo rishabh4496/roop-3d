@@ -123,12 +123,26 @@ def rasterize(texture: np.ndarray, texture_coverage: np.ndarray, pixels: np.ndar
 class PoseBlendProjector:
     MAX_SIZE = 512
 
-    def __init__(self) -> None:
-        mesh = build_canonical_head_mesh(68)
-        self.vertices = mesh.vertices.copy()
+    def __init__(self, *, vertices: np.ndarray | None = None, faces: np.ndarray | None = None,
+                 anchors: np.ndarray | None = None, geometry: str = "ESTIMATED_CANONICAL_PROXY_68") -> None:
+        # Default: the generic canonical proxy (unchanged behaviour). Stage 4 "3D Pose" mode supplies the SOURCE
+        # identity's own geometry and 5 anchors (same mesh frame: x right, y down, z toward the viewer).
+        if (vertices is None) != (faces is None) or (vertices is None) != (anchors is None):
+            raise DomainError('POSE_GEOMETRY_INVALID', 'vertices, faces and anchors must be supplied together', 422)
+        self.geometry = geometry
+        if vertices is None:
+            mesh = build_canonical_head_mesh(68)
+            self.vertices = mesh.vertices.copy()
+            self.faces = mesh.faces[:, [0, 2, 1]].copy()  # Front normals toward camera.
+            self.anchors = get_canonical_3d_landmarks(5).copy()
+        else:
+            self.vertices = np.asarray(vertices, np.float32).copy()
+            self.faces = np.asarray(faces, np.int32)[:, [0, 2, 1]].copy()
+            self.anchors = np.asarray(anchors, np.float32).copy()
+            if (self.vertices.ndim != 2 or self.vertices.shape[1] != 3 or self.anchors.shape != (5, 3)
+                    or not np.isfinite(self.vertices).all() or not np.isfinite(self.anchors).all()):
+                raise DomainError('POSE_GEOMETRY_INVALID', 'Identity geometry must be finite (N,3) vertices and (5,3) anchors', 422)
         self.vertices[:, 2] *= -1  # Nose toward camera in OpenCV (+Z into scene).
-        self.faces = mesh.faces[:, [0, 2, 1]].copy()  # Front normals toward camera.
-        self.anchors = get_canonical_3d_landmarks(5).copy()
         self.anchors[:, 2] *= -1
         reference = ARCFACE_REFERENCE_5PTS.astype(np.float64).copy()
         reference[:, 0] += 8
@@ -138,6 +152,16 @@ class PoseBlendProjector:
         model_xy = self.anchors[:, :2].astype(np.float64) * 5
         atlas = ThinPlateSplineWarper(model_xy, self.reference, regularization=1e-6)
         self.uv = atlas.transform_points(self.vertices[:, :2] * 5)
+
+    @classmethod
+    def from_identity_asset(cls, asset) -> "PoseBlendProjector":
+        """Same renderer, driven by the Stage 3 source identity's geometry (coarse proxy-resolution mesh)."""
+        from roop_3d.reconstruction.multiview_fit import identity_template
+        coarse = identity_template(0)                       # same topology as the canonical proxy; indices 0..N-1 are shared
+        count = len(coarse.vertices)
+        vertices = asset.vertices[:count].astype(np.float64)
+        anchors = np.vstack([vertices[36:42].mean(axis=0), vertices[42:48].mean(axis=0), vertices[30], vertices[48], vertices[54]])
+        return cls(vertices=vertices, faces=coarse.faces, anchors=anchors, geometry="IDENTITY_ASSET_" + asset.manifest.build_key[:12])
 
     def render(self, crop: np.ndarray, observed: np.ndarray, weight: float) -> PoseBlendResult:
         image_bgr(crop)

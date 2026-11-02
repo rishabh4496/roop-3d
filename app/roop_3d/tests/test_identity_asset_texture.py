@@ -159,3 +159,35 @@ def test_observation_and_camera_validation():
     with pytest.raises(DomainError) as info:
         synth.synthesize([other, legacy])
     assert info.value.code == "MIXED_CAMERA_MODELS"
+
+
+# ----------------------------------------------------------------------------- real-photo regressions (found on real FaceSets in Stage 4)
+def test_grazing_surfaces_are_never_observed(subject):
+    """Texture seen more than ~75 deg off the surface normal is stretched beyond use: it must not count as observed."""
+    asset = build_identity_asset(W.make_faceset("grazing", [W.make_view(subject, 0, 78.0)]), SETTINGS)
+    normal_z, _ = _gt_normal_z(asset, 78.0)
+    observed = asset.texel_state == OBS
+    assert observed.any() and float(normal_z[observed].min()) > 0.2
+
+
+def test_loosely_registered_views_are_not_averaged_into_ghosts(subject, monkeypatch):
+    base = [W.make_view(subject, i, y) for i, y in enumerate((0, -25, 25))]
+    # the 5-point landmarks of two views are off by a few pixels, as they are on real photographs
+    shifted = [base[0]] + [v.model_copy(update={"landmarks_68": tuple((x + 3.5, y - 3.0) for x, y in v.landmarks_68),
+                                                "landmarks": tuple((x + 3.5, y - 3.0) for x, y in v.landmarks)}) for v in base[1:]]
+    doc = W.make_faceset("ghost", shifted)
+    new = build_identity_asset(doc, SETTINGS)
+    monkeypatch.setattr(UVSynthesizer, "DOMINANCE_FRACTION", 0.0)
+    monkeypatch.setattr(UVSynthesizer, "WEIGHT_POWER", 2.0)
+    old = build_identity_asset(doc, SETTINGS)
+    # error against the KNOWN texture: smearing misregistered views is strictly worse than following the best one
+    assert _mae(new, subject) + 0.3 < _mae(old, subject)
+
+
+def test_near_profile_views_are_down_weighted_but_still_count_where_nothing_else_sees(subject):
+    views = [W.make_view(subject, i, y) for i, y in enumerate((0, -40, 40, 86))]
+    asset = build_identity_asset(W.make_faceset("profile_weight", views), SETTINGS)
+    observed = asset.texel_state == OBS
+    share = float((asset.texel_source_view[observed] == 3).mean())
+    assert share < 0.05, f"a poorly registered 86 deg view dominates {share:.0%} of the atlas"
+    assert asset.manifest.algorithm_version == "identity-mv-2"

@@ -45,7 +45,7 @@ from roop_3d.reconstruction.multiview_fit import (
 from roop_3d.reconstruction.uv_synthesizer import UVSynthesizer, ViewObservation
 
 SCHEMA = "roop.identity_asset.v1"
-ALGORITHM_VERSION = "identity-mv-1"
+ALGORITHM_VERSION = "identity-mv-2"          # v2: grazing-angle gate + dominant-view blending (real-photo ghosting)
 TEMPLATE_VERSION = "canonical68-delaunay+midpoint-subdiv"
 FRAME_DESCRIPTION = ("mesh frame (metres): +x image-right, +y down, +z toward the viewer; a frontal head has "
                      "yaw = pitch = roll = 0 (core.pose standard frame, pitch + = up)")
@@ -285,9 +285,12 @@ def build_identity_asset(
     for i in chosen:
         vf, q = fit_by_view[i], q_by_index[i]
         consistency = math.exp(-((max(vf.rms_mm, vf.holdout_mm or 0.0) / 6.0) ** 2))
+        # Real-photo finding: near-profile views are registered poorly from 5 landmarks (the template geometry at 85 deg is a
+        # guess), so their texture lands on background. Full trust up to 60 deg, fading to 10 % at 90 deg.
+        registration = float(np.clip(1.0 - (abs(vf.yaw) - 60.0) / 30.0, 0.1, 1.0))
         views_obs.append(ViewObservation(
             image=_decode(by_index[i]), camera=fit.camera_for(vf), sharpness=max(q.sharpness, 0.1),
-            view_quality=float(np.clip(q.landmark_score * consistency * (0.5 + 0.5 * q.exposure_score), 0.0, 1.0)),
+            view_quality=float(np.clip(q.landmark_score * consistency * registration * (0.5 + 0.5 * q.exposure_score), 0.0, 1.0)),
             view_index=i, occlusion_mask=None if not occlusion_masks else occlusion_masks.get(i)))
     atlas = synth.synthesize(views_obs)
     assert atlas.confidence_score is not None and atlas.view_count is not None and atlas.dominant_view is not None

@@ -535,3 +535,73 @@ def estimate_pose_from_landmarks(points: np.ndarray) -> tuple[float, float, floa
     five = five_from_68(pts) if pts.shape[0] == 68 else pts
     pose = estimate_pose_5pt(five)
     return pose.yaw, pose.pitch, pose.roll
+
+
+# --------------------------------------------------------------------------- pose against KNOWN geometry
+@dataclass
+class ViewPoseFit:
+    """Camera (weak-perspective) of ONE frame against fixed identity geometry. Standard-frame angles in degrees."""
+    yaw: float
+    pitch: float
+    roll: float
+    scale: float                 # pixels per metre
+    tx: float
+    ty: float
+    center: np.ndarray           # the model point the rotation acts about
+    rms_mm: float                # weighted landmark reprojection error at the face
+    rms_iod: float               # same error in units of the 3D inter-ocular distance
+    converged: bool
+
+    def camera(self) -> WeakPerspectiveCamera:
+        rot = batch_rotations(np.array([[self.yaw, self.pitch, self.roll]]))[0]
+        shift = self.scale * (rot @ self.center)[:2]
+        return WeakPerspectiveCamera(rotation=tuple(tuple(float(x) for x in row) for row in rot), scale=float(self.scale),
+                                     tx=float(self.tx - shift[0]), ty=float(self.ty - shift[1]))
+
+
+def solve_view_pose(
+    points2d: np.ndarray,
+    model_points: np.ndarray,
+    normals: np.ndarray,
+    pose0_deg: tuple[float, float, float],
+    weights: np.ndarray | None = None,
+    *,
+    iod_points: tuple[int, int] = (0, 1),
+    pose_sigma_deg: float = SIGMA_POSE_DEG,
+) -> ViewPoseFit:
+    """MAP pose (yaw/pitch/roll/scale/translation) of one view against FIXED 3D points.
+
+    Same residual model as the multi-view fit (so the two are consistent), with the geometry held at the identity
+    asset's landmarks. `weights` down-weights landmarks that move with expression (e.g. mouth corners).
+    """
+    pts = np.asarray(points2d, np.float64)
+    model = np.asarray(model_points, np.float64)
+    if pts.shape != (len(model), 2) or not np.isfinite(pts).all() or not np.isfinite(model).all():
+        raise DomainError("INVALID_POSE_INPUT", "Pose solve needs matching finite 2D/3D point sets", 422)
+    w = np.ones(len(model)) if weights is None else np.clip(np.asarray(weights, np.float64), 0.0, 1.0)
+    problem = _Problem(model, np.asarray(normals, np.float64), pts[None], np.array([1.0]), np.asarray(pose0_deg, np.float64)[None])
+    problem.robust = w[None].copy()
+    x0 = problem.initial()
+    zero_d = np.zeros(len(model) * 3)
+    start = x0[len(zero_d):]
+
+    def residual(vp: np.ndarray) -> np.ndarray:
+        r = problem.residual(np.concatenate([zero_d, vp]))
+        n_data = len(model) * 2
+        return np.concatenate([r[:n_data], r[-3:] * (SIGMA_POSE_DEG / pose_sigma_deg)])   # data rows + pose prior rows
+
+    steps = np.array([1e-4, 1e-4, 1e-4, 1e-6, 1e-3, 1e-3])
+    vp, _, converged, _ = _levenberg_marquardt(residual, start, steps, max_iter=30)
+    # Huber reweighting once (a single bad landmark must not drag the pose), then refine
+    pred, rot, scale = problem.predict(np.concatenate([zero_d, vp]))
+    err = (pred - pts[None]) / (scale * SIGMA_OBS_M)[:, None, None]
+    problem.robust = w[None] * huber_weights(err.reshape(-1, 2), delta=HUBER_DELTA).reshape(1, -1)
+    vp, _, converged, _ = _levenberg_marquardt(residual, vp, steps, max_iter=30)
+    pred, rot, scale = problem.predict(np.concatenate([zero_d, vp]))
+    err_m = np.linalg.norm(pred[0] - pts, axis=1) / scale[0]
+    ww = np.maximum(w, 1e-9)
+    rms = float(np.sqrt(np.sum(ww * err_m ** 2) / np.sum(ww)))
+    iod = float(np.linalg.norm(model[iod_points[0]] - model[iod_points[1]]))
+    return ViewPoseFit(yaw=float(vp[0]), pitch=float(vp[1]), roll=float(vp[2]), scale=float(np.exp(vp[3])), tx=float(vp[4]),
+                       ty=float(vp[5]), center=problem.centroid.copy(), rms_mm=rms * 1000.0,
+                       rms_iod=rms / max(iod, 1e-9), converged=bool(converged))

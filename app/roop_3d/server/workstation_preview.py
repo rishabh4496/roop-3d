@@ -200,7 +200,8 @@ class PreviewService:
                                     reserve_mib=settings.memory_safety_reserve_mb)
             session = ReferencePipeline(self.state.models, runtime)
             session.prepare_session(next(iter(sources.values())), track_ids=set(sources), sources_by_track=sources,
-                                    retarget='off' if value.effective_parameters.pose_mode == 'mesh_blend' else 'auto',
+                                    retarget='off' if value.effective_parameters.uses_mesh_projection() else 'auto',
+                                    **value.effective_parameters.session_options(),
                                     **runner.tracking_options(value.request))
             if identity_guard is not None:
                 session.set_identity_guard(identity_guard)

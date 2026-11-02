@@ -58,6 +58,14 @@ from roop_3d.reconstruction.multiview_fit import (
     fit_identity_landmarks,
     identity_template,
 )
+from roop_3d.reconstruction.reenactment import (
+    RENDER_MODES,
+    IdentityRig,
+    ReenactmentEngine,
+    ReenactmentFrame,
+    ReenactmentSettings,
+    TargetObservation,
+)
 from roop_3d.reconstruction.tps_fallback import (
     ThinPlateSplineWarper,
     build_canonical_head_mesh,
@@ -72,6 +80,12 @@ from roop_3d.reconstruction.uv_synthesizer import (
 )
 
 __all__ = [
+    "RENDER_MODES",
+    "IdentityRig",
+    "ReenactmentEngine",
+    "ReenactmentFrame",
+    "ReenactmentSettings",
+    "TargetObservation",
     "FaceSetCoverageReport",
     "IdentityAsset",
     "IdentityAssetManifest",

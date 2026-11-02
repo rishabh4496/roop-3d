@@ -308,7 +308,14 @@ class UVSynthesizer:
         )
 
     # ------------------------------------------------------------------ identity (camera) path
-    OBSERVED_MIN_WEIGHT = 0.04        # total blend weight a texel needs to count as OBSERVED (~ one view at vis 0.2)
+    OBSERVED_MIN_WEIGHT = 0.02        # total blend weight a texel needs to count as OBSERVED
+    # Real-data finding (Stage 4): with 5-point geometry the views are only loosely registered, so averaging several views
+    # (or trusting surfaces seen at a grazing angle, where texture is stretched) produces ghosts and seams. A texel must
+    # face the camera within ~75 deg, weights are sharpened (vis^3) and a secondary view carrying < 25 % of the best
+    # view's weight is not blended in at all.
+    GRAZING_MIN_COS = 0.25
+    WEIGHT_POWER = 3.0
+    DOMINANCE_FRACTION = 0.25
     OUTLIER_COLOR_DISTANCE = 55.0     # BGR L2 distance from the per-texel median beyond which a sample is rejected
     DEPTH_TOLERANCE_M = 0.008         # z-buffer slack: covers a triangle's own depth range
 
@@ -404,7 +411,7 @@ class UVSynthesizer:
             vis = cam.rotate_normals(nrm)[:, 2]
             xy = cam.project(pts)
             in_img = (xy[:, 0] >= 1) & (xy[:, 0] <= w_img - 2) & (xy[:, 1] >= 1) & (xy[:, 1] <= h_img - 2)
-            ok = (vis > self.vis_thresh) & in_img
+            ok = (vis > max(self.vis_thresh, self.GRAZING_MIN_COS)) & in_img
             if not ok.any():
                 continue
             unoccluded, silhouette = self._visible_by_zbuffer(cam, cam.depth(pts), xy)
@@ -418,13 +425,16 @@ class UVSynthesizer:
             sharp[i, ok] = remap_points(self._local_sharpness(img), xy[ok, 0], xy[ok, 1], cv2.INTER_LINEAR).reshape(-1)
             edge = np.minimum.reduce([xy[ok, 0], xy[ok, 1], w_img - 1 - xy[ok, 0], h_img - 1 - xy[ok, 1]])
             feather = np.clip(edge / max(0.03 * min(h_img, w_img), 1.0), 0.0, 1.0)
-            weights[i, ok] = ((vis[ok] ** 2) * feather * silhouette[ok] * max(obs.view_quality, 0.05)
+            weights[i, ok] = ((vis[ok] ** self.WEIGHT_POWER) * feather * silhouette[ok] * max(obs.view_quality, 0.05)
                               * max(obs.sharpness, 0.1) ** 0.5)
 
         # relative local sharpness: the sharpest observation of a texel gets full weight, blurrier ones down to 25%
         best = sharp.max(axis=0, keepdims=True)
         weights *= (0.25 + 0.75 * (sharp + 1e-3) / (best + 1e-3)) * (weights > 0)
 
+        # dominance: drop views that contribute far less than the best view of the same texel (loosely registered
+        # secondary views would only smear it)
+        weights *= weights >= self.DOMINANCE_FRACTION * weights.max(axis=0, keepdims=True)
         gains = self._solve_gains(colors, weights) if n_views > 1 else np.ones((1, 3))
         colors = np.clip(colors * gains[:, None, :].astype(np.float32), 0, 255)
 

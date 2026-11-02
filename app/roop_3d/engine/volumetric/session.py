@@ -26,6 +26,8 @@ from roop_3d.compositor.pipeline import CompositeOptions, FrameCompositor
 from roop_3d.engine.audio_sync.lip_sync_adapter import LipSyncAdapter, LipSyncFrameInput
 from roop_3d.reconstruction.expression_tps import apply_expression_to_crop
 from roop_3d.reconstruction.pose_blend import PoseBlendProjector, PoseBlendResult
+from roop_3d.reconstruction.reenactment import (RENDER_MODES, IdentityRig, ReenactmentEngine, ReenactmentFrame,
+                                                ReenactmentSettings, TargetObservation)
 
 
 @dataclass(frozen=True)
@@ -47,6 +49,10 @@ class Replacement:
     coverage: np.ndarray | None = None
     projection: PoseBlendResult | None = None
     landmarks5: np.ndarray | None = None
+    # Stage 4: what ran, and why the proven path was used instead of the requested mode (never silent).
+    render_mode: str = "standard"
+    fallback_reason: str | None = None
+    reenactment: ReenactmentFrame | None = None
 
 
 @dataclass(frozen=True)
@@ -99,14 +105,26 @@ class ReferencePipeline:
         self.last_latency: StageLatency | None = None
         self.frames_processed = 0
         self.pose_projector: PoseBlendProjector | None = None
+        # Stage 4 render modes: "standard" (existing identity swap), "pose_3d", "reenactment_3d"
+        self.render_mode = "standard"
+        self.default_source: FaceSetDocument | None = None
+        self.rigs: dict[str, IdentityRig] = {}
+        self.rig_status: dict[str, dict] = {}
+        self.reenactors: dict[int, ReenactmentEngine] = {}
+        self.pose_projectors: dict[str, PoseBlendProjector] = {}
+        self.reenactment_settings = ReenactmentSettings()
         register(self, "release_session")
 
     @guarded
     def prepare_session(self, source: FaceSetDocument, *, track_ids: set[int] | None = None,
                         sources_by_track: Mapping[int, FaceSetDocument] | None = None,
                         retarget: Literal["auto", "off", "required"] = "auto",
-                        track_policy=None, detection_threshold: float = 0.5) -> dict:
+                        track_policy=None, detection_threshold: float = 0.5,
+                        render_mode: str = "standard", identity_store=None,
+                        reenactment_settings: ReenactmentSettings | None = None) -> dict:
         with self.lock:
+            if render_mode not in RENDER_MODES:
+                raise ValueError(f"render_mode must be one of {RENDER_MODES}")
             if retarget not in ("auto", "off", "required") or track_ids is not None and (
                     len(track_ids) > 32 or any(type(i) is not int or i < 0 for i in track_ids)):
                 raise ValueError("Invalid session selection/policy")
@@ -121,6 +139,10 @@ class ReferencePipeline:
                                            policy=track_policy)
                 self.selected_ids = frozenset(track_ids) if track_ids is not None else None
                 self.sources_by_track = mapped_sources
+                self.default_source, self.render_mode = source, render_mode
+                self.reenactment_settings = reenactment_settings or ReenactmentSettings()
+                if render_mode != "standard":
+                    self._prepare_identity_rigs(source, mapped_sources, identity_store)
                 if retarget != "off":
                     self.portrait.prepare_session(required=retarget == "required")
                 else:
@@ -130,6 +152,47 @@ class ReferencePipeline:
             except BaseException:
                 self.release_session()
                 raise
+
+    def _prepare_identity_rigs(self, source: FaceSetDocument, mapped: Mapping[int, FaceSetDocument], store=None) -> None:
+        """Build / reuse the Stage 3 identity asset of every FaceSet in this session. A FaceSet that cannot support one
+        is recorded with its reason and keeps the proven path: the session still prepares."""
+        from roop_3d.reconstruction.identity_asset import IdentityAssetStore
+        store = store or IdentityAssetStore()
+        for document in {d.faceset_id: d for d in (source, *mapped.values())}.values():
+            try:
+                asset, reused = store.get_or_build(document)
+                self.rigs[document.faceset_id] = IdentityRig(asset)
+                self.rig_status[document.faceset_id] = {"available": True, "reused": reused, "build_key": asset.build_key,
+                                                        "level": asset.manifest.reconstruction_level,
+                                                        "layout": asset.manifest.landmark_layout}
+            except DomainError as error:
+                self.rig_status[document.faceset_id] = {"available": False, "reason": f"{error.code}: {error.message}"[:300]}
+
+    def _document_for(self, track_id: int) -> FaceSetDocument | None:
+        return self.sources_by_track.get(track_id, self.default_source)
+
+    def _rig_for(self, track_id: int) -> IdentityRig | None:
+        document = self._document_for(track_id)
+        return self.rigs.get(document.faceset_id) if document is not None else None
+
+    def _unavailable_reason(self, track_id: int) -> str:
+        document = self._document_for(track_id)
+        status = self.rig_status.get(document.faceset_id) if document is not None else None
+        return "IDENTITY_ASSET_UNAVAILABLE" + (f": {status['reason']}" if status and status.get("reason") else "")
+
+    def _frame_time(self) -> float:
+        seconds = getattr(self.tracker, "timestamp_seconds", None) if self.tracker is not None else None
+        return float(seconds) if seconds is not None and np.isfinite(seconds) else self.frames_processed / 30.0
+
+    @staticmethod
+    def _face_sharpness(image: np.ndarray, box: np.ndarray) -> float | None:
+        x1, y1, x2, y2 = (int(round(v)) for v in box[:4])
+        h, w = image.shape[:2]
+        region = image[max(y1, 0):min(y2, h), max(x1, 0):min(x2, w)]
+        if region.size == 0 or min(region.shape[:2]) < 8:
+            return None
+        gray = cv2.cvtColor(region, cv2.COLOR_BGR2GRAY)
+        return float(cv2.Laplacian(cv2.resize(gray, (96, 96), interpolation=cv2.INTER_AREA), cv2.CV_64F).var())
 
     def set_identity_guard(self, guard) -> None:
         """Install the render-time identity lock check (see roop_3d.identity.guard)."""
@@ -154,7 +217,8 @@ class ReferencePipeline:
 
     @guarded
     def infer_frame(self, image: np.ndarray, *, strength: float = 0.35, pose_blend: float | None = None,
-                    frontalization: float = 0.0, tps_expression: float = 0.0, identity_blend_t: float | None = None) -> FrameResult:
+                    frontalization: float = 0.0, tps_expression: float = 0.0, identity_blend_t: float | None = None,
+                    render_mode: str | None = None) -> FrameResult:
         with self.lock:
             if not self.prepared or self.tracker is None:
                 raise DomainError("SESSION_NOT_PREPARED", "Prepare a source before frame inference", 409)
@@ -166,10 +230,16 @@ class ReferencePipeline:
             for name, amount in (('Pose frontalization', frontalization), ('TPS expression weight', tps_expression)):
                 if not np.isfinite(amount) or not 0 <= amount <= 1:
                     raise ValueError(f'{name} must be within 0..1')
+            mode = self.render_mode if render_mode is None else render_mode
+            if mode not in RENDER_MODES:
+                raise ValueError(f"render_mode must be one of {RENDER_MODES}")
+            if mode == "pose_3d" and pose_blend is None:
+                pose_blend = 1.0
             began = time.perf_counter()
             faces = self.tracker.process(image, include203=self.portrait.available and pose_blend is None)
             detection_end = time.perf_counter()
             self.portrait.retain_tracks(self.tracker.active_ids)
+            self.reenactors = {key: engine for key, engine in self.reenactors.items() if key in self.tracker.active_ids}
             if self.tracker.scene_cut:
                 self.swapper._hysteresis = {}
             elif hasattr(self.swapper, '_hysteresis'):
@@ -215,22 +285,87 @@ class ReferencePipeline:
                         generated, method = warp.image, method + '_tps_expression'
                     projection_seconds += time.perf_counter() - at
                 projection = None
+                fallback_reason, reenactment, coverage = None, None, None
                 if pose_blend is not None:
                     at = time.perf_counter()
-                    if self.pose_projector is None:
-                        self.pose_projector = PoseBlendProjector()
-                    observed = transform_points(face.landmarks5, cv2.invertAffineTransform(inverse))
-                    projection = self.pose_projector.render(generated, observed, pose_blend)
-                    generated, method = projection.image, 'identity_swap_tps_mesh_blend'
+                    try:
+                        if mode == "pose_3d":
+                            projector, fallback_reason = self._pose_3d_projector(tracked.track_id)
+                        else:
+                            if self.pose_projector is None:
+                                self.pose_projector = PoseBlendProjector()
+                            projector = self.pose_projector
+                        observed = transform_points(face.landmarks5, cv2.invertAffineTransform(inverse))
+                        projection = projector.render(generated, observed, pose_blend)
+                        generated, method = projection.image, ('identity_swap_pose_3d' if mode == "pose_3d" else 'identity_swap_tps_mesh_blend')
+                        coverage = projection.coverage
+                    except DomainError as error:
+                        if mode != "pose_3d":
+                            raise
+                        # 3D Pose never forces a projection the landmarks cannot support: keep the proven swap crop.
+                        projection, fallback_reason = None, f"POSE_PROJECTION_REJECTED: {error.code}"
+                    projection_seconds += time.perf_counter() - at
+                if mode == "reenactment_3d":
+                    at = time.perf_counter()
+                    generated, coverage, method, fallback_reason, reenactment = self._reenact(
+                        tracked, image, generated, inverse, coverage, method)
                     projection_seconds += time.perf_counter() - at
                 replacements.append(Replacement(tracked.track_id, generated, inverse.copy(), swap.reference_index,
-                                                method, projection.coverage if projection else None, projection,
-                                                transform_points(face.landmarks5, cv2.invertAffineTransform(inverse))))
+                                                method, coverage, projection,
+                                                transform_points(face.landmarks5, cv2.invertAffineTransform(inverse)),
+                                                mode if fallback_reason is None else "standard", fallback_reason, reenactment))
             ended = time.perf_counter()
             self.frames_processed += 1
             self.last_latency = StageLatency((detection_end - began) * 1000, swap_seconds * 1000,
                                              retarget_seconds * 1000, (ended - began) * 1000, projection_seconds * 1000)
             return FrameResult(faces, tuple(replacements), self.last_latency, self.tracker.scene_cut, tuple(withheld))
+
+    def _pose_3d_projector(self, track_id: int):
+        """(projector, fallback_reason): the source identity's own geometry when an asset exists, else the proven proxy."""
+        document = self._document_for(track_id)
+        rig = self._rig_for(track_id)
+        if document is None or rig is None:
+            if self.pose_projector is None:
+                self.pose_projector = PoseBlendProjector()
+            return self.pose_projector, self._unavailable_reason(track_id)
+        projector = self.pose_projectors.get(document.faceset_id)
+        if projector is None:
+            projector = self.pose_projectors[document.faceset_id] = PoseBlendProjector.from_identity_asset(rig.asset)
+        return projector, None
+
+    def _reenact(self, tracked: TrackedFace, image: np.ndarray, generated: np.ndarray, inverse: np.ndarray,
+                 coverage: np.ndarray | None, method: str):
+        """3D Reenactment of one face; returns (image, coverage, method, fallback_reason, frame).
+
+        Engaged: the engine render replaces the crop, cross-faded with the proven path's crop while it ramps in/out, and
+        its coverage (zero where the atlas has no pixels, e.g. an open mouth) lets the compositor keep the target there.
+        Not engaged (or no asset): the proven crop is returned untouched, with the reason."""
+        rig = self._rig_for(tracked.track_id)
+        if rig is None:
+            return generated, coverage, method, self._unavailable_reason(tracked.track_id), None
+        engine = self.reenactors.get(tracked.track_id)
+        if engine is None:
+            engine = self.reenactors[tracked.track_id] = ReenactmentEngine(rig, self.reenactment_settings)
+        face = tracked.observation
+        to_crop = cv2.invertAffineTransform(inverse)
+        cut = bool(self.tracker is not None and self.tracker.scene_cut)
+        try:
+            observation = TargetObservation(
+                landmarks5=transform_points(face.landmarks5, to_crop), landmarks106=transform_points(face.landmarks106, to_crop),
+                timestamp=self._frame_time(), scene_cut=cut, sharpness=self._face_sharpness(image, face.box))
+        except (ValueError, TypeError):
+            observation = TargetObservation(None, None, self._frame_time(), cut)
+        frame = engine.process(observation, generated.shape[:2])
+        if not frame.engaged or frame.image is None or frame.coverage is None:
+            return generated, coverage, method, frame.reason, frame
+        weight = float(frame.weight)
+        engine_alpha = frame.coverage * weight
+        base_alpha = (np.ones(generated.shape[:2], np.float32) if coverage is None else coverage.astype(np.float32)) * (1.0 - weight)
+        total = engine_alpha + base_alpha
+        mixed = ((frame.image.astype(np.float32) * engine_alpha[..., None] + generated.astype(np.float32) * base_alpha[..., None])
+                 / np.maximum(total[..., None], 1e-6))
+        return (np.clip(mixed, 0, 255).astype(np.uint8), np.clip(total, 0.0, 1.0).astype(np.float32),
+                "identity_reenactment_3d" + ("" if weight >= 1.0 else "_blend"), None, frame)
 
     def _detect_landmarks106(self, crop: np.ndarray) -> np.ndarray | None:
         """106 dense landmarks of a generated crop (the crop is a tight face, so the box is the whole image)."""
@@ -248,7 +383,11 @@ class ReferencePipeline:
                 "pose_projection": {"state": "AVAILABLE", "geometry": "ESTIMATED_CANONICAL_PROXY_68",
                                     "camera": "ESTIMATED_CROP_PINHOLE", "active": self.pose_projector is not None},
                 "full_frame_compositor": self.compositor.capability(),
-                "lip_sync": self.lip_sync.capability()}
+                "lip_sync": self.lip_sync.capability(),
+                "render_modes": {"available": list(RENDER_MODES), "default": self.render_mode,
+                                 "fallback": "deterministic: the proven identity-swap path whenever the 3D geometry is not reliable",
+                                 "identity_assets": dict(self.rig_status),
+                                 "active_reenactors": len(self.reenactors)}}
 
     def composite_frame(self, image: np.ndarray, result: FrameResult, *,
                         options: CompositeOptions = CompositeOptions(),
@@ -294,6 +433,11 @@ class ReferencePipeline:
             self.last_latency = None
             self.frames_processed = 0
             self.pose_projector = None
+            self.render_mode, self.default_source = "standard", None
+            self.rigs.clear()
+            self.rig_status.clear()
+            self.reenactors.clear()
+            self.pose_projectors.clear()
 
 
 def prepare_session(source: FaceSetDocument, *, catalog: ModelCatalog | None = None,
