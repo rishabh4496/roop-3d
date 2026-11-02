@@ -63,8 +63,8 @@ it('offers exactly the six pipeline stages and maps each to its server buffer', 
   try {
     await act(async () => root.render(<VideoViewport target="" output="" time={0} setTime={() => {}} duration={0} enabled={false} keys={[]} previewRequest={REQUEST}/>));
     const names = [...host.querySelectorAll('.pipeline-node .node-select')].map(node => node.textContent?.replace(/^\d{2}/, ''));
-    expect(names).toEqual(['Input', '3D Pose & TPS Grid', 'Raw Swap', 'Occlusion & Seam Mask', 'Restorer', 'Final Output']);
-    expect(PIPELINE_NODES.map(node => node.buffer)).toEqual(['detector', 'pose', 'swapper', 'matte', 'restorer', 'final']);
+    expect(names).toEqual(['Input', '3D Pose & TPS Grid', '3D Normal Map', '3D Relighting (SH)', 'Raw Swap', 'Occlusion & Seam Mask', 'Restorer', 'Final Output']);
+    expect(PIPELINE_NODES.map(node => node.buffer)).toEqual(['detector', 'pose', 'normal_map', 'sh_lighting', 'swapper', 'matte', 'restorer', 'final']);
   } finally { await act(async () => root.unmount()); host.remove(); vi.unstubAllGlobals(); }
 });
 
@@ -101,4 +101,24 @@ it('offers mesh blending and an explicitly separate reference retarget mode', as
     await act(async () => { Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')!.set!.call(select, 'retarget'); select.dispatchEvent(new Event('change', { bubbles: true })); });
     expect(host.querySelector('[aria-label="Reference retarget strength"]')).toBeTruthy();
   } finally { await act(async () => root.unmount()); host.remove(); vi.unstubAllGlobals(); vi.restoreAllMocks(); }
+});
+
+it('solos 3D Normal Map and 3D Relighting nodes through POST /api/preview', async () => {
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+  vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
+  vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(() => {});
+  vi.useFakeTimers();
+  const fetch = vi.fn(async () => previewReply(25, 'normal_map'));
+  vi.stubGlobal('fetch', fetch);
+  const host = document.createElement('div'); document.body.append(host); const root = createRoot(host);
+  try {
+    await act(async () => root.render(<VideoViewport target="" output="" time={1} setTime={() => {}} duration={3} enabled={true} keys={[]} previewRequest={REQUEST} parameters={DEFAULT_PARAMETERS}/>));
+    await act(async () => { await vi.advanceTimersByTimeAsync(200); });
+    await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Solo 3D Normal Map"]')!.click());
+    await act(async () => { await vi.advanceTimersByTimeAsync(200); });
+    expect(previewBodies(fetch).at(-1)).toMatchObject({ solo_node: 'normal_map' });
+    await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Solo 3D Relighting (SH)"]')!.click());
+    await act(async () => { await vi.advanceTimersByTimeAsync(200); });
+    expect(previewBodies(fetch).at(-1)).toMatchObject({ solo_node: 'sh_lighting' });
+  } finally { await act(async () => root.unmount()); host.remove(); vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks(); }
 });

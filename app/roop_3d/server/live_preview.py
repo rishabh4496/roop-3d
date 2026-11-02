@@ -54,7 +54,7 @@ from roop_3d.server.workstation_preview import PreviewRequest
 router = APIRouter(prefix="/api/v1")
 
 RETRY_AFTER_MS = 1000
-SoloNode = Literal["final", "detector", "pose", "swapper", "matte", "restorer", "color", "source"]
+SoloNode = Literal["final", "detector", "pose", "swapper", "matte", "restorer", "color", "source", "normal_map", "sh_lighting"]
 RestorerName = Literal["off", "gpen", "codeformer", "gfpgan", "ultramax"]
 _FACESET = r"^[A-Za-z0-9_-]{1,64}$"
 _TRACK = r"^track_[0-9]{4}$"
@@ -113,6 +113,12 @@ class LivePreviewPayload(Contract):
     swap_weight: float = Field(default=1, ge=0, le=1)
     bypass: tuple[Literal["restorer", "color"], ...] = Field(default=(), max_length=2)
     solo_node: SoloNode = "final"
+    relight_strength: float | None = Field(default=None, ge=0, le=1)
+    specular_sheen: float | None = Field(default=None, ge=0, le=1)
+    shadow_preservation: float | None = Field(default=None, ge=0, le=1)
+    lighting_mode: Literal['auto', 'manual'] | None = None
+    manual_light_yaw: float | None = Field(default=None, ge=-180, le=180)
+    manual_light_pitch: float | None = Field(default=None, ge=-90, le=90)
     # job-request pass-through so the preview matches what Start would render
     face_segments: tuple[FaceSegment, ...] | None = Field(default=None, max_length=256)
     parameter_curves: ParameterCurves | None = None
@@ -436,6 +442,18 @@ class LivePreviewService:
             values.update(restorer_model='codeformer', fidelity_weight=payload.fidelity_weight)
         if payload.identity_blend_t is not None:
             values['identity_blend_t'] = payload.identity_blend_t
+        if payload.relight_strength is not None:
+            values['relight_strength'] = payload.relight_strength
+        if payload.specular_sheen is not None:
+            values['specular_sheen'] = payload.specular_sheen
+        if payload.shadow_preservation is not None:
+            values['shadow_preservation'] = payload.shadow_preservation
+        if payload.lighting_mode is not None:
+            values['lighting_mode'] = payload.lighting_mode
+        if payload.manual_light_yaw is not None:
+            values['manual_light_yaw'] = payload.manual_light_yaw
+        if payload.manual_light_pitch is not None:
+            values['manual_light_pitch'] = payload.manual_light_pitch
         parameters = WorkstationParameters.model_validate(values)
 
         mask = payload.mask_base64
@@ -487,6 +505,15 @@ class LivePreviewService:
         if payload.restorer == "codeformer":
             applied.append("fidelity_weight")
         if payload.mask_base64 or payload.mask_strokes:
+            applied.append("custom_mask")
+        if payload.relight_strength is not None:
+            applied.append("relight_strength")
+        if payload.specular_sheen is not None:
+            applied.append("specular_sheen")
+        if payload.shadow_preservation is not None:
+            applied.append("shadow_preservation")
+        if payload.lighting_mode is not None:
+            applied.append("lighting_mode")
             applied.append("custom_mask")
         if payload.resolved_sources()[1] is not None:
             applied.append(f"identity_blend:{payload.resolved_sources()[1].method}")

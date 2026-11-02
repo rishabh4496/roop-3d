@@ -1,8 +1,11 @@
 import React from 'react';
 import type { Coverage, Reconstruction, Track } from './contracts';
+import type { WorkstationParameters } from './components/workstation/pipeline';
 import PoseGeometryViewer from './components/three/PoseGeometryViewer';
+import LightProbeSphere from './components/three/LightProbeSphere';
 
 export { default as PoseGeometryViewer } from './components/three/PoseGeometryViewer';
+export { default as LightProbeSphere } from './components/three/LightProbeSphere';
 
 export function ThreeViewport({
   coverage,
@@ -20,10 +23,14 @@ export function PoseCoverageInspector({
   coverage,
   track,
   mesh,
+  parameters,
+  setParameters,
 }: {
   coverage: Coverage | null;
   track: Track | null;
   mesh: Reconstruction | null;
+  parameters?: WorkstationParameters;
+  setParameters?: (params: WorkstationParameters) => void;
 }) {
   return (
     <section className="pose-inspector">
@@ -32,6 +39,7 @@ export function PoseCoverageInspector({
         <span className="tiny-badge">{mesh?.method === 'flame' ? 'FLAME MESH' : 'ESTIMATED 2.5D'}</span>
       </div>
       <PoseGeometryViewer coverage={coverage} track={track} mesh={mesh} />
+      <LightProbeSphere parameters={parameters} setParameters={setParameters} />
       <p className="muted compact">
         {mesh
           ? `Imported ${mesh.method === 'flame' ? 'FLAME 3D' : 'approximate 2.5D'} mesh · user supplied provenance`

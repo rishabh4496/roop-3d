@@ -20,6 +20,13 @@ class WorkstationParameters(Contract):
     # Pre-swap 3D pose frontalization (reduces profile mismatch before inswapper_128) and TPS expression warping.
     pose_frontalization: float = Field(default=0, ge=0, le=1)
     tps_expression_weight: float = Field(default=0, ge=0, le=1)
+    # Stage 17: 3D Spherical Harmonics relighting, specular skin sheen, and cast shadow preservation.
+    relight_strength: float = Field(default=0.8, ge=0, le=1)
+    specular_sheen: float = Field(default=0.25, ge=0, le=1)
+    shadow_preservation: float = Field(default=0.85, ge=0, le=1)
+    lighting_mode: Literal['auto', 'manual'] = 'auto'
+    manual_light_yaw: float = Field(default=35.0, ge=-180.0, le=180.0)
+    manual_light_pitch: float = Field(default=25.0, ge=-90.0, le=90.0)
 
     @model_serializer(mode='wrap')
     def compatible_serialization(self, handler):
@@ -46,4 +53,11 @@ class WorkstationParameters(Contract):
         return CompositeOptions(color_method=self.color_method, fidelity_weight=self.fidelity_weight, restoration_blend=0 if 'restorer' in self.bypass else self.restoration_blend,
                                 feather_px=self.feather_px,
                                 swap_weight=self.swap_weight, erosion_px=self.erosion_px,
-                                color_strength=0 if 'color' in self.bypass else self.color_strength)
+                                color_strength=0 if 'color' in self.bypass else self.color_strength,
+                                relight=True,
+                                relight_strength=self.relight_strength,
+                                specular_sheen=self.specular_sheen,
+                                shadow_preservation=self.shadow_preservation,
+                                lighting_mode=self.lighting_mode,
+                                manual_light_yaw=self.manual_light_yaw,
+                                manual_light_pitch=self.manual_light_pitch)

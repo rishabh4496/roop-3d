@@ -112,6 +112,11 @@ def collect_composite(session, image, result, parameters, *, capture=True, occlu
         if stage == 'matte':
             projected = cv2.warpAffine(crop, inverse, size)
             buffers[stage] = np.maximum(buffers.get(stage, np.zeros(image.shape[:2], np.uint8)), projected)
+        elif stage in ('normal_map', 'sh_lighting'):
+            projected = cv2.warpAffine(crop, inverse, size)
+            weight = cv2.warpAffine(np.ones(crop.shape[:2], np.float32), inverse, size)[:, :, None]
+            base = buffers.get(stage, np.zeros_like(image))
+            buffers[stage] = np.clip(projected + base * (1 - weight), 0, 255).astype(np.uint8)
         else:
             projected = cv2.warpAffine(crop, inverse, size)
             weight = cv2.warpAffine(np.ones(crop.shape[:2], np.float32), inverse, size)[:, :, None]
@@ -122,6 +127,22 @@ def collect_composite(session, image, result, parameters, *, capture=True, occlu
     final = session.compositor.compose(image, result.replacements, landmarks, scene_cut=True,
         options=parameters.composite_options(), observer=observe if capture else None, occluder_masks=occluder_masks)
     buffers['final'] = final
+    if 'normal_map' not in buffers:
+        from roop_3d.relighting_3d import SurfaceNormalEstimator
+        est = SurfaceNormalEstimator()
+        norm_map = est.compute_normals(image)
+        buffers['normal_map'] = SurfaceNormalEstimator.encode_normal_map_rgb(norm_map)
+    if 'sh_lighting' not in buffers:
+        from roop_3d.relighting_3d import SphericalHarmonicsLighting, SurfaceNormalEstimator
+        sh_est = SphericalHarmonicsLighting()
+        norm_map = buffers.get('normal_map')
+        if norm_map is not None:
+            sh_coeffs = sh_est.create_directional_lighting(np.array([0.7, 0.0, 0.7]))
+            decoded = SurfaceNormalEstimator.decode_normal_map_rgb(norm_map)
+            shading = sh_est.evaluate_shading(decoded, sh_coeffs)
+            buffers['sh_lighting'] = np.clip(shading * 255.0, 0, 255).astype(np.uint8)
+        else:
+            buffers['sh_lighting'] = image.copy()
     return buffers
 
 
@@ -311,6 +332,8 @@ class PreviewService:
                 cv2.putText(pose, 'Y/P/R ' + '/'.join(f'{p:.1f}' for p in as_pose3d(face.pose).as_tuple()),
                             (max(0, x1), max(20, y1)), cv2.FONT_HERSHEY_SIMPLEX, .6, (80, 245, 180), 2)
             buffers.update(detector=detection, pose=pose)
+            buffers.setdefault('normal_map', frame.image.copy())
+            buffers.setdefault('sh_lighting', frame.image.copy())
             if value.request.export and {'normal', 'depth'} & set(value.request.export.passes):
                 aligned = []
                 for item in result.replacements:

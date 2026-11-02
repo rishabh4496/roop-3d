@@ -28,7 +28,13 @@ class CompositeOptions:
     fidelity_weight: float = 0.5
     color_method: str = "lab"
     color_strength: float = 0.65
-    relight: bool = False
+    relight: bool = True
+    relight_strength: float = 0.8
+    specular_sheen: float = 0.25
+    shadow_preservation: float = 0.85
+    lighting_mode: str = "auto"
+    manual_light_yaw: float = 35.0
+    manual_light_pitch: float = 25.0
     semantic_confidence_threshold: float = 0.55
     feather_px: float = 5.0
     pyramid_levels: int = 4
@@ -189,7 +195,24 @@ class FrameCompositor:
                         getattr(self, "timestamp_seconds", (frame_index if frame_index is not None else self.frames_composited) / 30.0)))
             if options.relight:
                 skin = face_mask.skin if face_mask.source.startswith("bisenet") else alpha
-                harmonized = relight_spherical_harmonics(harmonized, target_crop, skin, alpha)
+                from roop_3d.relighting_3d import relighter
+                skin = face_mask.skin if getattr(face_mask, "source", "").startswith("bisenet") else alpha
+                relit_crop, normal_vis, sh_vis, _ = relighter.relight(
+                    harmonized,
+                    target_crop,
+                    skin_mask=skin,
+                    face_mask=alpha,
+                    relight_strength=getattr(options, "relight_strength", 0.8),
+                    specular_sheen=getattr(options, "specular_sheen", 0.25),
+                    shadow_preservation=getattr(options, "shadow_preservation", 0.85),
+                    lighting_mode=getattr(options, "lighting_mode", "auto"),
+                    manual_light_yaw=getattr(options, "manual_light_yaw", 35.0),
+                    manual_light_pitch=getattr(options, "manual_light_pitch", 25.0),
+                )
+                harmonized = relit_crop
+                if observer is not None:
+                    observer('normal_map', normal_vis, replacement.inverse, alpha)
+                    observer('sh_lighting', sh_vis, replacement.inverse, alpha)
             temporal = self.temporal.update(replacement.track_id, replacement.inverse, alpha / max(options.swap_weight, 1e-8), color_stats,
                                             frame_index=frame_index, scene_cut=False)
             if observer is not None:
