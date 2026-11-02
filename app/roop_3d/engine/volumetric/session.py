@@ -50,11 +50,21 @@ class Replacement:
 
 
 @dataclass(frozen=True)
+class Withheld:
+    """A selected face that was deliberately left untouched because its identity was not verified."""
+    track_id: int
+    reason: str
+    state: str
+    confidence: float
+
+
+@dataclass(frozen=True)
 class FrameResult:
     observations: tuple[TrackedFace, ...]
     replacements: tuple[Replacement, ...]
     latency: StageLatency
     scene_cut: bool
+    withheld: tuple[Withheld, ...] = ()
 
 
 def swapped_portrait(portrait: AlignedCrop, swap: SwapResult) -> np.ndarray:
@@ -83,6 +93,7 @@ class ReferencePipeline:
         self.lip_sync = LipSyncAdapter(self.catalog)
         self.selected_ids: frozenset[int] | None = None
         self.sources_by_track: dict[int, FaceSetDocument] = {}
+        self.identity_guard = None
         self.prepared = False
         self.lock = threading.RLock()
         self.last_latency: StageLatency | None = None
@@ -93,7 +104,8 @@ class ReferencePipeline:
     @guarded
     def prepare_session(self, source: FaceSetDocument, *, track_ids: set[int] | None = None,
                         sources_by_track: Mapping[int, FaceSetDocument] | None = None,
-                        retarget: Literal["auto", "off", "required"] = "auto") -> dict:
+                        retarget: Literal["auto", "off", "required"] = "auto",
+                        track_policy=None, detection_threshold: float = 0.5) -> dict:
         with self.lock:
             if retarget not in ("auto", "off", "required") or track_ids is not None and (
                     len(track_ids) > 32 or any(type(i) is not int or i < 0 for i in track_ids)):
@@ -105,7 +117,8 @@ class ReferencePipeline:
             self.release_session()
             try:
                 self.swapper.prepare_session(source, sources_by_track=mapped_sources)
-                self.tracker = FaceTracker(self.catalog, config=self.config)
+                self.tracker = FaceTracker(self.catalog, config=self.config, threshold=detection_threshold,
+                                           policy=track_policy)
                 self.selected_ids = frozenset(track_ids) if track_ids is not None else None
                 self.sources_by_track = mapped_sources
                 if retarget != "off":
@@ -117,6 +130,11 @@ class ReferencePipeline:
             except BaseException:
                 self.release_session()
                 raise
+
+    def set_identity_guard(self, guard) -> None:
+        """Install the render-time identity lock check (see roop_3d.identity.guard)."""
+        with self.lock:
+            self.identity_guard = guard
 
     def configure_temporal(self, settings) -> None:
         from roop_3d.temporal_stabilizer import TemporalStabilizer
@@ -157,9 +175,19 @@ class ReferencePipeline:
             elif hasattr(self.swapper, '_hysteresis'):
                 self.swapper._hysteresis = {key:value for key,value in self.swapper._hysteresis.items() if key in self.tracker.active_ids}
             replacements, swap_seconds, retarget_seconds, projection_seconds = [], 0.0, 0.0, 0.0
+            withheld: list[Withheld] = []
             for tracked in faces:
                 if self.selected_ids is not None and tracked.track_id not in self.selected_ids:
                     continue
+                if not tracked.swap_allowed:
+                    withheld.append(Withheld(tracked.track_id, tracked.reason or tracked.state, tracked.state, tracked.confidence))
+                    continue
+                if self.identity_guard is not None:
+                    verdict = self.identity_guard.check(tracked)
+                    if not verdict.allowed:
+                        withheld.append(Withheld(tracked.track_id, verdict.reason or "IDENTITY_UNVERIFIED",
+                                                 tracked.state, verdict.similarity))
+                        continue
                 face = tracked.observation
                 at = time.perf_counter()
                 swap = self.swapper.infer_frame(image, face.landmarks5, pose=face.pose,
@@ -202,7 +230,7 @@ class ReferencePipeline:
             self.frames_processed += 1
             self.last_latency = StageLatency((detection_end - began) * 1000, swap_seconds * 1000,
                                              retarget_seconds * 1000, (ended - began) * 1000, projection_seconds * 1000)
-            return FrameResult(faces, tuple(replacements), self.last_latency, self.tracker.scene_cut)
+            return FrameResult(faces, tuple(replacements), self.last_latency, self.tracker.scene_cut, tuple(withheld))
 
     def _detect_landmarks106(self, crop: np.ndarray) -> np.ndarray | None:
         """106 dense landmarks of a generated crop (the crop is a tight face, so the box is the whole image)."""
@@ -261,6 +289,7 @@ class ReferencePipeline:
             self.lip_sync.release()
             self.selected_ids = None
             self.sources_by_track.clear()
+            self.identity_guard = None
             self.prepared = False
             self.last_latency = None
             self.frames_processed = 0

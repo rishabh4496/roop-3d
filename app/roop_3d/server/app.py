@@ -174,6 +174,8 @@ def create_app(settings: Settings | None = None, *, repo_root: Path | None = Non
     app.include_router(face_extract_router)
     from roop_3d.server.face_bank import router as face_bank_router
     app.include_router(face_bank_router)
+    from roop_3d.server.identity_lock import router as identity_lock_router
+    app.include_router(identity_lock_router)
     app.include_router(finishing_router)
     from roop_3d.server.queue_routes import router as queue_router
     app.include_router(queue_router)

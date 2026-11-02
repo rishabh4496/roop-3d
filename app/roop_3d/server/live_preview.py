@@ -413,6 +413,10 @@ class LivePreviewService:
             raise DomainError("INSPECTION_INVALID", "Saved inspection is invalid", 422) from None
         track_ids = [track.track_id for track in inspection.tracks]
         sources, blend = payload.resolved_sources()
+        if (inspection.tracking_method == "identity_lock_v1" and payload.face_mappings is None
+                and not payload.target_face_id and payload.cluster_index is None):
+            # Identity-locked inspections never fall back to "swap every detected face".
+            raise DomainError("TARGET_SELECTION_REQUIRED", "Select the target face (face_mappings) to preview", 422)
         if payload.face_mappings is not None:
             mappings = payload.face_mappings
         elif payload.target_face_id:

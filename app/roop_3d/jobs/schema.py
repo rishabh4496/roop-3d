@@ -68,6 +68,8 @@ class JobRequest(Contract):
     parameter_curves: ParameterCurves | None = None
     face_segments: tuple[FaceSegment, ...] | None = Field(default=None, max_length=256)
     export: ExportOptions | None = None
+    # Binds the render to an explicit, hash-verified target->FaceSet identity lock (roop_3d.identity.lock).
+    identity_lock_id: str | None = Field(default=None, pattern=r"^[0-9a-f]{32}$")
 
     def identity_payload(self) -> dict:
         value = self.model_dump(mode="json")
@@ -76,7 +78,7 @@ class JobRequest(Contract):
             for field in ('swap_weight', 'erosion_px', 'pose_frontalization', 'tps_expression_weight'):
                 if field not in self.workstation_parameters.model_fields_set:
                     value['workstation_parameters'].pop(field, None)
-        for name in ("identity_blend", "trim_start_seconds", "trim_end_seconds", "mask_base64", "workstation_parameters", "parameter_curves", "face_segments", "export"):
+        for name in ("identity_blend", "trim_start_seconds", "trim_end_seconds", "mask_base64", "workstation_parameters", "parameter_curves", "face_segments", "export", "identity_lock_id"):
             if value.get(name) is None:
                 value.pop(name, None)
         return value

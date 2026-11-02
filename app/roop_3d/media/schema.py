@@ -14,6 +14,10 @@ class InspectRequest(MediaRequest):
     max_samples: int = Field(default=32, ge=1, le=128, strict=True)
     max_decoded_frames: int = Field(default=10000, ge=1, le=10000, strict=True)
     detection_threshold: float = Field(default=0.5, ge=0.1, le=0.99)
+    # Opt in to the identity-lock tracker (track states, confidence, strict reacquisition) and the
+    # identity report. Off keeps the original inspection behaviour and response bit-for-bit.
+    identity_lock: bool = False
+    time_budget_seconds: float = Field(default=30.0, ge=1.0, le=900.0)
 
 
 class AudioTrack(Contract):
@@ -95,12 +99,16 @@ class FaceInspection(Contract):
     decoded_frames: int
     sampled_frames: int
     truncated: bool
-    tracking_method: Literal["sampled_spatial_iou", "iou_arcface_hungarian"] = "sampled_spatial_iou"
+    tracking_method: Literal["sampled_spatial_iou", "iou_arcface_hungarian", "identity_lock_v1"] = "sampled_spatial_iou"
     identity_continuity_verified: Literal[False] = False
     warnings: tuple[str, ...] = ()
     scene_cut_frames: tuple[int, ...] = ()
     recognizer_model_id: str | None = None
     recognizer_sha256: str | None = None
+    # Present only for tracking_method == "identity_lock_v1".
+    tracking_policy_fingerprint: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    detection_threshold: float | None = Field(default=None, ge=0.1, le=0.99)
+    identity_report_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
 
 
 class TrackToFaceSetMap(Contract):

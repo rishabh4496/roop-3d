@@ -1,7 +1,8 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState, type ComponentType } from 'react';
 import { api, post, upload } from './api';
 import { renderProbe } from './utils/renderProbe';
-import type { Capabilities, Config, Coverage, FaceSet, Inspection, Job, JobRequest, Probe, Project, Reconstruction, Track } from './contracts';
+import type { Capabilities, Config, Coverage, FaceSet, IdentityLock, Inspection, Job, JobRequest, Probe, Project, Reconstruction, Track } from './contracts';
+import { IdentityLockBar, IdentityTrackStats, lockProblem, useContactSheet } from './components/facemgr/IdentityLockPanel';
 import { EventConnection } from './events';
 import { publishHardware } from './stores/telemetryStore';
 import { setPlayhead } from './stores/playheadStore';
@@ -40,6 +41,7 @@ export default function App() {
   const [target, setTarget] = useState(''), [probe, setProbe] = useState<Probe | null>(null), [time, setCommittedTime] = useState(0), [keys, setKeys] = useState<number[]>([]);
   const setTime = useCallback((value: number) => { setCommittedTime(value); setPlayhead(value); }, []);
   const [inspection, setInspection] = useState<Inspection | null>(null), [selectedTrack, setSelectedTrack] = useState<string>('');
+  const [identityLock, setIdentityLock] = useState<IdentityLock | null>(null);
   const [sourceId, setSourceId] = useState(''), [coverage, setCoverage] = useState<Coverage | null>(null), [mesh, setMesh] = useState<Reconstruction | null>(null);
   const [identitySourceB, setIdentitySourceB] = useState('');
   const [reconstructions, setReconstructions] = useState<{ reconstruction_id: string }[]>([]);
@@ -100,6 +102,7 @@ export default function App() {
   const uploadAbort = useRef<AbortController | null>(null), queueKey = useRef({ fingerprint: '', key: '' });
   const currentJob = jobs.find(job => job.job_id === selectedJob) ?? null;
   const output = currentJob?.state === 'succeeded' && currentJob.request.target_path === target ? currentJob.output?.output_path ?? '' : '';
+  const { sheet } = useContactSheet(inspection, target);
   const currentTrack: Track | null = inspection?.tracks.find(track => track.track_id === selectedTrack) ?? null;
   const projectDirty = !project || project.name !== projectName || project.request.target_path !== target
     || project.request.inspection_id !== inspection?.inspection_id || (project.request.trim_start_seconds ?? 0) !== trimStart
@@ -163,7 +166,7 @@ export default function App() {
   }, [sourceId]);
   const loadTarget = async (path: string) => {
     const [info, frames, reconstructionList] = await Promise.all([post<Probe>('/media/probe', { path }), api<{ timestamps: number[] }>(`/media/keyframes?${new URLSearchParams({ path })}`), api<typeof reconstructions>('/reconstructions')]);
-    setTarget(path); setProbe(info); setTime(0); setKeys(frames.timestamps); setInspection(null); setAssigned({}); setSelectedTrack(''); setMesh(null); setTrimStart(0); setTrimEnd(null); setReconstructions(reconstructionList); setSelectedJob(''); setProject(null);
+    setTarget(path); setProbe(info); setTime(0); setKeys(frames.timestamps); setInspection(null); setIdentityLock(null); setAssigned({}); setSelectedTrack(''); setMesh(null); setTrimStart(0); setTrimEnd(null); setReconstructions(reconstructionList); setSelectedJob(''); setProject(null);
     useFaceSelectionStore.getState().reset(); useHistoryStore.getState().reset(); setMaskRaw(null);
   };
   const importAsset = (file: File | undefined) => {
@@ -177,8 +180,8 @@ export default function App() {
     });
   };
   const inspect = () => void run('Inspecting target faces', async () => {
-    const result = await post<Inspection>('/media/inspect-faces', { path: target });
-    setInspection(result); setAssigned({}); setSelectedTrack(result.tracks[0]?.track_id ?? '');
+    const result = await post<Inspection>('/media/inspect-faces', { path: target, identity_lock: true });
+    setInspection(result); setIdentityLock(null); setAssigned({}); setSelectedTrack(result.tracks[0]?.track_id ?? '');
     useFaceSelectionStore.getState().populateFromInspection(result, probe, {});
     if (!result.tracks.length) setNotice('No faces were detected. Try a clearer target frame or another clip.');
   });
@@ -186,7 +189,10 @@ export default function App() {
     const selected = renderMappings();
     if(identitySourceB && identitySourceB === sourceId) throw new Error("Choose distinct Source A and Source B identities.");
     if (!target || !inspection || !selected.length) throw new Error('Inspect a target and map at least one face track before continuing.');
-    return { identity_blend: identitySourceB && sourceId ? {method: 'slerp',source_face_ids: [sourceId, identitySourceB],weights:[1,0]} : undefined, target_path: target, inspection_id: inspection.inspection_id, face_mappings: selected, processing: 'local', remote_consent: false, trim_start_seconds: trimStart || null, trim_end_seconds: trimEnd, mask_base64: maskBase64 || undefined, workstation_parameters: parameters, parameter_curves: { tracks: curves }, face_segments: buildFaceSegments(clusters, assigned), export: exportOptions };
+    const segments = buildFaceSegments(clusters, assigned);
+    const lockIssue = lockProblem(identityLock, Object.fromEntries(selected.map(item => [item.track_id, item.faceset_id])));
+    if (lockIssue) throw new Error(`${lockIssue} Re-lock or release the identity lock before rendering.`);
+    return { identity_lock_id: identityLock?.lock_id, identity_blend: identitySourceB && sourceId ? {method: 'slerp',source_face_ids: [sourceId, identitySourceB],weights:[1,0]} : undefined, target_path: target, inspection_id: inspection.inspection_id, face_mappings: selected, processing: 'local', remote_consent: false, trim_start_seconds: trimStart || null, trim_end_seconds: trimEnd, mask_base64: maskBase64 || undefined, workstation_parameters: parameters, parameter_curves: { tracks: curves }, face_segments: segments, export: exportOptions };
   };
   const executeQueue = () => void run('Queueing local render', async () => {
     const value = request(), fingerprint = JSON.stringify(value);
@@ -436,7 +442,7 @@ export default function App() {
       <section className="face-inspector" data-tour="tracks"><div className="panel-heading"><div><span className="eyebrow">TARGET FACE INSPECTOR</span><h2>Assign an identity</h2></div><button className="button" disabled={!target || !!reason('face_inspection') || !!busy} title={reason('face_inspection') ?? ''} onClick={inspect}>{inspection ? 'Reinspect faces' : 'Inspect target faces'}</button></div>
         {!inspection ? <div className="mapping-empty"><span>◎</span><p>Inspect the target to find persistent face tracks.<small>Then map each track to an observed source FaceSet.</small></p></div> : <><div className="inspection-meta"><span>{inspection.tracks.length} detected tracks</span><span>Identity continuity is estimated</span>{inspection.truncated && <strong>Bounded sample — truncated</strong>}</div>{inspection.warnings.map(warning => <p key={warning} className="inline-warning">{warning}</p>)}
           <div className="track-list">{inspection.tracks.map(track => <div className={`track-card ${selectedTrack === track.track_id ? 'active' : ''}`} key={track.track_id}>
-            <button className="track-select" aria-label={`Inspect ${track.track_id}`} onClick={() => { setSelectedTrack(track.track_id); setTime(track.first_timestamp_seconds); if (assigned[track.track_id]) setSourceId(assigned[track.track_id]); }}>{track.thumbnail_base64 ? <img src={`data:${track.thumbnail_mime};base64,${track.thumbnail_base64}`} alt={`${track.track_id} detected face`}/> : <span className="track-fallback">◎</span>}<span><strong>{track.track_id.replace('track_', 'Face ')}</strong><small>Frames {track.first_frame}–{track.last_frame}</small><small>{formatTime(track.first_timestamp_seconds)} → {formatTime(track.last_timestamp_seconds)}</small></span></button><span className="mapping-arrow">→</span><label className="mapping-choice"><span>Source identity</span><select aria-label={`Identity for ${track.track_id}`} value={assigned[track.track_id] ?? ''} disabled={!sources.length} onChange={event => { const nextVal = event.target.value; setAssigned(previous => ({ ...previous, [track.track_id]: nextVal })); useFaceSelectionStore.getState().assignSource(track.track_id, nextVal || null); setSourceId(nextVal); }}><option value="">Keep original</option>{sources.map(source => <option key={source.faceset_id} value={source.faceset_id}>{source.name}</option>)}</select></label></div>)}</div></>}
+            <button className="track-select" aria-label={`Inspect ${track.track_id}`} onClick={() => { setSelectedTrack(track.track_id); setTime(track.first_timestamp_seconds); if (assigned[track.track_id]) setSourceId(assigned[track.track_id]); }}>{track.thumbnail_base64 ? <img src={`data:${track.thumbnail_mime};base64,${track.thumbnail_base64}`} alt={`${track.track_id} detected face`}/> : <span className="track-fallback">◎</span>}<span><strong>{track.track_id.replace('track_', 'Face ')}</strong><small>Frames {track.first_frame}–{track.last_frame}</small><small>{formatTime(track.first_timestamp_seconds)} → {formatTime(track.last_timestamp_seconds)}</small><IdentityTrackStats track={sheet?.tracks.find(item => item.track_id === track.track_id)} /></span></button><span className="mapping-arrow">→</span><label className="mapping-choice"><span>Source identity</span><select aria-label={`Identity for ${track.track_id}`} value={assigned[track.track_id] ?? ''} disabled={!sources.length} onChange={event => { const nextVal = event.target.value; setAssigned(previous => ({ ...previous, [track.track_id]: nextVal })); useFaceSelectionStore.getState().assignSource(track.track_id, nextVal || null); setSourceId(nextVal); }}><option value="">Keep original</option>{sources.map(source => <option key={source.faceset_id} value={source.faceset_id}>{source.name}</option>)}</select></label></div>)}</div><IdentityLockBar target={target} inspection={inspection} mappings={Object.fromEntries(renderMappings().map(item => [item.track_id, item.faceset_id]))} sources={sources} lock={identityLock} onLock={setIdentityLock} busy={!!busy} onError={setError} /></>}
       </section>
       <QueueDrawer
         jobs={jobs}
@@ -460,7 +466,7 @@ export default function App() {
         </div>
       )}
     </main></div></AppRouter>
-    <WorkstationScreens route={route} caps={caps} config={config} sources={sources} jobs={jobs} projects={projects} busy={!!busy} connection={connection} openProject={openProject} showJob={showJob} controlJob={controlJob} saveSettings={saveSettings} refreshJobs={refreshJobs} openLibrary={() => { setProjectsOpen(true); void refreshProjects(); }} latency={previewLatency} target={target} probe={probe} inspection={inspection} refreshProjects={refreshProjects} exportOptions={exportOptions} onExportChange={setExportOptions} meshBlend={parameters.pose_mode === 'mesh_blend'} onQueue={queue} canQueue={!reason('queue') && !!inspection && !!renderMappings().length && !busy} previewRequest={inspection && renderMappings().length ? request() : null} timestamp={time} themeName={themeName} onThemeChange={setThemeName} onStartTour={() => setTourOpen(true)}/>
+    <WorkstationScreens route={route} caps={caps} config={config} sources={sources} jobs={jobs} projects={projects} busy={!!busy} connection={connection} openProject={openProject} showJob={showJob} controlJob={controlJob} saveSettings={saveSettings} refreshJobs={refreshJobs} openLibrary={() => { setProjectsOpen(true); void refreshProjects(); }} latency={previewLatency} target={target} probe={probe} inspection={inspection} refreshProjects={refreshProjects} exportOptions={exportOptions} onExportChange={setExportOptions} meshBlend={parameters.pose_mode === 'mesh_blend'} onQueue={queue} canQueue={!reason('queue') && !!inspection && !!renderMappings().length && !busy} previewRequest={inspection && renderMappings().length ? previewRequest : null} timestamp={time} themeName={themeName} onThemeChange={setThemeName} onStartTour={() => setTourOpen(true)}/>
     <footer className="app-footer"><span>ROOP 3D / LOCAL WORKSTATION</span><span>Observed identities. Explicit processing. Synthetic media.</span><span>API :{config?.port ?? '—'}</span></footer>
     {projectsOpen && <div className="modal-backdrop" onClick={() => setProjectsOpen(false)}><section role="dialog" aria-modal="true" aria-labelledby="projects-title" className="project-modal" onClick={event => event.stopPropagation()}><div className="panel-heading"><div><span className="eyebrow">VERSIONED .R3DP MANIFESTS</span><h2 id="projects-title">Project library</h2></div><button aria-label="Close projects" className="icon-button" onClick={() => setProjectsOpen(false)}>×</button></div><p className="muted">Reopening verifies target, inspection, FaceSet, and model hashes. Project files contain references and settings, never raw media.</p><button className="button" disabled={!!busy} onClick={() => projectInput.current?.click()}>Import .r3dp</button><input ref={projectInput} hidden type="file" accept=".r3dp,application/json" onChange={event => { importProject(event.target.files?.[0]); event.target.value = ''; }}/>{!projects.length && <p className="empty-note muted">No saved projects yet.</p>}{projects.map(item => <div key={item.project_id} className="saved-project"><div><strong>{item.name}</strong><small>{new Date(item.saved_at).toLocaleString()} · checkpoint {item.last_completed_frame >= 0 ? item.last_completed_frame : 'none'}</small></div><button className="button small" disabled={!!busy} onClick={() => openProject(item.project_id)}>Verify & open</button><a className="button small" href={`/api/v1/projects/${item.project_id}/download`} download>Export</a></div>)}{project?.checkpoint_job_id && <button className="button accent" disabled={!!busy || !!reason('queue')} onClick={() => void run('Verifying checkpoint continuation', async () => { const resumed = await post<Job>(`/projects/${project.project_id}/resume`, {}); setSelectedJob(resumed.job_id); await refreshJobs(); setProjectsOpen(false); })}>Verify & resume {project.name}</button>}</section></div>}
     <QuickTour open={tourOpen} onClose={() => setTourOpen(false)} onNavigate={route => { if (window.location.hash !== route) window.location.hash = route; }} />

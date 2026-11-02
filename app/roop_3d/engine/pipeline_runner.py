@@ -35,6 +35,7 @@ from roop_3d.models.catalog import ModelCatalog
 from roop_3d.compositor.pipeline import CompositeOptions
 from roop_3d.compositor.restoration import GpenRestorer
 from roop_3d.engine.edit_plan import FrameEditPlan
+from roop_3d.engine.detection.track_policy import POLICY_VERSION, TrackPolicy
 
 
 class PipelineCheckpoint(Contract):
@@ -122,6 +123,10 @@ class PreparedPipeline:
     checkpoint: PipelineCheckpoint
     settings: Settings
     edit_plan: FrameEditPlan | None = None
+    # Identity lock (None when the job is not bound to a lock) and tracker options replayed from the inspection.
+    identity_lock: object | None = None
+    identity_guard: object | None = None
+    tracking: Mapping | None = None
 
 
 class MasterPipelineRunner:
@@ -242,6 +247,39 @@ class MasterPipelineRunner:
                 return path
         raise DomainError("FACESET_ARCHIVE_NOT_FOUND", "Mapped FaceSet archive is unavailable in owned storage", 404)
 
+    def lock_store(self, settings: Settings):
+        from roop_3d.identity.lock import LockEnvironment, LockStore
+        return LockStore(LockEnvironment(self.root, self.media.path, lambda: settings, self.catalog))
+
+    def tracking_options(self, request) -> dict:
+        """Tracker configuration the render must replay: exactly what the inspection was made with.
+
+        Legacy inspections (no policy) keep the legacy tracker and its default threshold, so existing
+        saved inspections, projects and previews behave exactly as before.
+        """
+        path = safe_path(self.root, f"roop_3d/.runtime/inspections/{request.inspection_id}.json")
+        try:
+            inspection = FaceInspection.model_validate_json(path.read_text("utf-8"))
+        except (OSError, ValueError):
+            raise DomainError("INSPECTION_INVALID", "Saved inspection is invalid", 422) from None
+        if inspection.tracking_method != POLICY_VERSION:
+            return {}
+        policy = TrackPolicy()
+        if inspection.tracking_policy_fingerprint != policy.fingerprint():
+            raise DomainError("IDENTITY_POLICY_CHANGED", "The tracking policy changed since this inspection; inspect again", 409)
+        return {"track_policy": policy, "detection_threshold": inspection.detection_threshold or 0.5}
+
+    def identity_context(self, request, labels_to_ids: Mapping[str, int], settings: Settings):
+        """(lock, guard) for a lock-bound job, re-verified against the files on disk right now."""
+        if request.identity_lock_id is None:
+            return None, None
+        from roop_3d.identity.guard import IdentityGuard
+        from roop_3d.identity.report import read_report
+        lock = self.lock_store(settings).verify_job(request)
+        report = read_report(self.root, lock.inspection_id, expected_sha256=lock.identity_report_sha256)
+        guard = IdentityGuard.from_report(report, labels_to_ids, {item.track_id: item.faceset_id for item in lock.assignments})
+        return lock, guard
+
     def _prepare_inputs(self, record: JobRecord, settings: Settings
                         ) -> tuple[Path, str, int | None, dict[int, FaceSetDocument], dict[str, int], list[str]]:
         request = record.request
@@ -328,6 +366,8 @@ class MasterPipelineRunner:
         curves_dict = record.request.parameter_curves.model_dump(mode="json") if record.request.parameter_curves else {}
         input_hashes_dict = {"target": digest, "target_path": record.request.target_path, "inspection_id": record.request.inspection_id}
         input_hashes_dict.update(source_fingerprints)
+        if record.request.identity_lock_id:
+            input_hashes_dict["identity_lock_id"] = record.request.identity_lock_id
         checkpoint = checkpoint.model_copy(update={
             "settings_sha256": fingerprint,
             "faceset_sha256": source_fingerprints,
@@ -345,8 +385,10 @@ class MasterPipelineRunner:
         workdir.mkdir(parents=True, exist_ok=True)
         numeric_ids = set(labels_to_ids.values())
         by_track = {track_id: sources[track_id] for track_id in numeric_ids}
+        lock, guard = self.identity_context(record.request, labels_to_ids, settings)
         return PreparedPipeline(target, digest, total, by_track, labels_to_ids,
-                                tuple(faceset_ids), checkpoint, settings, edit_plan)
+                                tuple(faceset_ids), checkpoint, settings, edit_plan,
+                                lock, guard, self.tracking_options(record.request))
 
     @staticmethod
     def _checkpoint_inputs(record: JobRecord) -> dict:
@@ -460,6 +502,7 @@ class MasterPipelineRunner:
         export = record.request.export
         scene_cuts: list[int] = []
         swapped_ranges: list[list[int]] = []
+        identity_report = None
 
         try:
             signal = self._control_signal(control)
@@ -468,7 +511,12 @@ class MasterPipelineRunner:
                 raise signal()
             session.prepare_session(base_source, track_ids=numeric_ids,
                                     sources_by_track=source_by_track,
-                                    retarget='off' if record.request.parameters_at(0).pose_mode == 'mesh_blend' else 'auto')
+                                    retarget='off' if record.request.parameters_at(0).pose_mode == 'mesh_blend' else 'auto',
+                                    **(prepared.tracking or {}))
+            if prepared.identity_guard is not None:
+                from roop_3d.identity.guard import IdentityRunReport
+                session.set_identity_guard(prepared.identity_guard)
+                identity_report = IdentityRunReport(prepared.identity_lock, labels_to_ids)
             if hasattr(session, 'configure_temporal'):
                 session.configure_temporal(settings)
             architecture = record.request.parameters_at(0).restorer_model
@@ -510,6 +558,8 @@ class MasterPipelineRunner:
                         session.set_frame_timestamp(float(decoded.timestamp.seconds))
                     result = (session.infer_frame(decoded.image, **parameters.inference_options())
                               if parameters else session.infer_frame(decoded.image))
+                    if identity_report is not None:
+                        identity_report.observe(decoded.index, result)
                     if export:
                         if getattr(result, 'scene_cut', False):
                             scene_cuts.append(decoded.index)
@@ -555,6 +605,9 @@ class MasterPipelineRunner:
             required_ids = numeric_ids if record.request.face_segments is None else {prepared.edit_plan.ids[item.track_id] for item in record.request.face_segments if item.role == 'swap'}
             missing = required_ids - mapped_seen
             if missing:
+                if identity_report is not None and not identity_report.never_seen() and identity_report.never_verified():
+                    raise DomainError("TRACK_IDENTITY_UNVERIFIED",
+                                      "A locked track was seen but its identity was never verified; no face was replaced for it", 422)
                 raise DomainError("TRACK_NOT_DETECTED", "One or more mapped tracks were not detected during rendering", 422)
             checkpoint = self._checkpoint(checkpoint, completed_frame=last_completed,
                                           profile=admission.profile)
@@ -628,6 +681,8 @@ class MasterPipelineRunner:
                                for (label, source_id) in zip(labels_to_ids, faceset_ids)],
             "model_hashes": model_hashes,
         }
+        if identity_report is not None:
+            metadata['identity_lock'] = identity_report.manifest()
         if export:
             metadata['timeline'] = {'scene_cuts': scene_cuts, 'swapped_ranges': swapped_ranges}
         pass_result = None

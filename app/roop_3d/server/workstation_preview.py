@@ -188,7 +188,8 @@ class PreviewService:
                 raise DomainError('PREVIEW_CAPACITY', 'Rendering currently owns the available execution capacity', 409)
             runner = MasterPipelineRunner(self.state.root, self.state.models, self.state.media, lambda: settings)
             # Reuse target hashes, inspection identity and FaceSet validation without creating a job/checkpoint.
-            target, _, _, sources, _, _ = runner._prepare_inputs(JobRecord(request=value.request), settings)
+            target, _, _, sources, labels_to_ids, _ = runner._prepare_inputs(JobRecord(request=value.request), settings)
+            _, identity_guard = runner.identity_context(value.request, labels_to_ids, settings)
             if value.identity_blend is not None:
                 blend = value.identity_blend
                 blended = blend_documents([runner.faceset_reader.read(runner._faceset_path(item), faceset_id=item)
@@ -199,7 +200,10 @@ class PreviewService:
                                     reserve_mib=settings.memory_safety_reserve_mb)
             session = ReferencePipeline(self.state.models, runtime)
             session.prepare_session(next(iter(sources.values())), track_ids=set(sources), sources_by_track=sources,
-                                    retarget='off' if value.effective_parameters.pose_mode == 'mesh_blend' else 'auto')
+                                    retarget='off' if value.effective_parameters.pose_mode == 'mesh_blend' else 'auto',
+                                    **runner.tracking_options(value.request))
+            if identity_guard is not None:
+                session.set_identity_guard(identity_guard)
             if hasattr(session, 'configure_temporal'):
                 session.configure_temporal(settings)
             base_parameters = value.effective_parameters

@@ -22,6 +22,8 @@ from roop_3d.core.settings import Settings, runtime_path
 from roop_3d.core.storage import atomic_json
 from roop_3d.media.detector import Detector
 from roop_3d.engine.detection.face_tracker import FaceTracker
+from roop_3d.engine.detection.track_policy import TrackPolicy
+from roop_3d.identity.report import IdentityReportCollector, write_report
 from roop_3d.media.probe import open_media, probe
 from roop_3d.media.timestamps import Timestamp
 from roop_3d.media.video_reader import VideoReader
@@ -124,7 +126,12 @@ class MediaService:
         began = time.monotonic()
         detector_record = self.detector.catalog.detector()
         recognizer_record = self.detector.catalog.recognizer()
-        tracker = FaceTracker(self.detector.catalog, threshold=request.detection_threshold, detector=self.detector)
+        policy = TrackPolicy() if request.identity_lock else None
+        tracker = FaceTracker(self.detector.catalog, threshold=request.detection_threshold, detector=self.detector,
+                              policy=policy)
+        collector = (IdentityReportCollector(policy, detection_threshold=request.detection_threshold)
+                     if policy is not None else None)
+        inspection_id = uuid.uuid4().hex
         cuts: list[int] = []
         with self.open(request.path) as container:
             stream = container.streams.video[0]
@@ -138,6 +145,8 @@ class MediaService:
                     if tracker.scene_cut and len(cuts) < 64:
                         cuts.append(index)
                     at = max(0.0, float(frame.timestamp.seconds - origin))
+                    if collector is not None:
+                        collector.observe(index, at, image, tracked)
                     for face in tracked:
                         observation = face.observation
                         box = observation.box
@@ -162,18 +171,32 @@ class MediaService:
                     if frame.key_frame or index == 0:
                         samples += 1
                     if (not complete or decoded >= request.max_decoded_frames or samples >= request.max_samples
-                            or time.monotonic() - began > 30):
+                            or time.monotonic() - began > request.time_budget_seconds):
                         complete = False
                         break
         finally:
             tracker.release()
         if sha256_file(path)[1] != digest:
             raise DomainError("MEDIA_CHANGED", "Video changed during inspection")
-        result = FaceInspection(inspection_id=uuid.uuid4().hex, target_sha256=digest,
+        identity_extra: dict = {}
+        identity_warnings: tuple[str, ...] = ()
+        if collector is not None:
+            document = collector.finalize(inspection_id=inspection_id, target_sha256=digest, events=tracker.events,
+                                          events_dropped=tracker.events_dropped, scene_cut_frames=cuts,
+                                          decoded_frames=decoded, truncated=not complete)
+            identity_extra = dict(tracking_policy_fingerprint=policy.fingerprint(),
+                                  detection_threshold=request.detection_threshold,
+                                  identity_report_sha256=write_report(self.root, document))
+            identity_warnings = ("Identity lock: faces whose identity is uncertain or ambiguous are never swapped.",
+                                 "Identity thresholds are uncalibrated heuristics; review the contact sheet before locking.")
+            if not complete:
+                identity_warnings += ("Inspection stopped early; later appearances of a person may be unreviewed.",)
+        result = FaceInspection(inspection_id=inspection_id, target_sha256=digest,
             detector_model_id=detector_record["model_id"], detector_sha256=detector_record["sha256"],
             recognizer_model_id=recognizer_record["model_id"], recognizer_sha256=recognizer_record["sha256"],
             decoded_frames=decoded, sampled_frames=samples, truncated=not complete,
-            tracking_method="iou_arcface_hungarian", scene_cut_frames=tuple(cuts),
+            tracking_method="identity_lock_v1" if collector is not None else "iou_arcface_hungarian",
+            scene_cut_frames=tuple(cuts), **identity_extra,
             tracks=tuple(FaceTrack(track_id=f"track_{identity:04d}", persistent_id=identity,
                 scene_id=item["scene_id"], landmark_count=106, first_frame=item["first"], last_frame=item["last"],
                 first_timestamp_seconds=item["first_at"], last_timestamp_seconds=item["last_at"],
@@ -182,11 +205,13 @@ class MediaService:
                     pitch_degrees=(item["pose_min"][1], item["pose_max"][1]),
                     roll_degrees=(item["pose_min"][2], item["pose_max"][2]),
                     method="five_point_geometric_estimate", yaw_pitch_state="CANDIDATE"),
-                sampled_detections=item["count"], thumbnail_base64=item["thumbnail"])
+                sampled_detections=item["count"],
+                thumbnail_base64=(collector.best_thumbnail(identity) if collector is not None else None) or item["thumbnail"])
                 for identity, item in records.items()),
             warnings=("IoU and ArcFace assignment can still split or merge tracks; review mappings.",
                       "Yaw and pitch are uncalibrated geometric estimates, not reconstructed 3D pose.",
-                      "persistent_id is the integer engine track ID; track_id retains the job mapping label."))
+                      "persistent_id is the integer engine track ID; track_id retains the job mapping label.",
+                      *identity_warnings))
         atomic_json(self.root, f"roop_3d/.runtime/inspections/{result.inspection_id}.json", result.model_dump(mode="json"))
         return result
 
