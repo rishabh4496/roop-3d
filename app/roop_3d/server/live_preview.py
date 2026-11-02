@@ -113,6 +113,7 @@ class LivePreviewPayload(Contract):
     swap_weight: float = Field(default=1, ge=0, le=1)
     bypass: tuple[Literal["restorer", "color"], ...] = Field(default=(), max_length=2)
     solo_node: SoloNode = "final"
+    relight: bool | None = None
     relight_strength: float | None = Field(default=None, ge=0, le=1)
     specular_sheen: float | None = Field(default=None, ge=0, le=1)
     shadow_preservation: float | None = Field(default=None, ge=0, le=1)
@@ -442,6 +443,10 @@ class LivePreviewService:
             values.update(restorer_model='codeformer', fidelity_weight=payload.fidelity_weight)
         if payload.identity_blend_t is not None:
             values['identity_blend_t'] = payload.identity_blend_t
+        if payload.relight is not None:
+            values['relight'] = payload.relight
+        elif payload.solo_node in ('normal_map', 'sh_lighting') or payload.relight_strength is not None:
+            values['relight'] = True
         if payload.relight_strength is not None:
             values['relight_strength'] = payload.relight_strength
         if payload.specular_sheen is not None:

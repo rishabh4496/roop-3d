@@ -128,9 +128,7 @@ def test_dlpack_aliases_device_storage_and_torch_affine_stays_cuda():
 
 @pytest.mark.parametrize("device", ["cpu", "cuda"])
 def test_optical_flow_smooths_30_moving_frames_and_preserves_occluders(device):
-    import torch
-    if device == "cuda":
-        cuda()
+    torch = cuda() if device == "cuda" else native("torch")
     tracker = OpticalFlowTracker(.75)
     raw_error, filtered_error = [], []
     forward = torch.zeros((1, 64, 96, 2), device=device)
@@ -156,7 +154,7 @@ def test_optical_flow_smooths_30_moving_frames_and_preserves_occluders(device):
 
 
 def test_disocclusion_confidence_and_missing_flow():
-    import torch
+    torch = native("torch")
     alpha = torch.ones((1, 1, 8, 8))
     tracker = OpticalFlowTracker()
     tracker.propagate(alpha)

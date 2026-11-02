@@ -33,11 +33,11 @@ def configure_gpu_runtime():
 
 def cuda_tensor(surface):
     """Borrow DLPack storage with producer/consumer stream negotiation."""
-    import torch
     if not hasattr(surface, "__dlpack__"):
         raise GPUBackendUnavailable("Backend must export the stream-aware DLPack protocol")
     if surface.__dlpack_device__()[0] != 2:
         raise ValueError("Host surfaces are forbidden in the CUDA path")
+    import torch
     tensor = torch.utils.dlpack.from_dlpack(surface)
     if not tensor.is_cuda:
         raise ValueError("Decoder returned a non-CUDA tensor")

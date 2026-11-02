@@ -21,6 +21,7 @@ class WorkstationParameters(Contract):
     pose_frontalization: float = Field(default=0, ge=0, le=1)
     tps_expression_weight: float = Field(default=0, ge=0, le=1)
     # Stage 17: 3D Spherical Harmonics relighting, specular skin sheen, and cast shadow preservation.
+    relight: bool = False
     relight_strength: float = Field(default=0.8, ge=0, le=1)
     specular_sheen: float = Field(default=0.25, ge=0, le=1)
     shadow_preservation: float = Field(default=0.85, ge=0, le=1)
@@ -54,7 +55,7 @@ class WorkstationParameters(Contract):
                                 feather_px=self.feather_px,
                                 swap_weight=self.swap_weight, erosion_px=self.erosion_px,
                                 color_strength=0 if 'color' in self.bypass else self.color_strength,
-                                relight=True,
+                                relight=self.relight,
                                 relight_strength=self.relight_strength,
                                 specular_sheen=self.specular_sheen,
                                 shadow_preservation=self.shadow_preservation,

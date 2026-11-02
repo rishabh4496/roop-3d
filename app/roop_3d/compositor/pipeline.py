@@ -28,7 +28,7 @@ class CompositeOptions:
     fidelity_weight: float = 0.5
     color_method: str = "lab"
     color_strength: float = 0.65
-    relight: bool = True
+    relight: bool = False
     relight_strength: float = 0.8
     specular_sheen: float = 0.25
     shadow_preservation: float = 0.85
