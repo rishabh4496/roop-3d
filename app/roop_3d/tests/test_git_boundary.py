@@ -12,6 +12,7 @@ def make_repo(root: Path) -> None:
 def test_boundary_accepts_only_independent_app_source() -> None:
     assert allowed_path('app/tests/test_nv_cvcuda_pipeline.py')
     assert allowed_path('app/tests/test_heterogeneous_scheduler.py')
+    assert allowed_path('app/tests/test_flame_and_liveportrait.py')
     assert allowed_path('app/tests/pytest.ini')
     assert not allowed_path('app/tests/unapproved.py')
     for path in ('app/roop_3d/server/app.py','app/roop_3d_ui/src/main.tsx','start.js','pinokio.js','.gitignore','torch.js','verify_trt_fps.py'):

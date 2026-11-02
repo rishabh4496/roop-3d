@@ -8,6 +8,7 @@ import httpx
 from roop_3d.core.settings import Settings
 from roop_3d.models.catalog import ModelCatalog
 from roop_3d.models.local_provider import LocalWeightProvider
+from roop_3d.models.stage16 import STAGE16_IDS
 from roop_3d.server.app import create_app
 from roop_3d.tests.test_stage03_downloader import DATA, remote
 from roop_3d.tests.test_stage03_registry import artifact, registry_for
@@ -18,7 +19,9 @@ def test_api_exposes_authoritative_registry_notices_and_blocked_license(tmp_path
     with TestClient(app, base_url="http://127.0.0.1:8030") as client:
         response = client.get("/api/v1/models/registry")
         assert response.status_code == 200
-        assert len(response.json()) == 101
+        assert len(response.json()) == 101 + len(STAGE16_IDS)
+        assert set(STAGE16_IDS) <= {item["model_id"] for item in response.json()}
+        assert sum(item["status"] == "verified_local" for item in response.json()) == 95
         flame = next(item for item in response.json() if item["model_id"] == "flame-2020")
         assert flame["expected_sha256"] is None and flame["upstream_url"] is None
         notice = client.get("/api/v1/models/flame-2020/license").json()

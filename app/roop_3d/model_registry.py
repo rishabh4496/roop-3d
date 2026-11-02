@@ -589,7 +589,11 @@ class UnifiedModelRegistry:
         }
 
     def get_full_readiness_report(self) -> list[dict[str, Any]]:
-        return [self.inspect_model_readiness(entry) for entry in UNIFIED_MODEL_ENTRIES]
+        report = [self.inspect_model_readiness(entry) for entry in UNIFIED_MODEL_ENTRIES]
+        # Stage 16 uses the authoritative registry with explicit unknown evidence.
+        # Do not fill in guessed shapes/VRAM or infer compiled readiness from a filename.
+        from roop_3d.models.stage16 import readiness_report
+        return report + readiness_report(self.root)
 
 
 class ResilientModelDownloader:

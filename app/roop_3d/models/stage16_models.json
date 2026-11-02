@@ -1,0 +1,370 @@
+{
+  "schema_version": 1,
+  "evidence_scope": "Stage 16 remote byte identities only. No graph, rights, inference, speed or gaze accuracy claim. Inspected repository revisions: {\"facefusion/models-3.0.0\": \"728b9659bd9691bf32cbf7f61af478d94b7ba81e\", \"facefusion/models-3.1.0\": \"c9e3a503d8e84e91c5cd89ee2d510fe5e793e570\", \"facefusion/models-3.2.0\": \"f9cbb5a090256d304f662b81b85880853a9d62cc\", \"facefusion/models-3.3.0\": \"6271ab1c4619ceb2e534d65e0ec973f22a9aec38\"}",
+  "models": [
+    {
+      "model_id": "stage16_liveportrait_eye",
+      "name": "live_portrait_eye_retargeter.onnx",
+      "role": "liveportrait_stitch",
+      "role_evidence": "Role from upstream FaceFusion processor; execution is separate evidence",
+      "upstream_url": "https://huggingface.co/facefusion/models-3.0.0/resolve/728b9659bd9691bf32cbf7f61af478d94b7ba81e/live_portrait_eye_retargeter.onnx",
+      "filenames": [
+        "live_portrait_eye_retargeter.onnx"
+      ],
+      "expected_sha256": "13cf8b06f0a314e6e65b4a47fea5ce270edb79cd54359c4d273f2c139820276b",
+      "byte_size": 581421,
+      "input_output_contract": {
+        "state": "UNKNOWN",
+        "evidence": "LFS artifact identity verified remotely; graph has not been inspected"
+      },
+      "status": "verified_remote",
+      "evidence": "Observed official HuggingFace LFS metadata: https://huggingface.co/api/models/facefusion/models-3.0.0/tree/728b9659bd9691bf32cbf7f61af478d94b7ba81e?recursive=true&expand=false",
+      "provenance_state": "VERIFIED_REMOTE",
+      "license_notice": "Weight rights unreviewed. Upstream code licenses do not establish converted checkpoint rights. Automatic download and commercial use remain gated.",
+      "license_id": "UNKNOWN",
+      "commercial_use": "unknown",
+      "family_hint": "stage16_liveportrait_eye",
+      "verified_at": "2026-11-02"
+    },
+    {
+      "model_id": "stage16_liveportrait_appearance",
+      "name": "live_portrait_feature_extractor.onnx",
+      "role": "liveportrait_appearance",
+      "role_evidence": "Role from upstream FaceFusion processor; execution is separate evidence",
+      "upstream_url": "https://huggingface.co/facefusion/models-3.0.0/resolve/728b9659bd9691bf32cbf7f61af478d94b7ba81e/live_portrait_feature_extractor.onnx",
+      "filenames": [
+        "live_portrait_feature_extractor.onnx"
+      ],
+      "expected_sha256": "980d26afc9af6d1b6c946329df08b89a4a8582c9bb668d9475f5254e69434d15",
+      "byte_size": 3354251,
+      "input_output_contract": {
+        "state": "UNKNOWN",
+        "evidence": "LFS artifact identity verified remotely; graph has not been inspected"
+      },
+      "status": "verified_remote",
+      "evidence": "Observed official HuggingFace LFS metadata: https://huggingface.co/api/models/facefusion/models-3.0.0/tree/728b9659bd9691bf32cbf7f61af478d94b7ba81e?recursive=true&expand=false",
+      "provenance_state": "VERIFIED_REMOTE",
+      "license_notice": "Weight rights unreviewed. Upstream code licenses do not establish converted checkpoint rights. Automatic download and commercial use remain gated.",
+      "license_id": "UNKNOWN",
+      "commercial_use": "unknown",
+      "family_hint": "stage16_liveportrait_appearance",
+      "verified_at": "2026-11-02"
+    },
+    {
+      "model_id": "stage16_liveportrait_generator",
+      "name": "live_portrait_generator.onnx",
+      "role": "liveportrait_warp",
+      "role_evidence": "Role from upstream FaceFusion processor; execution is separate evidence",
+      "upstream_url": "https://huggingface.co/facefusion/models-3.0.0/resolve/728b9659bd9691bf32cbf7f61af478d94b7ba81e/live_portrait_generator.onnx",
+      "filenames": [
+        "live_portrait_generator.onnx"
+      ],
+      "expected_sha256": "db9274114fed504226c5921fc736b9558505e68682e7448631aea7b62cb3048a",
+      "byte_size": 222263347,
+      "input_output_contract": {
+        "state": "UNKNOWN",
+        "evidence": "LFS artifact identity verified remotely; graph has not been inspected"
+      },
+      "status": "verified_remote",
+      "evidence": "Observed official HuggingFace LFS metadata: https://huggingface.co/api/models/facefusion/models-3.0.0/tree/728b9659bd9691bf32cbf7f61af478d94b7ba81e?recursive=true&expand=false",
+      "provenance_state": "VERIFIED_REMOTE",
+      "license_notice": "Weight rights unreviewed. Upstream code licenses do not establish converted checkpoint rights. Automatic download and commercial use remain gated.",
+      "license_id": "UNKNOWN",
+      "commercial_use": "unknown",
+      "family_hint": "stage16_liveportrait_generator",
+      "verified_at": "2026-11-02"
+    },
+    {
+      "model_id": "stage16_liveportrait_lip",
+      "name": "live_portrait_lip_retargeter.onnx",
+      "role": "liveportrait_stitch",
+      "role_evidence": "Role from upstream FaceFusion processor; execution is separate evidence",
+      "upstream_url": "https://huggingface.co/facefusion/models-3.0.0/resolve/728b9659bd9691bf32cbf7f61af478d94b7ba81e/live_portrait_lip_retargeter.onnx",
+      "filenames": [
+        "live_portrait_lip_retargeter.onnx"
+      ],
+      "expected_sha256": "0f5b76344d0bfbb44c8a0b1ec57a4a7c36fd38db530338777a48c4a33a02d71f",
+      "byte_size": 151022,
+      "input_output_contract": {
+        "state": "UNKNOWN",
+        "evidence": "LFS artifact identity verified remotely; graph has not been inspected"
+      },
+      "status": "verified_remote",
+      "evidence": "Observed official HuggingFace LFS metadata: https://huggingface.co/api/models/facefusion/models-3.0.0/tree/728b9659bd9691bf32cbf7f61af478d94b7ba81e?recursive=true&expand=false",
+      "provenance_state": "VERIFIED_REMOTE",
+      "license_notice": "Weight rights unreviewed. Upstream code licenses do not establish converted checkpoint rights. Automatic download and commercial use remain gated.",
+      "license_id": "UNKNOWN",
+      "commercial_use": "unknown",
+      "family_hint": "stage16_liveportrait_lip",
+      "verified_at": "2026-11-02"
+    },
+    {
+      "model_id": "stage16_liveportrait_motion",
+      "name": "live_portrait_motion_extractor.onnx",
+      "role": "liveportrait_motion",
+      "role_evidence": "Role from upstream FaceFusion processor; execution is separate evidence",
+      "upstream_url": "https://huggingface.co/facefusion/models-3.0.0/resolve/728b9659bd9691bf32cbf7f61af478d94b7ba81e/live_portrait_motion_extractor.onnx",
+      "filenames": [
+        "live_portrait_motion_extractor.onnx"
+      ],
+      "expected_sha256": "ef4a00ff50d5d864994eeecb226dc3b298e62afacec8fa4fc8b912835ec4b0ab",
+      "byte_size": 112636642,
+      "input_output_contract": {
+        "state": "UNKNOWN",
+        "evidence": "LFS artifact identity verified remotely; graph has not been inspected"
+      },
+      "status": "verified_remote",
+      "evidence": "Observed official HuggingFace LFS metadata: https://huggingface.co/api/models/facefusion/models-3.0.0/tree/728b9659bd9691bf32cbf7f61af478d94b7ba81e?recursive=true&expand=false",
+      "provenance_state": "VERIFIED_REMOTE",
+      "license_notice": "Weight rights unreviewed. Upstream code licenses do not establish converted checkpoint rights. Automatic download and commercial use remain gated.",
+      "license_id": "UNKNOWN",
+      "commercial_use": "unknown",
+      "family_hint": "stage16_liveportrait_motion",
+      "verified_at": "2026-11-02"
+    },
+    {
+      "model_id": "stage16_liveportrait_stitch",
+      "name": "live_portrait_stitcher.onnx",
+      "role": "liveportrait_stitch",
+      "role_evidence": "Role from upstream FaceFusion processor; execution is separate evidence",
+      "upstream_url": "https://huggingface.co/facefusion/models-3.0.0/resolve/728b9659bd9691bf32cbf7f61af478d94b7ba81e/live_portrait_stitcher.onnx",
+      "filenames": [
+        "live_portrait_stitcher.onnx"
+      ],
+      "expected_sha256": "c6683427edf3e0c3a86e61b1dea1e6dad56c557f5e711fec93966cfb34fd5f87",
+      "byte_size": 193259,
+      "input_output_contract": {
+        "state": "UNKNOWN",
+        "evidence": "LFS artifact identity verified remotely; graph has not been inspected"
+      },
+      "status": "verified_remote",
+      "evidence": "Observed official HuggingFace LFS metadata: https://huggingface.co/api/models/facefusion/models-3.0.0/tree/728b9659bd9691bf32cbf7f61af478d94b7ba81e?recursive=true&expand=false",
+      "provenance_state": "VERIFIED_REMOTE",
+      "license_notice": "Weight rights unreviewed. Upstream code licenses do not establish converted checkpoint rights. Automatic download and commercial use remain gated.",
+      "license_id": "UNKNOWN",
+      "commercial_use": "unknown",
+      "family_hint": "stage16_liveportrait_stitch",
+      "verified_at": "2026-11-02"
+    },
+    {
+      "model_id": "arcface_converter_hififace",
+      "name": "arcface_converter_hififace.onnx",
+      "role": "embedding_converter",
+      "role_evidence": "Role from upstream FaceFusion processor; execution is separate evidence",
+      "upstream_url": "https://huggingface.co/facefusion/models-3.1.0/resolve/c9e3a503d8e84e91c5cd89ee2d510fe5e793e570/arcface_converter_hififace.onnx",
+      "filenames": [
+        "arcface_converter_hififace.onnx"
+      ],
+      "expected_sha256": "34255826c8da689858a7d3c1615cde2df0e115674a0136e05296a1291b31cf66",
+      "byte_size": 20993559,
+      "input_output_contract": {
+        "state": "UNKNOWN",
+        "evidence": "LFS artifact identity verified remotely; graph has not been inspected"
+      },
+      "status": "verified_remote",
+      "evidence": "Observed official HuggingFace LFS metadata: https://huggingface.co/api/models/facefusion/models-3.1.0/tree/c9e3a503d8e84e91c5cd89ee2d510fe5e793e570?recursive=true&expand=false",
+      "provenance_state": "VERIFIED_REMOTE",
+      "license_notice": "Weight rights unreviewed. Upstream code licenses do not establish converted checkpoint rights. Automatic download and commercial use remain gated.",
+      "license_id": "UNKNOWN",
+      "commercial_use": "unknown",
+      "family_hint": "arcface_converter_hififace",
+      "verified_at": "2026-11-02"
+    },
+    {
+      "model_id": "bisenet_resnet_18",
+      "name": "bisenet_resnet_18.onnx",
+      "role": "face_parser",
+      "role_evidence": "Role from upstream FaceFusion processor; execution is separate evidence",
+      "upstream_url": "https://huggingface.co/facefusion/models-3.1.0/resolve/c9e3a503d8e84e91c5cd89ee2d510fe5e793e570/bisenet_resnet_18.onnx",
+      "filenames": [
+        "bisenet_resnet_18.onnx"
+      ],
+      "expected_sha256": "2218b6183c26ca5c83303232d682a536c670c13ea9695f716c777d1f244eefe9",
+      "byte_size": 53205356,
+      "input_output_contract": {
+        "state": "UNKNOWN",
+        "evidence": "LFS artifact identity verified remotely; graph has not been inspected"
+      },
+      "status": "verified_remote",
+      "evidence": "Observed official HuggingFace LFS metadata: https://huggingface.co/api/models/facefusion/models-3.1.0/tree/c9e3a503d8e84e91c5cd89ee2d510fe5e793e570?recursive=true&expand=false",
+      "provenance_state": "VERIFIED_REMOTE",
+      "license_notice": "Weight rights unreviewed. Upstream code licenses do not establish converted checkpoint rights. Automatic download and commercial use remain gated.",
+      "license_id": "UNKNOWN",
+      "commercial_use": "unknown",
+      "family_hint": "bisenet_resnet_18",
+      "verified_at": "2026-11-02"
+    },
+    {
+      "model_id": "hififace_unofficial_256",
+      "name": "hififace_unofficial_256.onnx",
+      "role": "identity_swapper",
+      "role_evidence": "Role from upstream FaceFusion processor; execution is separate evidence",
+      "upstream_url": "https://huggingface.co/facefusion/models-3.1.0/resolve/c9e3a503d8e84e91c5cd89ee2d510fe5e793e570/hififace_unofficial_256.onnx",
+      "filenames": [
+        "hififace_unofficial_256.onnx"
+      ],
+      "expected_sha256": "9de9751617976195114d7f067b9b6cf933748363355cf473cab2da57a739c2ef",
+      "byte_size": 203784742,
+      "input_output_contract": {
+        "state": "UNKNOWN",
+        "evidence": "LFS artifact identity verified remotely; graph has not been inspected"
+      },
+      "status": "verified_remote",
+      "evidence": "Observed official HuggingFace LFS metadata: https://huggingface.co/api/models/facefusion/models-3.1.0/tree/c9e3a503d8e84e91c5cd89ee2d510fe5e793e570?recursive=true&expand=false",
+      "provenance_state": "VERIFIED_REMOTE",
+      "license_notice": "Weight rights unreviewed. Upstream code licenses do not establish converted checkpoint rights. Automatic download and commercial use remain gated.",
+      "license_id": "UNKNOWN",
+      "commercial_use": "unknown",
+      "family_hint": "hififace_unofficial_256",
+      "verified_at": "2026-11-02"
+    },
+    {
+      "model_id": "real_web_photo_x4",
+      "name": "real_web_photo_x4.onnx",
+      "role": "frame_upscaler",
+      "role_evidence": "Role from upstream FaceFusion processor; execution is separate evidence",
+      "upstream_url": "https://huggingface.co/facefusion/models-3.1.0/resolve/c9e3a503d8e84e91c5cd89ee2d510fe5e793e570/real_web_photo_x4.onnx",
+      "filenames": [
+        "real_web_photo_x4.onnx"
+      ],
+      "expected_sha256": "ac378843a6cefa190b2d4972e93a2f53f9c7277c542142f5f57babb688f8a25d",
+      "byte_size": 116790337,
+      "input_output_contract": {
+        "state": "UNKNOWN",
+        "evidence": "LFS artifact identity verified remotely; graph has not been inspected"
+      },
+      "status": "verified_remote",
+      "evidence": "Observed official HuggingFace LFS metadata: https://huggingface.co/api/models/facefusion/models-3.1.0/tree/c9e3a503d8e84e91c5cd89ee2d510fe5e793e570?recursive=true&expand=false",
+      "provenance_state": "VERIFIED_REMOTE",
+      "license_notice": "Weight rights unreviewed. Upstream code licenses do not establish converted checkpoint rights. Automatic download and commercial use remain gated.",
+      "license_id": "UNKNOWN",
+      "commercial_use": "unknown",
+      "family_hint": "real_web_photo_x4",
+      "verified_at": "2026-11-02"
+    },
+    {
+      "model_id": "styleganex_age",
+      "name": "styleganex_age.onnx",
+      "role": "age_modifier",
+      "role_evidence": "Role from upstream FaceFusion processor; execution is separate evidence",
+      "upstream_url": "https://huggingface.co/facefusion/models-3.1.0/resolve/c9e3a503d8e84e91c5cd89ee2d510fe5e793e570/styleganex_age.onnx",
+      "filenames": [
+        "styleganex_age.onnx"
+      ],
+      "expected_sha256": "212cdf55a9b66c382016119f7d642a227ca16c833348dd78d1e129ae5cf9ec7c",
+      "byte_size": 1340360455,
+      "input_output_contract": {
+        "state": "UNKNOWN",
+        "evidence": "LFS artifact identity verified remotely; graph has not been inspected"
+      },
+      "status": "verified_remote",
+      "evidence": "Observed official HuggingFace LFS metadata: https://huggingface.co/api/models/facefusion/models-3.1.0/tree/c9e3a503d8e84e91c5cd89ee2d510fe5e793e570?recursive=true&expand=false",
+      "provenance_state": "VERIFIED_REMOTE",
+      "license_notice": "Weight rights unreviewed. Upstream code licenses do not establish converted checkpoint rights. Automatic download and commercial use remain gated.",
+      "license_id": "UNKNOWN",
+      "commercial_use": "unknown",
+      "family_hint": "styleganex_age",
+      "verified_at": "2026-11-02"
+    },
+    {
+      "model_id": "swin2_sr_x4",
+      "name": "swin2_sr_x4.onnx",
+      "role": "frame_upscaler",
+      "role_evidence": "Role from upstream FaceFusion processor; execution is separate evidence",
+      "upstream_url": "https://huggingface.co/facefusion/models-3.1.0/resolve/c9e3a503d8e84e91c5cd89ee2d510fe5e793e570/swin2_sr_x4.onnx",
+      "filenames": [
+        "swin2_sr_x4.onnx"
+      ],
+      "expected_sha256": "5a797560950146389fa938bc40f63c70ad4a84d6c7cf1abb06967c3624e35280",
+      "byte_size": 57340967,
+      "input_output_contract": {
+        "state": "UNKNOWN",
+        "evidence": "LFS artifact identity verified remotely; graph has not been inspected"
+      },
+      "status": "verified_remote",
+      "evidence": "Observed official HuggingFace LFS metadata: https://huggingface.co/api/models/facefusion/models-3.1.0/tree/c9e3a503d8e84e91c5cd89ee2d510fe5e793e570?recursive=true&expand=false",
+      "provenance_state": "VERIFIED_REMOTE",
+      "license_notice": "Weight rights unreviewed. Upstream code licenses do not establish converted checkpoint rights. Automatic download and commercial use remain gated.",
+      "license_id": "UNKNOWN",
+      "commercial_use": "unknown",
+      "family_hint": "swin2_sr_x4",
+      "verified_at": "2026-11-02"
+    },
+    {
+      "model_id": "xseg_1",
+      "name": "xseg_1.onnx",
+      "role": "occlusion_mask",
+      "role_evidence": "Role from upstream FaceFusion processor; execution is separate evidence",
+      "upstream_url": "https://huggingface.co/facefusion/models-3.1.0/resolve/c9e3a503d8e84e91c5cd89ee2d510fe5e793e570/xseg_1.onnx",
+      "filenames": [
+        "xseg_1.onnx"
+      ],
+      "expected_sha256": "c4d1498b8a03b5fe2a3a5d2ef2a0402ab03bd51edaf5b2d8d5fb764702a97dd3",
+      "byte_size": 70324286,
+      "input_output_contract": {
+        "state": "UNKNOWN",
+        "evidence": "LFS artifact identity verified remotely; graph has not been inspected"
+      },
+      "status": "verified_remote",
+      "evidence": "Observed official HuggingFace LFS metadata: https://huggingface.co/api/models/facefusion/models-3.1.0/tree/c9e3a503d8e84e91c5cd89ee2d510fe5e793e570?recursive=true&expand=false",
+      "provenance_state": "VERIFIED_REMOTE",
+      "license_notice": "Weight rights unreviewed. Upstream code licenses do not establish converted checkpoint rights. Automatic download and commercial use remain gated.",
+      "license_id": "UNKNOWN",
+      "commercial_use": "unknown",
+      "family_hint": "xseg_1",
+      "verified_at": "2026-11-02"
+    },
+    {
+      "model_id": "xseg_2",
+      "name": "xseg_2.onnx",
+      "role": "occlusion_mask",
+      "role_evidence": "Role from upstream FaceFusion processor; execution is separate evidence",
+      "upstream_url": "https://huggingface.co/facefusion/models-3.1.0/resolve/c9e3a503d8e84e91c5cd89ee2d510fe5e793e570/xseg_2.onnx",
+      "filenames": [
+        "xseg_2.onnx"
+      ],
+      "expected_sha256": "cd9a0879eaf43841d765472cf1f8c330dbf9dcb03da0eace93e95f3bcc399042",
+      "byte_size": 70324286,
+      "input_output_contract": {
+        "state": "UNKNOWN",
+        "evidence": "LFS artifact identity verified remotely; graph has not been inspected"
+      },
+      "status": "verified_remote",
+      "evidence": "Observed official HuggingFace LFS metadata: https://huggingface.co/api/models/facefusion/models-3.1.0/tree/c9e3a503d8e84e91c5cd89ee2d510fe5e793e570?recursive=true&expand=false",
+      "provenance_state": "VERIFIED_REMOTE",
+      "license_notice": "Weight rights unreviewed. Upstream code licenses do not establish converted checkpoint rights. Automatic download and commercial use remain gated.",
+      "license_id": "UNKNOWN",
+      "commercial_use": "unknown",
+      "family_hint": "xseg_2",
+      "verified_at": "2026-11-02"
+    },
+    {
+      "model_id": "smirk_em1",
+      "name": "SMIRK_em1.onnx",
+      "role": "flame_encoder",
+      "role_evidence": "Requested optional FLAME encoder; no verified ONNX export available",
+      "input_output_contract": {
+        "state": "UNKNOWN"
+      },
+      "status": "candidate",
+      "evidence": "No ONNX artifact identity or rights supplied; upstream SMIRK distributes a PyTorch checkpoint.",
+      "provenance_state": "CANDIDATE",
+      "license_notice": "A reviewed export, FLAME asset permission, and actual graph contract are required. No automatic model download.",
+      "manual_acceptance_required": true
+    },
+    {
+      "model_id": "emoca_flame",
+      "name": "emoca_flame.onnx",
+      "role": "flame_encoder",
+      "role_evidence": "Requested optional FLAME encoder; no verified ONNX export available",
+      "input_output_contract": {
+        "state": "UNKNOWN"
+      },
+      "status": "candidate",
+      "evidence": "No ONNX artifact identity or rights supplied; upstream SMIRK distributes a PyTorch checkpoint.",
+      "provenance_state": "CANDIDATE",
+      "license_notice": "A reviewed export, FLAME asset permission, and actual graph contract are required. No automatic model download.",
+      "manual_acceptance_required": true
+    }
+  ]
+}

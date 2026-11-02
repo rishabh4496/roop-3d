@@ -15,7 +15,8 @@ from roop_3d.core.settings import Contract
 Role = Literal["detector", "recognizer", "identity_swapper", "liveportrait_appearance",
                "liveportrait_motion", "liveportrait_warp", "liveportrait_stitch", "face_parser",
                "occlusion_mask", "face_restorer", "flame_geometry", "lip_sync", "diffusion_base",
-               "diffusion_adapter"]
+               "diffusion_adapter", "embedding_converter", "age_modifier", "frame_upscaler",
+               "flame_encoder", "dense_mesh"]
 RESERVED = {"con", "prn", "aux", "nul", *(f"com{i}" for i in range(1, 10)),
             *(f"lpt{i}" for i in range(1, 10))}
 
@@ -104,6 +105,14 @@ class ModelRegistry:
             for relative, digest in self.manifest.source_documents.items():
                 if hashlib.sha256(safe_path(self.root, relative).read_bytes()).hexdigest() != digest:
                     raise ValueError("Preserved discovery evidence changed")
+            # Supplement the preserved discovery manifest; never rewrite its local evidence.
+            supplemental = safe_path(self.root, "roop_3d/models/stage16_models.json")
+            if manifest is None and supplemental.is_file():
+                extension = Manifest.model_validate_json(supplemental.read_text("utf-8"))
+                self.manifest = Manifest(
+                    evidence_scope=self.manifest.evidence_scope + " " + extension.evidence_scope,
+                    source_documents=self.manifest.source_documents,
+                    models=self.manifest.models + extension.models)
         except (OSError, ValueError):
             raise DomainError("MODEL_REGISTRY_INVALID", "Model manifest or its discovery evidence is invalid", 503) from None
         self._records = {item.model_id: item for item in self.manifest.models}

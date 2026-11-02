@@ -15,6 +15,7 @@ GENERATED_SUFFIXES = {'.pyc','.pyo','.engine','.trt','.plan','.part','.onnx','.p
 GENERATED_FILES = {'protected_all_paths.json','stage00_verification.json','stage01_verification.json'}
 ROOT_FILES = {'AGENTS.md','README.md','CONTRIBUTING.md','.gitignore','.gitattributes','.roop3d-project.json','migration_source.json','pinokio.js','pinokio.json','start.js','install.js','update.js','reset.js','torch.js','verify_trt_fps.py','verify_integration.py','icon.svg'}
 STAGE14_GATE_FILES = {'app/tests/test_nv_cvcuda_pipeline.py', 'app/tests/test_heterogeneous_scheduler.py', 'app/tests/pytest.ini'}
+STAGE16_GATE_FILES = {'app/tests/test_flame_and_liveportrait.py'}
 
 def allowed_path(value: str) -> bool:
     path=PurePosixPath(value)
@@ -28,7 +29,7 @@ def allowed_path(value: str) -> bool:
         return False
     if path.suffix.casefold() in GENERATED_SUFFIXES:
         return False
-    return value in ROOT_FILES or value in STAGE14_GATE_FILES or value=='app/serve.py' or value.startswith(('app/roop_3d/','app/roop_3d_ui/','tools/','docs/','.githooks/','.github/'))
+    return value in ROOT_FILES or value in STAGE14_GATE_FILES or value in STAGE16_GATE_FILES or value=='app/serve.py' or value.startswith(('app/roop_3d/','app/roop_3d_ui/','tools/','docs/','.githooks/','.github/'))
 
 def git(root: Path,*arguments: str) -> bytes:
     return subprocess.check_output(['git',*arguments],cwd=root)

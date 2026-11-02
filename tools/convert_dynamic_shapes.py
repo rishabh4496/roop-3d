@@ -45,8 +45,17 @@ def main() -> int:
     parser.add_argument("--check-batches", type=parse_batches, default=(1, 4, 8))
     parser.add_argument("--shapes", default="{}", help='JSON concrete input shapes, e.g. {"images":[1,3,640,640]}')
     parser.add_argument("--synthetic", action="store_true", help="Create a synthetic static model at MODEL (must not exist)")
+    parser.add_argument("--grid-sample-4d", action="store_true",
+                        help="Lower volumetric GridSample into 4D spatial sampling plus depth interpolation")
     args = parser.parse_args()
     try:
+        if args.grid_sample_4d:
+            from roop_3d.models.grid_sample import convert_grid_sample
+            if args.output is None or args.synthetic:
+                parser.error("--grid-sample-4d requires --output and an existing reference model")
+            changed = convert_grid_sample(args.model, args.output)
+            print(f"GRIDSAMPLE_4D_CONVERTED nodes={len(changed)} provider_parity=UNVERIFIED output={args.output}")
+            return 0
         if args.synthetic:
             make_synthetic(args.model)
         result = convert(args.model, args.output, batches=args.check_batches,
