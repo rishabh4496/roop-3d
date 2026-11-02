@@ -162,6 +162,8 @@ class PreviewService:
         job, TensorRT compile or Start-button model re-bind owns the engine, and the owner in turn
         waits for this call to finish before it tears down or re-binds models.
         """
+        from roop_3d.engine.registry import EngineRegistry
+        EngineRegistry().validate(value.request.engine_id)
         gate = getattr(self.state, 'engine_gate', None)
         with gate.preview_section() if gate is not None else nullcontext():
             return self._render(value, cancel, raw)

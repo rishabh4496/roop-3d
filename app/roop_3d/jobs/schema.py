@@ -55,6 +55,7 @@ def require_transition(before: JobState, after: JobState) -> None:
 
 
 class JobRequest(Contract):
+    engine_id: str = Field(default="reference_onnx", pattern=r"^[a-z0-9][a-z0-9_]{0,95}$")
     target_path: str = Field(min_length=1, max_length=1024)
     inspection_id: str = Field(pattern=r"^[0-9a-f]{32}$")
     face_mappings: tuple[TrackToFaceSetMap, ...] = Field(min_length=1, max_length=64)
@@ -73,6 +74,9 @@ class JobRequest(Contract):
 
     def identity_payload(self) -> dict:
         value = self.model_dump(mode="json")
+        # Preserve existing idempotency/checkpoint fingerprints for the default engine.
+        if self.engine_id == "reference_onnx":
+            value.pop("engine_id", None)
         if self.workstation_parameters:
             # Preserve fingerprints of requests saved before these opt-in controls existed.
             for field in ('swap_weight', 'erosion_px', 'pose_frontalization', 'tps_expression_weight'):

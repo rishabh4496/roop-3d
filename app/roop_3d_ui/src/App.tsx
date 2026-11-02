@@ -6,6 +6,7 @@ import { IdentityLockBar, IdentityTrackStats, lockProblem, useContactSheet } fro
 import { EventConnection } from './events';
 import { publishHardware } from './stores/telemetryStore';
 import { setPlayhead } from './stores/playheadStore';
+import { selectEngine, useSelectedEngine } from './stores/engineSelection';
 import { featureReason, jobActions, mappings, optionReason } from './state';
 import { SettingsInspector } from './SettingsInspector';
 import { VideoViewport, formatTime } from './VideoViewport';
@@ -33,6 +34,7 @@ const PreFlightLinterModal = PreFlightLinterModalComponent as unknown as Compone
 const PoseCoverageInspector = lazy(() => import('./ThreeViewport').then(module => ({ default: module.PoseCoverageInspector })));
 
 export default function App() {
+  const selectedEngine = useSelectedEngine();
   renderProbe('App');
   const [caps, setCaps] = useState<Capabilities | null>(null), [config, setConfig] = useState<Config | null>(null);
   const [sources, setSources] = useState<FaceSet[]>([]), [jobs, setJobs] = useState<Job[]>([]);
@@ -192,7 +194,7 @@ export default function App() {
     const segments = buildFaceSegments(clusters, assigned);
     const lockIssue = lockProblem(identityLock, Object.fromEntries(selected.map(item => [item.track_id, item.faceset_id])));
     if (lockIssue) throw new Error(`${lockIssue} Re-lock or release the identity lock before rendering.`);
-    return { identity_lock_id: identityLock?.lock_id, identity_blend: identitySourceB && sourceId ? {method: 'slerp',source_face_ids: [sourceId, identitySourceB],weights:[1,0]} : undefined, target_path: target, inspection_id: inspection.inspection_id, face_mappings: selected, processing: 'local', remote_consent: false, trim_start_seconds: trimStart || null, trim_end_seconds: trimEnd, mask_base64: maskBase64 || undefined, workstation_parameters: parameters, parameter_curves: { tracks: curves }, face_segments: segments, export: exportOptions };
+    return { engine_id: selectedEngine, identity_lock_id: identityLock?.lock_id, identity_blend: identitySourceB && sourceId ? {method: 'slerp',source_face_ids: [sourceId, identitySourceB],weights:[1,0]} : undefined, target_path: target, inspection_id: inspection.inspection_id, face_mappings: selected, processing: 'local', remote_consent: false, trim_start_seconds: trimStart || null, trim_end_seconds: trimEnd, mask_base64: maskBase64 || undefined, workstation_parameters: parameters, parameter_curves: { tracks: curves }, face_segments: segments, export: exportOptions };
   };
   const executeQueue = () => void run('Queueing local render', async () => {
     const value = request(), fingerprint = JSON.stringify(value);
@@ -232,6 +234,7 @@ export default function App() {
     await loadTarget(saved.request.target_path);
     const loaded = await api<Inspection>(`/media/inspections/${saved.request.inspection_id}?${new URLSearchParams({ path: saved.request.target_path })}`);
     const restoredMappings = Object.fromEntries(saved.request.face_mappings.map(item => [item.track_id, item.faceset_id]));
+    selectEngine(saved.request.engine_id ?? 'reference_onnx');
     setConfig(settings); setInspection(loaded); setAssigned(restoredMappings); setSelectedTrack(loaded.tracks[0]?.track_id ?? '');
     useFaceSelectionStore.getState().populateFromInspection(loaded, null, restoredMappings);
     if (saved.request.face_segments) hydrateFaceSegments(saved.request.face_segments);
@@ -248,6 +251,7 @@ export default function App() {
     await post(path, {}); await refreshJobs();
   });
   const showJob = (job: Job) => {
+    selectEngine(job.request.engine_id ?? 'reference_onnx');
     if (job.request.target_path === target) { setSelectedJob(job.job_id); return; }
     void run('Opening job target', async () => {
       await loadTarget(job.request.target_path);

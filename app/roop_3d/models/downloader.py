@@ -12,8 +12,11 @@ import os
 from pathlib import Path
 import re
 import stat
-from urllib.parse import unquote, urlsplit
+import threading
+from urllib.parse import unquote, urljoin, urlsplit
 import uuid
+from contextlib import ExitStack
+from typing import Callable
 
 import httpx
 
@@ -24,6 +27,7 @@ from roop_3d.models.verifier import verify_file
 
 # Exact hosts only. Model-specific URLs and provenance still require manifest review.
 OFFICIAL_HOSTS = frozenset({"github.com", "raw.githubusercontent.com", "huggingface.co"})
+HF_STORAGE_HOSTS = frozenset({"us.aws.cdn.hf.co"})
 MAX_ARTIFACT_BYTES = 64 * 1024**3
 
 
@@ -40,6 +44,24 @@ def validate_url(value: str) -> str:
     except ValueError:
         raise DomainError("DOWNLOAD_URL_BLOCKED", "Only reviewed direct HTTPS URLs on official hosts are allowed", 403) from None
     return value
+
+
+def validate_hf_redirect(source: str, location: str) -> str:
+    """Permit the observed Hugging Face LFS redirect without trusting arbitrary hosts."""
+    try:
+        if urlsplit(source).hostname != "huggingface.co":
+            raise ValueError("Redirect source is not Hugging Face")
+        target = urlsplit(urljoin(source, location))
+        decoded = unquote(unquote(target.path))
+        if (target.scheme != "https" or target.hostname not in HF_STORAGE_HOSTS or target.port not in (None, 443)
+                or target.username or target.password or target.fragment
+                or any(c in target.geturl() for c in "\r\n\t\\")
+                or any(p in {".", ".."} for p in decoded.split("/"))
+                or any(c in decoded for c in "\x00\\\r\n")):
+            raise ValueError("Unapproved Hugging Face storage redirect")
+    except ValueError:
+        raise DomainError("DOWNLOAD_REDIRECT_BLOCKED", "Model host redirected outside the reviewed Hugging Face storage host", 403) from None
+    return target.geturl()
 
 
 def validator(headers: httpx.Headers) -> tuple[str, str] | None:
@@ -122,7 +144,8 @@ class Downloader:
         return 0, None
 
     def download(self, record: ModelRecord, *, accepted_license: bool = False,
-                 commercial: bool = False) -> DownloadResult:
+                 commercial: bool = False, cancel_event: threading.Event | None = None,
+                 progress_callback: Callable[[int, int], None] | None = None) -> DownloadResult:
         authorize(record, action="download", accepted_license=accepted_license, commercial=commercial)
         url = validate_url(record.upstream_url)  # type: ignore[arg-type]
         if record.byte_size > self.max_bytes:  # type: ignore[operator]
@@ -140,14 +163,26 @@ class Downloader:
             if partial.exists() and partial.stat().st_size == record.byte_size:
                 return self._finish(record, final, part, metadata, False)
             offset, previous = self._resume(record, part, metadata)
+            if progress_callback is not None:
+                try:
+                    progress_callback(offset, record.byte_size)
+                except Exception:
+                    pass
             with httpx.Client(transport=self.transport, timeout=httpx.Timeout(30, read=60),
                               follow_redirects=False, trust_env=False) as client:
                 for _ in range(2):
+                    if cancel_event is not None and cancel_event.is_set():
+                        raise DomainError("DOWNLOAD_CANCELLED", "Model download was cancelled; verified partial bytes are retained for resume", 409)
                     headers = {"Accept-Encoding": "identity"}
                     if offset and previous:
                         headers.update({"Range": f"bytes={offset}-", "If-Range": previous[1]})
                     try:
-                        with client.stream("GET", url, headers=headers) as response:
+                        with ExitStack() as stack:
+                            response = stack.enter_context(client.stream("GET", url, headers=headers))
+                            if 300 <= response.status_code < 400:
+                                location = response.headers.get("location", "")
+                                response = stack.enter_context(client.stream(
+                                    "GET", validate_hf_redirect(url, location), headers=headers))
                             if 300 <= response.status_code < 400:
                                 raise DomainError("DOWNLOAD_REDIRECT_BLOCKED", "Redirected model downloads require a reviewed direct URL", 403)
                             identity = validator(response.headers)
@@ -190,10 +225,17 @@ class Downloader:
                                 total = offset
                                 try:
                                     for block in response.iter_bytes():
+                                        if cancel_event is not None and cancel_event.is_set():
+                                            raise DomainError("DOWNLOAD_CANCELLED", "Model download was cancelled; verified partial bytes are retained for resume", 409)
                                         if total + len(block) > record.byte_size:
                                             raise DomainError("DOWNLOAD_SIZE_LIMIT", "Response exceeded the registered artifact size", 413)
                                         stream.write(block)
                                         total += len(block)
+                                        if progress_callback is not None:
+                                            try:
+                                                progress_callback(total, record.byte_size)
+                                            except Exception:
+                                                pass
                                 finally:
                                     stream.flush()
                                     os.fsync(stream.fileno())

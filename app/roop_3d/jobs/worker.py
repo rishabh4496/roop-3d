@@ -17,6 +17,7 @@ from roop_3d.engine.vram_governor import RuntimeProfile, VRAMGovernor
 from roop_3d.jobs.schema import JobFailure, JobProgress, JobState
 from roop_3d.jobs.store import JobStore
 from roop_3d.models.catalog import ModelCatalog
+from roop_3d.engine.registry import EngineRegistry
 
 
 RENDER_JOB = "RENDER_JOB"
@@ -33,6 +34,8 @@ class JobWorker:
         self.root, self.store, self.settings_provider = root, store, settings_provider
         self.catalog, self.media = catalog, media
         self.runner = pipeline_runner or MasterPipelineRunner(root, catalog, media, settings_provider)
+        self.engines = EngineRegistry()
+        self.engines.bind_reference(self.runner)
         self.scheduler = scheduler or RuntimeScheduler(VRAMGovernor())
         self.poll_interval, self.max_threads = poll_interval, max_threads
         # Shared with live preview: model teardown/re-binding waits for in-flight preview inference.
@@ -80,7 +83,11 @@ class JobWorker:
                     if self._stop.is_set():
                         break
                     if record.state == JobState.cancelled and record.job_id not in active_ids:
-                        cleanup = getattr(self.runner, "cleanup", None)
+                        try:
+                            cancelled_runner = self.engines.resolve(record.request.engine_id)
+                        except DomainError:
+                            continue
+                        cleanup = getattr(cancelled_runner, "cleanup", None)
                         if callable(cleanup):
                             cleanup(record.job_id)
                         continue
@@ -172,13 +179,15 @@ class JobWorker:
 
     def _execute_job(self, job_id: str) -> None:
         admission: ScheduledJob | None = None
+        runner = None
         try:
             record = self.store.get(job_id)
             if record.state != JobState.queued:
                 return
             self.store.transition(job_id, JobState.preparing, expected_revision=record.revision)
+            runner = self.engines.resolve(record.request.engine_id)
             settings = self.settings_provider()
-            prepared = self.runner.prepare(record, settings)
+            prepared = runner.prepare(record, settings)
             while admission is None:
                 state = self._control(job_id)
                 if state == JobState.pausing:
@@ -186,25 +195,25 @@ class JobWorker:
                     return
                 if state == JobState.cancelling:
                     self._acknowledge_control(job_id, "cancel")
-                    cleanup = getattr(self.runner, "cleanup", None)
+                    cleanup = getattr(runner, "cleanup", None)
                     if callable(cleanup):
                         cleanup(job_id)
                     return
                 if state == "shutdown":
                     self._interrupt(job_id)
                     return
-                force_profile = self.runner.retry_profile(job_id)
+                force_profile = runner.retry_profile(job_id)
                 admission = self.scheduler.try_admit(job_id, settings, force_profile=force_profile)
                 if admission is None:
                     self._wake_event.wait(self.poll_interval)
                     self._wake_event.clear()
-            output = self.runner.run_prepared(record, admission.lease.admission, prepared=prepared,
+            output = runner.run_prepared(record, admission.lease.admission, prepared=prepared,
                 control=lambda: self._control(job_id),
                 mark_running=lambda: self._mark_running(job_id),
                 report_progress=lambda value: self._report_progress(job_id, value))
             current = self.store.get(job_id)
             if current.state != JobState.running:
-                discard = getattr(self.runner, "discard_output", None)
+                discard = getattr(runner, "discard_output", None)
                 if callable(discard):
                     discard(output)
                 if current.state == JobState.pausing:
@@ -212,7 +221,7 @@ class JobWorker:
                     return
                 if current.state == JobState.cancelling:
                     self._acknowledge_control(job_id, "cancel")
-                    cleanup = getattr(self.runner, "cleanup", None)
+                    cleanup = getattr(runner, "cleanup", None)
                     if callable(cleanup):
                         cleanup(job_id)
                     return
@@ -220,14 +229,14 @@ class JobWorker:
                     return
                 raise DomainError("JOB_STATE_CHANGED", "Job left rendering before output publication", 409)
             self.store.succeed(job_id, output)
-            cleanup = getattr(self.runner, "cleanup", None)
+            cleanup = getattr(runner, "cleanup", None)
             if callable(cleanup):
                 cleanup(job_id)
         except PipelinePaused:
             self._acknowledge_control(job_id, "pause")
         except PipelineCancelled:
             self._acknowledge_control(job_id, "cancel")
-            cleanup = getattr(self.runner, "cleanup", None)
+            cleanup = getattr(runner, "cleanup", None)
             if callable(cleanup):
                 cleanup(job_id)
         except PipelineInterrupted:

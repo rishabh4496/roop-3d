@@ -13,14 +13,18 @@ from roop_3d.server.app import create_app
 from roop_3d.tests.test_stage03_downloader import DATA, remote
 from roop_3d.tests.test_stage03_registry import artifact, registry_for
 
+STAGE6_IDS = ("minimax_h3_ref2va_faceswap_lora", "bfs_qwen21_dare60_avgrank30",
+              "bfs_qwen21_prune20_dare50_avgrank26", "bfs_qwen21_prune20_dare60_avgrank30")
+
 
 def test_api_exposes_authoritative_registry_notices_and_blocked_license(tmp_path):
     app = create_app(Settings(), repo_root=tmp_path)
     with TestClient(app, base_url="http://127.0.0.1:8030") as client:
         response = client.get("/api/v1/models/registry")
         assert response.status_code == 200
-        assert len(response.json()) == 101 + len(STAGE16_IDS)
+        assert len(response.json()) == 101 + len(STAGE16_IDS) + len(STAGE6_IDS)
         assert set(STAGE16_IDS) <= {item["model_id"] for item in response.json()}
+        assert set(STAGE6_IDS) <= {item["model_id"] for item in response.json()}
         assert sum(item["status"] == "verified_local" for item in response.json()) == 95
         flame = next(item for item in response.json() if item["model_id"] == "flame-2020")
         assert flame["expected_sha256"] is None and flame["upstream_url"] is None

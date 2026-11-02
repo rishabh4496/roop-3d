@@ -81,6 +81,7 @@ class OcclusionSettings(Contract):
 
 
 class LivePreviewPayload(Contract):
+    engine_id: str = Field(default="reference_onnx", pattern=r"^[a-z0-9][a-z0-9_]{0,95}$")
     # media + frame
     target_path: str = Field(min_length=1, max_length=1024)
     inspection_id: str = Field(pattern=r"^[0-9a-f]{32}$")
@@ -301,6 +302,8 @@ class LivePreviewService:
         return {"settings": settings, "facesets": stamps}
 
     def config_hash(self, payload: LivePreviewPayload) -> str:
+        from roop_3d.engine.registry import EngineRegistry
+        EngineRegistry().validate(payload.engine_id)
         body = json.dumps({"config": payload.config_digest(), "env": self.environment_stamp(payload)},
                           sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(body.encode()).hexdigest()[:32]
@@ -469,7 +472,7 @@ class LivePreviewService:
         if payload.mask_strokes:
             info = self.media_info(payload.target_path)
             mask = rasterize_strokes(payload.mask_strokes, info.width, info.height, mask)
-        job = JobRequest(target_path=payload.target_path, inspection_id=payload.inspection_id, face_mappings=mappings,
+        job = JobRequest(engine_id=payload.engine_id, target_path=payload.target_path, inspection_id=payload.inspection_id, face_mappings=mappings,
                          processing="local", mask_base64=mask, workstation_parameters=parameters,
                          parameter_curves=payload.parameter_curves, identity_blend=blend, face_segments=payload.face_segments,
                          export=payload.export)

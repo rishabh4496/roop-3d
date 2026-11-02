@@ -60,8 +60,20 @@ class ModelRecord(Contract):
     provenance_state: Literal["VERIFIED_LOCAL", "VERIFIED_REMOTE", "CANDIDATE", "UNKNOWN", "BLOCKED"] = "UNKNOWN"
     license_notice: str
     license_url: str | None = None
+    related_license_urls: tuple[str, ...] = ()
     manual_acceptance_required: bool = False
     family_hint: str = "other"
+    version: str = "UNKNOWN"
+    model_family: str = "UNKNOWN"
+    engine_type: str = "UNKNOWN"
+    purpose: str = "UNKNOWN"
+    source_repository: str | None = None
+    minimum_vram_gib: float | None = Field(default=None, gt=0, le=1024)
+    recommended_vram_gib: float | None = Field(default=None, gt=0, le=1024)
+    dependencies: tuple[str, ...] = ()
+    supported_precision: tuple[str, ...] = ()
+    benchmark_status: str = "NOT_RUN"
+    inference_availability: Literal["UNKNOWN", "UNAVAILABLE", "AVAILABLE", "EXPERIMENTAL"] = "UNKNOWN"
 
     @field_validator("model_id")
     @classmethod
@@ -106,13 +118,15 @@ class ModelRegistry:
                 if hashlib.sha256(safe_path(self.root, relative).read_bytes()).hexdigest() != digest:
                     raise ValueError("Preserved discovery evidence changed")
             # Supplement the preserved discovery manifest; never rewrite its local evidence.
-            supplemental = safe_path(self.root, "roop_3d/models/stage16_models.json")
-            if manifest is None and supplemental.is_file():
-                extension = Manifest.model_validate_json(supplemental.read_text("utf-8"))
-                self.manifest = Manifest(
-                    evidence_scope=self.manifest.evidence_scope + " " + extension.evidence_scope,
-                    source_documents=self.manifest.source_documents,
-                    models=self.manifest.models + extension.models)
+            if manifest is None:
+                for relative in ("roop_3d/models/stage16_models.json", "roop_3d/models/stage6_models.json"):
+                    supplemental = safe_path(self.root, relative)
+                    if supplemental.is_file():
+                        extension = Manifest.model_validate_json(supplemental.read_text("utf-8"))
+                        self.manifest = Manifest(
+                            evidence_scope=self.manifest.evidence_scope + " " + extension.evidence_scope,
+                            source_documents=self.manifest.source_documents,
+                            models=self.manifest.models + extension.models)
         except (OSError, ValueError):
             raise DomainError("MODEL_REGISTRY_INVALID", "Model manifest or its discovery evidence is invalid", 503) from None
         self._records = {item.model_id: item for item in self.manifest.models}

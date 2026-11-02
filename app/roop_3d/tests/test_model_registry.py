@@ -163,15 +163,32 @@ def test_get_api_models_registry_returns_accurate_readiness_states(tmp_path):
         item_ghost = next(x for x in data if x["model_id"] == "ghost_1_256")
         assert item_ghost["readiness_state"] == "MISSING"
 
-        # Test POST /api/models/verify
+        # The legacy endpoint keeps its registry ID/readiness contract, but does not infer TRT readiness from a file name.
         v_resp = client.post("/api/models/verify", json={"model_id": "ghost_1_256"})
         assert v_resp.status_code == 200
-        assert v_resp.json()["models"][0]["readiness_state"] == "MISSING"
+        legacy_verification = v_resp.json()["models"][0]
+        assert legacy_verification["model_id"] == "ghost_1_256"
+        assert legacy_verification["readiness_state"] == "MISSING"
+        assert "status" not in legacy_verification
+        versioned_legacy = client.post("/api/v1/models/verify", json={"model_id": "ghost_1_256"})
+        assert versioned_legacy.status_code == 200
+        assert versioned_legacy.json()["models"][0]["readiness_state"] == "MISSING"
+        assert "status" not in versioned_legacy.json()["models"][0]
+        default_report = client.post("/api/v1/models/verify", json={})
+        assert default_report.status_code == 200
+        assert any(row["model_id"] == "ghost_1_256" for row in default_report.json()["models"])
+        canonical = client.post("/api/v1/models/hub/verify", json={"model_id": "minimax_h3_ref2va_faceswap_lora"})
+        assert canonical.status_code == 200
+        canonical_row = canonical.json()["models"][0]
+        assert canonical_row["status"] == "NOT_INSTALLED"
+        assert canonical_row["actual_inference_available"] is False
+        assert "readiness_state" not in canonical_row
 
-        # Test POST /api/models/compile_trt
+        # A placeholder engine must never be published as a compiled TensorRT engine.
         c_resp = client.post("/api/models/compile_trt", json={"model_id": "simswap_unofficial_512", "precision": "fp16"})
-        assert c_resp.status_code == 200
-        assert c_resp.json()["results"][0]["status"] == "COMPILED"
+        assert c_resp.status_code == 409
+        assert c_resp.json()["error"]["code"] == "TRT_BUILD_UNAVAILABLE"
+        assert not list(trt_dir.glob("*.engine"))
 
 
 def test_enhancers_ultramax_gpen_and_codeformer():

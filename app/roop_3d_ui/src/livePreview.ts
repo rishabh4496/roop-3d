@@ -20,6 +20,7 @@ export function buildLivePayload({ request, time, fps, parameters, maskBase64, r
   if (!request || !request.face_mappings.length) return null;
   const restoring = restorerAvailable && (parameters.restoration_blend > 0 || request.parameter_curves?.tracks.restorer_opacity?.some(key=>key.value>0)) && !parameters.bypass.includes('restorer');
   return {
+    engine_id: request.engine_id ?? 'reference_onnx',
     target_path: request.target_path,
     inspection_id: request.inspection_id,
     frame_index: Math.max(0, Math.round(time * fps)),

@@ -5,6 +5,7 @@ import { HotkeyEditor } from '../components/controls/Hotkeys';
 import ThemeGallery from '../components/ThemeGallery';
 import { THEMES, themeByName, applyThemeToDom } from '../themes';
 import { useTelemetry } from '../stores/telemetryStore';
+import ModelHubPanel from '../components/modelhub/ModelHubPanel';
 
 /** Leaf subscriber: the Settings screen itself never re-renders when the telemetry store first learns the GPU. */
 function GpuName({ override }) {
@@ -62,90 +63,6 @@ export default function SettingsScreen({
   const [compatStatus, setCompatStatus] = useState('UNVERIFIED');
   const [compatMessage, setCompatMessage] = useState('Offline-safe operation active. Defaults strictly to 100% offline.');
 
-  // Model Hub state
-  const [modelsData, setModelsData] = useState([]);
-  const [modelsSummary, setModelsSummary] = useState(null);
-  const [modelsLoading, setModelsLoading] = useState(false);
-  const [modelsCategoryFilter, setModelsCategoryFilter] = useState('all');
-  const [modelActionLoading, setModelActionLoading] = useState(null); // model_id being acted on
-  const [modelHubNotice, setModelHubNotice] = useState('');
-  const [godTierLoading, setGodTierLoading] = useState(false);
-
-  const loadModels = () => {
-    setModelsLoading(true);
-    api('/models/registry')
-      .then(res => {
-        const list = Array.isArray(res) ? res : (res?.models || []);
-        setModelsData(list);
-        if (res && !Array.isArray(res) && res.summary) {
-          setModelsSummary(res.summary);
-        }
-        setModelsLoading(false);
-      })
-      .catch(err => {
-        setModelHubNotice(`Error loading models: ${err.message}`);
-        setModelsLoading(false);
-      });
-  };
-
-  const handleDownloadModel = async (modelId) => {
-    setModelActionLoading(modelId);
-    setModelHubNotice('');
-    try {
-      const res = await post('/models/download', { model_id: modelId });
-      setModelHubNotice(`Download initiated for ${modelId}: ${res.status}`);
-      loadModels();
-    } catch (e) {
-      setModelHubNotice(`Download error: ${e.message}`);
-    } finally {
-      setModelActionLoading(null);
-    }
-  };
-
-  const handleVerifyModel = async (modelId) => {
-    setModelActionLoading(modelId);
-    setModelHubNotice('');
-    try {
-      const res = await post('/models/verify', { model_id: modelId });
-      const state = res.models?.[0]?.readiness_state || 'CHECKED';
-      setModelHubNotice(`Verified ${modelId}: ${state}`);
-      loadModels();
-    } catch (e) {
-      setModelHubNotice(`Verification error: ${e.message}`);
-    } finally {
-      setModelActionLoading(null);
-    }
-  };
-
-  const handleCompileTrtModel = async (modelId) => {
-    setModelActionLoading(modelId);
-    setModelHubNotice('');
-    try {
-      const res = await post('/models/compile_trt', { model_id: modelId, precision: 'fp16' });
-      setModelHubNotice(`TRT Compilation complete for ${modelId}: ${res.results?.[0]?.status || 'COMPILED'}`);
-      loadModels();
-    } catch (e) {
-      setModelHubNotice(`TRT compilation error: ${e.message}`);
-    } finally {
-      setModelActionLoading(null);
-    }
-  };
-
-  const handleDownloadAndPrebuildAll = async () => {
-    setGodTierLoading(true);
-    setModelHubNotice('Downloading & pre-building all God-Tier models in progress…');
-    try {
-      await post('/models/download', {});
-      await post('/models/compile_trt', {});
-      setModelHubNotice('Successfully downloaded and pre-built all God-Tier model engines!');
-      loadModels();
-    } catch (e) {
-      setModelHubNotice(`Batch operation error: ${e.message}`);
-    } finally {
-      setGodTierLoading(false);
-    }
-  };
-
   const handlePurgeVram = async () => {
     setPurgeLoading(true);
     setPurgeNotice('');
@@ -174,13 +91,10 @@ export default function SettingsScreen({
     }
   };
 
-  // Auto-fetch report when switching to diagnostics tab, and models for models tab
+  // Load diagnostics when the tab is first opened.
   useEffect(() => {
     if (activeTab === 'diagnostics' && !reportData && !reportLoading) {
       loadReport();
-    }
-    if (activeTab === 'models' && modelsData.length === 0 && !modelsLoading) {
-      loadModels();
     }
   }, [activeTab]);
 
@@ -689,220 +603,7 @@ export default function SettingsScreen({
         </div>
       )}
 
-      {activeTab === 'models' && (
-        <div className="model-hub-container" data-testid="model-hub-panel" style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-          {/* Header Card & 1-Click God-Tier Pre-build */}
-          <section className="model-hub-header-card" style={{ background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: '8px', padding: '22px' }}>
-            <div className="card-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '16px', marginBottom: '16px' }}>
-              <div>
-                <span className="eyebrow">DECLARATIVE ONNX / TENSORRT ARTIFACTS</span>
-                <h2>Model Hub & TRT Engine Manager</h2>
-                <p className="muted" style={{ margin: '4px 0 0 0', fontSize: '12px' }}>
-                  Unified source-of-truth registry managing Swappers, Enhancers, 3D Pose/Geometry, Detectors, and Occlusion Parsers.
-                </p>
-              </div>
-              <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
-                <button
-                  className="button small"
-                  onClick={loadModels}
-                  disabled={modelsLoading}
-                  data-testid="refresh-models-btn"
-                >
-                  {modelsLoading ? 'Refreshing…' : '↻ Refresh States'}
-                </button>
-                <button
-                  className="button small primary"
-                  onClick={handleDownloadAndPrebuildAll}
-                  disabled={godTierLoading}
-                  data-testid="god-tier-prebuild-btn"
-                  style={{ background: 'var(--accent, #6366f1)', color: '#fff', fontWeight: 'bold' }}
-                >
-                  {godTierLoading ? 'Pre-Building All Models…' : '⚡ Download & Pre-Build All God-Tier Models'}
-                </button>
-              </div>
-            </div>
-
-            {modelHubNotice && (
-              <div className="notice-box" style={{ padding: '8px 12px', borderRadius: '4px', background: 'rgba(99, 102, 241, 0.1)', border: '1px solid var(--accent, #6366f1)', fontSize: '12px', marginBottom: '16px' }}>
-                {modelHubNotice}
-              </div>
-            )}
-
-            {/* Model Summary Metric Pills */}
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '12px' }}>
-              <div style={{ background: 'var(--surface-sunken, rgba(0,0,0,0.2))', padding: '12px', borderRadius: '6px', border: '1px solid var(--line)' }}>
-                <span className="muted" style={{ fontSize: '11px', display: 'block' }}>TOTAL REGISTERED</span>
-                <strong style={{ fontSize: '20px' }}>{modelsSummary?.total_registered ?? modelsData.length}</strong>
-              </div>
-              <div style={{ background: 'var(--surface-sunken, rgba(0,0,0,0.2))', padding: '12px', borderRadius: '6px', border: '1px solid var(--line)' }}>
-                <span className="muted" style={{ fontSize: '11px', display: 'block' }}>READY + TRT ENGINE</span>
-                <strong style={{ fontSize: '20px', color: 'var(--mint, #06d6a0)' }}>
-                  {modelsSummary?.trt_ready ?? modelsData.filter(m => (m.readiness_state || m.status) === 'READY + TRT ENGINE').length}
-                </strong>
-              </div>
-              <div style={{ background: 'var(--surface-sunken, rgba(0,0,0,0.2))', padding: '12px', borderRadius: '6px', border: '1px solid var(--line)' }}>
-                <span className="muted" style={{ fontSize: '11px', display: 'block' }}>DOWNLOADED (NEEDS TRT)</span>
-                <strong style={{ fontSize: '20px', color: 'var(--amber, #ffd166)' }}>
-                  {modelsSummary?.downloaded ?? modelsData.filter(m => (m.readiness_state || m.status) === 'DOWNLOADED (NEEDS TRT)').length}
-                </strong>
-              </div>
-              <div style={{ background: 'var(--surface-sunken, rgba(0,0,0,0.2))', padding: '12px', borderRadius: '6px', border: '1px solid var(--line)' }}>
-                <span className="muted" style={{ fontSize: '11px', display: 'block' }}>MISSING / NOT INSTALLED</span>
-                <strong style={{ fontSize: '20px', color: 'var(--muted, #888)' }}>
-                  {modelsSummary?.missing ?? modelsData.filter(m => (m.readiness_state || m.status) === 'MISSING').length}
-                </strong>
-              </div>
-            </div>
-          </section>
-
-          {/* Model Filter Bar */}
-          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
-            <span className="muted" style={{ fontSize: '12px', marginRight: '4px' }}>Filter Category:</span>
-            {[
-              ['all', 'All Models'],
-              ['swapper', 'Swappers'],
-              ['enhancer', 'Enhancers / Restorers'],
-              ['3d_geometry', '3D Pose & Geometry'],
-              ['detector_embedder', 'Detectors & Embedders'],
-              ['occlusion_masking', 'Occlusion & Masking'],
-            ].map(([cat, label]) => (
-              <button
-                key={cat}
-                data-testid={`category-filter-${cat}`}
-                className={`button small ${modelsCategoryFilter === cat ? 'active' : ''}`}
-                style={{
-                  padding: '4px 10px',
-                  fontSize: '11px',
-                  background: modelsCategoryFilter === cat ? 'var(--accent, #6366f1)' : 'transparent',
-                  borderColor: modelsCategoryFilter === cat ? 'var(--accent, #6366f1)' : 'var(--line)',
-                  color: modelsCategoryFilter === cat ? '#fff' : 'inherit',
-                }}
-                onClick={() => setModelsCategoryFilter(cat)}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
-
-          {/* Model Registry List */}
-          <section className="model-registry-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(340px, 1fr))', gap: '16px' }}>
-            {modelsData
-              .filter(m => modelsCategoryFilter === 'all' || m.category === modelsCategoryFilter)
-              .map(model => {
-                const key = model.model_id || model.model_key || model.filename || model.name;
-                const state = model.readiness_state || model.status || 'MISSING';
-                const isActing = modelActionLoading === key;
-                let badgeCol = '#888';
-                let badgeBg = 'rgba(255,255,255,0.06)';
-                if (state === 'READY + TRT ENGINE') {
-                  badgeCol = 'var(--mint, #06d6a0)';
-                  badgeBg = 'rgba(6, 214, 160, 0.12)';
-                } else if (state === 'DOWNLOADED (NEEDS TRT)') {
-                  badgeCol = 'var(--amber, #ffd166)';
-                  badgeBg = 'rgba(255, 209, 102, 0.12)';
-                } else if (state === 'CORRUPT HASH') {
-                  badgeCol = 'var(--rose, #ef4444)';
-                  badgeBg = 'rgba(239, 68, 68, 0.12)';
-                }
-
-                const sizeBytes = model.expected_size_bytes || model.file_size_bytes || 0;
-
-                return (
-                  <div
-                    key={key}
-                    className="model-card"
-                    data-testid={`model-card-${key}`}
-                    style={{
-                      background: 'var(--surface)',
-                      border: '1px solid var(--line)',
-                      borderRadius: '8px',
-                      padding: '16px',
-                      display: 'flex',
-                      flexDirection: 'column',
-                      justifyContent: 'space-between',
-                      gap: '12px',
-                    }}
-                  >
-                    <div>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '8px', marginBottom: '8px' }}>
-                        <div>
-                          <strong style={{ fontSize: '13px', display: 'block', wordBreak: 'break-all' }}>{model.name}</strong>
-                          <span className="muted" style={{ fontSize: '10px', textTransform: 'uppercase' }}>{model.category}</span>
-                        </div>
-                        <span
-                          className="status-badge"
-                          style={{
-                            fontSize: '9px',
-                            fontWeight: 'bold',
-                            padding: '3px 6px',
-                            borderRadius: '4px',
-                            color: badgeCol,
-                            background: badgeBg,
-                            whiteSpace: 'nowrap',
-                          }}
-                        >
-                          {state}
-                        </span>
-                      </div>
-
-                      <p className="muted" style={{ fontSize: '11px', margin: '4px 0 10px 0', lineHeight: '1.4' }}>
-                        {model.description}
-                      </p>
-
-                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px', fontSize: '11px', background: 'var(--surface-sunken, rgba(0,0,0,0.15))', padding: '8px', borderRadius: '4px' }}>
-                        <div>
-                          <span className="muted">VRAM footprint: </span>
-                          <strong>{model.vram_footprint_mb} MB</strong>
-                        </div>
-                        <div>
-                          <span className="muted">Precision: </span>
-                          <strong style={{ color: model.precision_policy === 'FP32' ? 'var(--amber, #ffd166)' : 'inherit' }}>
-                            {model.precision_policy}
-                          </strong>
-                        </div>
-                        <div>
-                          <span className="muted">Batching: </span>
-                          <strong>{model.supports_dynamic_batch ? 'Dynamic' : 'Static B1'}</strong>
-                        </div>
-                        <div>
-                          <span className="muted">Size: </span>
-                          <span>{sizeBytes ? `${(sizeBytes / (1024 * 1024)).toFixed(1)} MB` : 'N/A'}</span>
-                        </div>
-                      </div>
-                    </div>
-
-                    <div style={{ display: 'flex', gap: '6px', marginTop: '6px' }}>
-                      <button
-                        className="button small"
-                        style={{ flex: 1, padding: '4px 8px', fontSize: '10px' }}
-                        disabled={isActing}
-                        onClick={() => handleDownloadModel(key)}
-                      >
-                        {isActing ? '…' : 'Download'}
-                      </button>
-                      <button
-                        className="button small"
-                        style={{ flex: 1, padding: '4px 8px', fontSize: '10px' }}
-                        disabled={isActing}
-                        onClick={() => handleVerifyModel(key)}
-                      >
-                        Verify
-                      </button>
-                      <button
-                        className="button small"
-                        style={{ flex: 1, padding: '4px 8px', fontSize: '10px' }}
-                        disabled={isActing}
-                        onClick={() => handleCompileTrtModel(key)}
-                      >
-                        Build TRT
-                      </button>
-                    </div>
-                  </div>
-                );
-              })}
-          </section>
-        </div>
-      )}
+      {activeTab === 'models' && <ModelHubPanel active />}
     </main>
   );
 }

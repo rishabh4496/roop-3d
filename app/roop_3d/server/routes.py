@@ -113,7 +113,7 @@ def capabilities(request: Request) -> Capabilities:
 class BatchModelDownloadRequest(Contract):
     model_id: str | None = None
     models: list[str] = Field(default_factory=list)
-    accepted_license: bool = True
+    accepted_license: bool = False
     commercial: bool = False
 
 
@@ -133,13 +133,54 @@ def models(request: Request) -> list[dict]:
     return request.app.state.models.public()
 
 
+@router.get("/models/hub")
+def model_hub(request: Request) -> dict[str, Any]:
+    return request.app.state.model_hub.snapshot()
+
+
+@router.post("/models/{model_id}/downloads", status_code=202)
+def start_model_download(model_id: str, request: Request,
+                         value: Annotated[ModelDownloadRequest | None, Body()] = None) -> dict[str, Any]:
+    value = value or ModelDownloadRequest()
+    return request.app.state.model_downloads.start(model_id, accepted_license=value.accepted_license,
+                                                   commercial=value.commercial)
+
+
+@router.get("/models/downloads/{download_id}")
+def model_download_status(download_id: str, request: Request) -> dict[str, Any]:
+    return request.app.state.model_downloads.get(download_id)
+
+
+@router.get("/models/downloads")
+def active_model_downloads(request: Request) -> list[dict[str, Any]]:
+    return request.app.state.model_downloads.active()
+
+
+@router.delete("/models/downloads/{download_id}")
+def cancel_model_download(download_id: str, request: Request) -> dict[str, Any]:
+    return request.app.state.model_downloads.cancel(download_id)
+
+
 @router.get("/models/registry")
 def model_registry(request: Request, view: str | None = None) -> Any:
     is_aliased = request.scope.get("original_api_path") == "/api/models/registry"
     if view == "unified" or (is_aliased and view != "legacy"):
-        from roop_3d.model_registry import UnifiedModelRegistry
-        return UnifiedModelRegistry(request.app.state.root).get_full_readiness_report()
+        from roop_3d.model_registry import UNIFIED_MANIFEST_MAP, UnifiedModelRegistry
+        report = UnifiedModelRegistry(request.app.state.root).get_full_readiness_report()
+        for item in report:
+            if item.get("model_id") in UNIFIED_MANIFEST_MAP:
+                _clear_unverified_legacy_trt_claim(item)
+        return report
     return request.app.state.models.registry.records()
+
+
+def _clear_unverified_legacy_trt_claim(report: dict[str, Any]) -> None:
+    """Keep legacy readiness fields, but don't trust an engine filename as an inference receipt."""
+    if report.get("readiness_state") == "READY + TRT ENGINE":
+        report["readiness_state"] = "DOWNLOADED (NEEDS TRT)"
+        report["trt_engine_path"] = None
+        report["engine_presence_verified"] = False
+        report["actual_inference_available"] = False
 
 
 @router.post("/models/download")
@@ -147,55 +188,38 @@ def batch_download_models(
     request: Request,
     value: Annotated[BatchModelDownloadRequest | None, Body()] = None,
 ) -> dict[str, Any]:
-    from roop_3d.model_registry import UNIFIED_MANIFEST_MAP, UNIFIED_MODEL_ENTRIES, ResilientModelDownloader
-    from roop_3d.server.ws import ModelDownloadProgressEvent
-
     req = value or BatchModelDownloadRequest()
-    target_ids = []
-    if req.model_id:
-        target_ids.append(req.model_id)
-    if req.models:
-        target_ids.extend(req.models)
+    target_ids = list(dict.fromkeys(([req.model_id] if req.model_id else []) + req.models))
     if not target_ids:
-        target_ids = [entry.model_id for entry in UNIFIED_MODEL_ENTRIES]
-
-    dest_dir = request.app.state.root / "app/models"
-    dest_dir.mkdir(parents=True, exist_ok=True)
-    downloader = ResilientModelDownloader(dest_dir)
-
+        raise DomainError("MODEL_SELECTION_REQUIRED", "Select one or more registered model IDs; bulk download is disabled", 422)
     results = []
-    for mid in target_ids:
-        entry = UNIFIED_MANIFEST_MAP.get(mid)
-        if not entry:
-            results.append({"model_id": mid, "status": "UNKNOWN_MODEL"})
-            continue
-
-        def on_progress(p_event: dict[str, Any]):
-            try:
-                if hasattr(request.app.state, "events"):
-                    request.app.state.events.publish(ModelDownloadProgressEvent(
-                        model_id=p_event["model_id"],
-                        bytes_downloaded=p_event.get("bytes_downloaded", 0),
-                        total_bytes=p_event.get("total_bytes", 0),
-                        percent=p_event.get("percent", 0.0),
-                        speed_mbps=p_event.get("speed_mbps", 0.0),
-                        eta_seconds=p_event.get("eta_seconds", 0.0),
-                        status=p_event.get("status", "downloading"),
-                    ))
-            except Exception:
-                pass
-
-        try:
-            file_path = dest_dir / entry.name
-            if file_path.is_file():
-                results.append({"model_id": mid, "name": entry.name, "status": "VERIFIED_LOCAL", "path": str(file_path)})
-            else:
-                p = downloader.download_model(entry, progress_callback=on_progress)
-                results.append({"model_id": mid, "name": entry.name, "status": "DOWNLOADED", "path": str(p)})
-        except Exception as e:
-            results.append({"model_id": mid, "name": entry.name, "status": "FAILED", "error": str(e)})
+    for model_id in target_ids:
+        result = request.app.state.models.ensure_available(model_id, accepted_license=req.accepted_license,
+                                                           commercial=req.commercial)
+        results.append({"model_id": model_id, "status": "VERIFIED_LOCAL", "downloaded": result.downloaded,
+                        "resumed": result.resumed})
 
     return {"status": "ok", "results": results}
+
+
+def _legacy_model_verification(root: Path, target_ids: list[str]) -> dict[str, Any]:
+    """Read-only compatibility response for existing /models/verify callers."""
+    from roop_3d.model_registry import UNIFIED_MANIFEST_MAP, UNIFIED_MODEL_ENTRIES, UnifiedModelRegistry
+    legacy_registry = UnifiedModelRegistry(root)
+    if not target_ids:
+        target_ids = [entry.model_id for entry in UNIFIED_MODEL_ENTRIES]
+    reports = []
+    for model_id in target_ids:
+        entry = UNIFIED_MANIFEST_MAP.get(model_id)
+        if entry is None:
+            reports.append({"model_id": model_id, "readiness_state": "MISSING", "error": "Unknown model ID"})
+            continue
+        report = legacy_registry.inspect_model_readiness(entry)
+        # The old inspector infers TensorRT readiness from a filename only.
+        # Do not claim executable acceleration without a verified build receipt.
+        _clear_unverified_legacy_trt_claim(report)
+        reports.append(report)
+    return {"status": "ok", "models": reports}
 
 
 @router.post("/models/verify")
@@ -203,25 +227,39 @@ def verify_models(
     request: Request,
     value: Annotated[ModelVerifyRequest | None, Body()] = None,
 ) -> dict[str, Any]:
-    from roop_3d.model_registry import UNIFIED_MANIFEST_MAP, UNIFIED_MODEL_ENTRIES, UnifiedModelRegistry
-
     req = value or ModelVerifyRequest()
-    reg = UnifiedModelRegistry(request.app.state.root)
-    target_ids = []
-    if req.model_id:
-        target_ids.append(req.model_id)
-    if req.models:
-        target_ids.extend(req.models)
-    if not target_ids:
-        target_ids = [entry.model_id for entry in UNIFIED_MODEL_ENTRIES]
+    target_ids = list(dict.fromkeys(([req.model_id] if req.model_id else []) + req.models))
+    return _legacy_model_verification(request.app.state.root, target_ids)
 
+
+@router.post("/models/hub/verify")
+def verify_hub_models(
+    request: Request,
+    value: Annotated[ModelVerifyRequest | None, Body()] = None,
+) -> dict[str, Any]:
+    """Verify canonical hub IDs without changing the legacy verify endpoint contract."""
+    req = value or ModelVerifyRequest()
+    target_ids = list(dict.fromkeys(([req.model_id] if req.model_id else []) + req.models))
+    if not target_ids:
+        raise DomainError("MODEL_SELECTION_REQUIRED", "Select one or more registered model IDs to verify", 422)
     reports = []
-    for mid in target_ids:
-        entry = UNIFIED_MANIFEST_MAP.get(mid)
-        if entry:
-            reports.append(reg.inspect_model_readiness(entry))
-        else:
-            reports.append({"model_id": mid, "readiness_state": "MISSING", "error": "Unknown model ID"})
+    for model_id in target_ids:
+        try:
+            path = request.app.state.models.provider.resolve(model_id)
+            evidence = request.app.state.model_hub.model(model_id)
+            reports.append({"model_id": model_id, "status": evidence["status"], "bytes_verified": True,
+                            "actual_inference_available": evidence["actual_inference_available"],
+                            "filename": path.name})
+        except DomainError as error:
+            try:
+                evidence = request.app.state.model_hub.model(model_id)
+                state = evidence["status"]
+                inference_available = evidence["actual_inference_available"]
+            except DomainError as lookup_error:
+                state = "NOT_INSTALLED" if lookup_error.code == "MODEL_NOT_FOUND" else "UNVERIFIED"
+                inference_available = False
+            reports.append({"model_id": model_id, "status": state, "bytes_verified": False,
+                            "actual_inference_available": inference_available, "error_code": error.code})
 
     return {"status": "ok", "models": reports}
 
@@ -231,40 +269,7 @@ def compile_trt_models(
     request: Request,
     value: Annotated[ModelCompileTrtRequest | None, Body()] = None,
 ) -> dict[str, Any]:
-    from roop_3d.model_registry import UNIFIED_MANIFEST_MAP, UNIFIED_MODEL_ENTRIES
-
-    req = value or ModelCompileTrtRequest()
-    target_ids = []
-    if req.model_id:
-        target_ids.append(req.model_id)
-    if req.models:
-        target_ids.extend(req.models)
-    if not target_ids:
-        target_ids = [entry.model_id for entry in UNIFIED_MODEL_ENTRIES]
-
-    trt_dir = request.app.state.root / "app/models/trt_cache"
-    trt_dir.mkdir(parents=True, exist_ok=True)
-
-    results = []
-    for mid in target_ids:
-        entry = UNIFIED_MANIFEST_MAP.get(mid)
-        if not entry:
-            results.append({"model_id": mid, "status": "UNKNOWN_MODEL"})
-            continue
-
-        stem = Path(entry.name).stem
-        engine_file = trt_dir / f"{stem}_{req.precision}.engine"
-        if not engine_file.is_file():
-            engine_file.write_bytes(b"TRT_ENGINE_CACHE_DATA_FOR_STAGE13")
-        results.append({
-            "model_id": mid,
-            "name": entry.name,
-            "precision": req.precision,
-            "engine_path": str(engine_file),
-            "status": "COMPILED",
-        })
-
-    return {"status": "ok", "results": results}
+    raise DomainError("TRT_BUILD_UNAVAILABLE", "No verified TensorRT build adapter is configured for these models", 409)
 
 
 @router.get("/models/{model_id}/license", response_model=ModelLicenseNotice)
@@ -343,6 +348,7 @@ def concat_segments(value: ConcatSegmentsRequest, request: Request) -> dict:
 
 def validate_job(request: Request, value: JobRequest) -> None:
     state = request.app.state
+    state.model_hub.engines_registry.validate(value.engine_id)
     if value.processing == "remote":
         if not state.settings.remote_processing_enabled:
             raise DomainError("REMOTE_PROCESSING_DISABLED", "Remote processing is disabled")

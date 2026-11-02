@@ -59,12 +59,18 @@ def create_app(settings: Settings | None = None, *, repo_root: Path | None = Non
     queue = QueueManager(root, events.publish)
     engine_gate = EngineGate()
     catalog = ModelCatalog(cache_root=root, search_paths=lambda: app.state.settings.model_search_paths)
+    from roop_3d.models.downloads import ModelDownloadManager
+    from roop_3d.models.hub import ModelHubService
+    model_downloads = ModelDownloadManager(catalog)
+    model_hub = ModelHubService(catalog)
     media = MediaService(root, catalog, lambda: app.state.settings)
     if worker_enabled and pipeline_runner is None:
         from roop_3d.optimized_processor import make_stream_runner
         pipeline_runner = make_stream_runner(root, catalog, media, lambda: app.state.settings, pipeline_tracker=pipeline)
     worker = (JobWorker(root, jobs, lambda: app.state.settings, catalog, media,
                         pipeline_runner=pipeline_runner, engine_gate=engine_gate) if worker_enabled else None)
+    if worker is not None:
+        model_hub.engines_registry = worker.engines
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -88,6 +94,7 @@ def create_app(settings: Settings | None = None, *, repo_root: Path | None = Non
         try:
             yield
         finally:
+            await run_in_threadpool(model_downloads.close)
             if worker is not None:
                 await run_in_threadpool(worker.stop)
             task.cancel()
@@ -95,7 +102,7 @@ def create_app(settings: Settings | None = None, *, repo_root: Path | None = Non
             await run_in_threadpool(app.state.thread_benchmark.close)
 
     app = FastAPI(title="Roop 3D", version=__version__, docs_url=None, redoc_url=None, lifespan=lifespan,
-                  responses={status: {"model": ErrorEnvelope} for status in (400, 403, 404, 409, 413, 416, 422, 500)})
+                  responses={status: {"model": ErrorEnvelope} for status in (400, 403, 404, 409, 413, 416, 422, 429, 500, 503)})
     app.state.settings = settings
     app.state.root = root
     app.state.events = events
@@ -109,6 +116,8 @@ def create_app(settings: Settings | None = None, *, repo_root: Path | None = Non
     app.state.jobs = jobs
     app.state.queue = queue
     app.state.models = catalog
+    app.state.model_hub = model_hub
+    app.state.model_downloads = model_downloads
     app.state.media = media
     app.state.projects = ProjectStore(root, media, catalog, jobs)
     app.state.worker = worker

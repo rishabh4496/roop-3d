@@ -1,5 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { api, post } from '../api';
+import { engineSelection } from '../stores/engineSelection';
 import { featureReason } from '../state';
 import NumericInput from '../components/controls/NumericInput';
 
@@ -175,7 +176,7 @@ export default function BatchMatrixScreen({
 
         for (const sub of subRequests) {
           const idemKey = `matrix-${crypto.randomUUID()}`;
-          const cleanRequest = { ...sub };
+          const cleanRequest = { engine_id: engineSelection.get().engineId, ...sub };
           const segIdx = cleanRequest._segment_index;
           const totalSegs = cleanRequest._total_segments;
           delete cleanRequest._segment_index;

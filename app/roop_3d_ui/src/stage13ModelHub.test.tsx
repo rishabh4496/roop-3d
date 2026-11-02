@@ -3,102 +3,66 @@ import React, { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import SettingsScreen from './screens/SettingsScreen';
+import { api, post } from './api';
+import { engineSelection, selectEngine } from './stores/engineSelection';
 
 const Settings = SettingsScreen as React.ComponentType<any>;
+const mockHub = vi.hoisted(() => ({
+  failHub: false,
+  activeDownloads: [] as { download_id: string; model_id: string; state: string; bytes_downloaded: number; total_bytes: number; percent: number; error_code: string | null }[],
+  execution_policy: 'offline_by_default',
+  download_policy: 'explicit_user_action_hash_verified_cancellable',
+  model_states: ['AVAILABLE', 'NOT_INSTALLED', 'LICENSE_RESTRICTED', 'INCOMPATIBLE', 'UNVERIFIED', 'BROKEN', 'READY_FOR_INFERENCE'],
+  engines: [
+    { engine_id: 'reference_onnx', name: 'Roop 3D Reference ONNX', family: 'InsightFace-compatible', engine_type: 'ONNX Runtime',
+      purpose: 'Local still-image and video face swap.', model_ids: ['swap'], minimum_vram_gib: null, recommended_vram_gib: null,
+      dependencies: [], supported_precision: ['FP32'], supported_execution_providers: ['CPUExecutionProvider'], status: 'READY_FOR_INFERENCE',
+      benchmark_status: 'NOT_RUN', actual_inference_available: true, selectable: true, selected: true, evidence: 'Hash checked.' },
+    { engine_id: 'minimax_h3_ref2va_experimental', name: 'MiniMax H3 Ref2VA', family: 'ComfyUI LoRA', engine_type: 'ComfyUI',
+      purpose: 'Experimental generative video.', model_ids: ['h3'], minimum_vram_gib: null, recommended_vram_gib: null,
+      dependencies: ['MiniMax H3 base'], supported_precision: [], supported_execution_providers: [], status: 'UNVERIFIED',
+      benchmark_status: 'NOT_RUN', actual_inference_available: false, selectable: false, selected: false, evidence: 'Video bridge unavailable.' },
+  ],
+  models: [
+    { model_id: 'swap', name: 'inswapper_128.onnx', version: 'SHA-identified', family: 'InsightFace-compatible', engine_type: 'ONNX Runtime',
+      purpose: 'Face identity transfer', source_repository: null,
+      weight_files: [{ filename: 'inswapper_128.onnx', sha256: 'a'.repeat(64), size_bytes: 128, source_url: null }],
+      license: { id: 'UNKNOWN', commercial_use: 'unknown', url: null, notice: 'Exact weight rights unknown.', acceptance_required: false, related_urls: [] },
+      minimum_vram_gib: null, recommended_vram_gib: null, dependencies: [], supported_precision: ['FP32'],
+      supported_execution_providers: ['CPUExecutionProvider'], provider_evidence: 'Test evidence', status: 'READY_FOR_INFERENCE',
+      status_evidence: 'Hash checked.', benchmark_status: 'NOT_RUN', actual_inference_available: true,
+      inference_evidence: 'test fixture', download_allowed: false, role: 'identity_swapper' },
+    { model_id: 'h3', name: 'H3 face-swap LoRA', version: 'b2a5823', family: 'MiniMax H3 Ref2VA LoRA', engine_type: 'ComfyUI',
+      purpose: 'Experimental generative video identity transfer', source_repository: 'https://huggingface.co/UntMods/FaceSwap_MiniMaxH3_REF2VA',
+      weight_files: [{ filename: 'h3.safetensors', sha256: 'b'.repeat(64), size_bytes: 1024, source_url: 'https://huggingface.co/model' }],
+      license: { id: 'Apache-2.0', commercial_use: 'allow', url: 'https://huggingface.co/UntMods/FaceSwap_MiniMaxH3_REF2VA', notice: 'Review base-model terms separately.', acceptance_required: true, related_urls: ['https://huggingface.co/MiniMaxAI/MiniMax-H3'] },
+      minimum_vram_gib: null, recommended_vram_gib: null, dependencies: ['MiniMax H3 base'], supported_precision: [],
+      supported_execution_providers: [], provider_evidence: 'Not tested', status: 'INCOMPATIBLE', status_evidence: 'No video adapter.',
+      benchmark_status: 'NOT_RUN', actual_inference_available: false, inference_evidence: 'No adapter', download_allowed: true, role: 'diffusion_adapter' },
+  ],
+}));
 
-// Mock API
 vi.mock('./api', () => ({
-  api: vi.fn((url: string) => {
-    if (url.includes('/models/registry')) {
-      return Promise.resolve({
-        status: 'ok',
-        summary: {
-          total_registered: 22,
-          downloaded: 4,
-          trt_ready: 2,
-          missing: 18,
-          corrupt_hash: 0,
-        },
-        models: [
-          {
-            model_key: 'inswapper_128.onnx',
-            name: 'InSwapper 128 (InsightFace)',
-            category: 'swapper',
-            filename: 'inswapper_128.onnx',
-            file_size_bytes: 554253681,
-            sha256: 'e4a3f08c536572c613f341d1493ee2a18b13773c883814400e732360549b0d23',
-            precision_policy: 'FP32',
-            supports_dynamic_batch: true,
-            status: 'READY + TRT ENGINE',
-            downloaded: true,
-            trt_compiled: true,
-            vram_footprint_mb: 528,
-          },
-          {
-            model_key: 'gpen_bfr_512.onnx',
-            name: 'GPEN Realistic 512',
-            category: 'enhancer',
-            filename: 'GPEN-BFR-512.onnx',
-            file_size_bytes: 290000000,
-            sha256: 'b123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
-            precision_policy: 'FP16',
-            supports_dynamic_batch: false,
-            status: 'DOWNLOADED (NEEDS TRT)',
-            downloaded: true,
-            trt_compiled: false,
-            vram_footprint_mb: 276,
-          },
-          {
-            model_key: 'simswap_unofficial_512.onnx',
-            name: 'SimSwap Unofficial 512',
-            category: 'swapper',
-            filename: 'simswap_unofficial_512.onnx',
-            file_size_bytes: 380000000,
-            sha256: 'c123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
-            precision_policy: 'FP16',
-            supports_dynamic_batch: true,
-            status: 'MISSING',
-            downloaded: false,
-            trt_compiled: false,
-            vram_footprint_mb: 362,
-          },
-        ],
-      });
-    }
-    if (url.includes('/system/diagnostics-report')) {
-      return Promise.resolve({
-        report_id: 'r3d_diag_test_123',
-        overall_status: 'PASS',
-        sections: [],
-        markdown_report: '# Test Report',
-      });
+  api: vi.fn((url: string, init?: RequestInit) => {
+    if (url === '/models/hub') return mockHub.failHub ? Promise.reject(new Error('local service unavailable')) : Promise.resolve(mockHub);
+    if (url === '/models/downloads') return Promise.resolve(mockHub.activeDownloads);
+    if (url === '/models/downloads/download-1' && init?.method === 'DELETE') {
+      return Promise.resolve({ download_id: 'download-1', model_id: 'h3', state: 'cancelled', bytes_downloaded: 0, total_bytes: 1024, percent: 0, error_code: null });
     }
     return Promise.resolve({});
   }),
-  post: vi.fn((url: string, body?: any) => {
-    if (url.includes('/models/download')) {
-      return Promise.resolve({
-        status: 'ok',
-        model_key: body?.model_key || 'inswapper_128.onnx',
-        message: 'Download initiated successfully',
-      });
-    }
-    if (url.includes('/models/compile_trt')) {
-      return Promise.resolve({
-        status: 'ok',
-        model_key: body?.model_key || 'gpen_bfr_512.onnx',
-        trt_engine_path: 'app/models/GPEN-BFR-512.engine',
-      });
-    }
-    return Promise.resolve({});
-  }),
-  mediaURL: vi.fn((p: string) => `http://127.0.0.1:8030/${p}`),
+  post: vi.fn(() => Promise.resolve({ download_id: 'download-1', model_id: 'h3', state: 'queued', bytes_downloaded: 0, total_bytes: 1024, percent: 0, error_code: null })),
+  mediaURL: vi.fn((path: string) => path),
 }));
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 let host: HTMLDivElement, root: Root;
 
 beforeEach(() => {
+  engineSelection.reset();
+  vi.clearAllMocks();
+  mockHub.failHub = false;
+  mockHub.activeDownloads = [];
   localStorage.clear();
   sessionStorage.clear();
   host = document.createElement('div');
@@ -118,123 +82,73 @@ const mount = async (element: React.ReactNode) => {
 
 const click = async (element: Element | null) => {
   expect(element).toBeTruthy();
-  await act(async () => {
-    element!.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
-  });
+  await act(async () => element!.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })));
 };
 
-describe('Stage 13 Model Hub & TRT Engine Manager UI', () => {
-  it('renders the Model Hub tab button, switches to Model Hub, and displays summary cards', async () => {
-    await mount(
-      <Settings
-        activeTab="models"
-        setActiveTab={() => {}}
-        hardware={{
-          gpu_name: 'NVIDIA GeForce RTX 4090',
-          vram_total_mib: 24576,
-          vram_allocated_mib: 4096,
-          vram_free_mib: 20480,
-          memory_pressure_gauge: 0.166,
-        }}
-        settings={{}}
-        updateSetting={() => {}}
-        onResetSettings={() => {}}
-      />
-    );
-
-    // Verify Model Hub container is mounted
-    const modelHubPanel = host.querySelector('[data-testid="model-hub-panel"]');
-    expect(modelHubPanel).toBeTruthy();
-    expect(modelHubPanel?.textContent).toContain('Model Hub & TRT Engine Manager');
-    expect(modelHubPanel?.textContent).toContain('22'); // Total registered models
+describe('Stage 6 local model hub', () => {
+  it('connects engine selection to the shared job preference and blocks unavailable engines', async () => {
+    selectEngine('unavailable_saved_engine');
+    await mount(<Settings activeTab="models" setActiveTab={() => {}} settings={{}} updateSetting={() => {}} onResetSettings={() => {}} />);
+    const experimental = host.querySelector('[data-testid="engine-card-minimax_h3_ref2va_experimental"] button') as HTMLButtonElement;
+    expect(experimental.disabled).toBe(true);
+    expect(engineSelection.get().engineId).toBe('unavailable_saved_engine');
+    await click(host.querySelector('[data-testid="engine-card-reference_onnx"] button'));
+    expect(engineSelection.get().engineId).toBe('reference_onnx');
+    expect(host.querySelector('[data-testid="engine-card-reference_onnx"] button')?.getAttribute('aria-pressed')).toBe('true');
+  });
+  it('shows the active production engine and reports the unverified H3 workflow as unavailable', async () => {
+    await mount(<Settings activeTab="models" setActiveTab={() => {}} settings={{}} updateSetting={() => {}} onResetSettings={() => {}} />);
+    expect(host.querySelector('[data-testid="model-hub-panel"]')?.textContent).toContain('Models and engines');
+    expect(host.querySelector('[data-testid="engine-card-reference_onnx"]')?.textContent).toContain('Current production engine');
+    expect(host.querySelector('[data-testid="engine-card-minimax_h3_ref2va_experimental"]')?.textContent).toContain('UNVERIFIED');
+    expect(host.querySelector('[data-testid="engine-card-minimax_h3_ref2va_experimental"]')?.textContent).toContain('Unavailable for production jobs');
+    expect(host.querySelector('[data-testid="model-card-swap"]')?.textContent).toContain('SHA-256:');
+    expect(api).toHaveBeenCalledWith('/models/hub');
   });
 
-  it('displays models with readiness badges (READY + TRT ENGINE, DOWNLOADED (NEEDS TRT), MISSING)', async () => {
-    await mount(
-      <Settings
-        activeTab="models"
-        setActiveTab={() => {}}
-        hardware={{
-          gpu_name: 'NVIDIA GeForce RTX 4090',
-          vram_total_mib: 24576,
-          vram_allocated_mib: 4096,
-          vram_free_mib: 20480,
-          memory_pressure_gauge: 0.166,
-        }}
-        settings={{}}
-        updateSetting={() => {}}
-        onResetSettings={() => {}}
-      />
-    );
-
-    // InSwapper 128 (READY + TRT ENGINE)
-    const inswapperCard = host.querySelector('[data-testid="model-card-inswapper_128.onnx"]');
-    expect(inswapperCard).toBeTruthy();
-    expect(inswapperCard?.textContent).toContain('READY + TRT ENGINE');
-    expect(inswapperCard?.textContent).toContain('FP32');
-
-    // GPEN Realistic 512 (DOWNLOADED (NEEDS TRT))
-    const gpenCard = host.querySelector('[data-testid="model-card-gpen_bfr_512.onnx"]');
-    expect(gpenCard).toBeTruthy();
-    expect(gpenCard?.textContent).toContain('DOWNLOADED (NEEDS TRT)');
-    expect(gpenCard?.textContent).toContain('FP16');
-
-    // SimSwap 512 (MISSING)
-    const simswapCard = host.querySelector('[data-testid="model-card-simswap_unofficial_512.onnx"]');
-    expect(simswapCard).toBeTruthy();
-    expect(simswapCard?.textContent).toContain('MISSING');
+  it('requires review before starting an explicit download and exposes cancellation', async () => {
+    await mount(<Settings activeTab="models" setActiveTab={() => {}} settings={{}} updateSetting={() => {}} onResetSettings={() => {}} />);
+    const card = host.querySelector('[data-testid="model-card-h3"]')!;
+    const downloadButton = card.querySelector('button')!;
+    expect((downloadButton as HTMLButtonElement).disabled).toBe(true);
+    const checkbox = card.querySelector('input[type="checkbox"]')!;
+    await click(checkbox);
+    const enabledButton = card.querySelector('button')!;
+    expect((enabledButton as HTMLButtonElement).disabled).toBe(false);
+    await click(enabledButton);
+    expect(post).toHaveBeenCalledWith('/models/h3/downloads', { accepted_license: true });
+    expect(host.textContent).toContain('Download queued');
+    expect(host.textContent).toContain('Cancel download');
+    await click(host.querySelector('[data-testid="model-card-h3"] button:last-child'));
+    expect(api).toHaveBeenCalledWith('/models/downloads/download-1', { method: 'DELETE' });
   });
 
-  it('filters models when clicking category filter buttons', async () => {
-    await mount(
-      <Settings
-        activeTab="models"
-        setActiveTab={() => {}}
-        hardware={{
-          gpu_name: 'NVIDIA GeForce RTX 4090',
-          vram_total_mib: 24576,
-          vram_allocated_mib: 4096,
-          vram_free_mib: 20480,
-          memory_pressure_gauge: 0.166,
-        }}
-        settings={{}}
-        updateSetting={() => {}}
-        onResetSettings={() => {}}
-      />
-    );
-
-    // Click 'enhancer' category filter
-    const enhancerFilterBtn = host.querySelector('[data-testid="category-filter-enhancer"]');
-    await click(enhancerFilterBtn);
-
-    // GPEN should remain visible
-    expect(host.querySelector('[data-testid="model-card-gpen_bfr_512.onnx"]')).toBeTruthy();
-    // Swappers should now be filtered out
-    expect(host.querySelector('[data-testid="model-card-inswapper_128.onnx"]')).toBeNull();
+  it('keeps an initial load error visible without retrying in a loop', async () => {
+    mockHub.failHub = true;
+    await mount(<Settings activeTab="models" setActiveTab={() => {}} settings={{}} updateSetting={() => {}} onResetSettings={() => {}} />);
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 20)); });
+    expect(host.textContent).toContain('local service unavailable');
+    expect(vi.mocked(api).mock.calls.filter(([url]) => url === '/models/hub')).toHaveLength(1);
+    expect(host.querySelector('[data-testid="refresh-models-btn"]')).toBeTruthy();
   });
 
-  it('triggers Download & Pre-Build All God-Tier Models button', async () => {
-    await mount(
-      <Settings
-        activeTab="models"
-        setActiveTab={() => {}}
-        hardware={{
-          gpu_name: 'NVIDIA GeForce RTX 4090',
-          vram_total_mib: 24576,
-          vram_allocated_mib: 4096,
-          vram_free_mib: 20480,
-          memory_pressure_gauge: 0.166,
-        }}
-        settings={{}}
-        updateSetting={() => {}}
-        onResetSettings={() => {}}
-      />
-    );
-
-    const godTierBtn = host.querySelector('[data-testid="god-tier-prebuild-btn"]');
-    await click(godTierBtn);
-
-    // Verify it triggers action without uncaught errors
-    expect(godTierBtn).toBeTruthy();
+  it('reconnects to server-side active downloads after leaving and reopening Models', async () => {
+    function NavigableSettings() {
+      const [tab, setTab] = React.useState('models');
+      return <>
+        <button onClick={() => setTab(tab === 'models' ? 'preferences' : 'models')}>Toggle models tab</button>
+        <Settings activeTab={tab} setActiveTab={setTab} settings={{}} updateSetting={() => {}} onResetSettings={() => {}} />
+      </>;
+    }
+    await mount(<NavigableSettings />);
+    await click(host.querySelector('[data-testid="model-card-h3"] input[type="checkbox"]'));
+    await click(host.querySelector('[data-testid="model-card-h3"] button'));
+    expect(host.textContent).toContain('Download queued');
+    await click(host.querySelector('button'));
+    mockHub.activeDownloads = [{ download_id: 'download-1', model_id: 'h3', state: 'downloading',
+      bytes_downloaded: 256, total_bytes: 1024, percent: 25, error_code: null }];
+    await click(host.querySelector('button'));
+    expect(host.textContent).toContain('Download downloading: 25.0%');
+    expect(host.textContent).toContain('Cancel download');
   });
 });

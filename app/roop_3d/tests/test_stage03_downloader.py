@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import threading
 
 import httpx
 import pytest
@@ -22,8 +23,9 @@ URL = "https://github.com/fixture/model.onnx"
 
 
 def remote(**changes):
-    return artifact(DATA, status="verified_remote", upstream_url=URL,
-                    provenance_state="VERIFIED_REMOTE", license_id="LicenseRef-TestFixture", **changes)
+    values = {"status": "verified_remote", "upstream_url": URL, "provenance_state": "VERIFIED_REMOTE",
+              "license_id": "LicenseRef-TestFixture", **changes}
+    return artifact(DATA, **values)
 
 
 def prepare_partial(root, record, data=DATA[:65536], identity=None):
@@ -195,6 +197,57 @@ def test_redirects_are_never_followed_and_policy_fails_before_network(tmp_path):
         with pytest.raises(DomainError):
             downloader.download(record)
     assert len(calls) == 1
+
+
+def test_only_observed_huggingface_storage_redirect_is_followed(tmp_path):
+    calls = []
+    record = remote(upstream_url="https://huggingface.co/org/repo/resolve/rev/fixture.onnx")
+    def handler(request):
+        calls.append(request.url.host)
+        if request.url.host == "huggingface.co":
+            return httpx.Response(302, headers={"Location": "https://us.aws.cdn.hf.co/path/object?signature=fixture"})
+        assert request.url.host == "us.aws.cdn.hf.co"
+        return httpx.Response(200, content=DATA, headers={"ETag": '"hf-v1"'})
+    result = Downloader(tmp_path, transport=httpx.MockTransport(handler)).download(record)
+    assert result.path.read_bytes() == DATA
+    assert calls == ["huggingface.co", "us.aws.cdn.hf.co"]
+
+
+def test_huggingface_redirect_to_unreviewed_host_is_rejected(tmp_path):
+    record = remote(upstream_url="https://huggingface.co/org/repo/resolve/rev/fixture.onnx")
+    downloader = Downloader(tmp_path, transport=httpx.MockTransport(
+        lambda request: httpx.Response(302, headers={"Location": "https://evil.example/model"})))
+    with pytest.raises(DomainError) as failure:
+        downloader.download(record)
+    assert failure.value.code == "DOWNLOAD_REDIRECT_BLOCKED"
+
+
+def test_download_cancellation_keeps_only_resumable_partial_bytes(tmp_path):
+    record = remote()
+    cancel = threading.Event()
+    class TwoChunks(httpx.SyncByteStream):
+        def __iter__(self):
+            yield DATA[:65536]
+            yield DATA[65536:]
+    def first(request):
+        return httpx.Response(200, stream=TwoChunks(), headers={"ETag": '"cancel-v1"'})
+    downloader = Downloader(tmp_path, transport=httpx.MockTransport(first))
+    with pytest.raises(DomainError) as failure:
+        downloader.download(record, cancel_event=cancel,
+                            progress_callback=lambda downloaded, total: cancel.set() if downloaded else None)
+    assert failure.value.code == "DOWNLOAD_CANCELLED"
+    final, part, metadata = downloader.paths(record)
+    assert not (tmp_path / final).exists()
+    assert (tmp_path / part).read_bytes() == DATA[:65536]
+    assert (tmp_path / metadata).is_file()
+
+    def resume(request):
+        assert request.headers["range"] == "bytes=65536-"
+        return httpx.Response(206, content=DATA[65536:], headers={
+            "ETag": '"cancel-v1"', "Content-Range": f"bytes 65536-{len(DATA)-1}/{len(DATA)}"})
+    downloader.transport = httpx.MockTransport(resume)
+    result = downloader.download(record)
+    assert result.resumed and result.path.read_bytes() == DATA
 
 
 def test_completed_part_crash_recovery_and_max_artifact_limit(tmp_path):
