@@ -30,6 +30,11 @@ class FaceView(Contract):
     pose_bin: str = Field(min_length=1, max_length=32)
     is_synthetic: Literal[False] = False
     uv_map_path: str | None = None
+    # Stage 3: optional dense (68-point) landmarks and an honesty flag. `landmarks` (5 points) stays the
+    # contract every existing consumer uses; `landmarks_trusted=False` marks fabricated stand-in landmarks
+    # (no detector result / archive without geometry) that a 3D reconstruction must never treat as observations.
+    landmarks_68: tuple[tuple[float, float], ...] | None = Field(default=None, min_length=68, max_length=68)
+    landmarks_trusted: bool = True
 
 
 class PoseBinSummary(Contract):

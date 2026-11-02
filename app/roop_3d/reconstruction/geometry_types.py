@@ -424,3 +424,43 @@ def pixel_to_uv(
         v = y / max(height - 1.0, 1.0)
 
     return np.column_stack((u, v)).astype(np.float32)
+
+
+# ---------------------------------------------------------------------------
+# Scaled-orthographic (weak-perspective) camera for multi-view identity fitting
+# ---------------------------------------------------------------------------
+
+class WeakPerspectiveCamera(Contract):
+    """Scaled-orthographic camera in the project's mesh frame (x right, y down, z toward the viewer).
+
+    This is the same projection family as ``core.pose.estimate_pose_5pt``: image = scale * (R @ X)[:2] + t.
+    ``depth`` is the rotated z, so a LARGER value is CLOSER to the viewer (the frame is left-handed on
+    purpose: it matches stored FaceSet poses and the canonical mesh, whose outward normals point +z).
+    """
+    rotation: tuple[tuple[float, float, float], tuple[float, float, float], tuple[float, float, float]]
+    scale: float = Field(gt=0.0, description="Pixels per metre")
+    tx: float
+    ty: float
+
+    @field_validator("rotation")
+    @classmethod
+    def _orthonormal(cls, value):
+        r = np.asarray(value, dtype=np.float64)
+        if not np.allclose(r @ r.T, np.eye(3), atol=1e-4) or abs(np.linalg.det(r) - 1.0) > 1e-3:
+            raise ValueError("rotation must be a proper orthonormal matrix")
+        return value
+
+    def rotation_matrix(self) -> np.ndarray:
+        return np.asarray(self.rotation, dtype=np.float64)
+
+    def project(self, points: np.ndarray) -> np.ndarray:
+        """(N, 3) model points -> (N, 2) pixel coordinates."""
+        rotated = np.asarray(points, dtype=np.float64).reshape(-1, 3) @ self.rotation_matrix().T
+        return np.column_stack((self.scale * rotated[:, 0] + self.tx, self.scale * rotated[:, 1] + self.ty))
+
+    def depth(self, points: np.ndarray) -> np.ndarray:
+        """(N,) toward-the-viewer depth of model points (larger = closer)."""
+        return (np.asarray(points, dtype=np.float64).reshape(-1, 3) @ self.rotation_matrix().T)[:, 2]
+
+    def rotate_normals(self, normals: np.ndarray) -> np.ndarray:
+        return np.asarray(normals, dtype=np.float64).reshape(-1, 3) @ self.rotation_matrix().T

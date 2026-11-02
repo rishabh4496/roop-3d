@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import struct
+from typing import Any, Mapping
 import uuid
 import cv2
 import numpy as np
@@ -177,10 +178,18 @@ def export_mesh_glb(
     filename: str,
     texture_image: np.ndarray | None = None,
     output_dir: Path | None = None,
+    *,
+    extras: Mapping[str, Any] | None = None,
+    vertex_attributes: Mapping[str, np.ndarray] | None = None,
 ) -> Path:
     """Atomically export Mesh3D to binary glTF 2.0 (.glb) format.
 
     Produces a self-contained, fully compliant glTF 2.0 binary file for Stage 14 ThreeViewport.
+
+    `vertex_attributes` adds application-specific per-vertex float attributes (glTF requires names to start
+    with an underscore, e.g. ``_CONFIDENCE``); `extras` is stored verbatim in the glTF root ``extras``.
+    The exporter writes vertices as given: callers that hold the project's y-down mesh frame must convert to
+    glTF's y-up frame first (see ``identity_asset.to_gltf_frame``).
     """
     mesh.validate()
 
@@ -294,6 +303,20 @@ def export_mesh_glb(
             "type": "SCALAR",
         })
 
+        custom_attributes: dict[str, int] = {}
+        for attr_name, values in (vertex_attributes or {}).items():
+            if not attr_name.startswith("_") or not attr_name[1:].replace("_", "").isalnum() or attr_name != attr_name.upper():
+                raise DomainError("INVALID_GLTF_ATTRIBUTE", f"Custom glTF attribute {attr_name!r} must look like _UPPER_CASE", 422)
+            arr = np.asarray(values, dtype=np.float32).reshape(n_verts, -1)
+            if arr.shape[1] not in (1, 2, 3, 4):
+                raise DomainError("INVALID_GLTF_ATTRIBUTE", f"{attr_name} must have 1-4 components per vertex", 422)
+            bv_attr = add_buffer_data(np.ascontiguousarray(arr).tobytes(), target=34962)
+            accessors.append({
+                "bufferView": bv_attr, "byteOffset": 0, "componentType": 5126, "count": n_verts,
+                "type": {1: "SCALAR", 2: "VEC2", 3: "VEC3", 4: "VEC4"}[arr.shape[1]],
+            })
+            custom_attributes[attr_name] = len(accessors) - 1
+
         # Texture and Material setup
         materials = []
         textures = []
@@ -323,7 +346,7 @@ def export_mesh_glb(
         buffers = [{"byteLength": len(total_bin_data)}]
 
         primitive = {
-            "attributes": {"POSITION": 0, "NORMAL": 1, "TEXCOORD_0": 2},
+            "attributes": {"POSITION": 0, "NORMAL": 1, "TEXCOORD_0": 2, **custom_attributes},
             "indices": 3,
         }
         if materials:
@@ -344,6 +367,8 @@ def export_mesh_glb(
             gltf_dict["textures"] = textures
             gltf_dict["images"] = images
             gltf_dict["samplers"] = samplers
+        if extras:
+            gltf_dict["extras"] = json.loads(json.dumps(extras, default=str))
 
         # Serialize JSON and pad with spaces (0x20) to 4-byte boundary
         json_bytes = json.dumps(gltf_dict, separators=(",", ":")).encode("utf-8")
@@ -375,3 +400,56 @@ def export_mesh_glb(
         if tmp_glb.exists():
             tmp_glb.unlink(missing_ok=True)
         raise
+
+
+_GLTF_TYPE_SIZES = {"SCALAR": 1, "VEC2": 2, "VEC3": 3, "VEC4": 4}
+_GLTF_COMPONENT_DTYPES = {5121: np.uint8, 5123: np.uint16, 5125: np.uint32, 5126: np.float32}
+
+
+def read_glb(path: Path | str) -> dict[str, Any]:
+    """Parse and validate a binary glTF 2.0 file for inspection.
+
+    Returns ``{"gltf": <json>, "attributes": {name: ndarray}, "indices": ndarray, "texture_png": bytes | None}``.
+    Raises ``DomainError`` for a malformed container, so a corrupt export cannot be mistaken for a valid one.
+    """
+    data = Path(path).read_bytes()
+    if len(data) < 28 or data[:4] != b"glTF":
+        raise DomainError("GLB_INVALID", "Not a GLB container", 422)
+    version, total = struct.unpack_from("<II", data, 4)
+    if version != 2 or total != len(data):
+        raise DomainError("GLB_INVALID", f"Unsupported GLB version/length ({version}, {total} vs {len(data)})", 422)
+    json_len, json_type = struct.unpack_from("<II", data, 12)
+    if json_type != 0x4E4F534A or 20 + json_len > len(data):
+        raise DomainError("GLB_INVALID", "Missing JSON chunk", 422)
+    gltf = json.loads(data[20:20 + json_len].decode("utf-8"))
+    offset = 20 + json_len
+    binary = b""
+    if offset + 8 <= len(data):
+        bin_len, bin_type = struct.unpack_from("<II", data, offset)
+        if bin_type != 0x004E4942 or offset + 8 + bin_len > len(data):
+            raise DomainError("GLB_INVALID", "Malformed BIN chunk", 422)
+        binary = data[offset + 8:offset + 8 + bin_len]
+
+    def accessor_array(index: int) -> np.ndarray:
+        acc = gltf["accessors"][index]
+        view = gltf["bufferViews"][acc["bufferView"]]
+        dtype = np.dtype(_GLTF_COMPONENT_DTYPES[acc["componentType"]])
+        comps = _GLTF_TYPE_SIZES[acc["type"]]
+        start = view.get("byteOffset", 0) + acc.get("byteOffset", 0)
+        end = start + acc["count"] * comps * dtype.itemsize
+        if end > len(binary) or end > view.get("byteOffset", 0) + view["byteLength"]:
+            raise DomainError("GLB_INVALID", f"Accessor {index} exceeds its buffer view", 422)
+        arr = np.frombuffer(binary[start:end], dtype=dtype)
+        return arr.reshape(acc["count"], comps) if comps > 1 else arr
+
+    primitive = gltf["meshes"][0]["primitives"][0]
+    attributes = {name: accessor_array(idx) for name, idx in primitive["attributes"].items()}
+    indices = accessor_array(primitive["indices"])
+    if indices.size and int(indices.max()) >= len(attributes["POSITION"]):
+        raise DomainError("GLB_INVALID", "Index exceeds vertex count", 422)
+    texture_png = None
+    if gltf.get("images"):
+        view = gltf["bufferViews"][gltf["images"][0]["bufferView"]]
+        start = view.get("byteOffset", 0)
+        texture_png = binary[start:start + view["byteLength"]]
+    return {"gltf": gltf, "attributes": attributes, "indices": indices, "texture_png": texture_png}

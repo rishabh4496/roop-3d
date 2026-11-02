@@ -1,5 +1,7 @@
 """Roop 3D Reconstruction subsystem: 3D geometry contracts, PnP pose estimation,
-2.5D TPS fallback, license-gated FLAME parametric fitting, and UV synthesis.
+2.5D TPS fallback, license-gated FLAME parametric fitting, UV synthesis, and (Stage 3) the
+multi-view identity-specific asset pipeline: FaceSet quality analysis, multi-view landmark fitting,
+texture atlas with OBSERVED/INTERPOLATED/UNSEEN states, and a persistent content-addressed store.
 """
 from __future__ import annotations
 
@@ -12,6 +14,7 @@ from roop_3d.reconstruction.flame_fitter import (
     huber_weights,
     verify_flame_license,
 )
+from roop_3d.reconstruction.faceset_quality import FaceSetCoverageReport, ViewQuality, analyze_faceset
 from roop_3d.reconstruction.geometry_types import (
     METRIC_SCALE_METERS,
     METRIC_SCALE_MILLIMETERS,
@@ -20,6 +23,7 @@ from roop_3d.reconstruction.geometry_types import (
     Mesh3D,
     Pose3D,
     UVOrigin,
+    WeakPerspectiveCamera,
     euler_to_rotation_matrix,
     opencv_to_opengl_camera,
     opengl_to_opencv_camera,
@@ -31,10 +35,28 @@ from roop_3d.reconstruction.geometry_types import (
     rotation_matrix_to_rodrigues,
     uv_to_pixel,
 )
+from roop_3d.reconstruction.identity_asset import (
+    IdentityAsset,
+    IdentityAssetManifest,
+    IdentityAssetSettings,
+    IdentityAssetStore,
+    build_identity_asset,
+    compute_build_key,
+    export_asset_glb,
+    flame_status,
+)
 from roop_3d.reconstruction.mesh_io import (
     export_mesh_glb,
     export_mesh_obj,
     load_mesh_obj,
+    read_glb,
+)
+from roop_3d.reconstruction.multiview_fit import (
+    IdentityShapeFit,
+    ViewLandmarks,
+    deform_template,
+    fit_identity_landmarks,
+    identity_template,
 )
 from roop_3d.reconstruction.tps_fallback import (
     ThinPlateSplineWarper,
@@ -50,6 +72,24 @@ from roop_3d.reconstruction.uv_synthesizer import (
 )
 
 __all__ = [
+    "FaceSetCoverageReport",
+    "IdentityAsset",
+    "IdentityAssetManifest",
+    "IdentityAssetSettings",
+    "IdentityAssetStore",
+    "IdentityShapeFit",
+    "ViewLandmarks",
+    "ViewQuality",
+    "WeakPerspectiveCamera",
+    "analyze_faceset",
+    "build_identity_asset",
+    "compute_build_key",
+    "deform_template",
+    "export_asset_glb",
+    "fit_identity_landmarks",
+    "flame_status",
+    "identity_template",
+    "read_glb",
     "METRIC_SCALE_METERS",
     "METRIC_SCALE_MILLIMETERS",
     "CameraIntrinsics",

@@ -168,10 +168,20 @@ class FaceSetReader:
 
             # Extract landmarks and bounding box
             lm_raw = geom.get("landmarks_2d") or geom.get("landmarks_68") or []
-            if lm_raw:
+            dense_raw = geom.get("landmarks_68") if len(geom.get("landmarks_68") or []) == 68 else (
+                lm_raw if len(lm_raw) == 68 else None)
+            landmarks_68 = tuple((float(pt[0]), float(pt[1])) for pt in dense_raw) if dense_raw else None
+            landmarks_trusted = bool(geom.get("landmarks_trusted", True))
+            if landmarks_68 is not None and len(lm_raw) != 5:
+                # A 68-point set: the first five entries are JAW points, so take the canonical eyes/nose/mouth instead.
+                dense = np.asarray(landmarks_68, dtype=np.float64)
+                five = (dense[36:42].mean(axis=0), dense[42:48].mean(axis=0), dense[30], dense[48], dense[54])
+                landmarks = tuple((float(pt[0]), float(pt[1])) for pt in five)
+            elif lm_raw:
                 landmarks = tuple((float(pt[0]), float(pt[1])) for pt in lm_raw[:5])
             else:
                 landmarks = ((16.0, 32.0), (48.0, 32.0), (32.0, 48.0), (20.0, 60.0), (44.0, 60.0))
+                landmarks_trusted = False  # fabricated stand-in, not an observation
 
             bbox_raw = geom.get("bbox") or [0.0, 0.0, 64.0, 64.0]
             bbox = (float(bbox_raw[0]), float(bbox_raw[1]), float(bbox_raw[2]), float(bbox_raw[3]))
@@ -208,6 +218,8 @@ class FaceSetReader:
                 pose_bin=pose_bin,
                 is_synthetic=False,
                 uv_map_path=src.get("uv_map_path"),
+                landmarks_68=landmarks_68,
+                landmarks_trusted=landmarks_trusted,
             )
             views.append(view)
 
@@ -350,6 +362,7 @@ class FaceSetReader:
         # Detect face with local SCRFD
         detections, _ = self.detector.detect(img, threshold=0.5)
 
+        fabricated_landmarks = False
         if detections:
             box, landmarks = detections[0]
             det_conf = 0.95
@@ -368,6 +381,7 @@ class FaceSetReader:
             lm_pts = ((w * 0.3, h * 0.4), (w * 0.7, h * 0.4), (w * 0.5, h * 0.55), (w * 0.35, h * 0.75), (w * 0.65, h * 0.75))
             roll, yaw, pitch = 0.0, 0.0, 0.0
             emb = self.recognizer.embed(img, None)
+            fabricated_landmarks = True
 
         score = float(round(0.7 * sharpness + 0.3 * det_conf, 4))
         quality = QualityMetrics(
@@ -394,6 +408,7 @@ class FaceSetReader:
             quality=quality,
             pose_bin=pose_bin,
             is_synthetic=False,
+            landmarks_trusted=not fabricated_landmarks,
         )
 
     def _aggregate_embeddings(
@@ -480,6 +495,7 @@ class FaceSetReader:
                         "quality": v.quality.model_dump(),
                         "pose_bin": v.pose_bin,
                         "is_synthetic": False,
+                        "landmarks_trusted": v.landmarks_trusted,
                     }
                     for v in doc.views
                 ],
@@ -530,6 +546,7 @@ class FaceSetReader:
                 quality=QualityMetrics(**item["quality"]),
                 pose_bin=item["pose_bin"],
                 is_synthetic=False,
+                landmarks_trusted=bool(item.get("landmarks_trusted", True)),
             )
             views.append(view)
 
@@ -619,6 +636,8 @@ def export_v2(
                 "geometry": {
                     "bbox": list(v.bbox),
                     "landmarks_2d": [list(pt) for pt in v.landmarks],
+                    **({"landmarks_68": [list(pt) for pt in v.landmarks_68]} if v.landmarks_68 is not None else {}),
+                    "landmarks_trusted": v.landmarks_trusted,
                     "yaw": v.yaw,
                     "pitch": v.pitch,
                     "roll": v.roll,

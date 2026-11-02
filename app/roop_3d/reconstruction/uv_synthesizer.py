@@ -12,7 +12,7 @@ import math
 from typing import Any, Sequence
 import cv2
 import numpy as np
-from pydantic import ConfigDict, Field
+from pydantic import ConfigDict, Field, model_validator
 
 from roop_3d.core.errors import DomainError
 from roop_3d.core.settings import Contract
@@ -22,18 +22,45 @@ from roop_3d.reconstruction.geometry_types import (
     Mesh3D,
     Pose3D,
     UVOrigin,
+    WeakPerspectiveCamera,
     uv_to_pixel,
 )
+
+
+def remap_points(image: np.ndarray, xs: np.ndarray, ys: np.ndarray, interpolation: int = cv2.INTER_LINEAR) -> np.ndarray:
+    """Sample `image` at N sub-pixel points. `cv2.remap` rejects maps with >= 32767 rows, so the points are laid
+    out as a (ceil(N/1024), 1024) grid; returns (N,) or (N, C)."""
+    xs, ys = np.asarray(xs, np.float32).reshape(-1), np.asarray(ys, np.float32).reshape(-1)
+    n = len(xs)
+    width = 1024
+    rows = max(1, -(-n // width))
+    gx = np.zeros(rows * width, np.float32)
+    gy = np.zeros(rows * width, np.float32)
+    gx[:n], gy[:n] = xs, ys
+    out = cv2.remap(image, gx.reshape(rows, width), gy.reshape(rows, width), interpolation,
+                    borderMode=cv2.BORDER_CONSTANT, borderValue=0)
+    return out.reshape(rows * width, *out.shape[2:])[:n]
 
 
 class ViewObservation(Contract):
     """Observation frame with camera pose, intrinsics, and quality metrics."""
     model_config = ConfigDict(arbitrary_types_allowed=True)
     image: np.ndarray = Field(description="BGR image array (H, W, 3)")
-    pose: Pose3D = Field(description="Calibrated head pose in camera frame")
-    intrinsics: CameraIntrinsics = Field(description="Pinhole camera parameters")
+    pose: Pose3D | None = Field(default=None, description="Calibrated head pose in camera frame (legacy path)")
+    intrinsics: CameraIntrinsics | None = Field(default=None, description="Pinhole camera parameters (legacy path)")
     sharpness: float = Field(default=1.0, ge=0.0, description="Image sharpness metric")
     occlusion_mask: np.ndarray | None = Field(default=None, description="Optional binary face mask (H, W)")
+    camera: WeakPerspectiveCamera | None = Field(
+        default=None, description="Scaled-orthographic camera fitted to this view (identity path)")
+    view_quality: float = Field(default=1.0, ge=0.0, le=1.0,
+                                description="0..1 trust in this view (landmark consistency x image quality)")
+    view_index: int = Field(default=-1, description="Source FaceSet view index, reported in per-texel provenance")
+
+    @model_validator(mode="after")
+    def _has_camera_model(self) -> "ViewObservation":
+        if self.camera is None and (self.pose is None or self.intrinsics is None):
+            raise ValueError("a ViewObservation needs either `camera` or both `pose` and `intrinsics`")
+        return self
 
 
 class UVSynthesisResult(Contract):
@@ -44,6 +71,12 @@ class UVSynthesisResult(Contract):
     observed_ratio: float = Field(ge=0.0, le=1.0, description="Ratio of face texels directly observed")
     interpolated_ratio: float = Field(ge=0.0, le=1.0, description="Ratio of face texels interpolated")
     unseen_ratio: float = Field(ge=0.0, le=1.0, description="Ratio of face texels remaining unseen")
+    # Identity (camera) path only; None for the legacy pose/intrinsics path.
+    confidence_score: np.ndarray | None = Field(default=None, description="Per-texel float32 confidence in [0, 1]")
+    view_count: np.ndarray | None = Field(default=None, description="Per-texel uint8 number of contributing views")
+    dominant_view: np.ndarray | None = Field(default=None, description="Per-texel int32 view_index of the top contributor (-1 none)")
+    view_gains: dict[int, tuple[float, float, float]] | None = Field(default=None, description="Per-view BGR exposure gain applied")
+    rejected_samples: int = Field(default=0, ge=0, description="Photometric outlier samples excluded from blending")
 
 
 class UVSynthesizer:
@@ -54,6 +87,7 @@ class UVSynthesizer:
         mesh: Mesh3D,
         uv_size: int = 512,
         visibility_threshold: float = 0.05,
+        max_interpolation_fraction: float | None = None,
     ):
         if uv_size < 64 or uv_size > 4096:
             raise DomainError("INVALID_UV_SIZE", f"UV size must be in [64, 4096], got {uv_size}", 422)
@@ -63,6 +97,8 @@ class UVSynthesizer:
         self.mesh = mesh
         self.uv_size = uv_size
         self.vis_thresh = float(visibility_threshold)
+        # Identity path only: interpolation is bounded to this distance (in texels) from an observed texel.
+        self.max_interp_px = None if max_interpolation_fraction is None else max(1.0, max_interpolation_fraction * uv_size)
 
         # Precompute rasterized 3D surface positions and normals in UV space
         self._rasterize_uv_geometry()
@@ -136,6 +172,10 @@ class UVSynthesizer:
         """Synthesize UV texture from multi-angle observations."""
         if not observations:
             raise DomainError("EMPTY_OBSERVATIONS", "At least one view observation is required for UV synthesis", 422)
+        if any(obs.camera is not None for obs in observations):
+            if any(obs.camera is None for obs in observations):
+                raise DomainError("MIXED_CAMERA_MODELS", "Either all or none of the observations may carry a camera", 422)
+            return self._synthesize_cameras(observations)
 
         h = w = self.uv_size
         accum_color = np.zeros((h, w, 3), dtype=np.float64)
@@ -195,14 +235,7 @@ class UVSynthesizer:
 
             # Occlusion mask check
             if obs.occlusion_mask is not None:
-                mask_val = cv2.remap(
-                    obs.occlusion_mask.astype(np.float32),
-                    px_valid[:, None],
-                    py_valid[:, None],
-                    interpolation=cv2.INTER_NEAREST,
-                    borderMode=cv2.BORDER_CONSTANT,
-                    borderValue=0,
-                ).reshape(-1)
+                mask_val = remap_points(obs.occlusion_mask.astype(np.float32), px_valid, py_valid, cv2.INTER_NEAREST)
                 unoccluded = mask_val > 128
                 subset_indices = subset_indices[unoccluded]
                 px_valid = px_valid[unoccluded]
@@ -211,14 +244,7 @@ class UVSynthesizer:
                     continue
 
             # Sample color from image with bilinear interpolation
-            sampled_colors = cv2.remap(
-                img,
-                px_valid[:, None],
-                py_valid[:, None],
-                interpolation=cv2.INTER_LINEAR,
-                borderMode=cv2.BORDER_CONSTANT,
-                borderValue=0,
-            ).reshape(-1, 3).astype(np.float64)
+            sampled_colors = remap_points(img, px_valid, py_valid, cv2.INTER_LINEAR).reshape(-1, 3).astype(np.float64)
 
             # Weight = dot product * image sharpness
             sub_vis = vis_dot[subset_indices]
@@ -279,4 +305,186 @@ class UVSynthesizer:
             observed_ratio=float(n_obs / total_face),
             interpolated_ratio=float(n_interp / total_face),
             unseen_ratio=float(max(0, n_unseen) / total_face),
+        )
+
+    # ------------------------------------------------------------------ identity (camera) path
+    OBSERVED_MIN_WEIGHT = 0.04        # total blend weight a texel needs to count as OBSERVED (~ one view at vis 0.2)
+    OUTLIER_COLOR_DISTANCE = 55.0     # BGR L2 distance from the per-texel median beyond which a sample is rejected
+    DEPTH_TOLERANCE_M = 0.008         # z-buffer slack: covers a triangle's own depth range
+
+    SILHOUETTE_FEATHER = 0.04         # fraction of the face extent over which weights ramp up from the silhouette
+
+    def _visible_by_zbuffer(self, camera: WeakPerspectiveCamera, texel_depth: np.ndarray,
+                            texel_xy: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        """(visible, silhouette_feather) per texel. `visible` is False where the surface point is hidden behind other
+        front-facing geometry; the feather ramps 0 -> 1 with distance from the projected silhouette, so texels at
+        the edge of the mask (where the photo shows hair, neck or background) carry little weight."""
+        verts = self.mesh.vertices.astype(np.float64)
+        vxy, vdepth = camera.project(verts), camera.depth(verts)
+        face_n = camera.rotate_normals(self.mesh.compute_face_normals())[:, 2]
+        front = np.where(face_n > 0.0)[0]
+        if len(front) == 0:
+            return np.zeros(len(texel_depth), dtype=bool), np.zeros(len(texel_depth))
+        tri = self.mesh.faces[front]
+        lo, hi = vxy[tri].reshape(-1, 2).min(axis=0), vxy[tri].reshape(-1, 2).max(axis=0)
+        extent = float(max(hi[0] - lo[0], hi[1] - lo[1], 1.0))
+        bs = float(np.clip(512.0 / extent, 0.25, 1.0))
+        size = (int(math.ceil((hi[1] - lo[1]) * bs)) + 4, int(math.ceil((hi[0] - lo[0]) * bs)) + 4)
+        zbuf = np.full(size, -np.inf, dtype=np.float32)
+        order = np.argsort(vdepth[tri].mean(axis=1))          # far first, near paints over
+        poly_xy = (vxy[tri] - lo) * bs + 2.0
+        for k in order:
+            cv2.fillConvexPoly(zbuf, np.round(poly_xy[k]).astype(np.int32), float(vdepth[tri[k]].mean()))
+        bx = np.clip(np.round((texel_xy[:, 0] - lo[0]) * bs + 2.0).astype(np.int64), 0, size[1] - 1)
+        by = np.clip(np.round((texel_xy[:, 1] - lo[1]) * bs + 2.0).astype(np.int64), 0, size[0] - 1)
+        visible = texel_depth >= zbuf[by, bx] - self.DEPTH_TOLERANCE_M
+        footprint = np.isfinite(zbuf).astype(np.uint8)
+        distance = cv2.distanceTransform(footprint, cv2.DIST_L2, 3) / bs      # image pixels
+        feather = np.clip(distance[by, bx] / max(self.SILHOUETTE_FEATHER * extent, 1.0), 0.0, 1.0)
+        return visible, feather
+
+    @staticmethod
+    def _local_sharpness(image: np.ndarray) -> np.ndarray:
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if image.ndim == 3 else image
+        return cv2.GaussianBlur(np.abs(cv2.Laplacian(gray.astype(np.float32), cv2.CV_32F)), (0, 0), 3.0)
+
+    @staticmethod
+    def _solve_gains(colors: np.ndarray, weights: np.ndarray) -> np.ndarray:
+        """Per-view, per-channel exposure gains from overlap statistics (gain compensation); (V, 3)."""
+        n_views = colors.shape[0]
+        gains = np.ones((n_views, 3))
+        present = weights > 0.02
+        pairs = []
+        for i in range(n_views):
+            for j in range(i + 1, n_views):
+                m = present[i] & present[j]
+                n = int(m.sum())
+                if n >= 40:
+                    pairs.append((i, j, n, colors[i][m].mean(axis=0), colors[j][m].mean(axis=0)))
+        if not pairs:
+            return gains
+        ridge = 0.3 * float(np.mean([math.sqrt(p[2]) for p in pairs]))
+        for c in range(3):
+            rows, rhs = [], []
+            for i, j, n, a, b in pairs:
+                row = np.zeros(n_views)
+                row[i], row[j] = a[c], -b[c]
+                rows.append(row * math.sqrt(n) / max(a[c], b[c], 1.0))
+                rhs.append(0.0)
+            for i in range(n_views):
+                row = np.zeros(n_views)
+                row[i] = ridge
+                rows.append(row)
+                rhs.append(ridge)
+            gains[:, c] = np.linalg.lstsq(np.asarray(rows), np.asarray(rhs), rcond=None)[0]
+        gains = np.clip(gains, 0.7, 1.4)
+        counts = present.sum(axis=1).astype(np.float64) + 1e-9
+        return gains / ((gains * counts[:, None]).sum(axis=0) / counts.sum())
+
+    def _synthesize_cameras(self, observations: Sequence[ViewObservation]) -> UVSynthesisResult:
+        h = w = self.uv_size
+        ys, xs = np.where(self.face_texel_mask)
+        k_total = len(ys)
+        if k_total == 0:
+            raise DomainError("EMPTY_UV_LAYOUT", "The mesh UV layout covers no texels", 422)
+        pts = self.pos_map[ys, xs].astype(np.float64)
+        nrm = self.norm_map[ys, xs].astype(np.float64)
+        n_views = len(observations)
+        colors = np.zeros((n_views, k_total, 3), np.float32)
+        weights = np.zeros((n_views, k_total), np.float32)
+        sharp = np.zeros((n_views, k_total), np.float32)
+        view_ids = np.array([o.view_index for o in observations], np.int32)
+
+        for i, obs in enumerate(observations):
+            cam, img = obs.camera, obs.image
+            assert cam is not None
+            if img.ndim != 3 or img.shape[2] != 3:
+                raise DomainError("INVALID_IMAGE", "Observation images must be BGR (H, W, 3)", 422)
+            h_img, w_img = img.shape[:2]
+            vis = cam.rotate_normals(nrm)[:, 2]
+            xy = cam.project(pts)
+            in_img = (xy[:, 0] >= 1) & (xy[:, 0] <= w_img - 2) & (xy[:, 1] >= 1) & (xy[:, 1] <= h_img - 2)
+            ok = (vis > self.vis_thresh) & in_img
+            if not ok.any():
+                continue
+            unoccluded, silhouette = self._visible_by_zbuffer(cam, cam.depth(pts), xy)
+            ok &= unoccluded
+            if obs.occlusion_mask is not None:
+                clear = remap_points(obs.occlusion_mask.astype(np.float32), xy[:, 0], xy[:, 1], cv2.INTER_NEAREST) > 128
+                ok &= clear
+            if not ok.any():
+                continue
+            colors[i, ok] = remap_points(img, xy[ok, 0], xy[ok, 1], cv2.INTER_LINEAR).reshape(-1, 3)
+            sharp[i, ok] = remap_points(self._local_sharpness(img), xy[ok, 0], xy[ok, 1], cv2.INTER_LINEAR).reshape(-1)
+            edge = np.minimum.reduce([xy[ok, 0], xy[ok, 1], w_img - 1 - xy[ok, 0], h_img - 1 - xy[ok, 1]])
+            feather = np.clip(edge / max(0.03 * min(h_img, w_img), 1.0), 0.0, 1.0)
+            weights[i, ok] = ((vis[ok] ** 2) * feather * silhouette[ok] * max(obs.view_quality, 0.05)
+                              * max(obs.sharpness, 0.1) ** 0.5)
+
+        # relative local sharpness: the sharpest observation of a texel gets full weight, blurrier ones down to 25%
+        best = sharp.max(axis=0, keepdims=True)
+        weights *= (0.25 + 0.75 * (sharp + 1e-3) / (best + 1e-3)) * (weights > 0)
+
+        gains = self._solve_gains(colors, weights) if n_views > 1 else np.ones((1, 3))
+        colors = np.clip(colors * gains[:, None, :].astype(np.float32), 0, 255)
+
+        # photometric outlier rejection (specular / occluder / residual lighting) against the per-texel median
+        rejected = 0
+        counts = (weights > 0).sum(axis=0)
+        multi = counts >= 3
+        if multi.any():
+            masked = np.where((weights > 0)[:, multi, None], colors[:, multi], np.nan)
+            with np.errstate(all="ignore"):
+                median = np.nanmedian(masked, axis=0)
+            dist = np.linalg.norm(colors[:, multi] - median[None], axis=2)
+            bad = (weights[:, multi] > 0) & (dist > self.OUTLIER_COLOR_DISTANCE)
+            rejected = int(bad.sum())
+            sub = weights[:, multi]
+            sub[bad] = 0.0
+            weights[:, multi] = sub
+
+        total = weights.sum(axis=0)
+        observed_flat = total >= self.OBSERVED_MIN_WEIGHT
+        mean_color = np.zeros((k_total, 3), np.float64)
+        denom = np.maximum(total, 1e-9)
+        for c in range(3):
+            mean_color[:, c] = (weights * colors[:, :, c]).sum(axis=0) / denom
+
+        texture = np.zeros((h, w, 3), np.uint8)
+        state = np.zeros((h, w), np.uint8)
+        score = np.zeros((h, w), np.float32)
+        view_count = np.zeros((h, w), np.uint8)
+        dominant = np.full((h, w), -1, np.int32)
+        oy, ox = ys[observed_flat], xs[observed_flat]
+        texture[oy, ox] = np.clip(mean_color[observed_flat], 0, 255).astype(np.uint8)
+        state[oy, ox] = int(ConfidenceState.OBSERVED)
+        score[oy, ox] = (1.0 - np.exp(-total[observed_flat] / 0.5)).astype(np.float32)
+        view_count[oy, ox] = (weights[:, observed_flat] > 0).sum(axis=0).astype(np.uint8)
+        dominant[oy, ox] = view_ids[np.argmax(weights[:, observed_flat], axis=0)]
+
+        # bounded interpolation: only short gaps next to real observations; everything else stays UNSEEN
+        observed = state == int(ConfidenceState.OBSERVED)
+        limit = self.max_interp_px if self.max_interp_px is not None else max(2.0, 0.02 * self.uv_size)
+        if observed.any():
+            dist = cv2.distanceTransform((~observed).astype(np.uint8), cv2.DIST_L2, 3)
+            candidates = self.face_texel_mask & ~observed & (dist <= limit)
+            if candidates.any():
+                fill = cv2.inpaint(texture, (~observed).astype(np.uint8) * 255, 3, cv2.INPAINT_TELEA)
+                texture[candidates] = fill[candidates]
+                state[candidates] = int(ConfidenceState.INTERPOLATED)
+                score[candidates] = (0.3 * (1.0 - dist[candidates] / (limit + 1e-6))).astype(np.float32)
+
+        texture[~self.face_texel_mask] = 0
+        state[~self.face_texel_mask] = int(ConfidenceState.UNSEEN)
+        score[state == int(ConfidenceState.UNSEEN)] = 0.0
+        total_face = max(int(self.face_texel_mask.sum()), 1)
+        n_obs = int((state == int(ConfidenceState.OBSERVED)).sum())
+        n_interp = int((state == int(ConfidenceState.INTERPOLATED)).sum())
+        return UVSynthesisResult(
+            texture_map=texture, confidence_mask=state,
+            observed_ratio=n_obs / total_face, interpolated_ratio=n_interp / total_face,
+            unseen_ratio=max(0, total_face - n_obs - n_interp) / total_face,
+            confidence_score=score, view_count=view_count, dominant_view=dominant,
+            view_gains={int(view_ids[i]): tuple(float(g) for g in gains[i]) for i in range(n_views)},
+            rejected_samples=rejected,
         )
