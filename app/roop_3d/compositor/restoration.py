@@ -107,6 +107,14 @@ class CodeFormerRestorer:
         self.fidelity_weight = 0.5
         self.inference_verified = False
 
+    def restore(self, image: np.ndarray, landmarks5: np.ndarray | None = None) -> np.ndarray:
+        if landmarks5 is not None:
+            return self.restore_aligned(image, landmarks5)
+        self.runner.fidelity_weight = self.fidelity_weight
+        restored = self.runner.restore(image)
+        self.inference_verified = True
+        return restored
+
     def restore_aligned(self, image, landmarks5):
         from roop_3d.engine.volumetric.preprocess import similarity
         points = np.asarray(landmarks5, np.float64)

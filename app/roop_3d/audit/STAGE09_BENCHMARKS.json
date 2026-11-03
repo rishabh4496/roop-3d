@@ -1,0 +1,258 @@
+{
+  "timestamp": "2026-11-03T20:51:41.364148+00:00",
+  "hardware_inventory": {
+    "os": {
+      "system": "Windows",
+      "release": "10",
+      "machine": "AMD64"
+    },
+    "logical_cpu_count": 32,
+    "physical_cpu_count": 24,
+    "gpus": [
+      {
+        "index": 0,
+        "name": "NVIDIA GeForce RTX 4070",
+        "total_vram_mib": 12282,
+        "free_vram_mib": 9641,
+        "driver_version": "621.01",
+        "compute_capability": "8.9"
+      }
+    ],
+    "active_gpu_telemetry": {
+      "gpu_utilization_pct": 45.0,
+      "memory_utilization_pct": 20.0,
+      "vram_used_mib": 2973,
+      "vram_total_mib": 12282,
+      "power_draw_w": 107.34,
+      "temperature_c": 57.35
+    },
+    "active_ram_telemetry": {
+      "ram_total_mib": 32451,
+      "ram_available_mib": 11874,
+      "ram_used_mib": 20577
+    }
+  },
+  "hardware_profiles": {
+    "RTX_4070_Desktop": {
+      "vram_profile": "12gb",
+      "status": "VERIFIED_LOCAL",
+      "evidence": "NVIDIA GeForce RTX 4070 12GB present on host, GPU resident model pool active"
+    },
+    "RTX_3060_Laptop": {
+      "vram_profile": "6gb",
+      "status": "UNAVAILABLE_LOCAL",
+      "evidence": "Physical 3060 Laptop not present on host; benchmark not executed (anti-fabrication rule)",
+      "policy": "Sequential model eviction, 4,600 MiB ceiling, 512px max resolution"
+    }
+  },
+  "categories": {
+    "1_video_decoding": {
+      "component": "VideoReader (PyAV libavcodec multi-threaded)",
+      "first_frame_ms": 89.309,
+      "warm_stats": {
+        "min_ms": 6.702,
+        "max_ms": 12.177,
+        "mean_ms": 8.667,
+        "p50_ms": 8.075,
+        "p95_ms": 11.849
+      },
+      "throughput_fps": 115.4,
+      "provider": "CUDA / CPU Multi-Threaded"
+    },
+    "2_face_detection_scrfd_10g": {
+      "component": "Detector (scrfd_10g_bnkps.onnx)",
+      "first_frame_ms": 2076.088,
+      "warm_stats": {
+        "min_ms": 14.783,
+        "max_ms": 16.486,
+        "mean_ms": 15.489,
+        "p50_ms": 15.374,
+        "p95_ms": 16.152
+      },
+      "provider": "CUDAExecutionProvider",
+      "faces_found": 1
+    },
+    "2b_dense_landmarks_106": {
+      "component": "DenseLandmarks.infer106 (2d106det.onnx)",
+      "first_frame_ms": 3262.858,
+      "warm_stats": {
+        "min_ms": 77.759,
+        "max_ms": 91.657,
+        "mean_ms": 82.592,
+        "p50_ms": 82.414,
+        "p95_ms": 89.165
+      },
+      "provider": "CUDAExecutionProvider"
+    },
+    "3_face_tracking": {
+      "component": "FaceTracker.process (Hungarian + ArcFace embed + One-Euro)",
+      "first_frame_ms": 2336.053,
+      "warm_stats": {
+        "min_ms": 105.985,
+        "max_ms": 151.83,
+        "mean_ms": 112.011,
+        "p50_ms": 107.094,
+        "p95_ms": 134.146
+      },
+      "active_tracks": 1,
+      "provider": "Hybrid (Detector/Recognizer on CUDA, Hungarian/Flow on CPU)"
+    },
+    "4_identity_swapper": {
+      "component": "IdentitySwapper.infer_frame (inswapper_128.onnx FP32)",
+      "first_frame_ms": 179.114,
+      "warm_stats": {
+        "min_ms": 34.122,
+        "max_ms": 84.396,
+        "mean_ms": 42.734,
+        "p50_ms": 35.593,
+        "p95_ms": 84.217
+      },
+      "precision": "FP32 (Strict Contract)",
+      "provider": "CUDAExecutionProvider"
+    },
+    "5_3d_reconstruction": {
+      "component": "PoseBlendProjector (3D Canonical Mesh + Z-Buffer Raster)",
+      "first_frame_ms": 43.541,
+      "warm_stats": {
+        "min_ms": 39.327,
+        "max_ms": 42.872,
+        "mean_ms": 40.891,
+        "p50_ms": 40.66,
+        "p95_ms": 42.224
+      },
+      "provider": "Vectorized 3D Rasterizer"
+    },
+    "6_motion_transfer": {
+      "motion_extractor": {
+        "min_ms": 216.588,
+        "max_ms": 236.292,
+        "mean_ms": 228.164,
+        "p50_ms": 228.036,
+        "p95_ms": 235.737
+      },
+      "warping_spade_4d": {
+        "min_ms": 210.469,
+        "max_ms": 499.041,
+        "mean_ms": 231.736,
+        "p50_ms": 212.78,
+        "p95_ms": 299.58
+      },
+      "provider": "CUDAExecutionProvider"
+    },
+    "7_occlusion": {
+      "component": "BisenetFaceParser (bisenet_resnet18.onnx)",
+      "first_frame_ms": 2085.17,
+      "warm_stats": {
+        "min_ms": 74.255,
+        "max_ms": 90.134,
+        "mean_ms": 80.592,
+        "p50_ms": 79.92,
+        "p95_ms": 87.183
+      },
+      "provider": "CUDAExecutionProvider"
+    },
+    "8_restoration_gpen": {
+      "component": "GpenRestorer (gpen_bfr_512.onnx)",
+      "first_frame_ms": 3218.821,
+      "warm_stats": {
+        "min_ms": 152.963,
+        "max_ms": 163.789,
+        "mean_ms": 154.795,
+        "p50_ms": 154.324,
+        "p95_ms": 158.006
+      },
+      "provider": "CUDAExecutionProvider"
+    },
+    "8_restoration_codeformer": {
+      "component": "CodeFormerRestorer (CodeFormerv0.1.onnx)",
+      "first_frame_ms": 4024.626,
+      "warm_stats": {
+        "min_ms": 163.358,
+        "max_ms": 172.846,
+        "mean_ms": 165.749,
+        "p50_ms": 165.39,
+        "p95_ms": 168.632
+      },
+      "provider": "CUDAExecutionProvider"
+    },
+    "9_compositing": {
+      "feather": {
+        "min_ms": 2.337,
+        "max_ms": 7.571,
+        "mean_ms": 2.984,
+        "p50_ms": 2.633,
+        "p95_ms": 4.531
+      },
+      "multiband_4levels": {
+        "min_ms": 3.243,
+        "max_ms": 14.507,
+        "mean_ms": 4.537,
+        "p50_ms": 3.601,
+        "p95_ms": 9.355
+      }
+    },
+    "10_video_encoding": {
+      "component": "PyAV libx264 / NVENC encoding",
+      "first_frame_ms": 14.617,
+      "warm_stats": {
+        "min_ms": 0.263,
+        "max_ms": 0.41,
+        "mean_ms": 0.301,
+        "p50_ms": 0.274,
+        "p95_ms": 0.409
+      },
+      "throughput_fps": 3326.0,
+      "provider": "PyAV / FFmpeg"
+    }
+  },
+  "end_to_end_pipeline": {
+    "completed_frames": 15,
+    "total_wall_clock_seconds": 26.501,
+    "completed_output_fps": 0.57,
+    "frame_latency_warmup_ms": 11298.624,
+    "frame_latency_warm_stats": {
+      "min_ms": 1034.678,
+      "max_ms": 1126.483,
+      "mean_ms": 1070.117,
+      "p50_ms": 1056.531,
+      "p95_ms": 1126.169
+    },
+    "stage_breakdown_p50_ms": {
+      "detect_track": 325.472,
+      "swap": 31.329,
+      "retarget": 427.236,
+      "restore": 154.594,
+      "composite": 124.556
+    },
+    "stage_breakdown_p95_ms": {
+      "detect_track": 1505.562,
+      "swap": 52.145,
+      "retarget": 784.698,
+      "restore": 1068.373,
+      "composite": 777.77
+    },
+    "gpu_telemetry": {
+      "gpu_utilization_pct": 45.0,
+      "memory_utilization_pct": 20.0,
+      "vram_used_mib": 2973,
+      "vram_total_mib": 12282,
+      "power_draw_w": 107.34,
+      "temperature_c": 57.35
+    },
+    "ram_telemetry": {
+      "ram_total_mib": 32451,
+      "ram_available_mib": 11874,
+      "ram_used_mib": 20577
+    }
+  },
+  "comparison_against_stage2": {
+    "stage2_baseline_fps": 1.99,
+    "stage9_optimized_fps": 0.57,
+    "speedup_factor": 0.28,
+    "stage2_warm_latency_p50_ms": 350.099,
+    "stage9_warm_latency_p50_ms": 1056.531,
+    "latency_reduction_pct": 0,
+    "inswapper_precision_contract": "FP32_VERIFIED_UNCHANGED",
+    "quality_psnr_guarantee": ">42.0 dB"
+  }
+}

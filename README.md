@@ -214,6 +214,8 @@ Stage 6 (nine deep-linked routes, the 3-step run-bar pill, full-bleed comparison
 
 Stage 8 (Stage 25 parameter curves, timestamped One-Euro stabilization, CodeFormer fidelity, animated Slerp, durable person banks and the 3x3 archive studio) is documented in [docs/REMEDIATION_STAGE8.md](docs/REMEDIATION_STAGE8.md).
 
+Stage 9 (Unified Adaptive CPU/GPU Runtime, RTX 4070 Desktop 12 GB vs RTX 3060 Laptop 6 GB profiles, INSwapper FP32 precision contract, warm session residency, sequential VRAM eviction, and 10-category benchmarks) is documented in [app/roop_3d/docs/STAGE09_OPTIMIZATION.md](app/roop_3d/docs/STAGE09_OPTIMIZATION.md). Benchmark metrics vs Stage 2 baseline are recorded in [app/roop_3d/audit/STAGE09_BENCHMARKS.json](app/roop_3d/audit/STAGE09_BENCHMARKS.json).
+
 Stage 14 optional NVIDIA codec/CV-CUDA adapters, temporal flow propagation and
 explicit FP8 admission are documented in [docs/REMEDIATION_STAGE14.md](docs/REMEDIATION_STAGE14.md).
 Native CV-CUDA/TensorRT hardware acceptance remains pending.

@@ -143,8 +143,17 @@ class OrtModel:
                 "liveportrait_stitching_eye.onnx": 32, "liveportrait_stitching_eye.batch.onnx": 32,
                 "liveportrait_stitching_lip.onnx": 32,
             }.get(name, 32)
-            providers = [(config.provider, {"gpu_mem_limit": config.gpu_budget_bytes // divisor,
-                                           "arena_extend_strategy": "kSameAsRequested"}), "CPUExecutionProvider"]
+            arena = "kNextPowerOfTwo" if config.hardware_profile == "12gb" else "kSameAsRequested"
+            cuda_opts = {
+                "gpu_mem_limit": config.gpu_budget_bytes // divisor,
+                "arena_extend_strategy": arena,
+                "do_copy_in_default_stream": "1",
+            }
+            if config.hardware_profile == "12gb":
+                cuda_opts["cudnn_conv_algo_search"] = "DEFAULT"
+            else:
+                cuda_opts["cudnn_conv_algo_search"] = "HEURISTIC"
+            providers = [(config.provider, cuda_opts), "CPUExecutionProvider"]
         retry_reason = None
         try:
             self.session = ort.InferenceSession(str(self.path), sess_options=options, providers=providers)
@@ -159,11 +168,19 @@ class OrtModel:
             raise DomainError("PROVIDER_UNAVAILABLE", "Runtime did not activate the requested provider", 503)
         catalog.verify(self.record)
         self._check_graph()
+        self._io_binder = None
+        if self.provider == "CUDAExecutionProvider":
+            try:
+                from roop_3d.engine.adaptive_runtime import CudaIoBinder
+                self._io_binder = CudaIoBinder(self.session)
+            except Exception:
+                self._io_binder = None
         register(self, "release")
 
     def _switch_to_cpu(self, reason: str) -> None:
         import onnxruntime as ort
         self.session = None
+        self._io_binder = None
         self.path = self.catalog._path(self.record)
         self._identity = self._stat()
         self.catalog.verify(self.record)
@@ -214,7 +231,11 @@ class OrtModel:
                            dtype=np.dtype({"tensor(float16)": "float16", "tensor(double)": "float64"}.get(node.type, "float32")))
         retry_reason = None
         try:
-            arrays = self.session.run(None, values)
+            if getattr(self, "_io_binder", None) is not None:
+                out_map = self._io_binder.bind_and_run(values)
+                arrays = [out_map[node.name] for node in self.session.get_outputs()]
+            else:
+                arrays = self.session.run(None, values)
         except Exception as error:
             retry_reason = cuda_fallback_reason(str(error)) if self.provider == "CUDAExecutionProvider" else None
             if retry_reason is None:
@@ -237,6 +258,7 @@ class OrtModel:
     @guarded
     def release(self) -> None:
         self.session = None
+        self._io_binder = None
 
     def capability(self) -> dict:
         return {"model_id": self.record["model_id"], "sha256": self.record["sha256"],
@@ -275,3 +297,10 @@ def session_factory(catalog: ModelCatalog, config: RuntimeConfig):
     if factory is None:
         return None
     return lambda record: SessionFacade(factory(catalog, record["name"], config))
+
+
+def adaptive_session_factory(catalog: ModelCatalog, config: RuntimeConfig):
+    """Session factory powered by AdaptiveModelPool for warm GPU residency."""
+    from roop_3d.engine.adaptive_runtime import AdaptiveModelPool
+    pool = AdaptiveModelPool.get_instance()
+    return lambda record: SessionFacade(pool.acquire(catalog, record["name"], config))

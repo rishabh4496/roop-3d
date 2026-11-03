@@ -144,6 +144,13 @@ class VRAMGovernor:
         Inference owners must release their sessions before calling it.
         """
         gc.collect()
+        try:
+            from roop_3d.engine.adaptive_runtime import AdaptiveModelPool
+            pool = AdaptiveModelPool.get_instance()
+            if pool.profile.profile_type == "6gb":
+                pool.release_heavy()
+        except Exception:
+            pass
         torch = sys.modules.get("torch")
         state = "NOT_LOADED"
         if torch is not None:

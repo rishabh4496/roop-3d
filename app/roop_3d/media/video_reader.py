@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from fractions import Fraction
+import os
 from pathlib import Path
 from threading import Event
 from typing import Iterator, Literal
@@ -46,11 +47,12 @@ class DecodedFrame:
 class VideoReader:
     def __init__(self, path: Path, *, hardware: Literal["auto", "software"] = "auto",
                  max_frame_bytes: int = 64 * 1024 * 1024, format: Literal["bgr24", "rgb24"] = "bgr24",
-                 cancel: Event | None = None):
+                 cancel: Event | None = None, thread_count: int | None = None):
         if hardware not in ("auto", "software") or format not in ("bgr24", "rgb24") or max_frame_bytes <= 0:
             raise ValueError("Invalid reader policy")
         self.path, self.hardware, self.max_frame_bytes, self.format = Path(path), hardware, max_frame_bytes, format
         self.cancel = cancel
+        self.thread_count = thread_count
         self.backend, self.hardware_state = "software", "UNKNOWN"
         self.fallback_reason: str | None = None
 
@@ -77,7 +79,8 @@ class VideoReader:
                 kwargs = {"hwaccel": av.codec.hwaccel.HWAccel("cuda", allow_software_fallback=False)} if hardware else {}
                 with open_media(self.path, **kwargs) as container:
                     stream = container.streams.video[0]
-                    stream.codec_context.thread_count = 1
+                    threads = self.thread_count or (1 if hardware else max(1, min(8, (os.cpu_count() or 4) - 2)))
+                    stream.codec_context.thread_count = threads
                     if stream.width * stream.height * 3 > self.max_frame_bytes:
                         raise DomainError("FRAME_MEMORY_BUDGET", "Frame exceeds configured byte budget", 422)
                     if seek is not None:
