@@ -24,7 +24,7 @@ from roop_3d.media.video_writer import encode_video
 
 def make_video(path: Path, *, vfr: bool = False, rotation: int = 0, audio: int = 0,
                audio_codec: str = "pcm_s16le", offset: int = 0, rate: Fraction = Fraction(25),
-               size: tuple[int, int] = (96, 64), video_codec: str = "libx264") -> Path:
+               size: tuple[int, int] = (96, 64), video_codec: str = "libx264", sar: Fraction | None = None) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     with av.open(str(path), "w") as output:
         video = output.add_stream(video_codec, rate=rate)
@@ -35,6 +35,8 @@ def make_video(path: Path, *, vfr: bool = False, rotation: int = 0, audio: int =
         video.codec_context.gop_size = 2
         video.codec_context.colorspace = video.codec_context.color_primaries = video.codec_context.color_trc = 1
         video.codec_context.color_range = 1
+        if sar is not None:
+            video.codec_context.sample_aspect_ratio = sar
         if rotation:
             video.set_display_rotation(rotation)
         streams = []
@@ -310,8 +312,11 @@ def test_reader_cancellation_releases_source_handle(tmp_path):
 def test_external_output_root_rejected_before_writes(tmp_path):
     source = make_video(tmp_path / "roop_3d/input.mov")
     from roop_3d.audit.isolation import AuditError
+    from roop_3d.audit.project_paths import application_root
+    # TEMP may legitimately live in this app's runtime. Use a root that is explicitly
+    # outside the application root while remaining inside the checkout's hard boundary.
     with pytest.raises(AuditError, match="outside"):
-        encode_video(source, "forbidden.mov", root=Path(os.environ["TEMP"]), hardware="software")
+        encode_video(source, "forbidden.mov", root=application_root().parent, hardware="software")
 
 
 def test_media_service_preview_applies_rotation(tmp_path):

@@ -211,7 +211,7 @@ describe('VideoViewport live swap', () => {
 
     const previewCalls = fetchMock.mock.calls.filter(([url]) => url === '/api/preview');
     expect(previewCalls).toHaveLength(1);
-    expect(JSON.parse(previewCalls[0][1].body)).toMatchObject({ frame_index: 5, face_mappings: REQUEST.face_mappings, restorer: 'off' });
+    expect(JSON.parse(previewCalls[0][1].body)).toMatchObject({ timestamp: .2, face_mappings: REQUEST.face_mappings, restorer: 'off' });
     const image = host.querySelector('.processed img.live-swap-preview') as HTMLImageElement;
     expect(image.src).toBe('blob:mock-1');
     expect(host.querySelector('.processed .pane-label')!.textContent).toContain('LIVE SWAP');

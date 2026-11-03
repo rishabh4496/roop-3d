@@ -14,17 +14,45 @@ from roop_3d.audit.isolation import sha256_file
 from roop_3d.core.errors import DomainError
 from roop_3d.core.settings import Contract, Settings
 from roop_3d.core.storage import atomic_json, exclusive, owned
-from roop_3d.jobs.schema import JobRequest
+from roop_3d.jobs.schema import JobRequest, JobOutput
+from roop_3d.models.catalog import render_dependencies
 
 
 def settings_digest(settings: Settings) -> str:
     return hashlib.sha256(json.dumps(settings.model_dump(mode="json"), sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
+class ViewportPreferences(Contract):
+    live_swap: bool = True
+    view_mode: Literal["side", "compare"] = "side"
+    compare_mode: Literal["wipe", "crossfade", "diff", "blend", "loupe"] = "wipe"
+    show_landmarks: bool = True
+    show_pose: bool = True
+    show_overlays: bool = True
+    grid_mode: Literal["off", "thirds", "crosshair", "safe"] = "off"
+    zoom: float = Field(default=1, ge=1, le=4)
+
+
+class ProjectPreview(Contract):
+    timestamp: float = Field(default=0, ge=0, le=86400)
+    selected_track: str = Field(default="", max_length=128)
+    source_faceset_id: str = Field(default="", max_length=64)
+    viewport: ViewportPreferences = Field(default_factory=ViewportPreferences)
+
+
+class ProjectRender(Contract):
+    job_id: str = Field(pattern=r"^[a-f0-9]{32}$")
+    state: str
+    created_at: datetime
+    output: JobOutput | None = None
+
+
 class ProjectDraft(Contract):
     name: str = Field(min_length=1, max_length=128)
     request: JobRequest
     checkpoint_job_id: str | None = Field(default=None, pattern=r"^[a-f0-9]{32}$")
+    preview: ProjectPreview = Field(default_factory=ProjectPreview)
+    revision: int | None = Field(default=None, ge=0)
 
 
 class ProjectInput(Contract):
@@ -43,6 +71,10 @@ class ProjectManifest(Contract):
     effective_settings: Settings
     checkpoint_job_id: str | None = Field(default=None, pattern=r"^[a-f0-9]{32}$")
     last_completed_frame: int = Field(default=-1, ge=-1)
+    revision: int = Field(default=0, ge=0)
+    preview: ProjectPreview = Field(default_factory=ProjectPreview)
+    identity_assets: dict[str, str] = Field(default_factory=dict)
+    output_history: tuple[ProjectRender, ...] = ()
 
 
 class ProjectStore:
@@ -62,7 +94,10 @@ class ProjectStore:
         if not inspection.is_file():
             raise DomainError("INSPECTION_NOT_FOUND", "Inspect the target before saving a mapped project", 422)
         paths.append(inspection)
-        for source in sorted({item.faceset_id for item in request.face_mappings} | {item.faceset_id for item in request.face_segments or () if item.faceset_id}):
+        source_ids = {item.faceset_id for item in request.face_mappings} | {item.faceset_id for item in request.face_segments or () if item.faceset_id}
+        if request.identity_blend:
+            source_ids.update(request.identity_blend.source_face_ids)
+        for source in sorted(source_ids):
             candidates = [owned(self.root, f"roop_3d/{base}/facesets/{source}.fsz") for base in ("outputs", ".runtime")]
             path = next((path for path in candidates if path.is_file()), None)
             if path is None:
@@ -71,21 +106,48 @@ class ProjectStore:
         return tuple(ProjectInput(path=path.relative_to(self.root).as_posix(), sha256=sha256_file(path)[1]) for path in paths)
 
     def _models(self) -> dict[str, str]:
-        names = {"inswapper_128.onnx", "2d106det.onnx", "liveportrait_landmark.onnx", "liveportrait_appearance_feature_extractor.onnx",
-                 "liveportrait_motion_extractor.onnx", "liveportrait_warping_spade.onnx", "liveportrait_stitching.onnx",
-                 "liveportrait_stitching_eye.onnx", "liveportrait_stitching_lip.onnx", "bisenet_resnet_34.onnx", "gpen_bfr_512.onnx"}
-        selected = [self.catalog.detector(), self.catalog.recognizer()]
-        seen = set()
-        for record in self.catalog.records():
-            if record["name"] in names and record["name"] not in seen:
-                selected.append(record)
-                seen.add(record["name"])
-        result = {record["model_id"]: record["sha256"] for record in selected}
-        for model_id in result:
-            self.catalog.verify(self.catalog.get(model_id))
+        return render_dependencies(self.catalog)
+
+    def _assets(self, inputs: tuple[ProjectInput, ...]) -> dict[str, str]:
+        """Reference existing verified assets; saving never builds one or copies its arrays."""
+        from roop_3d.reconstruction.identity_asset import IdentityAssetManifest, IdentityAssetStore
+        base = owned(self.root, "roop_3d/.runtime/identity_assets")
+        store = IdentityAssetStore(base)
+        result = {}
+        for item in inputs:
+            if not item.path.endswith(".fsz"):
+                continue
+            faceset_id = Path(item.path).stem
+            directory = owned(self.root, f"roop_3d/.runtime/identity_assets/{faceset_id}")
+            if not directory.is_dir():
+                continue
+            for candidate in sorted(directory.glob("*/manifest.json"), key=lambda p: p.stat().st_mtime, reverse=True):
+                path = owned(self.root, candidate.relative_to(self.root).as_posix())
+                try:
+                    manifest = IdentityAssetManifest.model_validate_json(path.read_text("utf-8"))
+                    if (manifest.faceset_source_sha256 == item.sha256 and manifest.faceset_id == faceset_id
+                            and store.load(faceset_id, manifest.build_key) is not None):
+                        result[faceset_id] = manifest.build_key
+                        break
+                except (ValueError, OSError):
+                    continue
         return result
 
-    def save(self, draft: ProjectDraft, settings: Settings) -> ProjectManifest:
+    def history(self, project_id: str) -> tuple[ProjectRender, ...]:
+        return tuple(ProjectRender(job_id=job.job_id, state=job.state.value, created_at=job.created_at,
+                                   output=job.output if job.state.value == "succeeded" else None)
+                     for job in self.jobs.list() if job.project_id == project_id)
+
+    def save(self, draft: ProjectDraft, settings: Settings, *, project_id: str | None = None) -> ProjectManifest:
+        project_id = project_id or uuid.uuid4().hex
+        with exclusive(self.root, self.relative(project_id) + ".lock"):
+            previous = self.load(project_id, verify=False) if owned(self.root, self.relative(project_id)).exists() else None
+            if previous is not None and draft.revision != previous.revision:
+                raise DomainError("PROJECT_REVISION_CONFLICT", "Project changed; reopen it before saving", 409)
+            return self._save(draft, settings, project_id, previous)
+
+    def _save(self, draft: ProjectDraft, settings: Settings, project_id: str,
+              previous: ProjectManifest | None) -> ProjectManifest:
         inputs = self._inputs(draft.request)
         frame = -1
         if draft.checkpoint_job_id:
@@ -105,9 +167,13 @@ class ProjectStore:
                 frame = checkpoint.completed_frame
             except (ValueError, OSError):
                 raise DomainError("PROJECT_CHECKPOINT_INVALID", "Checkpoint settings do not match this project", 409) from None
-        manifest = ProjectManifest(project_id=uuid.uuid4().hex, name=draft.name,
+        manifest = ProjectManifest(project_id=project_id, name=draft.name,
             saved_at=datetime.now(timezone.utc), request=draft.request, inputs=inputs, model_digests=self._models(),
-            effective_settings=settings, checkpoint_job_id=draft.checkpoint_job_id, last_completed_frame=frame)
+            effective_settings=settings, checkpoint_job_id=draft.checkpoint_job_id, last_completed_frame=frame,
+            revision=previous.revision + 1 if previous else 0, preview=draft.preview,
+            identity_assets=self._assets(inputs), output_history=self.history(project_id))
+        if len(manifest.model_dump_json().encode("utf-8")) > 512 * 1024:
+            raise DomainError("PROJECT_TOO_LARGE", "Project exceeds the 512 KiB manifest limit", 422)
         atomic_json(self.root, self.relative(manifest.project_id), manifest.model_dump(mode="json"))
         return manifest
 
@@ -143,6 +209,7 @@ class ProjectStore:
                         status = "Missing Source Media"
                         reason = f"Model {model_id} identity changed"
                         break
+                    self.catalog.verify(record)
                 except Exception:
                     verified = False
                     status = "Missing Source Media"
@@ -190,24 +257,23 @@ class ProjectStore:
             try:
                 result.append(self.validate_project(path.stem))
             except Exception:
-                item = self.load(path.stem, verify=False)
                 result.append({
-                    "project_id": item.project_id,
-                    "name": item.name,
-                    "saved_at": item.saved_at,
-                    "last_completed_frame": item.last_completed_frame,
+                    "project_id": path.stem,
+                    "name": f"Unreadable project {path.stem[:8]}",
+                    "saved_at": datetime.fromtimestamp(path.stat().st_mtime, timezone.utc),
+                    "last_completed_frame": -1,
                     "inputs_verified": False,
                     "status": "Missing Source Media",
                     "verification_reason": "Failed to load project manifest",
                     "missing_inputs": ["Corrupted or invalid project manifest"],
-                    "checkpoint_job_id": item.checkpoint_job_id,
+                    "checkpoint_job_id": None,
                     "checkpoint": None,
-                    "target_path": item.request.target_path,
-                    "face_mappings": [m.model_dump(mode="json") for m in item.request.face_mappings],
-                    "trim_start_seconds": item.request.trim_start_seconds,
-                    "trim_end_seconds": item.request.trim_end_seconds,
-                    "has_mask": bool(item.request.mask_base64),
-                    "has_curves": bool(item.request.parameter_curves),
+                    "target_path": None,
+                    "face_mappings": [],
+                    "trim_start_seconds": None,
+                    "trim_end_seconds": None,
+                    "has_mask": False,
+                    "has_curves": False,
                 })
         return result
 
@@ -232,7 +298,17 @@ class ProjectStore:
                 if record["sha256"] != digest:
                     raise DomainError("PROJECT_MODEL_CHANGED", "A project model identity changed", 409)
                 self.catalog.verify(record)
-        return item
+        history = self.history(project_id)
+        return item.model_copy(update={"output_history": history or item.output_history})
+
+    def queue(self, project_id: str, settings: Settings, idempotency_key: str, validate=None):
+        with exclusive(self.root, self.relative(project_id) + ".lock"):
+            item = self.load(project_id)
+            if settings != item.effective_settings:
+                raise DomainError("PROJECT_SETTINGS_CHANGED", "Save or restore project settings before rendering", 409)
+            return self.jobs.create(item.request, idempotency_key,
+                (lambda: validate(item.request)) if validate else None,
+                project_id=project_id, effective_settings=item.effective_settings)
 
     def resume(self, project_id: str, settings: Settings):
         with exclusive(self.root, self.relative(project_id) + ".lock"):

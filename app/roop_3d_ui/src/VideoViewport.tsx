@@ -38,6 +38,8 @@ import SnapshotSlots, { SnapshotViewport } from './components/workstation/Snapsh
 import { panAnchoredAt } from './utils/zoomPan';
 import { buildLivePayload, downloadBlob, previewFilename, useLiveSwapPreview } from './livePreview';
 import LiveSwapStatus from './components/workstation/LiveSwapStatus';
+import { DEFAULT_VIEWPORT, type ViewportPreferences } from './previewPreferences';
+import type { Dispatch, SetStateAction } from 'react';
 
 /** Snapshot slots keep a self-contained image, so convert the preview PNG before its object URL is revoked. */
 async function blobToDataUrl(blob: Blob): Promise<string> {
@@ -85,6 +87,7 @@ export function VideoViewport({
   inspector, posePanel, restorerAvailable = false, onPreviewLatency,
   maskBase64 = null, captureWorkspace = () => ({}), restoreWorkspace = () => {},
   onInspectionUpdate, onSourceExtracted, activeSourceId = '', studio = null,
+  previewView, onPreviewViewChange,
 }: {
   target: string;
   output: string;
@@ -122,7 +125,13 @@ export function VideoViewport({
    * stacked layout unchanged.
    */
   studio?: { panels: HTMLElement | null; timeline: HTMLElement | null; tray: HTMLElement | null } | null;
+  previewView?: ViewportPreferences;
+  onPreviewViewChange?: Dispatch<SetStateAction<ViewportPreferences>>;
 }) {
+  const [localView, setLocalView] = useState(DEFAULT_VIEWPORT);
+  const view = previewView ?? localView, setView = onPreviewViewChange ?? setLocalView;
+  const preference = <K extends keyof ViewportPreferences,>(key: K) => [view[key], (next: SetStateAction<ViewportPreferences[K]>) =>
+    setView(previous => ({ ...previous, [key]: typeof next === 'function' ? (next as (value: ViewportPreferences[K]) => ViewportPreferences[K])(previous[key]) : next }))] as const;
   const [detectingFaces, setDetectingFaces] = useState(false);
   renderProbe('VideoViewport');
   const [detectionNotice, setDetectionNotice] = useState('');
@@ -173,7 +182,7 @@ export function VideoViewport({
   const previewLive = active || previewPinned;
 
   // Comparison & Masking Modes
-  const [compMode, setCompMode] = useState<'wipe' | 'crossfade' | 'diff' | 'blend' | 'loupe'>('wipe');
+  const [compMode, setCompMode] = preference('compare_mode');
   const [isMaskEditing, setIsMaskEditing] = useState(false);
   const [viewportSize, setViewportSize] = useState({ width: 0, height: 0 });
   const history = useHistoryStore(), [historyOpen, setHistoryOpen] = useState(false), [captureBusy, setCaptureBusy] = useState(false), [captureError, setCaptureError] = useState('');
@@ -189,7 +198,7 @@ export function VideoViewport({
   useEffect(() => { if (history.previewSlot || history.comparison) { setPlaying(false); original.current?.pause(); processed.current?.pause(); } }, [history.previewSlot, history.comparison]);
   const captureSlot = async (slot: string) => {
     const at = now();
-    const payload = buildLivePayload({ request: previewRequest, time: at, fps, parameters, maskBase64, restorerAvailable, solo: 'final' });
+    const payload = buildLivePayload({ timestampSelection: true, request: previewRequest, time: at, fps, parameters, maskBase64, restorerAvailable, solo: 'final' });
     if (!payload || captureBusy) return;
     const controller = new AbortController(); captureAbort.current = controller; const workspace = captureWorkspace();
     setCaptureBusy(true); setCaptureError(''); setPlaying(false); original.current?.pause(); processed.current?.pause();
@@ -215,16 +224,16 @@ export function VideoViewport({
   const sourcePreview = usePreview(enabled && previewLive ? target : '', time, playing);
   const outputPreview = usePreview(enabled && previewLive ? output : '', time, playing);
   // The real swapped frame (or, when a node is soloed, that stage's buffer) from POST /api/preview: debounced, 503-aware.
-  const [liveSwap, setLiveSwap] = useState(true);
+  const [liveSwap, setLiveSwap] = preference('live_swap');
   const live = useLiveSwapPreview(previewLive && enabled && liveSwap && !playing && !isMaskEditing
-    ? buildLivePayload({ request: previewRequest, time, fps, parameters, maskBase64, restorerAvailable, solo: nodeBuffer(solo) })
+    ? buildLivePayload({ timestampSelection: true, request: previewRequest, time, fps, parameters, maskBase64, restorerAvailable, solo: nodeBuffer(solo) })
     : null);
   useEffect(() => { if (live.meta?.latency) latencyCallback.current?.(live.meta.latency); }, [live.meta]);
   // Only show a live image that is the buffer currently asked for: never the previous node's output while a new one loads.
   const liveFresh = !!live.url && (live.meta?.solo_node ?? 'final') === (nodeBuffer(solo) ?? 'final');
   const liveUrl = liveFresh ? live.url : null, liveBlob = liveFresh ? live.blob : null;
-  const [viewMode, setViewMode] = useState<'side' | 'compare'>('side');
-  const [showLandmarks, setShowLandmarks] = useState(true), [showPose, setShowPose] = useState(true);
+  const [viewMode, setViewMode] = preference('view_mode');
+  const [showLandmarks, setShowLandmarks] = preference('show_landmarks'), [showPose, setShowPose] = preference('show_pose');
   const [faceMenu, setFaceMenu] = useState<FaceMenuTarget | null>(null);
   const extraction = useFaceExtraction({ target, frameIndex: currentFrame, activeSourceId: activeSourceId || null, onSourceExtracted, onRefreshPreview: live.retry });
   const activeSourceName = sources.find(item => item.faceset_id === activeSourceId)?.name ?? null;
@@ -316,13 +325,13 @@ export function VideoViewport({
   }, [time, fps, mediaDims.width, mediaDims.height]);
 
   // Preview Box zoom, pan, grid, peek, and display state
-  const [previewZoom, setPreviewZoom] = useState(1);
+  const [previewZoom, setPreviewZoom] = preference('zoom');
   const [previewPan, setPreviewPan] = useState({ x: 0, y: 0 });
   const [isPanning, setIsPanning] = useState(false);
   const [panOrigin, setPanOrigin] = useState({ x: 0, y: 0 });
-  const [gridMode, setGridMode] = useState<'off' | 'thirds' | 'crosshair' | 'safe'>('off');
+  const [gridMode, setGridMode] = preference('grid_mode');
   const [showSourcePeek, setShowSourcePeek] = useState(false);
-  const [showFaceOverlays, setShowFaceOverlays] = useState(true);
+  const [showFaceOverlays, setShowFaceOverlays] = preference('show_overlays');
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [snapshotNotice, setSnapshotNotice] = useState('');
   const [isSpaceDown, setIsSpaceDown] = useState(false);
@@ -882,7 +891,7 @@ export function VideoViewport({
         payloadFor={(patch: Patch) => {
           const { fidelity_weight: _inactive, ...applied } = patch;
           const sweeping = 'restoration_blend' in applied;
-          return buildLivePayload({ request: previewRequest, time, fps, restorerAvailable, maskBase64, solo: 'final',
+          return buildLivePayload({ timestampSelection: true, request: previewRequest, time, fps, restorerAvailable, maskBase64, solo: 'final',
             parameters: { ...parameters, ...applied, bypass: sweeping ? parameters.bypass.filter(item => item !== 'restorer') : parameters.bypass } });
         }}
         onApply={(patch: Patch) => { const { fidelity_weight: _inactive, ...applied } = patch; setParameters({ ...parameters, ...applied }); }} onClose={() => setSweepPanel(null)}/>}

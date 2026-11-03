@@ -55,6 +55,7 @@ class SweepAxis(Contract):
 class PreviewRequest(Contract):
     request: JobRequest
     timestamp: float = Field(ge=0, le=86400)
+    frame_index: int | None = Field(default=None, ge=0, le=10_000_000)
     parameters: WorkstationParameters = WorkstationParameters()
     x: SweepAxis | None = None
     y: SweepAxis | None = None
@@ -201,10 +202,11 @@ class PreviewService:
             runtime = RuntimeConfig(provider=admission.provider, hardware_profile=admission.profile,
                                     reserve_mib=settings.memory_safety_reserve_mb)
             session = ReferencePipeline(self.state.models, runtime)
+            tracking = runner.tracking_options(value.request)
             session.prepare_session(next(iter(sources.values())), track_ids=set(sources), sources_by_track=sources,
                                     retarget='off' if value.effective_parameters.uses_mesh_projection() else 'auto',
                                     **value.effective_parameters.session_options(),
-                                    **runner.tracking_options(value.request))
+                                    **tracking)
             if identity_guard is not None:
                 session.set_identity_guard(identity_guard)
             if hasattr(session, 'configure_temporal'):
@@ -236,7 +238,10 @@ class PreviewService:
                 rate = stream.average_rate or stream.base_rate or 25
                 fps = float(rate) if rate else 25.0
 
-            if target_time <= seek_threshold:
+            replay = (target_time <= seek_threshold or value.frame_index is not None or bool(tracking)
+                      or value.request.identity_lock_id is not None
+                      or self.state.media.probe(value.request.target_path).vfr is True)
+            if replay:
                 with closing(VideoReader(target, hardware='software', cancel=cancel).frames()) as frames:
                     for frame in frames:
                         check()
@@ -258,8 +263,11 @@ class PreviewService:
                             session.set_frame_timestamp(float(frame.timestamp.seconds))
                         result = session.infer_frame(frame.image, **parameters.inference_options())
                         selected = (frame, result, float(frame.timestamp.seconds - origin), frame.index)
-                        if frame.timestamp.seconds - origin >= target_time:
+                        if (frame.index >= value.frame_index if value.frame_index is not None
+                                else frame.timestamp.seconds - origin >= target_time):
                             break
+                        collect_composite(session, frame.image, result, parameters, capture=False,
+                                          occluder_masks=edit_plan.occluders(frame.image, result))
                     else:
                         raise DomainError('PREVIEW_FRAME_MISSING', 'No frame exists at the requested playhead time', 422)
             else:
@@ -313,7 +321,7 @@ class PreviewService:
             response = {'frame_index': frame_index, 'timestamp': timestamp,
                         'width': frame.image.shape[1], 'height': frame.image.shape[0],
                         'profile': admission.profile, 'provider': admission.provider,
-                        'notes': ['Single-frame preview, tracking replayed from frame zero; temporal smoothing resets per variant.' if target_time <= seek_threshold else 'Single-frame preview, seeked to playhead keyframe; temporal smoothing resets per variant.',
+                        'notes': ['Single-frame preview, tracking and compositor replayed from frame zero.' if replay else 'Single-frame preview, seeked to playhead keyframe; temporal smoothing resets per variant.',
                                   'Mesh blend: TPS at 0, perspective 3D proxy projection at 1; canonical geometry and camera are estimates.' if parameters.pose_mode == 'mesh_blend' else 'Reference retarget mode: observed dense landmarks; mesh projection is not selected.',
                                   'Matte uses the reference BiSeNet parser with landmark-hull fallback; no XSeg adapter.']}
             response['faces'] = face_readouts(result)

@@ -27,6 +27,7 @@ const lock = (status = { valid: true, reasons: [] as object[] }) => ({ lock_id: 
 
 async function boot(page: Page) {
   const seen = { posts: [] as { path: string; body: any }[], deletes: 0, jobs: [] as any[], verify: 'valid' as 'valid' | 'stale' };
+  let savedRequest = project.request;
   await page.addInitScript(() => { sessionStorage.setItem('roop3d_skip_linter', 'true'); localStorage.setItem('roop3d_tour_seen', 'true'); });
   await page.route('**/api/v1/**', async (route: Route) => {
     const url = new URL(route.request().url()), path = url.pathname.replace('/api/v1', ''), method = route.request().method();
@@ -36,6 +37,7 @@ async function boot(page: Page) {
     if (path === '/config') return json({});
     if (path === '/facesets') return json([{ faceset_id: 'alice', name: 'Alice', item_count: 1 }, { faceset_id: 'bob', name: 'Bob', item_count: 1 }]);
     if (path === '/projects') return json([project]);
+    if (path === '/projects/p1' && method === 'PUT') { savedRequest = route.request().postDataJSON().request; return json({ ...project, request: savedRequest }); }
     if (path === '/projects/p1') return json(project);
     if (/^\/facesets\/[^/]+\/coverage$/.test(path)) return json({ faceset_id: path.split('/')[2], views: [{ yaw: 0, pitch: 0, roll: 0, pose_bin: 'center_center' }], bins: { center_center: 1 } });
     if (path.startsWith('/faces/bank')) return json({ version: 1, revision: 1, target_sha256: 'b'.repeat(64), next_rank: 0, clusters: [], aliases: {}, unresolved_tracks: [], inspection_id: ID });
@@ -48,6 +50,7 @@ async function boot(page: Page) {
     if (path === `/identity/locks/${LOCK_ID}`) return json(seen.verify === 'valid' ? lock()
       : lock({ valid: false, reasons: [{ code: 'FACESET_CHANGED', detail: 'The source FaceSet changed after it was assigned', track_id: 'track_0001', faceset_id: 'alice' } as object] }));
     if (path === '/jobs' && method === 'POST') { seen.jobs.push(route.request().postDataJSON()); return json({ job_id: '1'.repeat(32), state: 'queued', request: seen.jobs.at(-1), progress: { frame: 0, total_frames: null, fps: 0, stage: 'queued' }, output: null }, 201); }
+    if (path === '/projects/p1/jobs' && method === 'POST') { seen.jobs.push(savedRequest); return json({ job_id: '1'.repeat(32), state: 'queued', request: savedRequest, progress: { frame: 0, total_frames: null, fps: 0, stage: 'queued' }, output: null }, 201); }
     return json([]);
   });
   const tinyJpeg = Buffer.from('/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wgALCAABAAEBAREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxA=', 'base64');

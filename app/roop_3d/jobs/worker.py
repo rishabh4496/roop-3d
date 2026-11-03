@@ -186,7 +186,7 @@ class JobWorker:
                 return
             self.store.transition(job_id, JobState.preparing, expected_revision=record.revision)
             runner = self.engines.resolve(record.request.engine_id)
-            settings = self.settings_provider()
+            settings = record.effective_settings or self.settings_provider()
             prepared = runner.prepare(record, settings)
             while admission is None:
                 state = self._control(job_id)

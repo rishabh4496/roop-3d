@@ -114,6 +114,9 @@ def encode_video(source: Path, filename: str, *, root: Path | None = None,
                                       'render': manifest_metadata or {}}, finishing.provenance)
             info = probe(source)
             video = info.videos[0]
+            with open_media(source) as original:
+                source_aspect = Fraction(original.streams.video[0].sample_aspect_ratio or 1)
+            output_aspect = 1 / source_aspect if video.rotation % 180 else source_aspect
             plans = plan_audio(source, final.suffix.lower(), audio_policy, start=start, end=end, cancel=cancel)
             origin = start or Fraction(0)
             base = Fraction(1, lcm(video.time_base.denominator, origin.denominator,
@@ -159,6 +162,7 @@ def encode_video(source: Path, filename: str, *, root: Path | None = None,
                 stream.codec_context.max_b_frames = 0
                 stream.codec_context.thread_count = 1
                 ctx = stream.codec_context
+                ctx.sample_aspect_ratio = output_aspect
                 ctx.colorspace, ctx.color_range = video.colorspace, video.color_range
                 ctx.color_primaries, ctx.color_trc = video.color_primaries, video.color_trc
                 stream.options = {"preset": "fast"} if "nvenc" not in encoder else {"preset": "p4"}
@@ -214,6 +218,9 @@ def encode_video(source: Path, filename: str, *, root: Path | None = None,
                 c2pa_result = sign_c2pa(muxed, signed, claim)
                 os.replace(signed, muxed)
             observed = probe(muxed)
+            with open_media(muxed) as playable:
+                if Fraction(playable.streams.video[0].sample_aspect_ratio or 1) != output_aspect:
+                    raise DomainError("OUTPUT_ASPECT_DRIFT", "Output pixel aspect differs from the upright source", 422)
             if len(observed.audio) != len(info.audio):
                 raise DomainError("AUDIO_TRACK_LOSS", "Output audio track count differs from input", 422)
             verified_count = 0
@@ -243,6 +250,8 @@ def encode_video(source: Path, filename: str, *, root: Path | None = None,
                         "output_path": output_relative, "manifest_path": manifest_path,
                         "encoder": encoder, "nvenc_state": hardware_state, "decoder": reader.backend,
                         "width": width, "height": height, "pixel_format": "yuv420p",
+                        "source_rotation": video.rotation, "orientation_policy": "upright_pixels",
+                        "source_sample_aspect_ratio": str(source_aspect), "output_sample_aspect_ratio": str(output_aspect),
                         "nvdec_state": reader.hardware_state, "source_frames_read": source_count,
                         "encoded_frames": len(expected), "verified_frames": verified_count,
                         "source_time_base": str(video.time_base), "output_time_base": str(observed.videos[0].time_base),

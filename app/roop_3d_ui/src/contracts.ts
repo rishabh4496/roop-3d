@@ -1,4 +1,5 @@
 import type { WorkstationParameters } from './components/workstation/pipeline';
+import type { ProjectPreview } from './previewPreferences';
 export type Schema = { type?: string; title?: string; description?: string; enum?: (string | number | boolean)[]; const?: unknown; minimum?: number; maximum?: number; properties?: Record<string, Schema> };
 export type Config = Record<string, string | number | boolean | string[]>;
 export type Feature = { enabled: boolean; reason: string | null };
@@ -53,7 +54,7 @@ export interface QueueJob {
 export interface Mapping { track_id: string; faceset_id: string }
 export interface ExportOptions { baked_video: boolean; passes: string[]; finishing: { cube: string | null; grain: { size: number; intensity: number; shadows: number; highlights: number; seed: number }; provenance: string } }
 export interface JobRequest { engine_id?: string; identity_lock_id?: string | null; identity_blend?: {method: 'slerp' | 'linear'; source_face_ids: string[]; weights?: number[]} | null; target_path: string; inspection_id: string; face_mappings: Mapping[]; processing: 'local'; remote_consent: false; trim_start_seconds: number | null; trim_end_seconds: number | null; mask_base64?: string | null; workstation_parameters?: WorkstationParameters | null; parameter_curves?: { tracks: Record<string, {frame: number; value: number; easing: string}[]> } | null; export?: ExportOptions | null; face_segments?: {cluster_id: string; track_id: string; start_frame: number; end_frame: number | null; role: string; faceset_id: string | null; source_view_index: number | null}[] | null }
-export interface Job { job_id: string; state: JobState; request: JobRequest; progress: { frame: number; total_frames: number | null; fps: number; stage: string; stage_latency_ms?: number; stage_timings_ms?: Record<string, number> }; output: { output_path: string; frames: number; passes?: Record<string, string>; pass_manifest_path?: string | null; baked_video?: boolean } | null; failure: { message: string } | null }
+export interface Job { project_id?: string | null; effective_settings?: Config | null; job_id: string; state: JobState; request: JobRequest; progress: { frame: number; total_frames: number | null; fps: number; stage: string; stage_latency_ms?: number; stage_timings_ms?: Record<string, number> }; output: { output_path: string; frames: number; passes?: Record<string, string>; pass_manifest_path?: string | null; baked_video?: boolean } | null; failure: { message: string } | null }
 export interface Track { track_id: string; first_frame: number; last_frame: number; first_timestamp_seconds: number; last_timestamp_seconds: number; thumbnail_base64: string; thumbnail_mime: string; landmark_count: number; pose_range: { yaw_degrees: [number, number] | null; pitch_degrees: [number, number] | null; roll_degrees: [number, number] | null; method: string }; bounding_box?: { x1: number; y1: number; x2: number; y2: number }; sampled_detections?: number }
 export interface DetectedFace {
   id: string;
@@ -122,6 +123,10 @@ export interface Project {
   last_completed_frame: number;
   checkpoint_job_id: string | null;
   saved_at: string;
+  revision?: number;
+  preview?: ProjectPreview;
+  identity_assets?: Record<string, string>;
+  output_history?: { job_id: string; state: JobState; created_at: string; output: Job['output'] }[];
   inputs_verified?: boolean;
   status?: string;
   verification_reason?: string | null;

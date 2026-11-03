@@ -31,7 +31,7 @@ from roop_3d.jobs.schema import JobOutput, JobProgress, JobRecord, JobState
 from roop_3d.media.schema import FaceInspection
 from roop_3d.media.video_reader import VideoReader
 from roop_3d.media.video_writer import encode_video
-from roop_3d.models.catalog import ModelCatalog
+from roop_3d.models.catalog import ModelCatalog, render_dependencies
 from roop_3d.compositor.pipeline import CompositeOptions
 from roop_3d.compositor.restoration import GpenRestorer
 from roop_3d.engine.edit_plan import FrameEditPlan
@@ -63,6 +63,9 @@ class PipelineCheckpoint(Contract):
     inputs: dict = Field(default_factory=dict)
     pose_settings: dict = Field(default_factory=dict)
     hardware_state: dict = Field(default_factory=dict)
+    model_digests: dict[str, str] = Field(default_factory=dict)
+    inspection_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    identity_assets: dict[str, str | None] = Field(default_factory=dict)
 
 
 CHECKPOINT_NPZ_FORMAT = "roop3d.checkpoint.npz/1"
@@ -353,6 +356,17 @@ class MasterPipelineRunner:
         request_digest = self._request_digest(record)
         checkpoint = self._read_checkpoint(record.job_id, digest, request_digest, total,
                                            "cpu")
+        # Bind actual verified local dependencies, not registry presence. Missing optional models stay optional.
+        models = render_dependencies(self.catalog)
+        inspection_digest = sha256_file(owned(self.root,
+            f"roop_3d/.runtime/inspections/{record.request.inspection_id}.json"))[1]
+        if checkpoint.completed_frame >= 0 and not checkpoint.model_digests:
+            raise DomainError("JOB_CHECKPOINT_MODELS_UNKNOWN",
+                              "This older checkpoint has no model identity; queue a new render", 409)
+        if checkpoint.model_digests and checkpoint.model_digests != models:
+            raise DomainError("JOB_MODELS_CHANGED", "Model selection changed since the saved checkpoint", 409)
+        if checkpoint.inspection_sha256 and checkpoint.inspection_sha256 != inspection_digest:
+            raise DomainError("JOB_INSPECTION_CHANGED", "Target inspection changed since the saved checkpoint", 409)
         from roop_3d.jobs.project_store import settings_digest
         fingerprint = settings_digest(settings)
         source_fingerprints = {document.faceset_id: document.source_sha256 for document in sources.values()}
@@ -379,6 +393,8 @@ class MasterPipelineRunner:
             "inputs": self._checkpoint_inputs(record),
             "pose_settings": self._pose_settings(record, {**sources, **edit_plan.documents}),
             "hardware_state": self._hardware_state(settings),
+            "model_digests": models,
+            "inspection_sha256": inspection_digest,
         })
         self._write_checkpoint(checkpoint)
         workdir = owned(self.root, f"roop_3d/.runtime/jobs/{record.job_id}/frames")
@@ -499,6 +515,7 @@ class MasterPipelineRunner:
         expected_shape: tuple[int, ...] | None = None
         last_completed = checkpoint.completed_frame
         capability: dict = {}
+        restorer_sha256: str | None = None
         export = record.request.export
         scene_cuts: list[int] = []
         swapped_ranges: list[list[int]] = []
@@ -514,6 +531,12 @@ class MasterPipelineRunner:
                                     retarget='off' if record.request.parameters_at(0).uses_mesh_projection() else 'auto',
                                     **record.request.parameters_at(0).session_options(),
                                     **(prepared.tracking or {}))
+            assets = session.capability().get("render_modes", {}).get("identity_assets", {})
+            asset_keys = {key: value.get("build_key") if value.get("available") else None for key, value in assets.items()}
+            if checkpoint.completed_frame >= 0 and checkpoint.identity_assets != asset_keys:
+                raise DomainError("JOB_IDENTITY_ASSET_CHANGED", "3D identity geometry changed since the saved checkpoint", 409)
+            checkpoint = checkpoint.model_copy(update={"identity_assets": asset_keys})
+            self._write_checkpoint(checkpoint)
             if prepared.identity_guard is not None:
                 from roop_3d.identity.guard import IdentityRunReport
                 session.set_identity_guard(prepared.identity_guard)
@@ -613,6 +636,12 @@ class MasterPipelineRunner:
             checkpoint = self._checkpoint(checkpoint, completed_frame=last_completed,
                                           profile=admission.profile)
             capability = session.capability()
+            # Capture the actual activated restoration model before release clears its session.
+            restorer = getattr(session.compositor, "restorer", None)
+            model = getattr(restorer, "model", None) or getattr(getattr(restorer, "runner", None), "model", None)
+            record_used = getattr(model, "record", None)
+            if record_used:
+                restorer_sha256 = record_used.get("sha256")
         except BaseException as error:
             if is_cuda_oom(error):
                 if checkpoint.oom_retries == 0 and admission.profile != "cpu":
@@ -625,6 +654,8 @@ class MasterPipelineRunner:
             session.release_session()
 
         self._check_control(control, checkpoint, last_completed)
+
+        report_progress(JobProgress(frame=decoded_count, total_frames=total_frames, stage="mux"))
 
         def completed_frame(decoded):
             self._check_control(control, checkpoint, last_completed)
@@ -661,10 +692,8 @@ class MasterPipelineRunner:
             pass
         if capability.get("identity_swapper", {}).get("sha256"):
             model_hashes["identity_swapper"] = capability["identity_swapper"]["sha256"]
-        if getattr(session, "compositor", None) and getattr(session.compositor, "restorer", None):
-            res_rec = getattr(session.compositor.restorer, "record", None)
-            if res_rec and "sha256" in res_rec:
-                model_hashes["restorer"] = res_rec["sha256"]
+        if restorer_sha256:
+            model_hashes["restorer"] = restorer_sha256
 
         metadata = {
             "stage": "12",
@@ -681,6 +710,14 @@ class MasterPipelineRunner:
             "face_mappings": [{"track_id": label, "faceset_id": source_id}
                                for (label, source_id) in zip(labels_to_ids, faceset_ids)],
             "model_hashes": model_hashes,
+            "request_sha256": self._request_digest(record),
+            "parameters": record.request.parameters_at(0).model_dump(mode="json"),
+            "source_faceset_sha256": checkpoint.faceset_sha256,
+            "effective_settings": settings.model_dump(mode="json"),
+            "dependency_model_digests": checkpoint.model_digests,
+            "inspection_sha256": checkpoint.inspection_sha256,
+            "identity_assets": capability.get("render_modes", {}).get("identity_assets", {}),
+            "restoration": capability.get("full_frame_compositor", {}).get("restorer", {}),
         }
         if identity_report is not None:
             metadata['identity_lock'] = identity_report.manifest()

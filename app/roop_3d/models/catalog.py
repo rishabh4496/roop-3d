@@ -12,6 +12,40 @@ from roop_3d.models.local_provider import LocalWeightProvider
 from roop_3d.models.registry import ModelRecord, ModelRegistry, authorize, license_info
 
 
+def render_dependencies(catalog) -> dict[str, str]:
+    """Snapshot reference/stream model candidates, including optional local adapters.
+
+    These are dependency identities, not a claim that every candidate ran. Actual activation
+    still verifies bytes and reports providers through the existing inference adapters.
+    """
+    names = {"inswapper_128.onnx", "inswapper_128.batch.onnx", "2d106det.onnx",
+             "liveportrait_landmark.onnx", "liveportrait_appearance_feature_extractor.onnx",
+             "liveportrait_motion_extractor.onnx", "liveportrait_warping_spade.onnx",
+             "liveportrait_stitching.onnx", "liveportrait_stitching_eye.onnx",
+             "liveportrait_stitching_lip.onnx", "bisenet_resnet_34.onnx",
+             "gpen_bfr_512.onnx", "CodeFormerv0.1.onnx"}
+    selected = [catalog.detector(), catalog.recognizer()]
+    required = {record["model_id"] for record in selected}
+    seen = set()
+    for record in catalog.records():
+        if record["name"] in names and record["name"] not in seen:
+            selected.append(record)
+            seen.add(record["name"])
+            if record["name"] == "inswapper_128.onnx":
+                required.add(record["model_id"])
+    records = {record["model_id"]: record for record in selected}
+    available = {}
+    for key, record in records.items():
+        try:
+            catalog.verify(record)
+        except DomainError as error:
+            if key not in required and error.code == "MODEL_NOT_INSTALLED":
+                continue
+            raise
+        available[key] = record["sha256"]
+    return available
+
+
 class ModelCatalog:
     def __init__(self, root: Path | None = None, *, cache_root: Path | None = None,
                  search_paths: Callable[[], tuple[str, ...]] | None = None,

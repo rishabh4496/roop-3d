@@ -11,7 +11,7 @@ from pydantic import Field, field_validator, model_validator
 
 from roop_3d.core.errors import DomainError
 from roop_3d.core.stage_timing import validate_timings
-from roop_3d.core.settings import Contract
+from roop_3d.core.settings import Contract, Settings
 from roop_3d.core.workstation import WorkstationParameters
 from roop_3d.core.animation import ParameterCurves, FaceSegment
 from roop_3d.media.schema import TrackToFaceSetMap
@@ -187,6 +187,8 @@ class JobRecord(Contract):
     diagnostics: JobDiagnostics = Field(default_factory=JobDiagnostics)
     output: JobOutput | None = None
     failure: JobFailure | None = None
+    project_id: str | None = Field(default=None, pattern=r"^[0-9a-f]{32}$")
+    effective_settings: Settings | None = None
 
 
 class FaceSetSummary(Contract):

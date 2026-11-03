@@ -150,7 +150,7 @@ test('audit: classic layout assigns source and triggers live preview', async ({ 
   await expect(page.locator('img.live-swap-preview')).toBeVisible({ timeout: 5000 });
 });
 
-test('audit: scrubbing playhead requests updated frame_index for live preview', async ({ page }) => {
+test('audit: scrubbing playhead requests updated timestamp for live preview', async ({ page }) => {
   const seenPreviews: any[] = [];
   await setupRoutes(page, seenPreviews);
   await page.goto('/#/faceswap');
@@ -168,11 +168,11 @@ test('audit: scrubbing playhead requests updated frame_index for live preview', 
   await select.selectOption('alice');
 
   await expect.poll(() => seenPreviews.length, { timeout: 5000 }).toBeGreaterThan(0);
-  expect(seenPreviews.at(-1)?.frame_index).toBe(0);
+  expect(seenPreviews.at(-1)?.timestamp).toBe(0);
 
   // Press right arrow shortcut or step forward to scrub playhead
   await page.keyboard.press('ArrowRight');
-  await expect.poll(() => seenPreviews.at(-1)?.frame_index, { timeout: 5000 }).toBeGreaterThan(0);
+  await expect.poll(() => seenPreviews.at(-1)?.timestamp, { timeout: 5000 }).toBeGreaterThan(0);
 });
 
 test('audit: solo buffer selection requests intermediate pipeline buffer', async ({ page }) => {

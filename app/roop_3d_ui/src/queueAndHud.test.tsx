@@ -179,9 +179,9 @@ describe('Persistent Queue Manager (QueueDrawer)', () => {
     expect(normalizeJobState('succeeded')).toBe(QUEUE_STATES.COMPLETED);
     expect(normalizeJobState('failed')).toBe(QUEUE_STATES.FAILED);
     expect(normalizeJobState('cancelled')).toBe(QUEUE_STATES.CANCELLED);
-    expect(normalizeJobState('cancelling')).toBe(QUEUE_STATES.CANCELLED);
+    expect(normalizeJobState('cancelling')).toBe(QUEUE_STATES.CANCELLING);
     expect(normalizeJobState('paused')).toBe(QUEUE_STATES.PAUSED);
-    expect(normalizeJobState('pausing')).toBe(QUEUE_STATES.PAUSED);
+    expect(normalizeJobState('pausing')).toBe(QUEUE_STATES.PAUSING);
     expect(normalizeJobState('interrupted')).toBe(QUEUE_STATES.PAUSED);
   });
 
@@ -236,7 +236,8 @@ describe('Persistent Queue Manager (QueueDrawer)', () => {
     expect(html).toContain('Duplicate');
     expect(html).toContain('Retry');
     expect(html).toContain('Cancel');
-    expect(html).toContain('Output ↗');
+    expect(html).toContain('Export video ↗');
+    expect(html).toContain('Render manifest');
   });
 
   it('renders an empty state note when no jobs are present', () => {

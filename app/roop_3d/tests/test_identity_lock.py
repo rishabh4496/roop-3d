@@ -578,7 +578,11 @@ def finish(client, job_id, timeout=20.0):
     raise AssertionError("job did not finish")
 
 
-def test_api_contact_sheet_lock_lifecycle_and_locked_render(tmp_path):
+def test_api_contact_sheet_lock_lifecycle_and_locked_render(tmp_path, monkeypatch):
+    # This existing scripted-session contract test has synthetic model IDs, not real weights.
+    # Real byte verification and inference are exercised by the Stage 8 and local-model gates.
+    monkeypatch.setattr("roop_3d.engine.pipeline_runner.render_dependencies",
+                        lambda catalog: {"det": "d" * 64, "rec": "e" * 64})
     app, world = job_world(tmp_path)
     app.state.worker.start()
     try:

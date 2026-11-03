@@ -35,6 +35,7 @@ import FaceSetDetail from './components/studio/FaceSetDetail';
 import StudioInspector from './components/studio/StudioInspector';
 import TrackLanes from './components/studio/TrackLanes';
 import PanelBoundary from './components/studio/PanelBoundary';
+import { DEFAULT_VIEWPORT, type ViewportPreferences } from './previewPreferences';
 import { parseFps } from './components/timeline/TimelineWorkstation';
 const PreFlightLinterModal = PreFlightLinterModalComponent as unknown as ComponentType<any>;
 const PoseCoverageInspector = lazy(() => import('./ThreeViewport').then(module => ({ default: module.PoseCoverageInspector })));
@@ -55,6 +56,7 @@ export default function App() {
   const [reconstructions, setReconstructions] = useState<{ reconstruction_id: string }[]>([]);
   const [selectedJob, setSelectedJob] = useState(''), [queueOpen, setQueueOpen] = useState(true), [connection, setConnection] = useState('connecting');
   const [project, setProject] = useState<Project | null>(null), [projectName, setProjectName] = useState('Untitled project'), [projects, setProjects] = useState<Pick<Project, 'project_id' | 'name' | 'saved_at' | 'last_completed_frame'>[]>([]), [projectsOpen, setProjectsOpen] = useState(false);
+  const [previewView, setPreviewView] = useState<ViewportPreferences>(DEFAULT_VIEWPORT);
   const [trimStart, setTrimStart] = useState(0), [trimEnd, setTrimEnd] = useState<number | null>(null), [includeCheckpoint, setIncludeCheckpoint] = useState(false);
   const [maskBase64, setMaskRaw] = useState<string | null>(null);
   const [linterOpen, setLinterOpen] = useState(false);
@@ -134,6 +136,8 @@ export default function App() {
   const { sheet } = useContactSheet(inspection, target);
   const currentTrack: Track | null = inspection?.tracks.find(track => track.track_id === selectedTrack) ?? null;
   const projectDirty = !project || project.name !== projectName || project.request.target_path !== target
+    || (project.request.engine_id ?? 'reference_onnx') !== selectedEngine
+    || JSON.stringify(project.preview ?? { timestamp: 0, selected_track: '', source_faceset_id: '', viewport: DEFAULT_VIEWPORT }) !== JSON.stringify({ timestamp: time, selected_track: selectedTrack, source_faceset_id: sourceId, viewport: previewView })
     || project.request.inspection_id !== inspection?.inspection_id || (project.request.trim_start_seconds ?? 0) !== trimStart
     || project.request.trim_end_seconds !== trimEnd
     || (project.request.identity_blend?.source_face_ids[1] ?? '') !== identitySourceB
@@ -244,7 +248,8 @@ export default function App() {
     });
   };
   const inspect = () => void run('Inspecting target faces', async () => {
-    const result = await post<Inspection>('/media/inspect-faces', { path: target, identity_lock: true });
+    const result = await post<Inspection>('/media/inspect-faces', { path: target, identity_lock: true,
+      full_video: true, time_budget_seconds: 900 });
     setInspection(result); setIdentityLock(null); setAssigned({}); setSelectedTrack(result.tracks[0]?.track_id ?? '');
     useFaceSelectionStore.getState().populateFromInspection(result, probe, {});
     if (!result.tracks.length) setNotice('No faces were detected. Try a clearer target frame or another clip.');
@@ -261,10 +266,10 @@ export default function App() {
     return { engine_id: selectedEngine, identity_lock_id: identityLock?.lock_id, identity_blend: identitySourceB && sourceId ? {method: 'slerp',source_face_ids: [sourceId, identitySourceB],weights:[1,0]} : undefined, target_path: target, inspection_id: inspection.inspection_id, face_mappings: selected, processing: 'local', remote_consent: false, trim_start_seconds: trimStart || null, trim_end_seconds: trimEnd, mask_base64: maskBase64 || undefined, workstation_parameters: parameters, parameter_curves: { tracks: curves }, face_segments: segments, export: exportOptions };
   };
   const executeQueue = () => void run('Queueing local render', async () => {
-    const value = request(), fingerprint = JSON.stringify(value);
+    const saved = await persistProject(), fingerprint = JSON.stringify({ project: saved.project_id, request: saved.request });
     if (queueKey.current.fingerprint !== fingerprint) queueKey.current = { fingerprint, key: crypto.randomUUID() };
     window.dispatchEvent(new Event(JOB_START_EVENT)); // drop in-flight live previews so the render can take the GPU promptly
-    const job = await post<Job>('/jobs', value, { headers: { 'Idempotency-Key': queueKey.current.key } });
+    const job = await post<Job>(`/projects/${saved.project_id}/jobs`, {}, { headers: { 'Idempotency-Key': queueKey.current.key } });
     queueKey.current = { fingerprint: '', key: '' }; setSelectedJob(job.job_id); setQueueOpen(true); await refreshJobs(); setNotice('Render added to the local queue.');
   });
   const queue = () => {
@@ -282,10 +287,17 @@ export default function App() {
     }
   };
   const saveSettings = (value: Config) => void run('Applying settings', async () => { const saved = await api<Config>('/config', { method: 'PUT', body: JSON.stringify(value) }); setConfig(saved); await connect(); setNotice('Effective settings saved. Existing paused jobs retain their original settings identity.'); });
-  const saveProject = () => void run('Saving project', async () => {
+  const persistProject = async (copy = false) => {
     const checkpoint = includeCheckpoint && currentJob && jobActions(caps, currentJob.state).includes('resume') ? currentJob.job_id : null;
-    const saved = await post<Project>('/projects', { name: projectName, request: request(), checkpoint_job_id: checkpoint });
+    const draft = { name: projectName, request: request(), checkpoint_job_id: checkpoint, revision: !copy ? project?.revision ?? 0 : undefined,
+      preview: { timestamp: time, selected_track: selectedTrack, source_faceset_id: sourceId, viewport: previewView } };
+    const saved = project && !copy
+      ? await api<Project>(`/projects/${project.project_id}`, { method: 'PUT', body: JSON.stringify(draft) })
+      : await post<Project>('/projects', draft);
     setProject(saved); await refreshProjects(); setNotice('Project saved with input and model hashes.');
+    return saved;
+  };
+  const saveProject = () => void run('Saving project', async () => { await persistProject();
   });
   const openProject = (id: string) => void run('Verifying project hashes', async () => {
     const saved = await api<Project>(`/projects/${id}`);
@@ -297,9 +309,15 @@ export default function App() {
     const settings = await api<Config>('/config', { method: 'PUT', body: JSON.stringify(saved.effective_settings) });
     const savedProbe = await loadTarget(saved.request.target_path);
     const loaded = await api<Inspection>(`/media/inspections/${saved.request.inspection_id}?${new URLSearchParams({ path: saved.request.target_path })}`);
+    const restoredLock = saved.request.identity_lock_id ? await api<IdentityLock>(`/identity/locks/${saved.request.identity_lock_id}?verify=true`) : null;
     const restoredMappings = Object.fromEntries(saved.request.face_mappings.map(item => [item.track_id, item.faceset_id]));
     selectEngine(saved.request.engine_id ?? 'reference_onnx');
     setConfig(settings); setInspection(loaded); setAssigned(restoredMappings); setSelectedTrack(loaded.tracks[0]?.track_id ?? '');
+    setIdentityLock(restoredLock);
+    setSelectedTrack(saved.preview?.selected_track || loaded.tracks[0]?.track_id || '');
+    setSourceId(saved.preview?.source_faceset_id || saved.request.face_mappings[0]?.faceset_id || '');
+    setTime(Math.min(saved.preview?.timestamp ?? 0, savedProbe.duration_seconds ?? 86400));
+    setPreviewView({ ...DEFAULT_VIEWPORT, ...saved.preview?.viewport });
     // The probe gives the overlay real pixel → frame mapping; without it every face box falls back to one default rectangle.
     useFaceSelectionStore.getState().populateFromInspection(loaded, savedProbe, restoredMappings);
     if (saved.request.face_segments) hydrateFaceSegments(saved.request.face_segments);
@@ -308,7 +326,7 @@ export default function App() {
     setIdentitySourceB(saved.request.identity_blend?.source_face_ids[1] ?? '');
     setParametersRaw({ ...DEFAULT_PARAMETERS, ...saved.request.workstation_parameters, pose_mode: saved.request.workstation_parameters?.pose_mode ?? 'retarget' });
     location.hash = '#/faceswap';
-    setTrimStart(saved.request.trim_start_seconds ?? 0); setTrimEnd(saved.request.trim_end_seconds); setProject(saved); setProjectName(saved.name); setSelectedJob(saved.checkpoint_job_id ?? ''); setIncludeCheckpoint(!!saved.checkpoint_job_id); setProjectsOpen(false); setNotice('Project input and model hashes verified. Saved settings restored.');
+    setTrimStart(saved.request.trim_start_seconds ?? 0); setTrimEnd(saved.request.trim_end_seconds); setProject(saved); setProjectName(saved.name); setSelectedJob(saved.checkpoint_job_id ?? saved.output_history?.at(-1)?.job_id ?? ''); setIncludeCheckpoint(!!saved.checkpoint_job_id); setProjectsOpen(false); setNotice('Project input and model hashes verified. Saved settings restored.');
   });
   const importProject = (file: File | undefined) => { if (!file) return; void run('Importing project manifest', async () => { if (file.size > 512 * 1024) throw new Error('Project manifest exceeds 512 KiB.'); const saved = await post<Project>('/projects/import', JSON.parse(await file.text())); await refreshProjects(); setNotice(`Imported ${saved.name}. Open it from the project library.`); }); };
   const controlJob = (job: Job, action: string) => void run(`${action} job`, async () => {
@@ -317,14 +335,21 @@ export default function App() {
   });
   const showJob = (job: Job) => {
     selectEngine(job.request.engine_id ?? 'reference_onnx');
-    if (job.request.target_path === target) { setSelectedJob(job.job_id); return; }
     void run('Opening job target', async () => {
-      const jobProbe = await loadTarget(job.request.target_path);
+      const jobProbe = job.request.target_path === target && probe ? probe : await loadTarget(job.request.target_path);
       const loaded = await api<Inspection>(`/media/inspections/${job.request.inspection_id}?${new URLSearchParams({ path: job.request.target_path })}`);
+      const linkedProject = job.project_id ? await api<Project>(`/projects/${job.project_id}`) : null;
+      setProject(linkedProject); setProjectName(linkedProject?.name ?? 'Untitled project');
+      if (job.effective_settings) {
+        const settings = await api<Config>('/config', { method: 'PUT', body: JSON.stringify(job.effective_settings) });
+        setConfig(settings);
+      }
       const restoredMappings = Object.fromEntries(job.request.face_mappings.map(item => [item.track_id, item.faceset_id]));
       setInspection(loaded); setAssigned(restoredMappings);
       useFaceSelectionStore.getState().populateFromInspection(loaded, jobProbe, restoredMappings);
       setSelectedTrack(loaded.tracks[0]?.track_id ?? ''); setSelectedJob(job.job_id);
+      setSourceId(job.request.face_mappings[0]?.faceset_id ?? '');
+      setIdentityLock(job.request.identity_lock_id ? await api<IdentityLock>(`/identity/locks/${job.request.identity_lock_id}?verify=true`) : null);
       if (job.request.face_segments) hydrateFaceSegments(job.request.face_segments);
       replaceCurves(job.request.parameter_curves?.tracks ?? {}); setMaskRaw(job.request.mask_base64 ?? null);
       setExportOptions(job.request.export ?? DEFAULT_EXPORT);
@@ -344,7 +369,7 @@ export default function App() {
     await refreshSources();
   };
   const reconstructionPicker = <><label className="reconstruction-choice">Reconstructed artifact<select value="" disabled={!target || !reconstructions.length || !!reason('reconstruction_viewer')} onChange={event => { const id = event.target.value; if (!id) { setMesh(null); return; } void run('Verifying reconstruction', async () => { setIdentityMesh(null); setMesh(await api<Reconstruction>(`/reconstructions/${id}?${new URLSearchParams({ target_path: target })}`)); }); }}><option value="">{mesh ? 'Choose another artifact' : reconstructions.length ? 'No reconstruction loaded' : 'No reconstruction artifacts'}</option>{reconstructions.map(item => <option key={item.reconstruction_id} value={item.reconstruction_id}>{item.reconstruction_id.slice(0, 12)}</option>)}</select></label>{(mesh || identityMesh) && <button className="button small" onClick={() => { setMesh(null); setIdentityMesh(null); }}>Show pose coverage</button>}</>;
-  const viewport = <VideoViewport studio={layoutMode === 'studio' ? { panels: panelsSlot, timeline: timelineSlot, tray: traySlot } : null} activeSourceId={sourceId} onSourceExtracted={faceset => { setSources(previous => previous.some(item => item.faceset_id === faceset.faceset_id) ? previous : [...previous, faceset]); setSourceId(faceset.faceset_id); void refreshSources(); }} maskBase64={maskBase64} captureWorkspace={captureWorkspace} restoreWorkspace={restoreWorkspace} active={route === "#/faceswap"} parameters={parameters} setParameters={setParameters} previewRequest={previewRequest} restorerAvailable={!!caps?.models.some(model => model.name === (parameters.restorer_model === "codeformer" ? "CodeFormerv0.1.onnx" : "gpen_bfr_512.onnx") && model.state === "VERIFIED_LOCAL")} onPreviewLatency={setPreviewLatency} inspector={<SettingsInspector namespace="workstation-setting" caps={caps} config={config} save={saveSettings} busy={!!busy}/>} posePanel={<><Suspense fallback={<p className="muted empty-note">Loading pose inspection…</p>}><PoseCoverageInspector coverage={coverage} track={currentTrack} mesh={mesh} parameters={parameters} setParameters={setParameters}/></Suspense><label className="reconstruction-choice">Reconstructed artifact<select value="" disabled={!target || !reconstructions.length || !!reason('reconstruction_viewer')} onChange={event => { const id = event.target.value; if (!id) { setMesh(null); return; } void run('Verifying reconstruction', async () => setMesh(await api<Reconstruction>(`/reconstructions/${id}?${new URLSearchParams({ target_path: target })}`))); }}><option value="">{mesh ? 'Choose another artifact' : 'No reconstruction loaded'}</option>{reconstructions.map(item => <option key={item.reconstruction_id} value={item.reconstruction_id}>{item.reconstruction_id.slice(0, 12)}</option>)}</select></label>{mesh && <button className="button small" onClick={() => setMesh(null)}>Show pose coverage</button>}</>} target={target} output={output} time={time} setTime={setTime} duration={probe?.duration_seconds ?? 0} enabled={!reason('frame_preview')} keys={keys} probe={probe} sources={sources} onInspectionUpdate={setInspection} onMaskChange={setMaskBase64} trimStart={trimStart} trimEnd={trimEnd} onTrimChange={(start, end) => { setTrimStart(start); setTrimEnd(end); }} onAssignSource={(clusterId, facesetId) => assignTrack(clusterId, facesetId)}/>;
+  const viewport = <VideoViewport previewView={previewView} onPreviewViewChange={setPreviewView} studio={layoutMode === 'studio' ? { panels: panelsSlot, timeline: timelineSlot, tray: traySlot } : null} activeSourceId={sourceId} onSourceExtracted={faceset => { setSources(previous => previous.some(item => item.faceset_id === faceset.faceset_id) ? previous : [...previous, faceset]); setSourceId(faceset.faceset_id); void refreshSources(); }} maskBase64={maskBase64} captureWorkspace={captureWorkspace} restoreWorkspace={restoreWorkspace} active={route === "#/faceswap"} parameters={parameters} setParameters={setParameters} previewRequest={previewRequest} restorerAvailable={!!caps?.models.some(model => model.name === (parameters.restorer_model === "codeformer" ? "CodeFormerv0.1.onnx" : "gpen_bfr_512.onnx") && model.state === "VERIFIED_LOCAL")} onPreviewLatency={setPreviewLatency} inspector={<SettingsInspector namespace="workstation-setting" caps={caps} config={config} save={saveSettings} busy={!!busy}/>} posePanel={<><Suspense fallback={<p className="muted empty-note">Loading pose inspection…</p>}><PoseCoverageInspector coverage={coverage} track={currentTrack} mesh={mesh} parameters={parameters} setParameters={setParameters}/></Suspense><label className="reconstruction-choice">Reconstructed artifact<select value="" disabled={!target || !reconstructions.length || !!reason('reconstruction_viewer')} onChange={event => { const id = event.target.value; if (!id) { setMesh(null); return; } void run('Verifying reconstruction', async () => setMesh(await api<Reconstruction>(`/reconstructions/${id}?${new URLSearchParams({ target_path: target })}`))); }}><option value="">{mesh ? 'Choose another artifact' : 'No reconstruction loaded'}</option>{reconstructions.map(item => <option key={item.reconstruction_id} value={item.reconstruction_id}>{item.reconstruction_id.slice(0, 12)}</option>)}</select></label>{mesh && <button className="button small" onClick={() => setMesh(null)}>Show pose coverage</button>}</>} target={target} output={output} time={time} setTime={setTime} duration={probe?.duration_seconds ?? 0} enabled={!reason('frame_preview')} keys={keys} probe={probe} sources={sources} onInspectionUpdate={setInspection} onMaskChange={setMaskBase64} trimStart={trimStart} trimEnd={trimEnd} onTrimChange={(start, end) => { setTrimStart(start); setTrimEnd(end); }} onAssignSource={(clusterId, facesetId) => assignTrack(clusterId, facesetId)}/>;
   const trimBar = <div className="trim-bar">
         <span className="eyebrow">EXPORT RANGE</span>
         <button
@@ -406,6 +431,7 @@ export default function App() {
         selectedJobId={selectedJob}
         onSelectJob={showJob}
         onRefreshJobs={refreshJobs}
+        onControlJob={controlJob}
         isOpen={queueOpen}
         onToggleOpen={() => setQueueOpen(!queueOpen)}
       />
@@ -472,7 +498,7 @@ export default function App() {
         </button>
       </div>
       <button type="button" className="button small layout-toggle" aria-pressed={layoutMode === 'studio'} title="Switch between the four-panel studio and the classic stacked workstation" onClick={() => setLayoutMode(mode => (mode === 'studio' ? 'classic' : 'studio'))}>{layoutMode === 'studio' ? 'Studio layout' : 'Classic layout'}</button>
-      <button className="button" disabled={!!reason('projects') || !!busy} title={reason('projects') ?? ''} onClick={() => { setProjectsOpen(true); void refreshProjects(); }}>Projects</button><button className="button" disabled={!!reason('projects') || !inspection || !!busy} onClick={saveProject}>Save project</button>
+      <button className="button" disabled={!!reason('projects') || !!busy} title={reason('projects') ?? ''} onClick={() => { setProjectsOpen(true); void refreshProjects(); }}>Projects</button><button className="button" disabled={!!reason('projects') || !inspection || !!busy} onClick={saveProject}>Save project</button><button className="button" disabled={!inspection || !!busy} onClick={() => void run('Saving project copy', async () => { await persistProject(true); })}>Save copy</button>
     </header>
     <RunPill />
     <Navigation route={route}/>
@@ -509,7 +535,7 @@ export default function App() {
           </aside>
           <aside className="studio-panel studio-identity" aria-label="Source identities" data-tour="source">
             <div className="studio-panel-head"><span className="eyebrow">02 · IDENTITY</span><span className="muted">{sources.length.toString().padStart(2, '0')}</span></div>
-            <PanelBoundary name="Identity panel"><FacesetLibrary variant="list" sources={sources} selectedSourceId={sourceId} onSelectSource={id => setSourceId(id)} onRefreshSources={refreshSources} onImportFaceset={file => importAsset(file)}
+            <PanelBoundary name="Identity panel"><FacesetLibrary variant="list" importDisabled={!!reason('uploads') || !!busy} sources={sources} selectedSourceId={sourceId} onSelectSource={id => setSourceId(id)} onRefreshSources={refreshSources} onImportFaceset={file => importAsset(file)}
               canSave={!!currentTrack?.thumbnail_base64} onSaveFace={saveTrackFace} notify={(message, type) => { if (type === 'error') setError(message); else setNotice(message); }} />
             {selectedFaceset ? <FaceSetDetail faceset={selectedFaceset} sources={sources} selectedTrackLabel={selectedTrack ? trackLabel(selectedTrack) : null}
               assignedHere={!!selectedTrack && assigned[selectedTrack] === selectedFaceset.faceset_id} onAssign={() => selectedTrack && assignTrack(selectedTrack, selectedFaceset.faceset_id)}

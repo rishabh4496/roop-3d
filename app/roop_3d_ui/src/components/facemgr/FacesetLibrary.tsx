@@ -18,6 +18,7 @@ export interface FacesetLibraryProps {
    * visible as a virtualized list of thumbnails whose rows can be dragged onto a target track.
    */
   variant?: 'dropdown' | 'list';
+  importDisabled?: boolean;
 }
 
 export default function FacesetLibrary({
@@ -30,6 +31,7 @@ export default function FacesetLibrary({
   onSaveFace,
   notify,
   variant = 'dropdown',
+  importDisabled = false,
 }: FacesetLibraryProps) {
   const [open, setOpen] = useState(true);
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -214,7 +216,7 @@ export default function FacesetLibrary({
     return (
       <div className="fs-library" aria-busy={busy}>
         <div className="fs-library-actions">
-          <button type="button" className="button small primary-soft" onClick={() => importRef.current?.click()} title="Import .fsz archives into the local library">＋ Import .fsz</button>
+          <button type="button" className="button small primary-soft" disabled={busy || importDisabled} onClick={() => importRef.current?.click()} title="Import .fsz archives into the local library">＋ Import .fsz</button>
           {canSave && <button type="button" className="button small" disabled={busy} onClick={() => setSaveModalOpen(true)} title="Save the selected target track's face as a FaceSet">Save track face</button>}
           <button type="button" className="button small" onClick={openFolder} title="Open the FaceSets folder on disk">Folder</button>
           <button type="button" className="button small" disabled={busy || !sources.length} onClick={rebuildThumbs} title="Rebuild previews from each set's most frontal view">Fix thumbs</button>

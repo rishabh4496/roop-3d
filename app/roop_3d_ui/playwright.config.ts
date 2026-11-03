@@ -1,4 +1,7 @@
 import { defineConfig } from '@playwright/test';
+import { localBrowserTemp } from './browserPaths';
+
+localBrowserTemp();
 
 /**
  * Real-browser gates (`npm run test:e2e`). They drive the system Chrome (no browser download) against the Vite dev

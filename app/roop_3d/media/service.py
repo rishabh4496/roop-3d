@@ -170,7 +170,8 @@ class MediaService:
                             item["pose_max"] = np.maximum(item["pose_max"], pose).tolist()
                     if frame.key_frame or index == 0:
                         samples += 1
-                    if (not complete or decoded >= request.max_decoded_frames or samples >= request.max_samples
+                    if (not complete or (not request.full_video and
+                            (decoded >= request.max_decoded_frames or samples >= request.max_samples))
                             or time.monotonic() - began > request.time_budget_seconds):
                         complete = False
                         break

@@ -8,8 +8,10 @@ integrity hashes, and cryptographic signatures.
 
 An independent Pinokio application with its own source checkout, Git repository,
 virtual environment, launchers, cache, logs and process. It does not launch or
-import Roop Ultimate. The current release is the Stage 01 local service scaffold;
-face replacement and volumetric inference are later implementation stages.
+import Roop Ultimate. The workstation supports local FaceSet import, target inspection,
+3D identity assets, frame preview, project save/reopen, resumable queued rendering,
+and video/manifest export. See the [Stage 8 offline workflow](app/roop_3d/docs/STAGE08_OFFLINE_WORKFLOW.md)
+for the real execution path, acceptance evidence, dependency gates and limitations.
 
 ## Open the app
 
@@ -24,7 +26,7 @@ kills its owner. Set `ROOP3D_PORT` in this app's environment if needed.
 
 ## Independence contract
 
-- Code lives in `app/roop_3d/`; future UI code lives in `app/roop_3d_ui/`.
+- Code lives in `app/roop_3d/`; workstation UI code lives in `app/roop_3d_ui/`.
 - Python lives in `app/roop_3d/.venv/`; dependency distributions were freshly
   installed from the hash-pinned lock, with copy mode and this app's own cache.
 - This is a separate Git repository: `rishabh4496/roop-3d`. Its initial commit does
@@ -79,8 +81,8 @@ curl http://127.0.0.1:8030/api/v1/health
 The host is restricted to 127.0.0.1. Request bodies are bounded (default 2 MiB);
 origins/Host headers are checked, and errors use JSON envelopes with request IDs.
 `ROOP3D_DEV_CORS=1` enables only the development origin `http://127.0.0.1:5174`.
-There are no remote-provider or archive-import endpoints in this stage. Secrets
-remain in the environment/OS secret stores, never project manifests or logs.
+There is no remote-provider adapter. FaceSet archives use validated local upload
+endpoints. Secrets remain in environment/OS secret stores, never project manifests or logs.
 
 ### Identity panel API (Stage 7)
 

@@ -11,11 +11,12 @@ export const JOB_START_EVENT = 'roop3d:job-start';
 
 export type LivePayload = Record<string, unknown>;
 
-export function buildLivePayload({ request, time, fps, parameters, maskBase64, restorerAvailable, solo }: {
+export function buildLivePayload({ request, time, fps, parameters, maskBase64, restorerAvailable, solo, timestampSelection = false }: {
   request: JobRequest | null; time: number; fps: number; parameters: WorkstationParameters;
   maskBase64?: string | null; restorerAvailable: boolean;
   /** `solo_node` buffer to return instead of the final composite (see PIPELINE_NODES[].buffer). */
   solo?: string | null;
+  timestampSelection?: boolean;
 }): LivePayload | null {
   if (!request || !request.face_mappings.length) return null;
   const restoring = restorerAvailable && (parameters.restoration_blend > 0 || request.parameter_curves?.tracks.restorer_opacity?.some(key=>key.value>0)) && !parameters.bypass.includes('restorer');
@@ -23,11 +24,13 @@ export function buildLivePayload({ request, time, fps, parameters, maskBase64, r
     engine_id: request.engine_id ?? 'reference_onnx',
     target_path: request.target_path,
     inspection_id: request.inspection_id,
-    frame_index: Math.max(0, Math.round(time * fps)),
+    ...(timestampSelection ? { timestamp: Math.max(0, time) } : { frame_index: Math.max(0, Math.round(time * fps)) }),
+    identity_lock_id: request.identity_lock_id ?? undefined,
     face_mappings: request.face_mappings,
     frontalization_weight: parameters.pose_mode === 'mesh_blend' ? parameters.pose_strength : undefined,
     pose_frontalization: parameters.pose_frontalization || undefined,
     tps_expression_weight: parameters.tps_expression_weight || undefined,
+    pose_strength: parameters.pose_strength,
     solo_node: solo || undefined,
     occlusion: { erosion_px: parameters.erosion_px ?? 0, feather_px: parameters.feather_px },
     mask_base64: maskBase64 || request.mask_base64 || undefined,

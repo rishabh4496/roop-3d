@@ -8,7 +8,7 @@ from pathlib import Path
 import uuid
 import zipfile
 
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, Header, Query, Request, Response
 from fastapi.responses import FileResponse
 from pydantic import Field, model_validator
 from starlette.concurrency import run_in_threadpool
@@ -579,6 +579,27 @@ def import_project(value: ProjectManifest, request: Request):
             raise
 
 
+@router.put("/projects/{project_id}", response_model=ProjectManifest)
+def update_project(project_id: str, value: ProjectDraft, request: Request):
+    from roop_3d.server.routes import validate_job
+    store = request.app.state.projects
+    store.load(project_id, verify=False)
+    validate_job(request, value.request)
+    return store.save(value, request.app.state.settings, project_id=project_id)
+
+
+@router.post("/projects/{project_id}/jobs", status_code=201)
+def queue_project(project_id: str, request: Request, response: Response,
+                  idempotency_key: str = Header(alias="Idempotency-Key", min_length=1, max_length=128)):
+    from roop_3d.server.routes import validate_job
+    record, created = request.app.state.projects.queue(project_id, request.app.state.settings, idempotency_key,
+                                                      lambda value: validate_job(request, value))
+    response.status_code = 201 if created else 200
+    if request.app.state.worker is not None:
+        request.app.state.worker.wake()
+    return record
+
+
 @router.get("/projects/{project_id}", response_model=ProjectManifest)
 def open_project(project_id: str, request: Request):
     return request.app.state.projects.load(project_id)
@@ -591,9 +612,9 @@ def validate_project(project_id: str, request: Request):
 
 @router.get("/projects/{project_id}/download")
 def download_project(project_id: str, request: Request):
-    request.app.state.projects.load(project_id)
-    path = owned(request.app.state.root, request.app.state.projects.relative(project_id))
-    return FileResponse(path, filename=f"{project_id}.r3dp", media_type="application/json")
+    item = request.app.state.projects.load(project_id)
+    return Response(item.model_dump_json(indent=2), media_type="application/json",
+                    headers={"Content-Disposition": f'attachment; filename="{project_id}.r3dp"'})
 
 
 @router.post("/projects/{project_id}/resume")

@@ -11,6 +11,9 @@ class MediaRequest(Contract):
 
 
 class InspectRequest(MediaRequest):
+    # Opt-in complete traversal: legacy calls retain their frame/keyframe budgets.
+    # Time, image-size, track-count and report-storage bounds still apply.
+    full_video: bool = False
     max_samples: int = Field(default=32, ge=1, le=128, strict=True)
     max_decoded_frames: int = Field(default=10000, ge=1, le=10000, strict=True)
     detection_threshold: float = Field(default=0.5, ge=0.1, le=0.99)

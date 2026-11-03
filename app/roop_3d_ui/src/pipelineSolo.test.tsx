@@ -37,7 +37,7 @@ it('solos a pipeline node through POST /api/preview solo_node, returns to the co
     expect(previewBodies(fetch)[0].solo_node).toBeUndefined();              // not soloed: the final composite
     await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Solo Occlusion & Seam Mask"]')!.click());
     await act(async () => { await vi.advanceTimersByTimeAsync(200); });
-    expect(previewBodies(fetch).at(-1)).toMatchObject({ solo_node: 'matte', frame_index: 25 });
+    expect(previewBodies(fetch).at(-1)).toMatchObject({ solo_node: 'matte', timestamp: 1 });
     await act(async () => { replies.at(-1)!.resolve(previewReply(25, 'matte')); await vi.advanceTimersByTimeAsync(0); });
     expect(host.querySelector('.solo-viewport img')?.getAttribute('src')).toMatch(/^blob:solo-/);
     expect(host.querySelector('.solo-viewport .pane-label')?.textContent).toContain('Occlusion & Seam Mask');
@@ -81,7 +81,7 @@ it('captures a rendered final composite and full settings into a snapshot slot',
     await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Capture snapshot A"]')!.click());
     await vi.waitFor(() => expect(useHistoryStore.getState().slots.A).toBeTruthy());
     expect(previewBodies(fetch)).toHaveLength(1);
-    expect(previewBodies(fetch)[0]).toMatchObject({ solo_node: 'final', frame_index: 25 });
+    expect(previewBodies(fetch)[0]).toMatchObject({ solo_node: 'final', timestamp: 1 });
     expect(useHistoryStore.getState().slots.A).toMatchObject({ frame: 25, workspace });
     expect(useHistoryStore.getState().slots.A!.image).toMatch(/^data:/);     // self-contained: survives the preview URL being revoked
     expect(host.querySelector('[aria-label="Snapshot A"]')).toBeTruthy();

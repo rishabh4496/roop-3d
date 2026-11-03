@@ -9,7 +9,7 @@ from typing import Callable
 from pydantic import Field
 
 from roop_3d.core.errors import DomainError
-from roop_3d.core.settings import Contract
+from roop_3d.core.settings import Contract, Settings
 from roop_3d.core.storage import atomic_json, exclusive, owned
 from roop_3d.jobs.schema import (JobFailure, JobOutput, JobProgress, JobRecord, JobRequest,
                                  JobState, now, require_transition)
@@ -55,12 +55,15 @@ class JobStore:
             return record
 
     def create(self, request: JobRequest, idempotency_key: str,
-               validate: Callable[[], None] | None = None) -> tuple[JobRecord, bool]:
+               validate: Callable[[], None] | None = None, *,
+               project_id: str | None = None, effective_settings: Settings | None = None) -> tuple[JobRecord, bool]:
         request = JobRequest.model_validate(request.model_dump())
         if not 1 <= len(idempotency_key) <= 128 or not idempotency_key.isascii() or any(ord(c) < 33 or ord(c) > 126 for c in idempotency_key):
             raise DomainError("IDEMPOTENCY_KEY_INVALID", "Idempotency-Key must contain 1 to 128 printable ASCII characters", 422)
         key = hashlib.sha256(idempotency_key.encode()).hexdigest()
         fingerprint = hashlib.sha256(json.dumps(request.identity_payload(), sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        if project_id is not None:
+            fingerprint = hashlib.sha256(f"{project_id}:{fingerprint}".encode()).hexdigest()
         with exclusive(self.root, self.relative + ".lock"):
             data = self._read()
             prior = data.idempotency.get(key)
@@ -70,7 +73,7 @@ class JobStore:
                 return data.jobs[prior.job_id], False
             if validate:
                 validate()
-            record = JobRecord(request=request)
+            record = JobRecord(request=request, project_id=project_id, effective_settings=effective_settings)
             data.jobs[record.job_id] = record
             data.idempotency[key] = IdempotencyEntry(job_id=record.job_id, request_sha256=fingerprint)
             self._save(data)

@@ -32,7 +32,7 @@ const MESH = { method: 'identity_asset', coordinate_system: 'opengl', vertices: 
 
 test.use({ viewport: { width: 1680, height: 1050 } });
 
-async function boot(page: Page, options: { width?: number } = {}) {
+async function boot(page: Page, options: { width?: number; jobs?: any[] } = {}) {
   const seen = { previews: [] as any[], projects: [] as any[], builds: 0 };
   let built = false;
   await page.addInitScript(() => { sessionStorage.setItem('roop3d_skip_linter', 'true'); localStorage.setItem('roop3d_tour_seen', 'true'); });
@@ -43,8 +43,11 @@ async function boot(page: Page, options: { width?: number } = {}) {
     if (path === '/config') return json({});
     if (path === '/facesets') return json([{ faceset_id: 'alice', name: 'Alice', item_count: 3 }, { faceset_id: 'bob', name: 'Bob', item_count: 3 }]);
     if (path === '/projects' && method === 'POST') { seen.projects.push(route.request().postDataJSON()); return json({ ...project, request: seen.projects.at(-1).request }, 201); }
+    if (path === '/projects/p1' && method === 'PUT') { seen.projects.push(route.request().postDataJSON()); return json({ ...project, request: seen.projects.at(-1).request }); }
     if (path === '/projects') return json([project]);
     if (path === '/projects/p1') return json(project);
+    if (path === '/projects/p2') return json({ ...project, project_id: 'p2', name: 'Second project' });
+    if (path === '/jobs') return json(options.jobs ?? []);
     if (path === '/models/hub') return json({ models: [], model_states: [], execution_policy: '', download_policy: '', engines: [
       { engine_id: 'reference_onnx', name: 'Roop 3D Reference ONNX', status: 'READY_FOR_INFERENCE', selectable: true, actual_inference_available: true, evidence: 'hash checked' },
       { engine_id: 'experimental_x', name: 'Experimental X', status: 'NOT_INSTALLED', selectable: false, actual_inference_available: false, evidence: 'weights absent' }] });
@@ -162,6 +165,21 @@ test('inspector: 3D render mode, relighting and engine reach the preview and the
   // Standard mode drops the key again, so the request matches pre-Stage-7 requests exactly.
   await page.getByLabel('3D render mode').selectOption('standard');
   await expect.poll(() => seen.previews.at(-1)?.render_mode ?? 'absent').toBe('absent');
+  expect(errors).toEqual([]);
+});
+
+test('selecting queue jobs from the same video restores the correct project and render controls', async ({ page }) => {
+  const jobs = [
+    { job_id: 'b'.repeat(32), project_id: 'p2', state: 'queued', request: { ...project.request, workstation_parameters: { pose_mode: 'mesh_blend', feather_px: 12 } }, progress: { frame: 0, total_frames: 100, fps: 0, stage: 'queued' }, output: null },
+    { job_id: 'c'.repeat(32), state: 'queued', request: { ...project.request, workstation_parameters: { pose_mode: 'mesh_blend', feather_px: 3 } }, progress: { frame: 0, total_frames: 100, fps: 0, stage: 'queued' }, output: null },
+  ];
+  const { errors } = await boot(page, { jobs });
+  await page.locator('.queue-job-card').filter({ hasText: 'bbbbbbbb' }).locator('.job-info-block').click();
+  await expect(page.getByLabel('Project name', { exact: true })).toHaveValue('Second project');
+  await expect(page.getByRole('textbox', { name: 'Mask feather', exact: true })).toHaveValue('12');
+  await page.locator('.queue-job-card').filter({ hasText: 'cccccccc' }).locator('.job-info-block').click();
+  await expect(page.getByLabel('Project name', { exact: true })).toHaveValue('Untitled project');
+  await expect(page.getByRole('textbox', { name: 'Mask feather', exact: true })).toHaveValue('3');
   expect(errors).toEqual([]);
 });
 

@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
-import { api, post } from '../../api';
+import React, { useState, useMemo } from 'react';
+import { post } from '../../api';
 import BottleneckFlamegraph from '../diagnostics/BottleneckFlamegraph';
 
 /**
@@ -13,6 +13,8 @@ export const QUEUE_STATES = {
   FAILED: 'FAILED',
   CANCELLED: 'CANCELLED',
   PAUSED: 'PAUSED',
+  PAUSING: 'PAUSING',
+  CANCELLING: 'CANCELLING',
 };
 
 /**
@@ -32,10 +34,12 @@ export function normalizeJobState(rawState) {
       return QUEUE_STATES.COMPLETED;
     case 'failed':
       return QUEUE_STATES.FAILED;
-    case 'cancelled':
     case 'cancelling':
+      return QUEUE_STATES.CANCELLING;
+    case 'cancelled':
       return QUEUE_STATES.CANCELLED;
     case 'pausing':
+      return QUEUE_STATES.PAUSING;
     case 'paused':
     case 'interrupted':
       return QUEUE_STATES.PAUSED;
@@ -45,8 +49,8 @@ export function normalizeJobState(rawState) {
 }
 
 /**
- * Robust, persistent queue manager drawer matching roop-ultimate (`QueueDrawer.jsx`).
- * Decoupled from UI state, persists in local storage, supports reordering, duplication,
+ * Persistent queue manager backed by the existing server JobStore.
+ * Supports duplication,
  * retry on failure, and FFmpeg stream copy concatenation.
  *
  * @param {{
@@ -54,6 +58,7 @@ export function normalizeJobState(rawState) {
  *   selectedJobId?: string;
  *   onSelectJob?: (job: any) => void;
  *   onRefreshJobs?: () => Promise<void>;
+ *   onControlJob?: (job: any, action: string) => void;
  *   isOpen?: boolean;
  *   onToggleOpen?: () => void;
  * }} props
@@ -63,55 +68,19 @@ export default function QueueDrawer({
   selectedJobId = '',
   onSelectJob,
   onRefreshJobs,
+  onControlJob,
   isOpen = false,
   onToggleOpen,
 }) {
-  const [localJobs, setLocalJobs] = useState(jobs);
+  const localJobs = jobs;
+  const [inspectedOutput, setInspectedOutput] = useState(null);
   const [selectedForConcat, setSelectedForConcat] = useState([]);
   const [isConcatenating, setIsConcatenating] = useState(false);
   const [concatResult, setConcatResult] = useState(null);
   const [actionNotice, setActionNotice] = useState('');
   const [drawerTab, setDrawerTab] = useState('queue');
 
-  // Persist jobs to localStorage so closing/refreshing tab does not lose rendering history
-  useEffect(() => {
-    if (jobs && jobs.length > 0) {
-      setLocalJobs(jobs);
-      try {
-        localStorage.setItem('roop3d_queue_cache', JSON.stringify(jobs));
-      } catch {
-        // Ignore storage quota
-      }
-    } else {
-      try {
-        const cached = localStorage.getItem('roop3d_queue_cache');
-        if (cached) {
-          const parsed = JSON.parse(cached);
-          if (Array.isArray(parsed) && parsed.length > 0) {
-            setLocalJobs(parsed);
-          }
-        }
-      } catch {
-        // Fallback
-      }
-    }
-  }, [jobs]);
-
-  // Reorder jobs (Move Up / Down)
-  const handleMoveJob = useCallback((index, direction) => {
-    const targetIdx = index + direction;
-    if (targetIdx < 0 || targetIdx >= localJobs.length) return;
-    const reordered = [...localJobs];
-    const temp = reordered[index];
-    reordered[index] = reordered[targetIdx];
-    reordered[targetIdx] = temp;
-    setLocalJobs(reordered);
-    try {
-      localStorage.setItem('roop3d_queue_cache', JSON.stringify(reordered));
-    } catch {
-      // Ignore
-    }
-  }, [localJobs]);
+  // The durable server JobStore is authoritative, including an empty queue.
 
   // Duplicate Job
   const handleDuplicateJob = async (job) => {
@@ -145,6 +114,7 @@ export default function QueueDrawer({
   // Job Controls (Pause / Resume / Cancel)
   const handleControl = async (jobId, action) => {
     try {
+      if (onControlJob) { onControlJob(localJobs.find(job => job.job_id === jobId), action); return; }
       await post(`/jobs/${jobId}/${action}`, {});
       if (onRefreshJobs) await onRefreshJobs();
     } catch (err) {
@@ -282,10 +252,11 @@ export default function QueueDrawer({
 
           {/* Job Cards List */}
           <div className="queue-items-list" role="list">
-            {[...localJobs].reverse().map((job, idx) => {
+            {[...localJobs].reverse().map((job) => {
               const normState = normalizeJobState(job.state);
               const isSelected = selectedJobId === job.job_id;
               const hasOutput = job.state === 'succeeded' && job.output?.output_path;
+              const hasVideo = hasOutput && job.output.baked_video !== false;
               const isChecked = selectedForConcat.includes(job.job_id);
 
               return (
@@ -295,7 +266,7 @@ export default function QueueDrawer({
                   role="listitem"
                 >
                   {/* Concat Checkbox for completed videos */}
-                  {hasOutput && (
+                  {hasVideo && (
                     <input
                       type="checkbox"
                       checked={isChecked}
@@ -309,26 +280,6 @@ export default function QueueDrawer({
                       className="concat-check"
                     />
                   )}
-
-                  {/* Job Reorder Buttons */}
-                  <div className="reorder-btns">
-                    <button
-                      type="button"
-                      disabled={idx === 0}
-                      onClick={() => handleMoveJob(localJobs.length - 1 - idx, -1)}
-                      title="Move Up in Queue"
-                    >
-                      ▲
-                    </button>
-                    <button
-                      type="button"
-                      disabled={idx === localJobs.length - 1}
-                      onClick={() => handleMoveJob(localJobs.length - 1 - idx, 1)}
-                      title="Move Down in Queue"
-                    >
-                      ▼
-                    </button>
-                  </div>
 
                   {/* Job Details & Selection */}
                   <div
@@ -390,7 +341,7 @@ export default function QueueDrawer({
                       </button>
                     )}
 
-                    {['running', 'queued'].includes(job.state) && (
+                    {['queued', 'preparing', 'running', 'pausing', 'paused', 'interrupted'].includes(job.state) && (
                       <button
                         type="button"
                         className="button small"
@@ -401,14 +352,18 @@ export default function QueueDrawer({
                       </button>
                     )}
 
-                    {hasOutput && (
+                    {['queued', 'preparing', 'running'].includes(job.state) && <button type="button" className="button small" onClick={() => handleControl(job.job_id, 'pause')}>Pause</button>}
+                    {['paused', 'interrupted'].includes(job.state) && <button type="button" className="button small" onClick={() => handleControl(job.job_id, 'resume')}>Resume</button>}
+                    {hasVideo && <button type="button" className="button small" onClick={() => setInspectedOutput(job)}>Inspect output</button>}
+                    {hasOutput && <a className="button small" href={`/api/v1/jobs/${job.job_id}/artifacts/manifest`} download>Render manifest</a>}
+                    {hasVideo && (
                       <a
                         className="button small primary-soft"
-                        href={`/api/v1/media/content?path=${encodeURIComponent(job.output.output_path)}`}
+                        href={`/api/v1/jobs/${job.job_id}/artifacts/video`}
                         download
                         title="Download rendered output video"
                       >
-                        Output ↗
+                        Export video ↗
                       </a>
                     )}
                   </div>
@@ -428,6 +383,15 @@ export default function QueueDrawer({
           )}
         </div>
       )}
+      {inspectedOutput && <div className="modal-backdrop" onClick={() => setInspectedOutput(null)}>
+        <section className="project-modal" role="dialog" aria-modal="true" aria-label="Rendered output" onClick={event => event.stopPropagation()}>
+          <div className="panel-heading"><h2>Rendered output</h2><button className="button" onClick={() => setInspectedOutput(null)}>Close output</button></div>
+          <p>Synthetic media processed locally by Roop 3D · {inspectedOutput.output.frames} verified frames</p>
+          <video aria-label="Completed render playback" controls preload="metadata" style={{ width: '100%', maxHeight: '60vh' }} src={`/api/v1/jobs/${inspectedOutput.job_id}/artifacts/video`} />
+          <a className="button" href={`/api/v1/jobs/${inspectedOutput.job_id}/artifacts/video`} download>Export video</a>
+          <a className="button" href={`/api/v1/jobs/${inspectedOutput.job_id}/artifacts/manifest`} download>Render manifest</a>
+        </section>
+      </div>}
     </aside>
   );
 }

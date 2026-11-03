@@ -5,11 +5,13 @@ from pathlib import Path
 from typing import Annotated
 
 from fastapi import APIRouter, Body, Header, Query, Request, Response
+from fastapi.responses import FileResponse
 from pydantic import Field
 
 from roop_3d.audit.isolation import safe_path, sha256_file
 from roop_3d.core.errors import DomainError
 from roop_3d.core.settings import ConfigStore, Contract, Settings
+from roop_3d.core.storage import owned
 from roop_3d.jobs.schema import FaceSetSummary, JobRecord, JobRequest
 from roop_3d.media.schema import FaceInspection, InspectRequest, MediaProbe, MediaRequest
 from roop_3d.models.registry import ModelRecord
@@ -401,6 +403,24 @@ def get_jobs(request: Request) -> list[JobRecord]:
 @router.get("/jobs/{job_id}", response_model=JobRecord)
 def get_job(job_id: str, request: Request) -> JobRecord:
     return request.app.state.jobs.get(job_id)
+
+
+@router.get("/jobs/{job_id}/artifacts/{kind}")
+def job_artifact(job_id: str, kind: str, request: Request):
+    record = request.app.state.jobs.get(job_id)
+    if kind not in {"video", "manifest"}:
+        raise DomainError("JOB_ARTIFACT_NOT_FOUND", "Unknown render artifact", 404)
+    if record.state.value != "succeeded" or record.output is None:
+        raise DomainError("JOB_OUTPUT_NOT_READY", "A verified completed render is required", 409)
+    if kind == "video" and not record.output.baked_video:
+        raise DomainError("JOB_VIDEO_NOT_RENDERED", "This render exported passes only", 409)
+    output = owned(request.app.state.root, record.output.output_path)
+    manifest = owned(request.app.state.root, record.output.manifest_path)
+    if not output.is_file() or not manifest.is_file() or sha256_file(output)[1] != record.output.output_sha256:
+        raise DomainError("JOB_OUTPUT_CHANGED", "Published output is missing or its integrity changed", 409)
+    path = output if kind == "video" else manifest
+    return FileResponse(path, filename=path.name, headers={"Cache-Control": "no-store"},
+                        media_type="video/mp4" if kind == "video" else "application/json")
 
 
 @router.post("/jobs/{job_id}/cancel", response_model=JobRecord)

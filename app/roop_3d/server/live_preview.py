@@ -89,6 +89,7 @@ class LivePreviewPayload(Contract):
     # media + frame
     target_path: str = Field(min_length=1, max_length=1024)
     inspection_id: str = Field(pattern=r"^[0-9a-f]{32}$")
+    identity_lock_id: str | None = Field(default=None, pattern=r"^[0-9a-f]{32}$")
     frame_index: int | None = Field(default=None, ge=0, le=10_000_000)
     timestamp: float | None = Field(default=None, ge=0, le=86400)
     # who is swapped with whom: explicit mappings OR sources + a target selection
@@ -104,6 +105,7 @@ class LivePreviewPayload(Contract):
     frontalization_weight: float | None = Field(default=None, ge=0, le=1)   # 2.5D -> 3D mesh blend (post-swap projection)
     pose_frontalization: float | None = Field(default=None, ge=0, le=1)     # pre-swap 3D pose normalisation (Stage 5)
     tps_expression_weight: float | None = Field(default=None, ge=0, le=1)   # TPS expression warp (Stage 5)
+    pose_strength: float | None = Field(default=None, ge=0, le=1)
     # mask
     occlusion: OcclusionSettings = OcclusionSettings()
     mask_base64: str | None = Field(default=None, max_length=12_000_000)
@@ -187,6 +189,9 @@ class LivePreviewPayload(Contract):
     def config_digest(self) -> dict[str, Any]:
         """Everything that changes the pixels, nothing that selects the frame."""
         value = self.model_dump(mode="json", exclude={"frame_index", "timestamp"})
+        for key in ("identity_lock_id", "pose_strength"):
+            if value[key] is None:
+                value.pop(key)
         if value.get("mask_base64"):
             value["mask_base64"] = hashlib.sha256(value["mask_base64"].encode()).hexdigest()
         return value
@@ -201,22 +206,22 @@ class CacheEntry:
 
 
 class PreviewCache:
-    """Thread-safe LRU keyed by (media_id, frame_index, swap_config_hash), bounded by count and bytes."""
+    """LRU keyed by (media_id, exact frame selector, config hash), bounded by count and bytes."""
 
     def __init__(self, max_entries: int = 128, max_bytes: int = 192 * 1024 * 1024):
         self.max_entries, self.max_bytes = max_entries, max_bytes
-        self._items: OrderedDict[tuple[str, int, str], CacheEntry] = OrderedDict()
+        self._items: OrderedDict[tuple[str, int | str, str], CacheEntry] = OrderedDict()
         self._bytes = 0
         self._lock = threading.Lock()
 
-    def get(self, key: tuple[str, int, str]) -> CacheEntry | None:
+    def get(self, key: tuple[str, int | str, str]) -> CacheEntry | None:
         with self._lock:
             entry = self._items.get(key)
             if entry is not None:
                 self._items.move_to_end(key)
             return entry
 
-    def put(self, key: tuple[str, int, str], entry: CacheEntry) -> None:
+    def put(self, key: tuple[str, int | str, str], entry: CacheEntry) -> None:
         with self._lock:
             old = self._items.pop(key, None)
             if old is not None:
@@ -352,6 +357,13 @@ class LivePreviewService:
         return max(0, round(payload.timestamp * self.media_info(payload.target_path).fps))
 
     # -- orchestration ----------------------------------------------------------------
+    @staticmethod
+    def _cache_key(payload: LivePreviewPayload, index: int, digest: str) -> tuple[str, int | str, str]:
+        # Nominal FPS cannot identify a VFR frame. Preserve public config hashes while keeping
+        # timestamp selectors separate from ordinal selectors and from one another.
+        selector = f"timestamp:{payload.timestamp.hex()}" if payload.timestamp is not None else index
+        return payload.inspection_id, selector, digest
+
     async def frames(self, payload: LivePreviewPayload, indices: list[int], cancel: Event, *,
                      budget_s: float | None = None, strict: bool = True) -> tuple[str, list[FrameOutcome]]:
         """Cache-first resolution of `indices`. Returns (config_hash, outcomes in order)."""
@@ -359,7 +371,7 @@ class LivePreviewService:
         self.configs.put(digest, payload)
         outcomes: dict[int, FrameOutcome] = {}
         for index in indices:
-            hit = self.cache.get((payload.inspection_id, index, digest))
+            hit = self.cache.get(self._cache_key(payload, index, digest))
             if hit is not None:
                 outcomes[index] = FrameOutcome(index, "ready", hit, cached=True)
         missing = [index for index in indices if index not in outcomes]
@@ -389,7 +401,7 @@ class LivePreviewService:
             for index in missing:
                 if cancel.is_set():
                     raise PreviewCancelled("Preview cancelled")
-                key = (payload.inspection_id, index, digest)
+                key = self._cache_key(payload, index, digest)
                 hit = self.cache.get(key)  # a queued twin may have rendered it while we waited
                 if hit is not None:
                     results.append(FrameOutcome(index, "ready", hit, cached=True))
@@ -401,6 +413,12 @@ class LivePreviewService:
                     try:
                         entry = self._render_one(payload, base, info, index, digest, cancel)
                         self.cache.put(key, entry)
+                        # Once decoded, timestamp and ordinal selectors may safely share this exact frame.
+                        # Never alias a VFR timestamp through its rounded nominal-FPS index.
+                        actual = int(entry.meta["decoded_frame_index"])
+                        self.cache.put((payload.inspection_id, actual, digest), entry)
+                        stamp = float(entry.meta["timestamp"])
+                        self.cache.put((payload.inspection_id, f"timestamp:{stamp.hex()}", digest), entry)
                         results.append(FrameOutcome(index, "ready", entry))
                     except EngineBusy as busy:
                         halted = busy.stage
@@ -454,6 +472,8 @@ class LivePreviewService:
                                   "pose_mode": "mesh_blend" if payload.frontalization_weight is not None else "retarget"}
         if payload.frontalization_weight is not None:
             values["pose_strength"] = payload.frontalization_weight
+        elif payload.pose_strength is not None:
+            values["pose_strength"] = payload.pose_strength
         if payload.pose_frontalization is not None:
             values["pose_frontalization"] = payload.pose_frontalization
         if payload.tps_expression_weight is not None:
@@ -489,6 +509,7 @@ class LivePreviewService:
             info = self.media_info(payload.target_path)
             mask = rasterize_strokes(payload.mask_strokes, info.width, info.height, mask)
         job = JobRequest(engine_id=payload.engine_id, target_path=payload.target_path, inspection_id=payload.inspection_id, face_mappings=mappings,
+                         identity_lock_id=payload.identity_lock_id,
                          processing="local", mask_base64=mask, workstation_parameters=parameters,
                          parameter_curves=payload.parameter_curves, identity_blend=blend, face_segments=payload.face_segments,
                          export=payload.export)
@@ -497,7 +518,8 @@ class LivePreviewService:
     def _render_one(self, payload: LivePreviewPayload, base: PreviewRequest, info: _MediaInfo, index: int,
                     digest: str, cancel: Event) -> CacheEntry:
         timestamp = payload.timestamp if payload.timestamp is not None else max(0.0, (index - 0.5) / info.fps)
-        request = base.model_copy(update={"timestamp": min(timestamp, 86400.0)})
+        request = base.model_copy(update={"timestamp": min(timestamp, 86400.0),
+                                         "frame_index": index if payload.frame_index is not None else None})
         try:
             raw = self.state.previews.render(request, cancel, raw=True)
         except DomainError as error:
@@ -512,7 +534,7 @@ class LivePreviewService:
         ok, encoded = cv2.imencode(".png", image, [cv2.IMWRITE_PNG_COMPRESSION, 1])
         if not ok:
             raise DomainError("PREVIEW_ENCODE_FAILED", "Preview encoding failed", 500)
-        meta = {"media_id": payload.inspection_id, "frame_index": index, "swap_config_hash": digest,
+        meta = {"media_id": payload.inspection_id, "frame_index": raw["frame_index"], "swap_config_hash": digest,
                 "solo_node": payload.solo_node, "width": int(image.shape[1]), "height": int(image.shape[0]),
                 "decoded_frame_index": raw["frame_index"], "timestamp": raw["timestamp"], "faces": raw.get("faces", []),
                 "applied": self._applied(payload), "unsupported": payload.unsupported(), "notes": raw.get("notes", []),
