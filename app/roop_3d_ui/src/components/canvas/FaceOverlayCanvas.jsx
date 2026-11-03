@@ -6,6 +6,7 @@ import { leftToRightRank } from '../../utils/poseCells';
 export const FACE_ROLES = { swap: { label: 'Swap Target', color: '#91e6c9' }, ignore: { label: 'Reference Guide', color: '#60a5fa' }, exclude: { label: 'Exclude (Never Swap)', color: '#fb7185' } };
 
 import { calculateLetterbox, mapBoxToPixels, mapPointToPixels } from '../../utils/letterbox';
+import { carriesFaceset, droppedFaceset } from '../../utils/facesetDrag';
 export { calculateLetterbox, mapBoxToPixels, mapPointToPixels };
 
 /**
@@ -426,6 +427,24 @@ export default function FaceOverlayCanvas({
           } else {
             handleClick(event);
           }
+        }}
+        onDragOver={event => {
+          // Stage 7: a FaceSet dragged from the identity panel can be dropped straight onto a face in the video.
+          if (!carriesFaceset(event)) return;
+          const rect = event.currentTarget.getBoundingClientRect(), x = event.clientX - rect.left, y = event.clientY - rect.top;
+          if (visibleFaces.some(face => { const box = mapBoxToPixels(face.bbox, letterbox); return x >= box.x - 4 && x <= box.x + box.w + 4 && y >= box.y - 4 && y <= box.y + box.h + 4; })) {
+            event.preventDefault(); event.dataTransfer.dropEffect = 'copy';
+          }
+        }}
+        onDrop={event => {
+          const facesetId = droppedFaceset(event);
+          if (!facesetId) return;
+          const rect = event.currentTarget.getBoundingClientRect(), x = event.clientX - rect.left, y = event.clientY - rect.top;
+          const hit = visibleFaces.find(face => { const box = mapBoxToPixels(face.bbox, letterbox); return x >= box.x - 4 && x <= box.x + box.w + 4 && y >= box.y - 4 && y <= box.y + box.h + 4; });
+          if (!hit) return;
+          event.preventDefault();
+          setActiveSelection(hit.id);
+          handleSelectSource(hit.clusterId, facesetId);
         }}
         tabIndex={0}
         aria-label="Detected face bounding boxes"

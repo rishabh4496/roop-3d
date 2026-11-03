@@ -93,14 +93,26 @@ export interface FaceSelectionState {
   activeSelection: string | null;
   hoveredFaceId: string | null;
 }
-export interface Inspection { inspection_id: string; target_sha256: string; tracks: Track[]; warnings: string[]; truncated: boolean; tracking_method?: string; identity_report_sha256?: string | null }
+export interface Inspection { inspection_id: string; target_sha256: string; tracks: Track[]; warnings: string[]; truncated: boolean; tracking_method?: string; identity_report_sha256?: string | null; scene_cut_frames?: number[] }
 export interface IdentitySheetTrack { track_id: string; persistent_id: number; first_frame: number; last_frame: number; segments: [number, number, number, number][]; missing_ranges: [number, number][]; visible_frames: number; swappable_frames: number; withheld_frames: number; withheld_reasons: Record<string, number>; state_frames: Record<string, number>; confidence_mean: number; confidence_min: number; scene_ids: number[]; thumbnails: { frame: number; timestamp_seconds: number; jpeg_base64: string }[] }
 export interface IdentitySheet { inspection_id: string; target_sha256: string; truncated: boolean; scene_cut_frames: number[]; warnings: string[]; tracks: IdentitySheetTrack[] }
 export interface IdentityLock { lock_id: string; revision: number; digest: string; target_path: string; target_sha256: string; inspection_id: string; assignments: { track_id: string; faceset_id: string; faceset_sha256: string }[]; excluded_tracks: string[]; status: { valid: boolean; reasons: { code: string; detail: string; track_id?: string; faceset_id?: string }[] } }
 export interface FaceSet { faceset_id: string; name: string; item_count: number }
+/** `GET /facesets/{id}/views`: stored view poses (legacy pitch frame, + = looking down). */
+export interface FaceSetView { index: number; yaw: number; pitch: number; roll: number }
+/** `GET|POST /facesets/{id}/identity-asset` (Stage 7 server/identity_assets.py). GET never builds. */
+export interface IdentityAssetStatus {
+  faceset_id: string; name: string; state: 'built' | 'not_built'; build_key: string; reused?: boolean; note: string;
+  coverage: { readiness: string; view_count: number; usable_count: number; yaw_range_deg: [number, number] | null; yaw_span_deg: number; pitch_span_deg: number;
+    yaw_coverage: Record<string, number[]>; pitch_coverage: Record<string, number[]>; missing: string[]; requests: string[]; duplicate_groups: number[][]; capabilities: Record<string, string> };
+  asset: null | { build_key: string; created_at: string; algorithm_version: string; reconstruction_level: string; landmark_layout: string; claims: Record<string, boolean>;
+    missing_information: string[]; limitations: string[]; statistics: Record<string, unknown>; sources_used: number; sources_total: number; vertex_count: number; face_count: number; texture_size: [number, number] };
+  flame: Record<string, unknown>;
+}
 export interface Probe { width: number; height: number; duration_seconds: number | null; fps_rational: string | null; declared_frame_count: number | null; audio_tracks: unknown[] }
 export interface Coverage { faceset_id: string; views: { yaw: number; pitch: number; roll: number; pose_bin: string }[]; bins: Record<string, number> }
-export interface Reconstruction { method: 'flame' | 'tps_2_5d'; coordinate_system: 'opencv' | 'opengl'; vertices: number[][]; faces: number[][]; uvs: number[][] | null; face_uvs?: number[][] | null; texture: string | null; provenance: string }
+/** `identity_asset` is the Stage 3 per-FaceSet asset served by `GET /facesets/{id}/identity-asset/mesh` (glTF frame). */
+export interface Reconstruction { method: 'flame' | 'tps_2_5d' | 'identity_asset';coordinate_system: 'opencv' | 'opengl'; vertices: number[][]; faces: number[][]; uvs: number[][] | null; face_uvs?: number[][] | null; texture: string | null; provenance: string }
 export interface Project {
   project_id: string;
   name: string;

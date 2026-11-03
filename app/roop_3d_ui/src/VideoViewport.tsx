@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import { renderProbe } from './utils/renderProbe';
 import { mediaURL, postLivePreview } from './api';
 import { PreviewURL } from './state';
@@ -83,7 +84,7 @@ export function VideoViewport({
   active = true, parameters = DEFAULT_PARAMETERS, setParameters = () => {}, previewRequest = null,
   inspector, posePanel, restorerAvailable = false, onPreviewLatency,
   maskBase64 = null, captureWorkspace = () => ({}), restoreWorkspace = () => {},
-  onInspectionUpdate, onSourceExtracted, activeSourceId = '',
+  onInspectionUpdate, onSourceExtracted, activeSourceId = '', studio = null,
 }: {
   target: string;
   output: string;
@@ -115,6 +116,12 @@ export function VideoViewport({
   onSourceExtracted?: (faceset: FaceSet) => void;
   /** Source FaceSet currently selected in the workspace: "Add to .fsz Faceset" extends it. */
   activeSourceId?: string;
+  /**
+   * Stage 7 studio layout: the parameter panels, timeline and face tray render (through portals, so all their state
+   * stays here) into the workstation's inspector / bottom dock instead of below the viewport. Null keeps the classic
+   * stacked layout unchanged.
+   */
+  studio?: { panels: HTMLElement | null; timeline: HTMLElement | null; tray: HTMLElement | null } | null;
 }) {
   const [detectingFaces, setDetectingFaces] = useState(false);
   renderProbe('VideoViewport');
@@ -544,7 +551,7 @@ export function VideoViewport({
 
   return (
     <section className={`viewport-section ${isFullscreen ? 'is-fullscreen' : ''}`}>
-      <LayoutToolbar onFloat={floating.openWindow}/>
+      {!studio && <LayoutToolbar onFloat={floating.openWindow}/>}
       <SnapshotSlots onCapture={(slot: string) => void captureSlot(slot)} onRestore={restoreWorkspace} busy={captureBusy} captureAvailable={!!previewRequest}/>
       {captureError && <p role="alert" className="inline-warning">{captureError}</p>}
       <PipelineNodeFlowBar selected={selectedNode} solo={solo} bypass={parameters.bypass} onSelect={setSelectedNode} onSolo={selectSolo} onBypass={bypassNode} busy={false} available={!!previewRequest}/>
@@ -837,7 +844,7 @@ export function VideoViewport({
       {playbackError && <p className="inline-warning">{playbackError}</p>}
       {solo && live.status === 'error' && <p className="inline-warning" role="alert">{live.error}<button className="button small" onClick={live.retry}>Retry preview</button></p>}
       {solo && live.meta?.notes.map(note => <p className="muted buffer-note" key={note}>{note}</p>)}
-      <div className="parameter-panels">
+      {(() => { const panels = <div className="parameter-panels">
         {(Object.keys(PANELS) as PanelId[]).map(panel => (
           <fieldset key={panel} className={`parameter-panel panel-${panel}`}>
             <legend>{PANELS[panel].title}</legend>
@@ -853,7 +860,7 @@ export function VideoViewport({
               onClick={() => { setPlaying(false); original.current?.pause(); processed.current?.pause(); setSweepPanel(panel); }}>3×3 Sweep</button>
           </fieldset>
         ))}
-      </div>
+      </div>; return studio ? (studio.panels ? createPortal(panels, studio.panels) : null) : panels; })()}
       {floating.portal}
       {historyOpen && <HistoryDrawer onClose={() => setHistoryOpen(false)}/>}
       {faceMenu && <FaceContextMenu target={faceMenu} activeSourceName={activeSourceName} busy={extraction.busy} onClose={() => setFaceMenu(null)}
@@ -866,10 +873,7 @@ export function VideoViewport({
             parameters: { ...parameters, ...applied, bypass: sweeping ? parameters.bypass.filter(item => item !== 'restorer') : parameters.bypass } });
         }}
         onApply={(patch: Patch) => { const { fidelity_weight: _inactive, ...applied } = patch; setParameters({ ...parameters, ...applied }); }} onClose={() => setSweepPanel(null)}/>}
-      <DockArea>
-
-      {/* Video Editor-Grade Workstation Timeline */}
-      <DockPanel id="timeline" title="Timeline"><TimelineWorkstation
+      {(() => { const timeline = <TimelineWorkstation
         parameters={parameters}
         target={target}
         output={output}
@@ -891,20 +895,24 @@ export function VideoViewport({
           setTime(seekTime);
         }}
         onTrimChange={onTrimChange}
-      /></DockPanel>
-
-      {/* Target Face Selection Tray */}
-      <DockPanel id="tray" title="Face Tray"><LiveTime fallback={time} live={playing}>{liveTime => <FaceSelectionTray
+      />;
+      const tray = <LiveTime fallback={time} live={playing}>{liveTime => <FaceSelectionTray
         currentTime={liveTime}
         sources={sources}
         onSeekTime={setTime}
         onAssignSource={onAssignSource}
         onUseFaceFromFrame={openMenuFromBar}
         canUseFaceFromFrame={!!target}
-      />}</LiveTime></DockPanel>
+      />}</LiveTime>;
+      if (studio) return <>{studio.timeline && createPortal(timeline, studio.timeline)}{studio.tray && createPortal(tray, studio.tray)}</>;
+      return <DockArea>
+      {/* Video Editor-Grade Workstation Timeline */}
+      <DockPanel id="timeline" title="Timeline">{timeline}</DockPanel>
+      {/* Target Face Selection Tray */}
+      <DockPanel id="tray" title="Face Tray">{tray}</DockPanel>
       <DockPanel id="inspector" title="Inspector">{inspector ?? <p className="muted">Processing inspector</p>}</DockPanel>
       <DockPanel id="pose" title="3D Pose & Geometry">{posePanel ?? <p className="muted">Select a source identity to inspect geometry.</p>}</DockPanel>
-      </DockArea>
+      </DockArea>; })()}
     </section>
   );
 }

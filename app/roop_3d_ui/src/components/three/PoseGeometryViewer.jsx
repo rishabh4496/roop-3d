@@ -240,15 +240,32 @@ function CanonicalHeadMesh({ pose, mode, mesh }) {
     }
     g.computeVertexNormals();
     g.center();
+    // Receipts are in metres (identity assets) or arbitrary units (imported meshes): fit every mesh to the viewer.
+    g.computeBoundingSphere();
+    const radius = g.boundingSphere?.radius ?? 0;
+    if (radius > 0) g.scale(0.95 / radius, 0.95 / radius, 0.95 / radius);
     return g;
   }, [mesh, mode]);
+  // The observed atlas (identity assets: unseen texels are grey). Only data: URLs from the local API are loaded.
+  const customTexture = useMemo(() => {
+    if (!customMeshGeom || typeof mesh?.texture !== 'string' || !mesh.texture.startsWith('data:image/') || !customMeshGeom.getAttribute('uv')) return null;
+    const texture = new THREE.TextureLoader().load(mesh.texture);
+    texture.colorSpace = THREE.SRGBColorSpace;
+    return texture;
+  }, [customMeshGeom, mesh]);
+  // GPU resources created here are not owned by R3F: release them when replaced or unmounted.
+  useEffect(() => () => customMeshGeom?.dispose(), [customMeshGeom]);
+  useEffect(() => () => customTexture?.dispose(), [customTexture]);
+  useEffect(() => () => headGeom.dispose(), [headGeom]);
 
   return (
     <group ref={groupRef} position={[0, 0, 0]}>
       {customMeshGeom ? (
         <mesh geometry={customMeshGeom}>
           <meshStandardMaterial
-            color="#91e6c9"
+            key={customTexture ? 'textured' : 'flat'}
+            map={customTexture}
+            color={customTexture ? '#ffffff' : '#91e6c9'}
             roughness={0.65}
             metalness={0.2}
             side={THREE.DoubleSide}
@@ -390,7 +407,9 @@ export default function PoseGeometryViewer({
   const controlsRef = useRef(null);
 
   const [dimensions, setDimensions] = useState({ width: 0, height: 0 });
-  const [viewMode, setViewMode] = useState('estimated_2_5d'); // 'estimated_2_5d' | 'reconstruction'
+  const [viewMode, setViewMode] = useState(mesh ? 'reconstruction' : 'estimated_2_5d'); // 'estimated_2_5d' | 'reconstruction'
+  // A newly supplied mesh is shown at once; removing it returns to the estimate (there is nothing else to show).
+  useEffect(() => { setViewMode(mesh ? 'reconstruction' : 'estimated_2_5d'); }, [mesh]);
   const [webglError, setWebglError] = useState('');
 
   // Active pose from useFaceSelectionStore
@@ -487,7 +506,8 @@ export default function PoseGeometryViewer({
             type="button"
             className={`viewer-mode-btn ${viewMode === 'reconstruction' ? 'active' : ''}`}
             onClick={() => setViewMode('reconstruction')}
-            title="Full 3D Reconstructed Mesh"
+            disabled={!mesh}
+            title={mesh ? `Reconstructed mesh: ${mesh.provenance ?? mesh.method}` : 'No reconstruction loaded: build a 3D identity asset or choose a reconstruction artifact'}
           >
             Full 3D Reconstructed
           </button>

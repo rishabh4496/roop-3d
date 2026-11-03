@@ -23,7 +23,7 @@ vi.mock('./events', () => {
   class EventConnection { constructor(public url: string, public receive: (event: any) => void, public status: (state: string) => void) { links.push(this); } start() { this.status('online'); } stop() {} }
   return { EventConnection, __links: links };
 });
-vi.mock('./ThreeViewport', () => ({ PoseCoverageInspector: () => <div>Pose inspector</div> }));
+vi.mock('./ThreeViewport', () => ({ PoseCoverageInspector: () => <div>Pose inspector</div>, PoseGeometryViewer: () => <div>Pose viewer</div>, LightProbeSphere: () => <div>Light probe</div> }));
 vi.mock('./components/queue/QueueDrawer', () => ({ default: () => null }));
 vi.mock('./components/canvas/FaceOverlayCanvas', () => ({ default: () => null }));
 vi.mock('./components/canvas/MaskBrushOverlay', () => ({ default: () => null }));

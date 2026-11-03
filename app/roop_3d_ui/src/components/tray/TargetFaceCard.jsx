@@ -1,5 +1,6 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { FACE_ROLES } from '../canvas/FaceOverlayCanvas';
+import { facesetDropProps } from '../../utils/facesetDrag';
 
 /**
  * Target identity card in the horizontal face selection tray.
@@ -27,6 +28,9 @@ export default function TargetFaceCard({
   onSeek,
 }) {
   const currentMode = cluster?.mode || 'swap';
+  const [dropOver, setDropOver] = useState(false);
+  // Stage 7: drop a FaceSet from the identity panel onto this card (swap targets only, like the select below).
+  const dropProps = currentMode === 'swap' && onAssignSource ? facesetDropProps(id => onAssignSource(cluster.id, id), setDropOver) : {};
   const assignedSource = sources.find(s => s.faceset_id === assignedSourceId);
 
   const yaw = cluster?.avgPose?.yaw ?? 0;
@@ -40,8 +44,9 @@ export default function TargetFaceCard({
 
   return (
     <div
-      className={`target-face-card ${isActive ? 'active-in-frame' : ''} ${isSelected ? 'selected' : ''}`}
+      className={`target-face-card ${isActive ? 'active-in-frame' : ''} ${isSelected ? 'selected' : ''} ${dropOver ? 'drop-over' : ''}`}
       onClick={handleCardClick}
+      {...dropProps}
       data-cluster-id={cluster.id}
     >
       {/* On-screen badge indicator */}

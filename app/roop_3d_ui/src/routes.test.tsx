@@ -8,7 +8,7 @@ import App from './App';
 import useHistoryStore from './stores/useHistoryStore';
 
 vi.mock('./events', () => ({ EventConnection: class { start() {} stop() {} } }));
-vi.mock('./ThreeViewport', () => ({ PoseCoverageInspector: () => <div>Pose inspector</div> }));
+vi.mock('./ThreeViewport', () => ({ PoseCoverageInspector: () => <div>Pose inspector</div>, PoseGeometryViewer: () => <div>Pose viewer</div>, LightProbeSphere: () => <div>Light probe</div> }));
 vi.mock('./components/hud/PipelinePill', () => ({ default: () => null }));
 vi.mock('./components/queue/QueueDrawer', () => ({ default: () => null }));
 vi.mock('./components/facemgr/FaceManager', () => ({ default: function Manager() { const [draft, setDraft] = useState(''); return <input aria-label="Identity draft" value={draft} onChange={e => setDraft(e.target.value)}/>; } }));

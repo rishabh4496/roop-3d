@@ -114,6 +114,10 @@ class LivePreviewPayload(Contract):
     swap_weight: float = Field(default=1, ge=0, le=1)
     bypass: tuple[Literal["restorer", "color"], ...] = Field(default=(), max_length=2)
     solo_node: SoloNode = "final"
+    # Stage 7: the 3D render mode (Stage 4) and compositor occlusion strategy (Stage 5) reach the live preview too, so
+    # the workstation previews exactly what Start would render. Omitted = the existing defaults (standard / standard).
+    render_mode: Literal['standard', 'pose_3d', 'reenactment_3d'] | None = None
+    occlusion_mode: Literal['standard', 'robust'] | None = None
     relight: bool | None = None
     relight_strength: float | None = Field(default=None, ge=0, le=1)
     specular_sheen: float | None = Field(default=None, ge=0, le=1)
@@ -466,6 +470,10 @@ class LivePreviewService:
             values['manual_light_yaw'] = payload.manual_light_yaw
         if payload.manual_light_pitch is not None:
             values['manual_light_pitch'] = payload.manual_light_pitch
+        if payload.render_mode is not None:
+            values['render_mode'] = payload.render_mode
+        if payload.occlusion_mode is not None:
+            values['occlusion_mode'] = payload.occlusion_mode
         parameters = WorkstationParameters.model_validate(values)
 
         mask = payload.mask_base64

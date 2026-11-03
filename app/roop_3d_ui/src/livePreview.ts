@@ -40,6 +40,13 @@ export function buildLivePayload({ request, time, fps, parameters, maskBase64, r
     color_method: parameters.color_method ?? 'lab',
     swap_weight: parameters.swap_weight ?? 1,
     bypass: parameters.bypass,
+    // Stage 7: preview what Start would render. Omitted at their defaults so earlier preview cache keys are unchanged.
+    render_mode: parameters.render_mode && parameters.render_mode !== 'standard' ? parameters.render_mode : undefined,
+    occlusion_mode: parameters.occlusion_mode && parameters.occlusion_mode !== 'standard' ? parameters.occlusion_mode : undefined,
+    ...(parameters.relight ? {
+      relight: true, relight_strength: parameters.relight_strength, specular_sheen: parameters.specular_sheen, shadow_preservation: parameters.shadow_preservation,
+      lighting_mode: parameters.lighting_mode, manual_light_yaw: parameters.manual_light_yaw, manual_light_pitch: parameters.manual_light_pitch,
+    } : {}),
     face_segments: request.face_segments ?? undefined,
     parameter_curves: request.parameter_curves ?? undefined,
     export: request.export ?? undefined,

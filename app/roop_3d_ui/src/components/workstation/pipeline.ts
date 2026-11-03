@@ -9,7 +9,10 @@ export type WorkstationParameters = {
   tps_expression_weight?: number;
   /** Compositor occlusion strategy. Omitted until the user touches it, so older requests keep the standard path. */
   occlusion_mode?: 'standard' | 'robust';
-  /** Stage 17 3D Relighting parameters. */
+  /** Stage 4 render mode. Omitted (= 'standard') until the user picks a 3D mode, so older requests keep their identity. */
+  render_mode?: 'standard' | 'pose_3d' | 'reenactment_3d';
+  /** Stage 17 3D Relighting: off unless enabled; the strength / light controls below only apply while it is on. */
+  relight?: boolean;
   relight_strength?: number;
   specular_sheen?: number;
   shadow_preservation?: number;

@@ -82,6 +82,36 @@ origins/Host headers are checked, and errors use JSON envelopes with request IDs
 There are no remote-provider or archive-import endpoints in this stage. Secrets
 remain in the environment/OS secret stores, never project manifests or logs.
 
+### Identity panel API (Stage 7)
+
+Local-only additions used by the workstation's identity panel (see
+`app/roop_3d/docs/STAGE07_WORKSTATION_UI.md`):
+
+- `GET /api/v1/facesets/{id}/views/{index}/image?size=160`: bounded JPEG of one stored view (no embeddings).
+- `GET /api/v1/facesets/{id}/identity-asset`: pose-coverage readiness plus the cached 3D identity asset
+  manifest, or `state: "not_built"`. It never builds.
+- `POST /api/v1/facesets/{id}/identity-asset`: explicitly build (or reuse) the asset on the CPU; the same
+  asset is reused by `pose_3d` / `reenactment_3d` renders. 409 while a build of that FaceSet is running.
+- `GET /api/v1/facesets/{id}/identity-asset/mesh`: the built asset as a viewer mesh (glTF frame, observed
+  atlas with unseen texels grey); 404 until built.
+- `POST /api/preview` additionally accepts `render_mode` (`standard|pose_3d|reenactment_3d`) and
+  `occlusion_mode` (`standard|robust`); omitted values keep the previous behaviour.
+
+```shell
+curl -X POST http://127.0.0.1:8030/api/v1/facesets/<faceset_id>/identity-asset
+```
+
+```python
+import httpx
+status = httpx.get('http://127.0.0.1:8030/api/v1/facesets/<faceset_id>/identity-asset').json()
+print(status['state'], status['coverage']['readiness'])
+```
+
+```javascript
+const mesh = await fetch('/api/v1/facesets/<faceset_id>/identity-asset/mesh').then(r => r.json());
+console.log(mesh.vertices.length, mesh.provenance);
+```
+
 ### Single origin, aliases and telemetry
 
 The built workstation (`app/roop_3d_ui/dist`) is served by the same process, port and origin as

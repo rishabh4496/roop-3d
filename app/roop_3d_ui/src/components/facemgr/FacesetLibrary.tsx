@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { api, post } from '../../api';
 import type { FaceSet } from '../../contracts';
 import VirtualList from '../common/VirtualList';
+import { startFacesetDrag } from '../../utils/facesetDrag';
 
 export interface FacesetLibraryProps {
   sources?: FaceSet[];
@@ -12,6 +13,11 @@ export interface FacesetLibraryProps {
   canSave?: boolean;
   onSaveFace?: (name: string) => Promise<void>;
   notify?: (msg: string, type?: 'info' | 'error') => void;
+  /**
+   * `dropdown` (default) is the original compact picker. `list` (Stage 7 studio identity panel) keeps every FaceSet
+   * visible as a virtualized list of thumbnails whose rows can be dragged onto a target track.
+   */
+  variant?: 'dropdown' | 'list';
 }
 
 export default function FacesetLibrary({
@@ -23,6 +29,7 @@ export default function FacesetLibrary({
   canSave = false,
   onSaveFace,
   notify,
+  variant = 'dropdown',
 }: FacesetLibraryProps) {
   const [open, setOpen] = useState(true);
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -186,6 +193,62 @@ export default function FacesetLibrary({
       </span>
     );
   };
+
+  const saveModal = saveModalOpen && (
+    <div className="modal-backdrop" onClick={() => setSaveModalOpen(false)}>
+      <div className="project-modal" role="dialog" aria-modal="true" aria-label="Name this FaceSet" style={{ maxWidth: '420px' }} onClick={(e) => e.stopPropagation()}>
+        <div className="panel-heading"><div><span className="eyebrow">SAVE TO LIBRARY</span><h2>Name this FaceSet</h2></div>
+          <button className="icon-button" aria-label="Close" onClick={() => setSaveModalOpen(false)}>×</button></div>
+        <p className="muted" style={{ margin: '12px 0' }}>The selected target track's thumbnail becomes a one-view FaceSet in your local library.</p>
+        <input autoFocus className="full" aria-label="FaceSet name" value={newFacesetName} placeholder="e.g. Hero — front angle" onChange={(e) => setNewFacesetName(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter') void handleSaveCurrent(); if (e.key === 'Escape') setSaveModalOpen(false); }} />
+        <div style={{ marginTop: 16, display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+          <button className="button" onClick={() => setSaveModalOpen(false)}>Cancel</button>
+          <button className="button accent" disabled={!newFacesetName.trim() || busy} onClick={handleSaveCurrent}>Save FaceSet</button>
+        </div>
+      </div>
+    </div>
+  );
+
+  if (variant === 'list') {
+    return (
+      <div className="fs-library" aria-busy={busy}>
+        <div className="fs-library-actions">
+          <button type="button" className="button small primary-soft" onClick={() => importRef.current?.click()} title="Import .fsz archives into the local library">＋ Import .fsz</button>
+          {canSave && <button type="button" className="button small" disabled={busy} onClick={() => setSaveModalOpen(true)} title="Save the selected target track's face as a FaceSet">Save track face</button>}
+          <button type="button" className="button small" onClick={openFolder} title="Open the FaceSets folder on disk">Folder</button>
+          <button type="button" className="button small" disabled={busy || !sources.length} onClick={rebuildThumbs} title="Rebuild previews from each set's most frontal view">Fix thumbs</button>
+          <button type="button" className="button small icon-only" aria-label="Refresh FaceSets" onClick={refresh} title="Refresh the FaceSet catalog">↻</button>
+          <input ref={importRef} type="file" accept=".fsz" multiple hidden onChange={handleImport} />
+        </div>
+        {sources.length > 4 && <input className="fs-search" aria-label="Search facesets" value={filter} onChange={(ev) => setFilter(ev.target.value)} placeholder={`Search ${sources.length} FaceSets…`} />}
+        {!sources.length ? (
+          <p className="fs-empty muted">No FaceSets yet. Import a <code>.fsz</code> archive, or right-click a face in the video and choose “Use as source”.</p>
+        ) : !shown.length ? <p className="fs-empty muted">No match for “{filter}”.</p> : (
+          <VirtualList items={shown} itemKey={(e) => e.faceset_id} estimateHeight={52} gap={4} maxHeight={260} aria-label="FaceSets" className="fs-list" renderItem={(e) => {
+            const active = selected?.faceset_id === e.faceset_id;
+            return (
+              <div className={`fs-row ${active ? 'active' : ''}`} draggable={renaming !== e.faceset_id} data-faceset-id={e.faceset_id}
+                onDragStart={(ev) => startFacesetDrag(ev, e.faceset_id, e.name)} title="Click to select · drag onto a target track to assign">
+                <button type="button" className="fs-row-main" aria-pressed={active} aria-label={`Select FaceSet ${e.name}`} onClick={() => { if (renaming !== e.faceset_id) load(e); }}>
+                  <Thumb entry={e} size="fs-thumb" />
+                  {renaming === e.faceset_id ? null : <span className="fs-row-text"><strong>{e.name}</strong><small>{e.item_count} view{e.item_count === 1 ? '' : 's'}</small></span>}
+                </button>
+                {renaming === e.faceset_id && <input autoFocus className="fs-rename" aria-label="Rename FaceSet" value={renameVal} onChange={(ev) => setRenameVal(ev.target.value)} onBlur={() => commitRename(e)}
+                  onKeyDown={(ev) => { ev.stopPropagation(); if (ev.key === 'Enter') commitRename(e); if (ev.key === 'Escape') cancelRename(); }} />}
+                <span className="fs-row-actions">
+                  <button type="button" className="icon-button tiny" title="Rename" aria-label={`Rename ${e.name}`} onClick={() => beginRename(e)}>✎</button>
+                  <a className="icon-button tiny" title="Download .fsz" aria-label={`Download ${e.name}`} href={`/api/v1/facesets/${e.faceset_id}/download`} download={`${e.faceset_id}.fsz`}>⤓</a>
+                  <button type="button" className="icon-button tiny danger" title="Delete FaceSet" aria-label={`Delete ${e.name}`} onClick={() => void del(e)}>✕</button>
+                </span>
+              </div>
+            );
+          }} />
+        )}
+        {saveModal}
+      </div>
+    );
+  }
 
   return (
     <div className={`faceset-library rounded-xl bg-black/45 border border-white/10 overflow-hidden ${pickerOpen ? 'relative z-20' : ''}`}>

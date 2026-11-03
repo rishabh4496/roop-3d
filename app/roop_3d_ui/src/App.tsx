@@ -30,6 +30,12 @@ import QuickTour from './components/tour/QuickTour';
 import { tourSeen } from './components/tour/tourSteps';
 import ThemeGallery from './components/ThemeGallery';
 import { THEMES, themeByName, applyThemeToDom } from './themes';
+import TargetPanel, { trackLabel } from './components/studio/TargetPanel';
+import FaceSetDetail from './components/studio/FaceSetDetail';
+import StudioInspector from './components/studio/StudioInspector';
+import TrackLanes from './components/studio/TrackLanes';
+import PanelBoundary from './components/studio/PanelBoundary';
+import { parseFps } from './components/timeline/TimelineWorkstation';
 const PreFlightLinterModal = PreFlightLinterModalComponent as unknown as ComponentType<any>;
 const PoseCoverageInspector = lazy(() => import('./ThreeViewport').then(module => ({ default: module.PoseCoverageInspector })));
 
@@ -56,6 +62,12 @@ export default function App() {
   const [busy, setBusy] = useState(''), [error, setError] = useState(''), [notice, setNotice] = useState(''), [uploadProgress, setUploadProgress] = useState(0);
   const [themeName, setThemeName] = useState(() => localStorage.getItem('roop3d-theme-name') ?? 'Default');
   const [themeGalleryOpen, setThemeGalleryOpen] = useState(false);
+  // Stage 7: 'studio' = four-panel workstation (target / identity / preview / inspector + bottom timeline); 'classic'
+  // keeps the previous stacked workstation intact. Stored per browser only (a convenience, never project state).
+  const [layoutMode, setLayoutMode] = useState<'studio' | 'classic'>(() => { try { return localStorage.getItem('roop3d-workstation-layout') === 'classic' ? 'classic' : 'studio'; } catch { return 'studio'; } });
+  useEffect(() => { try { localStorage.setItem('roop3d-workstation-layout', layoutMode); } catch { /* per-session only */ } }, [layoutMode]);
+  const [panelsSlot, setPanelsSlot] = useState<HTMLDivElement | null>(null), [timelineSlot, setTimelineSlot] = useState<HTMLDivElement | null>(null), [traySlot, setTraySlot] = useState<HTMLDivElement | null>(null);
+  const [identityMesh, setIdentityMesh] = useState<Reconstruction | null>(null);
   const [zoom, setZoom] = useState(() => {
     const v = parseFloat(localStorage.getItem('roop3d_zoom') || '1');
     return Number.isFinite(v) && v >= 0.5 && v <= 1.6 ? v : 1;
@@ -118,6 +130,31 @@ export default function App() {
     || (project.request.mask_base64 ?? null) !== maskBase64
     || !!project.request.face_segments && JSON.stringify(project.request.face_segments) !== JSON.stringify(buildFaceSegments(clusters, assigned));
   const reason = (name: string) => featureReason(caps, name);
+  /** One undoable assignment through the face-selection store (the same path the tray and video overlay use). */
+  const assignTrack = (trackId: string, facesetId: string | null) => {
+    const store = useFaceSelectionStore.getState(), cluster = store.targetClusters.find(item => item.id === trackId);
+    if (facesetId && cluster && cluster.mode !== 'swap') { setNotice(`${trackLabel(trackId)} is ${cluster.mode === 'ignore' ? 'a reference guide' : 'excluded'}; set its role to Swap to assign a source.`); return; }
+    if (cluster) store.assignSource(trackId, facesetId);
+    else setAssigned(previous => { const next = { ...previous }; if (facesetId) next[trackId] = facesetId; else delete next[trackId]; return next; });
+    if (facesetId) { setSourceId(facesetId); setSelectedTrack(trackId); setNotice(`${sources.find(item => item.faceset_id === facesetId)?.name ?? 'FaceSet'} assigned to ${trackLabel(trackId)}. The live preview updates without a render.`); }
+  };
+  /** Select a target track everywhere: inspector, overlays (store selection) and, optionally, the playhead. */
+  const selectTrack = (trackId: string, seek = true) => {
+    setSelectedTrack(trackId);
+    const track = inspection?.tracks.find(item => item.track_id === trackId);
+    if (seek && track) setTime(track.first_timestamp_seconds);
+    if (assigned[trackId]) setSourceId(assigned[trackId]);
+    const store = useFaceSelectionStore.getState(), face = store.detectedFaces.find(item => item.clusterId === trackId);
+    if (face && store.activeSelection !== face.id) store.setActiveSelection(face.id);
+  };
+  // Clicking a face in the video selects it in the store; follow it here so the inspector shows that track.
+  const storeCluster = useFaceSelectionStore(state => (state as { selectedClusterId?: string | null }).selectedClusterId ?? null);
+  useEffect(() => {
+    if (!storeCluster) return;
+    const cluster = useFaceSelectionStore.getState().targetClusters.find(item => item.id === storeCluster);
+    const trackId = cluster?.originTrackId ?? storeCluster;
+    if (inspection?.tracks.some(item => item.track_id === trackId)) setSelectedTrack(trackId);
+  }, [storeCluster, inspection]);
   const refreshJobs = useCallback(async () => setJobs(await api<Job[]>('/jobs')), []);
   const refreshSources = useCallback(async () => setSources(await api<FaceSet[]>('/facesets')), []);
   const refreshProjects = useCallback(async () => setProjects(await api<typeof projects>('/projects')), []);
@@ -160,6 +197,7 @@ export default function App() {
     document.addEventListener('keydown', handle);
     return () => { document.removeEventListener('keydown', handle); previous?.focus(); };
   }, [projectsOpen]);
+  useEffect(() => { setIdentityMesh(null); }, [sourceId]);
   useEffect(() => {
     if (!sourceId) { setCoverage(null); return; }
     const controller = new AbortController(); setCoverage(null);
@@ -168,8 +206,9 @@ export default function App() {
   }, [sourceId]);
   const loadTarget = async (path: string) => {
     const [info, frames, reconstructionList] = await Promise.all([post<Probe>('/media/probe', { path }), api<{ timestamps: number[] }>(`/media/keyframes?${new URLSearchParams({ path })}`), api<typeof reconstructions>('/reconstructions')]);
-    setTarget(path); setProbe(info); setTime(0); setKeys(frames.timestamps); setInspection(null); setIdentityLock(null); setAssigned({}); setSelectedTrack(''); setMesh(null); setTrimStart(0); setTrimEnd(null); setReconstructions(reconstructionList); setSelectedJob(''); setProject(null);
+    setTarget(path); setProbe(info); setTime(0); setKeys(frames.timestamps); setInspection(null); setIdentityLock(null); setAssigned({}); setSelectedTrack(''); setMesh(null); setTrimStart(0); setTrimEnd(null); setReconstructions(reconstructionList); setSelectedJob(''); setProject(null); setIdentityMesh(null);
     useFaceSelectionStore.getState().reset(); useHistoryStore.getState().reset(); setMaskRaw(null);
+    return info;
   };
   const importAsset = (file: File | undefined) => {
     if (!file || !caps) return;
@@ -231,12 +270,13 @@ export default function App() {
       }
     }
     const settings = await api<Config>('/config', { method: 'PUT', body: JSON.stringify(saved.effective_settings) });
-    await loadTarget(saved.request.target_path);
+    const savedProbe = await loadTarget(saved.request.target_path);
     const loaded = await api<Inspection>(`/media/inspections/${saved.request.inspection_id}?${new URLSearchParams({ path: saved.request.target_path })}`);
     const restoredMappings = Object.fromEntries(saved.request.face_mappings.map(item => [item.track_id, item.faceset_id]));
     selectEngine(saved.request.engine_id ?? 'reference_onnx');
     setConfig(settings); setInspection(loaded); setAssigned(restoredMappings); setSelectedTrack(loaded.tracks[0]?.track_id ?? '');
-    useFaceSelectionStore.getState().populateFromInspection(loaded, null, restoredMappings);
+    // The probe gives the overlay real pixel → frame mapping; without it every face box falls back to one default rectangle.
+    useFaceSelectionStore.getState().populateFromInspection(loaded, savedProbe, restoredMappings);
     if (saved.request.face_segments) hydrateFaceSegments(saved.request.face_segments);
     replaceCurves(saved.request.parameter_curves?.tracks ?? {}); setMaskRaw(saved.request.mask_base64 ?? null);
     setExportOptions(saved.request.export ?? DEFAULT_EXPORT);
@@ -254,11 +294,11 @@ export default function App() {
     selectEngine(job.request.engine_id ?? 'reference_onnx');
     if (job.request.target_path === target) { setSelectedJob(job.job_id); return; }
     void run('Opening job target', async () => {
-      await loadTarget(job.request.target_path);
+      const jobProbe = await loadTarget(job.request.target_path);
       const loaded = await api<Inspection>(`/media/inspections/${job.request.inspection_id}?${new URLSearchParams({ path: job.request.target_path })}`);
       const restoredMappings = Object.fromEntries(job.request.face_mappings.map(item => [item.track_id, item.faceset_id]));
       setInspection(loaded); setAssigned(restoredMappings);
-      useFaceSelectionStore.getState().populateFromInspection(loaded, null, restoredMappings);
+      useFaceSelectionStore.getState().populateFromInspection(loaded, jobProbe, restoredMappings);
       setSelectedTrack(loaded.tracks[0]?.track_id ?? ''); setSelectedJob(job.job_id);
       if (job.request.face_segments) hydrateFaceSegments(job.request.face_segments);
       replaceCurves(job.request.parameter_curves?.tracks ?? {}); setMaskRaw(job.request.mask_base64 ?? null);
@@ -271,114 +311,15 @@ export default function App() {
   useShortcutActions({ save: saveProject, undo: () => useHistoryStore.getState().undo(), redo: () => useHistoryStore.getState().redo() }, !projectsOpen);
   const previewRequest = (() => { try { return request(); } catch { return null; } })();
   const checkpointAllowed = !!currentJob && jobActions(caps, currentJob.state).includes('resume');
-  return <div className="workstation">
-    <header className="app-header"><a className="brand" href="#/home" aria-label="Roop 3D home"><span className="brand-mark">R<span>3</span></span><strong>roop<span>3D</span></strong></a><span className="header-divider"/><span className="workspace-label">VIDEO WORKSTATION</span>
-      <button className={`button small tour-button ${tourSeen() ? '' : 'fresh'}`} data-testid="header-tour-button" aria-haspopup="dialog" title="Four-step guide to the workstation" onClick={() => setTourOpen(true)}>How to Use</button>
-      <div className="project-name"><input aria-label="Project name" maxLength={128} value={projectName} onChange={event => setProjectName(event.target.value)} /><span>{projectDirty ? 'UNSAVED' : 'SAVED'}</span></div>
-      <span className="local-status"><i className={`dot ${connection === 'online' ? 'mint' : 'amber'}`}/>{connection === 'online' ? 'Local service' : connection}</span>
-      <PipelinePill activeJob={currentJob} />
-      <div role="group" aria-label="UI zoom" title="UI Zoom (Ctrl + / − / 0)" className="ui-zoom-group">
-        <button type="button" onClick={() => bumpZoom(-0.05)} title="Zoom out (Ctrl −)" aria-label="Zoom out" className="zoom-btn">−</button>
-        <button type="button" onClick={resetZoom} title="Reset zoom (Ctrl 0)" aria-label={`Reset zoom, ${Math.round(zoom * 100)}%`} className="zoom-reset-btn">{Math.round(zoom * 100)}%</button>
-        <button type="button" onClick={() => bumpZoom(0.05)} title="Zoom in (Ctrl +)" aria-label="Zoom in" className="zoom-btn">+</button>
-      </div>
-      <div className="header-theme-group" title="Active Interface Theme">
-        <span className="theme-badge-label">THEME:</span>
-        <select
-          aria-label="Select Theme"
-          value={themeName}
-          onChange={e => setThemeName(e.target.value)}
-          className="theme-dropdown-select"
-        >
-          <optgroup label="Dark Themes">
-            {THEMES.filter(t => t.mode === 'dark').map(t => (
-              <option key={t.name} value={t.name}>{t.name}</option>
-            ))}
-          </optgroup>
-          <optgroup label="Light Themes">
-            {THEMES.filter(t => t.mode === 'light').map(t => (
-              <option key={t.name} value={t.name}>{t.name}</option>
-            ))}
-          </optgroup>
-        </select>
-        <button
-          type="button"
-          className="button small theme-gallery-btn"
-          title="Open visual swatch cards for all 37 themes"
-          onClick={() => setThemeGalleryOpen(true)}
-        >
-          🎨 Swatches
-        </button>
-        <button
-          type="button"
-          className="icon-button"
-          aria-label={`Switch to ${themeByName(themeName).mode === 'dark' ? 'light' : 'dark'} theme`}
-          title={`Quick toggle: ${themeByName(themeName).mode === 'dark' ? 'Light mode' : 'Dark mode'}`}
-          onClick={() => setThemeName(themeByName(themeName).mode === 'dark' ? 'Glass Light' : 'Default')}
-        >
-          {themeByName(themeName).mode === 'dark' ? '☀' : '◐'}
-        </button>
-      </div>
-      <button className="button" disabled={!!reason('projects') || !!busy} title={reason('projects') ?? ''} onClick={() => { setProjectsOpen(true); void refreshProjects(); }}>Projects</button><button className="button" disabled={!!reason('projects') || !inspection || !!busy} onClick={saveProject}>Save project</button>
-    </header>
-    <RunPill />
-    <Navigation route={route}/>
-    {(error || notice || busy) && <div className={`notification ${error ? 'error' : ''}`} role={error ? 'alert' : 'status'}><span>{error || busy || notice}</span>{busy === 'Importing asset' && <><progress value={uploadProgress} max={1}/><button onClick={() => uploadAbort.current?.abort()}>Cancel import</button></>}{error && <button onClick={() => void connect()}>Reconnect</button>}{!busy && <button aria-label="Dismiss message" onClick={() => { setError(''); setNotice(''); }}>×</button>}</div>}
-    <AppRouter route={route} screen="facemgr">
-      <FaceManager
-        sources={sources}
-        target={target}
-        inspection={inspection}
-        onRefreshSources={refreshSources}
-        onAssignSource={(clusterId, facesetId) => {
-          setAssigned(previous => {
-            const next = { ...previous };
-            if (facesetId) next[clusterId] = facesetId;
-            else delete next[clusterId];
-            return next;
-          });
-          if (facesetId) setSourceId(facesetId);
-        }}
-        onBackToWorkstation={() => { window.location.hash = '#/faceswap'; }}
-      />
-    </AppRouter>
-    <AppRouter route={route} screen="faceswap">
-      <div className="workstation-body"><aside className="asset-sidebar" data-tour="source"><div className="section-title"><span>ASSET LIBRARY</span><span className="muted">01</span></div><div className="asset-actions"><button className="button full primary-soft" disabled={!!reason('uploads') || !!busy} title={reason('uploads') ?? ''} onClick={() => fileInput.current?.click()}>＋ Import target video</button><input ref={fileInput} hidden type="file" accept=".mp4,.mov,.mkv,.avi,.webm,.m4v,.ts" onChange={event => { importAsset(event.target.files?.[0]); event.target.value = ''; }} /></div>
-      <div className={`target-asset ${target ? 'loaded' : ''}`}><span className="asset-symbol">▤</span><div><strong>{target ? target.split('/').at(-1) : 'No target loaded'}</strong><small>{probe ? `${probe.width} × ${probe.height} · ${probe.fps_rational ?? '?'} fps` : 'Your files stay on this machine'}</small></div></div>
-      <div className="section-title spaced"><span>SOURCE IDENTITIES</span><span>{sources.length.toString().padStart(2, '0')}</span></div>
-      <FacesetLibrary
-        sources={sources}
-        selectedSourceId={sourceId}
-        onSelectSource={id => setSourceId(id)}
-        onRefreshSources={refreshSources}
-        onImportFaceset={file => importAsset(file)}
-        canSave={Boolean(inspection?.tracks?.length)}
-        onSaveFace={async (name) => {
-          const track = inspection?.tracks.find(t => t.track_id === selectedTrack) || inspection?.tracks[0];
-          if (!track?.thumbnail_base64) {
-            throw new Error('Inspect target faces first to extract an identity.');
-          }
-          await post('/facesets/build', {
-            name,
-            views: [{
-              image_base64: track.thumbnail_base64,
-              bbox: [0, 0, 100, 100],
-            }],
-          });
-          await refreshSources();
-        }}
-        notify={(msg, type) => {
-          if (type === 'error') setError(msg);
-          else setNotice(msg);
-        }}
-      />
-      <div className="library-footer"><span className="tiny-badge">LOCAL BY DEFAULT</span><p>Media, FaceSets, and identity embeddings stay in your local workspace.</p></div>
-    </aside>
-    <main className="main-workspace"><div className="workspace-heading"><div><span className="eyebrow">EDIT / INSPECT / RENDER</span><h1>Your scene. A new identity.</h1></div><button className="button accent" disabled={!!reason('queue') || !inspection || !renderMappings().length || !!busy} title={reason('queue') ?? 'Render mapped face tracks locally'} onClick={queue}>Queue render <span>↗</span></button></div>
-      <label>Identity B for animated Slerp<select aria-label="Identity B for animated Slerp" value={identitySourceB} onChange={event=>setIdentitySourceB(event.target.value)}><option value="">No identity morph</option>{sources.filter(source=>source.faceset_id!==sourceId).map(source=><option key={source.faceset_id} value={source.faceset_id}>{source.name}</option>)}</select></label>
-      <label>Colour transfer<select aria-label="Colour transfer" value={parameters.color_method ?? 'lab'} onChange={event=>setParameters({...parameters,color_method:event.target.value as 'lab' | 'histogram'})}><option value="lab">LAB statistics</option><option value="histogram">Stabilized histograms</option></select></label>
-      <label>Restoration model<select aria-label="Restoration model" value={parameters.restorer_model ?? 'gpen'} onChange={event=>setParameters({...parameters,restorer_model:event.target.value as 'gpen' | 'codeformer'})}><option value="gpen">GPEN</option><option value="codeformer">CodeFormer</option></select></label>
-      <VideoViewport activeSourceId={sourceId} onSourceExtracted={faceset => { setSources(previous => previous.some(item => item.faceset_id === faceset.faceset_id) ? previous : [...previous, faceset]); setSourceId(faceset.faceset_id); void refreshSources(); }} maskBase64={maskBase64} captureWorkspace={captureWorkspace} restoreWorkspace={restoreWorkspace} active={route === "#/faceswap"} parameters={parameters} setParameters={setParameters} previewRequest={previewRequest} restorerAvailable={!!caps?.models.some(model => model.name === (parameters.restorer_model === "codeformer" ? "CodeFormerv0.1.onnx" : "gpen_bfr_512.onnx") && model.state === "VERIFIED_LOCAL")} onPreviewLatency={setPreviewLatency} inspector={<SettingsInspector namespace="workstation-setting" caps={caps} config={config} save={saveSettings} busy={!!busy}/>} posePanel={<><Suspense fallback={<p className="muted empty-note">Loading pose inspection…</p>}><PoseCoverageInspector coverage={coverage} track={currentTrack} mesh={mesh} parameters={parameters} setParameters={setParameters}/></Suspense><label className="reconstruction-choice">Reconstructed artifact<select value="" disabled={!target || !reconstructions.length || !!reason('reconstruction_viewer')} onChange={event => { const id = event.target.value; if (!id) { setMesh(null); return; } void run('Verifying reconstruction', async () => setMesh(await api<Reconstruction>(`/reconstructions/${id}?${new URLSearchParams({ target_path: target })}`))); }}><option value="">{mesh ? 'Choose another artifact' : 'No reconstruction loaded'}</option>{reconstructions.map(item => <option key={item.reconstruction_id} value={item.reconstruction_id}>{item.reconstruction_id.slice(0, 12)}</option>)}</select></label>{mesh && <button className="button small" onClick={() => setMesh(null)}>Show pose coverage</button>}</>} target={target} output={output} time={time} setTime={setTime} duration={probe?.duration_seconds ?? 0} enabled={!reason('frame_preview')} keys={keys} probe={probe} sources={sources} onInspectionUpdate={setInspection} onMaskChange={setMaskBase64} trimStart={trimStart} trimEnd={trimEnd} onTrimChange={(start, end) => { setTrimStart(start); setTrimEnd(end); }} onAssignSource={(clusterId, facesetId) => {
+  const selectedFaceset = sources.find(item => item.faceset_id === sourceId) ?? null;
+  const saveTrackFace = async (name: string) => {
+    const track = currentTrack ?? inspection?.tracks[0];
+    if (!track?.thumbnail_base64) throw new Error('Inspect target faces first to extract an identity.');
+    await post('/facesets/build', { name, views: [{ image_base64: track.thumbnail_base64, bbox: [0, 0, 100, 100] }] });
+    await refreshSources();
+  };
+  const reconstructionPicker = <><label className="reconstruction-choice">Reconstructed artifact<select value="" disabled={!target || !reconstructions.length || !!reason('reconstruction_viewer')} onChange={event => { const id = event.target.value; if (!id) { setMesh(null); return; } void run('Verifying reconstruction', async () => { setIdentityMesh(null); setMesh(await api<Reconstruction>(`/reconstructions/${id}?${new URLSearchParams({ target_path: target })}`)); }); }}><option value="">{mesh ? 'Choose another artifact' : reconstructions.length ? 'No reconstruction loaded' : 'No reconstruction artifacts'}</option>{reconstructions.map(item => <option key={item.reconstruction_id} value={item.reconstruction_id}>{item.reconstruction_id.slice(0, 12)}</option>)}</select></label>{(mesh || identityMesh) && <button className="button small" onClick={() => { setMesh(null); setIdentityMesh(null); }}>Show pose coverage</button>}</>;
+  const viewport = <VideoViewport studio={layoutMode === 'studio' ? { panels: panelsSlot, timeline: timelineSlot, tray: traySlot } : null} activeSourceId={sourceId} onSourceExtracted={faceset => { setSources(previous => previous.some(item => item.faceset_id === faceset.faceset_id) ? previous : [...previous, faceset]); setSourceId(faceset.faceset_id); void refreshSources(); }} maskBase64={maskBase64} captureWorkspace={captureWorkspace} restoreWorkspace={restoreWorkspace} active={route === "#/faceswap"} parameters={parameters} setParameters={setParameters} previewRequest={previewRequest} restorerAvailable={!!caps?.models.some(model => model.name === (parameters.restorer_model === "codeformer" ? "CodeFormerv0.1.onnx" : "gpen_bfr_512.onnx") && model.state === "VERIFIED_LOCAL")} onPreviewLatency={setPreviewLatency} inspector={<SettingsInspector namespace="workstation-setting" caps={caps} config={config} save={saveSettings} busy={!!busy}/>} posePanel={<><Suspense fallback={<p className="muted empty-note">Loading pose inspection…</p>}><PoseCoverageInspector coverage={coverage} track={currentTrack} mesh={mesh} parameters={parameters} setParameters={setParameters}/></Suspense><label className="reconstruction-choice">Reconstructed artifact<select value="" disabled={!target || !reconstructions.length || !!reason('reconstruction_viewer')} onChange={event => { const id = event.target.value; if (!id) { setMesh(null); return; } void run('Verifying reconstruction', async () => setMesh(await api<Reconstruction>(`/reconstructions/${id}?${new URLSearchParams({ target_path: target })}`))); }}><option value="">{mesh ? 'Choose another artifact' : 'No reconstruction loaded'}</option>{reconstructions.map(item => <option key={item.reconstruction_id} value={item.reconstruction_id}>{item.reconstruction_id.slice(0, 12)}</option>)}</select></label>{mesh && <button className="button small" onClick={() => setMesh(null)}>Show pose coverage</button>}</>} target={target} output={output} time={time} setTime={setTime} duration={probe?.duration_seconds ?? 0} enabled={!reason('frame_preview')} keys={keys} probe={probe} sources={sources} onInspectionUpdate={setInspection} onMaskChange={setMaskBase64} trimStart={trimStart} trimEnd={trimEnd} onTrimChange={(start, end) => { setTrimStart(start); setTrimEnd(end); }} onAssignSource={(clusterId, facesetId) => {
         setAssigned(previous => {
           const next = { ...previous };
           if (facesetId) next[clusterId] = facesetId;
@@ -386,8 +327,8 @@ export default function App() {
           return next;
         });
         if (facesetId) setSourceId(facesetId);
-      }}/>
-      <div className="trim-bar">
+      }}/>;
+  const trimBar = <div className="trim-bar">
         <span className="eyebrow">EXPORT RANGE</span>
         <button
           type="button"
@@ -442,13 +383,8 @@ export default function App() {
             `${Math.max(0, ((trimEnd ?? probe.duration_seconds) - trimStart)).toFixed(2)}s · ${Math.round(Math.max(0, ((trimEnd ?? probe.duration_seconds) - trimStart)) * (probe.fps_rational ? (parseInt(probe.fps_rational.split('/')[0], 10) / (parseInt(probe.fps_rational.split('/')[1], 10) || 1)) || 30 : 30))} frames`
           ) : 'Full clip'}
         </span>
-      </div>
-      <section className="face-inspector" data-tour="tracks"><div className="panel-heading"><div><span className="eyebrow">TARGET FACE INSPECTOR</span><h2>Assign an identity</h2></div><button className="button" disabled={!target || !!reason('face_inspection') || !!busy} title={reason('face_inspection') ?? ''} onClick={inspect}>{inspection ? 'Reinspect faces' : 'Inspect target faces'}</button></div>
-        {!inspection ? <div className="mapping-empty"><span>◎</span><p>Inspect the target to find persistent face tracks.<small>Then map each track to an observed source FaceSet.</small></p></div> : <><div className="inspection-meta"><span>{inspection.tracks.length} detected tracks</span><span>Identity continuity is estimated</span>{inspection.truncated && <strong>Bounded sample — truncated</strong>}</div>{inspection.warnings.map(warning => <p key={warning} className="inline-warning">{warning}</p>)}
-          <div className="track-list">{inspection.tracks.map(track => <div className={`track-card ${selectedTrack === track.track_id ? 'active' : ''}`} key={track.track_id}>
-            <button className="track-select" aria-label={`Inspect ${track.track_id}`} onClick={() => { setSelectedTrack(track.track_id); setTime(track.first_timestamp_seconds); if (assigned[track.track_id]) setSourceId(assigned[track.track_id]); }}>{track.thumbnail_base64 ? <img src={`data:${track.thumbnail_mime};base64,${track.thumbnail_base64}`} alt={`${track.track_id} detected face`}/> : <span className="track-fallback">◎</span>}<span><strong>{track.track_id.replace('track_', 'Face ')}</strong><small>Frames {track.first_frame}–{track.last_frame}</small><small>{formatTime(track.first_timestamp_seconds)} → {formatTime(track.last_timestamp_seconds)}</small><IdentityTrackStats track={sheet?.tracks.find(item => item.track_id === track.track_id)} /></span></button><span className="mapping-arrow">→</span><label className="mapping-choice"><span>Source identity</span><select aria-label={`Identity for ${track.track_id}`} value={assigned[track.track_id] ?? ''} disabled={!sources.length} onChange={event => { const nextVal = event.target.value; setAssigned(previous => ({ ...previous, [track.track_id]: nextVal })); useFaceSelectionStore.getState().assignSource(track.track_id, nextVal || null); setSourceId(nextVal); }}><option value="">Keep original</option>{sources.map(source => <option key={source.faceset_id} value={source.faceset_id}>{source.name}</option>)}</select></label></div>)}</div><IdentityLockBar target={target} inspection={inspection} mappings={Object.fromEntries(renderMappings().map(item => [item.track_id, item.faceset_id]))} sources={sources} lock={identityLock} onLock={setIdentityLock} busy={!!busy} onError={setError} /></>}
-      </section>
-      <QueueDrawer
+      </div>;
+  const queuePanel = <><QueueDrawer
         jobs={jobs}
         selectedJobId={selectedJob}
         onSelectJob={showJob}
@@ -468,8 +404,165 @@ export default function App() {
             Include selected paused/interrupted checkpoint when saving a project
           </label>
         </div>
-      )}
-    </main></div></AppRouter>
+      )}</>;
+  return <div className="workstation">
+    <header className="app-header"><a className="brand" href="#/home" aria-label="Roop 3D home"><span className="brand-mark">R<span>3</span></span><strong>roop<span>3D</span></strong></a><span className="header-divider"/><span className="workspace-label">VIDEO WORKSTATION</span>
+      <button className={`button small tour-button ${tourSeen() ? '' : 'fresh'}`} data-testid="header-tour-button" aria-haspopup="dialog" title="Four-step guide to the workstation" onClick={() => setTourOpen(true)}>How to Use</button>
+      <div className="project-name"><input aria-label="Project name" maxLength={128} value={projectName} onChange={event => setProjectName(event.target.value)} /><span>{projectDirty ? 'UNSAVED' : 'SAVED'}</span></div>
+      <span className="local-status"><i className={`dot ${connection === 'online' ? 'mint' : 'amber'}`}/>{connection === 'online' ? 'Local service' : connection}</span>
+      <PipelinePill activeJob={currentJob} />
+      <div role="group" aria-label="UI zoom" title="UI Zoom (Ctrl + / − / 0)" className="ui-zoom-group">
+        <button type="button" onClick={() => bumpZoom(-0.05)} title="Zoom out (Ctrl −)" aria-label="Zoom out" className="zoom-btn">−</button>
+        <button type="button" onClick={resetZoom} title="Reset zoom (Ctrl 0)" aria-label={`Reset zoom, ${Math.round(zoom * 100)}%`} className="zoom-reset-btn">{Math.round(zoom * 100)}%</button>
+        <button type="button" onClick={() => bumpZoom(0.05)} title="Zoom in (Ctrl +)" aria-label="Zoom in" className="zoom-btn">+</button>
+      </div>
+      <div className="header-theme-group" title="Active Interface Theme">
+        <span className="theme-badge-label">THEME:</span>
+        <select
+          aria-label="Select Theme"
+          value={themeName}
+          onChange={e => setThemeName(e.target.value)}
+          className="theme-dropdown-select"
+        >
+          <optgroup label="Dark Themes">
+            {THEMES.filter(t => t.mode === 'dark').map(t => (
+              <option key={t.name} value={t.name}>{t.name}</option>
+            ))}
+          </optgroup>
+          <optgroup label="Light Themes">
+            {THEMES.filter(t => t.mode === 'light').map(t => (
+              <option key={t.name} value={t.name}>{t.name}</option>
+            ))}
+          </optgroup>
+        </select>
+        <button
+          type="button"
+          className="button small theme-gallery-btn"
+          title="Open visual swatch cards for all 37 themes"
+          onClick={() => setThemeGalleryOpen(true)}
+        >
+          🎨 Swatches
+        </button>
+        <button
+          type="button"
+          className="icon-button"
+          aria-label={`Switch to ${themeByName(themeName).mode === 'dark' ? 'light' : 'dark'} theme`}
+          title={`Quick toggle: ${themeByName(themeName).mode === 'dark' ? 'Light mode' : 'Dark mode'}`}
+          onClick={() => setThemeName(themeByName(themeName).mode === 'dark' ? 'Glass Light' : 'Default')}
+        >
+          {themeByName(themeName).mode === 'dark' ? '☀' : '◐'}
+        </button>
+      </div>
+      <button type="button" className="button small layout-toggle" aria-pressed={layoutMode === 'studio'} title="Switch between the four-panel studio and the classic stacked workstation" onClick={() => setLayoutMode(mode => (mode === 'studio' ? 'classic' : 'studio'))}>{layoutMode === 'studio' ? 'Studio layout' : 'Classic layout'}</button>
+      <button className="button" disabled={!!reason('projects') || !!busy} title={reason('projects') ?? ''} onClick={() => { setProjectsOpen(true); void refreshProjects(); }}>Projects</button><button className="button" disabled={!!reason('projects') || !inspection || !!busy} onClick={saveProject}>Save project</button>
+    </header>
+    <RunPill />
+    <Navigation route={route}/>
+    {(error || notice || busy) && <div className={`notification ${error ? 'error' : ''}`} role={error ? 'alert' : 'status'}><span>{error || busy || notice}</span>{busy === 'Importing asset' && <><progress value={uploadProgress} max={1}/><button onClick={() => uploadAbort.current?.abort()}>Cancel import</button></>}{error && <button onClick={() => void connect()}>Reconnect</button>}{!busy && <button aria-label="Dismiss message" onClick={() => { setError(''); setNotice(''); }}>×</button>}</div>}
+    <AppRouter route={route} screen="facemgr">
+      <FaceManager
+        sources={sources}
+        target={target}
+        inspection={inspection}
+        onRefreshSources={refreshSources}
+        onAssignSource={(clusterId, facesetId) => {
+          setAssigned(previous => {
+            const next = { ...previous };
+            if (facesetId) next[clusterId] = facesetId;
+            else delete next[clusterId];
+            return next;
+          });
+          if (facesetId) setSourceId(facesetId);
+        }}
+        onBackToWorkstation={() => { window.location.hash = '#/faceswap'; }}
+      />
+    </AppRouter>
+    <AppRouter route={route} screen="faceswap">
+      <input ref={fileInput} hidden type="file" accept=".mp4,.mov,.mkv,.avi,.webm,.m4v,.ts" onChange={event => { importAsset(event.target.files?.[0]); event.target.value = ''; }} />
+      {layoutMode === 'studio' ? <div className="studio" data-testid="studio-layout">
+        <div className="studio-grid">
+          <aside className="studio-panel studio-left" aria-label="Target media" data-tour="tracks">
+            <div className="studio-panel-head"><span className="eyebrow">01 · TARGET</span></div>
+            <PanelBoundary name="Target panel"><TargetPanel target={target} probe={probe} busy={!!busy} uploadReason={reason('uploads')} onImport={() => fileInput.current?.click()}
+              time={time} setTime={setTime} fps={parseFps(probe?.fps_rational, 30)} duration={probe?.duration_seconds ?? 0}
+              inspection={inspection} inspectReason={reason('face_inspection')} onInspect={inspect} sheet={sheet}
+              selectedTrack={selectedTrack} onSelectTrack={trackId => selectTrack(trackId)} sources={sources} assigned={assigned} onAssign={assignTrack}
+              lockBar={inspection && <IdentityLockBar target={target} inspection={inspection} mappings={Object.fromEntries(renderMappings().map(item => [item.track_id, item.faceset_id]))} sources={sources} lock={identityLock} onLock={setIdentityLock} busy={!!busy} onError={setError} />} /></PanelBoundary>
+          </aside>
+          <aside className="studio-panel studio-identity" aria-label="Source identities" data-tour="source">
+            <div className="studio-panel-head"><span className="eyebrow">02 · IDENTITY</span><span className="muted">{sources.length.toString().padStart(2, '0')}</span></div>
+            <PanelBoundary name="Identity panel"><FacesetLibrary variant="list" sources={sources} selectedSourceId={sourceId} onSelectSource={id => setSourceId(id)} onRefreshSources={refreshSources} onImportFaceset={file => importAsset(file)}
+              canSave={!!currentTrack?.thumbnail_base64} onSaveFace={saveTrackFace} notify={(message, type) => { if (type === 'error') setError(message); else setNotice(message); }} />
+            {selectedFaceset ? <FaceSetDetail faceset={selectedFaceset} sources={sources} selectedTrackLabel={selectedTrack ? trackLabel(selectedTrack) : null}
+              assignedHere={!!selectedTrack && assigned[selectedTrack] === selectedFaceset.faceset_id} onAssign={() => selectedTrack && assignTrack(selectedTrack, selectedFaceset.faceset_id)}
+              identitySourceB={identitySourceB} onIdentitySourceB={setIdentitySourceB} onShowMesh={setIdentityMesh} meshShown={!!identityMesh} />
+              : sources.length > 0 && <p className="muted studio-hint">Select a FaceSet to see its views, pose coverage and 3D identity asset.</p>}</PanelBoundary>
+          </aside>
+          <main className="studio-center" aria-label="Preview">
+            <div className="studio-center-head"><div><span className="eyebrow">03 · PREVIEW</span><strong>{target ? target.split('/').at(-1) : 'No target loaded'}</strong></div>
+              <button className="button accent" disabled={!!reason('queue') || !inspection || !renderMappings().length || !!busy} title={reason('queue') ?? (renderMappings().length ? 'Render mapped face tracks locally' : 'Assign a FaceSet to at least one track first')} onClick={queue}>Queue render <span>↗</span></button></div>
+            {viewport}
+          </main>
+          <aside className="studio-panel studio-right" aria-label="Inspector">
+            <div className="studio-panel-head"><span className="eyebrow">04 · INSPECTOR</span></div>
+            <PanelBoundary name="Inspector"><StudioInspector caps={caps} track={currentTrack} sheet={sheet} sources={sources} assignedId={currentTrack ? assigned[currentTrack.track_id] ?? '' : ''} onAssign={assignTrack}
+              parameters={parameters} setParameters={setParameters} coverage={coverage} mesh={identityMesh ?? mesh} panelsRef={setPanelsSlot}
+              reconstructionPicker={reconstructionPicker} processing={<SettingsInspector namespace="workstation-setting" caps={caps} config={config} save={saveSettings} busy={!!busy}/>} /></PanelBoundary>
+          </aside>
+        </div>
+        <section className="studio-bottom" aria-label="Timeline">
+          <PanelBoundary name="Track lanes"><TrackLanes tracks={inspection?.tracks ?? []} sheet={sheet} sceneCuts={sheet?.scene_cut_frames ?? inspection?.scene_cut_frames ?? []} fps={parseFps(probe?.fps_rational, 30)} duration={probe?.duration_seconds ?? 0}
+            trimStart={trimStart} trimEnd={trimEnd} job={currentJob && currentJob.request.target_path === target ? currentJob : null} selectedTrack={selectedTrack} assigned={assigned} sources={sources}
+            onSelectTrack={trackId => selectTrack(trackId, false)} onSeek={value => setTime(Math.max(0, Math.min(probe?.duration_seconds ?? 0, value)))} onAssign={assignTrack} /></PanelBoundary>
+          <div className="studio-timeline-slot" ref={setTimelineSlot} />
+          {trimBar}
+          <details className="studio-tray"><summary>Face tray <span className="muted">· faces in the current frame</span></summary><div ref={setTraySlot} /></details>
+          {queuePanel}
+        </section>
+      </div> : <>      <div className="workstation-body"><aside className="asset-sidebar" data-tour="source"><div className="section-title"><span>ASSET LIBRARY</span><span className="muted">01</span></div><div className="asset-actions"><button className="button full primary-soft" disabled={!!reason('uploads') || !!busy} title={reason('uploads') ?? ''} onClick={() => fileInput.current?.click()}>＋ Import target video</button></div>
+      <div className={`target-asset ${target ? 'loaded' : ''}`}><span className="asset-symbol">▤</span><div><strong>{target ? target.split('/').at(-1) : 'No target loaded'}</strong><small>{probe ? `${probe.width} × ${probe.height} · ${probe.fps_rational ?? '?'} fps` : 'Your files stay on this machine'}</small></div></div>
+      <div className="section-title spaced"><span>SOURCE IDENTITIES</span><span>{sources.length.toString().padStart(2, '0')}</span></div>
+      <FacesetLibrary
+        sources={sources}
+        selectedSourceId={sourceId}
+        onSelectSource={id => setSourceId(id)}
+        onRefreshSources={refreshSources}
+        onImportFaceset={file => importAsset(file)}
+        canSave={Boolean(inspection?.tracks?.length)}
+        onSaveFace={async (name) => {
+          const track = inspection?.tracks.find(t => t.track_id === selectedTrack) || inspection?.tracks[0];
+          if (!track?.thumbnail_base64) {
+            throw new Error('Inspect target faces first to extract an identity.');
+          }
+          await post('/facesets/build', {
+            name,
+            views: [{
+              image_base64: track.thumbnail_base64,
+              bbox: [0, 0, 100, 100],
+            }],
+          });
+          await refreshSources();
+        }}
+        notify={(msg, type) => {
+          if (type === 'error') setError(msg);
+          else setNotice(msg);
+        }}
+      />
+      <div className="library-footer"><span className="tiny-badge">LOCAL BY DEFAULT</span><p>Media, FaceSets, and identity embeddings stay in your local workspace.</p></div>
+    </aside>
+    <main className="main-workspace"><div className="workspace-heading"><div><span className="eyebrow">EDIT / INSPECT / RENDER</span><h1>Your scene. A new identity.</h1></div><button className="button accent" disabled={!!reason('queue') || !inspection || !renderMappings().length || !!busy} title={reason('queue') ?? 'Render mapped face tracks locally'} onClick={queue}>Queue render <span>↗</span></button></div>
+      <label>Identity B for animated Slerp<select aria-label="Identity B for animated Slerp" value={identitySourceB} onChange={event=>setIdentitySourceB(event.target.value)}><option value="">No identity morph</option>{sources.filter(source=>source.faceset_id!==sourceId).map(source=><option key={source.faceset_id} value={source.faceset_id}>{source.name}</option>)}</select></label>
+      <label>Colour transfer<select aria-label="Colour transfer" value={parameters.color_method ?? 'lab'} onChange={event=>setParameters({...parameters,color_method:event.target.value as 'lab' | 'histogram'})}><option value="lab">LAB statistics</option><option value="histogram">Stabilized histograms</option></select></label>
+      <label>Restoration model<select aria-label="Restoration model" value={parameters.restorer_model ?? 'gpen'} onChange={event=>setParameters({...parameters,restorer_model:event.target.value as 'gpen' | 'codeformer'})}><option value="gpen">GPEN</option><option value="codeformer">CodeFormer</option></select></label>
+      {viewport}
+      {trimBar}
+      <section className="face-inspector" data-tour="tracks"><div className="panel-heading"><div><span className="eyebrow">TARGET FACE INSPECTOR</span><h2>Assign an identity</h2></div><button className="button" disabled={!target || !!reason('face_inspection') || !!busy} title={reason('face_inspection') ?? ''} onClick={inspect}>{inspection ? 'Reinspect faces' : 'Inspect target faces'}</button></div>
+        {!inspection ? <div className="mapping-empty"><span>◎</span><p>Inspect the target to find persistent face tracks.<small>Then map each track to an observed source FaceSet.</small></p></div> : <><div className="inspection-meta"><span>{inspection.tracks.length} detected tracks</span><span>Identity continuity is estimated</span>{inspection.truncated && <strong>Bounded sample — truncated</strong>}</div>{inspection.warnings.map(warning => <p key={warning} className="inline-warning">{warning}</p>)}
+          <div className="track-list">{inspection.tracks.map(track => <div className={`track-card ${selectedTrack === track.track_id ? 'active' : ''}`} key={track.track_id}>
+            <button className="track-select" aria-label={`Inspect ${track.track_id}`} onClick={() => { setSelectedTrack(track.track_id); setTime(track.first_timestamp_seconds); if (assigned[track.track_id]) setSourceId(assigned[track.track_id]); }}>{track.thumbnail_base64 ? <img src={`data:${track.thumbnail_mime};base64,${track.thumbnail_base64}`} alt={`${track.track_id} detected face`}/> : <span className="track-fallback">◎</span>}<span><strong>{track.track_id.replace('track_', 'Face ')}</strong><small>Frames {track.first_frame}–{track.last_frame}</small><small>{formatTime(track.first_timestamp_seconds)} → {formatTime(track.last_timestamp_seconds)}</small><IdentityTrackStats track={sheet?.tracks.find(item => item.track_id === track.track_id)} /></span></button><span className="mapping-arrow">→</span><label className="mapping-choice"><span>Source identity</span><select aria-label={`Identity for ${track.track_id}`} value={assigned[track.track_id] ?? ''} disabled={!sources.length} onChange={event => { const nextVal = event.target.value; setAssigned(previous => ({ ...previous, [track.track_id]: nextVal })); useFaceSelectionStore.getState().assignSource(track.track_id, nextVal || null); setSourceId(nextVal); }}><option value="">Keep original</option>{sources.map(source => <option key={source.faceset_id} value={source.faceset_id}>{source.name}</option>)}</select></label></div>)}</div><IdentityLockBar target={target} inspection={inspection} mappings={Object.fromEntries(renderMappings().map(item => [item.track_id, item.faceset_id]))} sources={sources} lock={identityLock} onLock={setIdentityLock} busy={!!busy} onError={setError} /></>}
+      </section>
+      {queuePanel}
+    </main></div></>}</AppRouter>
     <WorkstationScreens route={route} caps={caps} config={config} sources={sources} jobs={jobs} projects={projects} busy={!!busy} connection={connection} openProject={openProject} showJob={showJob} controlJob={controlJob} saveSettings={saveSettings} refreshJobs={refreshJobs} openLibrary={() => { setProjectsOpen(true); void refreshProjects(); }} latency={previewLatency} target={target} probe={probe} inspection={inspection} refreshProjects={refreshProjects} exportOptions={exportOptions} onExportChange={setExportOptions} meshBlend={parameters.pose_mode === 'mesh_blend'} onQueue={queue} canQueue={!reason('queue') && !!inspection && !!renderMappings().length && !busy} previewRequest={inspection && renderMappings().length ? previewRequest : null} timestamp={time} themeName={themeName} onThemeChange={setThemeName} onStartTour={() => setTourOpen(true)}/>
     <footer className="app-footer"><span>ROOP 3D / LOCAL WORKSTATION</span><span>Observed identities. Explicit processing. Synthetic media.</span><span>API :{config?.port ?? '—'}</span></footer>
     {projectsOpen && <div className="modal-backdrop" onClick={() => setProjectsOpen(false)}><section role="dialog" aria-modal="true" aria-labelledby="projects-title" className="project-modal" onClick={event => event.stopPropagation()}><div className="panel-heading"><div><span className="eyebrow">VERSIONED .R3DP MANIFESTS</span><h2 id="projects-title">Project library</h2></div><button aria-label="Close projects" className="icon-button" onClick={() => setProjectsOpen(false)}>×</button></div><p className="muted">Reopening verifies target, inspection, FaceSet, and model hashes. Project files contain references and settings, never raw media.</p><button className="button" disabled={!!busy} onClick={() => projectInput.current?.click()}>Import .r3dp</button><input ref={projectInput} hidden type="file" accept=".r3dp,application/json" onChange={event => { importProject(event.target.files?.[0]); event.target.value = ''; }}/>{!projects.length && <p className="empty-note muted">No saved projects yet.</p>}{projects.map(item => <div key={item.project_id} className="saved-project"><div><strong>{item.name}</strong><small>{new Date(item.saved_at).toLocaleString()} · checkpoint {item.last_completed_frame >= 0 ? item.last_completed_frame : 'none'}</small></div><button className="button small" disabled={!!busy} onClick={() => openProject(item.project_id)}>Verify & open</button><a className="button small" href={`/api/v1/projects/${item.project_id}/download`} download>Export</a></div>)}{project?.checkpoint_job_id && <button className="button accent" disabled={!!busy || !!reason('queue')} onClick={() => void run('Verifying checkpoint continuation', async () => { const resumed = await post<Job>(`/projects/${project.project_id}/resume`, {}); setSelectedJob(resumed.job_id); await refreshJobs(); setProjectsOpen(false); })}>Verify & resume {project.name}</button>}</section></div>}
