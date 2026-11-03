@@ -228,6 +228,7 @@ let state: FaceSelectionStoreState = {
       targetClusters: nextClusters,
     };
     recordFaceEdit('Assign source identity', before);
+    notify();
   },
 
   setClusterMode: (targetClusterId: string, mode: 'swap' | 'ignore' | 'exclude') => {
@@ -241,18 +242,33 @@ let state: FaceSelectionStoreState = {
       assignments: Object.fromEntries(Object.entries(state.assignments).filter(([id]) => id !== targetClusterId || mode === 'swap')),
     };
     recordFaceEdit(`Set face role: ${mode === 'ignore' ? 'reference guide' : mode}`, before);
+    notify();
   },
 
   replaceAssignments: assignments => {
     const before = faceEditState();
-    const next = Object.fromEntries(Object.entries(assignments).filter(([id, source]) => source && state.targetClusters.some(cluster => cluster.id === id && cluster.mode === 'swap')));
-    state = { ...state, assignments: next, targetClusters: state.targetClusters.map(cluster => ({ ...cluster, sourceFaceId: next[cluster.id] ?? null, sourceViewIndex: cluster.sourceFaceId === next[cluster.id] ? cluster.sourceViewIndex : null })) };
+    const next = Object.fromEntries(
+      Object.entries(assignments).filter(
+        ([id, source]) => source && (!state.targetClusters.length || state.targetClusters.some(cluster => (cluster.id === id || cluster.originTrackId === id) && cluster.mode === 'swap'))
+      )
+    );
+    state = {
+      ...state,
+      assignments: next,
+      targetClusters: state.targetClusters.map(cluster => ({
+        ...cluster,
+        sourceFaceId: next[cluster.id] ?? next[cluster.originTrackId ?? ''] ?? null,
+        sourceViewIndex: cluster.sourceFaceId === next[cluster.id] ? cluster.sourceViewIndex : null
+      }))
+    };
     recordFaceEdit('Assign source identities', before);
+    notify();
   },
   setSourceView: (clusterId, view) => {
     const before = faceEditState();
     state = { ...state, targetClusters: state.targetClusters.map(cluster => cluster.id === clusterId && cluster.mode === 'swap' ? { ...cluster, sourceViewIndex: view } : cluster) };
     recordFaceEdit('Choose source face', before);
+    notify();
   },
   focusPose: faceId => {
     state = { ...state, activeSelection: faceId, poseFocus: { faceId, serial: (state.poseFocus?.serial ?? 0) + 1 } }; notify();
@@ -266,7 +282,9 @@ let state: FaceSelectionStoreState = {
     const head = { ...cluster, endFrame: frame - 1, splitLocked: true, faceIds: headFaces.map(face => face.id), frameCount: new Set(headFaces.map(face => face.frameIndex)).size };
     const tail = { ...cluster, id, name: `${cluster.name ?? cluster.id} from ${frame}`, originTrackId: cluster.originTrackId ?? cluster.id, startFrame: frame, splitLocked: true, faceIds: tailFaces.map(face => face.id), frameCount: new Set(tailFaces.map(face => face.frameIndex)).size };
     state = { ...state, detectedFaces: faces, targetClusters: [...state.targetClusters.filter(item => item.id !== clusterId), head, tail], assignments: { ...state.assignments, ...(state.assignments[clusterId] ? { [id]: state.assignments[clusterId] } : {}) } };
-    recordFaceEdit(`Split cluster at frame ${frame}`, before); return true;
+    recordFaceEdit(`Split cluster at frame ${frame}`, before);
+    notify();
+    return true;
   },
 
   computeClusters: (similarityThreshold = 0.65) => {

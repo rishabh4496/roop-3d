@@ -536,9 +536,14 @@ export function VideoViewport({
           </>
         ) : !showLive && (
           <div className="viewport-empty">
-            <span className="film-icon">{isOutput ? '◇' : '⊞'}</span>
-            <h2>{isOutput ? 'Your output starts here' : 'Bring a scene to life'}</h2>
-            <p>{isOutput ? 'Completed renders appear alongside your source.' : 'Import a local video, inspect its faces, and assign an identity.'}</p>
+            <span className="film-icon">{isOutput ? (live.status === 'loading' ? '⏳' : live.status === 'error' ? '⚠' : '◇') : '⊞'}</span>
+            <h2>{isOutput ? (live.status === 'loading' ? 'Rendering live swap…' : live.status === 'error' ? 'Swap preview failed' : 'Your output starts here') : 'Bring a scene to life'}</h2>
+            <p>{isOutput ? (live.status === 'error' ? (live.error || 'Check server logs for preview details.') : live.status === 'loading' ? 'Real-time frame preview is rendering…' : 'Completed renders appear alongside your source.') : 'Import a local video, inspect its faces, and assign an identity.'}</p>
+            {isOutput && live.status === 'error' && (
+              <button type="button" className="button small primary-soft" onClick={live.retry}>
+                Retry preview
+              </button>
+            )}
           </div>
         )}
         {showLive && (

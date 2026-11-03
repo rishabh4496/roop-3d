@@ -122,13 +122,13 @@ export function SpatialInspector({
       {coverage && (
         <>
           <div className="pose-legend">
-            <span><i className="dot mint" />Observed views {coverage.views.length}</span>
+            <span><i className="dot mint" />Observed views {coverage.views?.length ?? 0}</span>
             <span><i className="dot amber" />Sparse</span>
             <span><i className="dot dim" />Unobserved blind spots</span>
           </div>
 
           <div className="pose-bins">
-            {Object.entries(coverage.bins).map(([bin, count]) => (
+            {Object.entries(coverage.bins ?? {}).map(([bin, count]) => (
               <span key={bin}>
                 {bin.replaceAll('_', ' ')} <strong>{count}</strong>
               </span>
