@@ -190,3 +190,21 @@ def test_live_preview_carries_render_and_occlusion_modes(tmp_path, monkeypatch):
         assert meta_old["swap_config_hash"] != meta_new["swap_config_hash"], "different modes must not share a cache entry"
         assert client.post("/api/preview", json={**base, "render_mode": "flame_magic"}).status_code == 422
         assert client.post("/api/preview", json={**base, "occlusion_mode": "maybe"}).status_code == 422
+
+
+def test_live_preview_cancelled_returns_204(tmp_path, monkeypatch):
+    from roop_3d.server import live_preview as lp_module
+    from roop_3d.tests.test_remediation_stage4 import live_payload
+    from roop_3d.tests.test_workstation_preview import preview_fixture
+
+    app, fixture = preview_fixture(tmp_path, monkeypatch)
+    base = live_payload(fixture)
+
+    async def cancelling_frames(*args, **kwargs):
+        raise lp_module.PreviewCancelled("Client disconnected")
+
+    monkeypatch.setattr(app.state.live_previews, "frames", cancelling_frames)
+    with TestClient(app, base_url=BASE) as client:
+        response = client.post("/api/preview", json=base)
+        assert response.status_code == 204
+        assert response.headers.get("X-Preview-Status") == "cancelled"

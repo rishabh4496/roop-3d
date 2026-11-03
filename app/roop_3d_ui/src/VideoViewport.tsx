@@ -195,7 +195,7 @@ export function VideoViewport({
     setCaptureBusy(true); setCaptureError(''); setPlaying(false); original.current?.pause(); processed.current?.pause();
     try {
       const rendered = await postLivePreview(payload, { signal: controller.signal });
-      if (controller.signal.aborted) return;
+      if (controller.signal.aborted || rendered.cancelled) return;
       useHistoryStore.getState().captureSlot(slot, { image: await blobToDataUrl(rendered.blob), frame: rendered.meta?.frame_index ?? currentFrame, timestamp: at, workspace });
     } catch (error) { if ((error as Error).name !== 'AbortError') setCaptureError((error as Error).message); }
     finally { if (captureAbort.current === controller) setCaptureBusy(false); }
@@ -228,11 +228,19 @@ export function VideoViewport({
   const [faceMenu, setFaceMenu] = useState<FaceMenuTarget | null>(null);
   const extraction = useFaceExtraction({ target, frameIndex: currentFrame, activeSourceId: activeSourceId || null, onSourceExtracted, onRefreshPreview: live.retry });
   const activeSourceName = sources.find(item => item.faceset_id === activeSourceId)?.name ?? null;
-  const openFaceMenu = useCallback((menu: { faceRank: number; pose: FaceMenuTarget['pose']; x: number; y: number }) => setFaceMenu({ x: menu.x, y: menu.y, faceRank: menu.faceRank, pose: menu.pose }), []);
+  const openFaceMenu = useCallback((menu: { faceRank: number; pose: FaceMenuTarget['pose']; x: number; y: number; face?: any; norm_cx?: number; norm_cy?: number }) => {
+    const bbox = menu.face?.bbox;
+    const norm_cx = menu.norm_cx ?? (bbox ? (bbox[0] + bbox[2]) / 2 : undefined);
+    const norm_cy = menu.norm_cy ?? (bbox ? (bbox[1] + bbox[3]) / 2 : undefined);
+    setFaceMenu({ x: menu.x, y: menu.y, faceRank: menu.faceRank, pose: menu.pose, norm_cx, norm_cy });
+  }, []);
   const openMenuFromBar = useCallback((anchor: { x: number; y: number }) => {
     const store = useFaceSelectionStore.getState(), faces = store.getFacesAtTimestamp(time, fps);
     const face = faces.find(item => item.id === store.activeSelection) ?? faces[0];
-    setFaceMenu({ ...anchor, faceRank: face ? leftToRightRank(faces, face) : 0, pose: face ? facePose(face) : null });
+    const bbox = face?.bbox;
+    const norm_cx = bbox ? (bbox[0] + bbox[2]) / 2 : undefined;
+    const norm_cy = bbox ? (bbox[1] + bbox[3]) / 2 : undefined;
+    setFaceMenu({ ...anchor, faceRank: face ? leftToRightRank(faces, face) : 0, pose: face ? facePose(face) : null, norm_cx, norm_cy });
   }, [time, fps]);
   const floatingImage = history.previewSlot ? history.slots[history.previewSlot]?.image : liveUrl || outputPreview.source || sourcePreview.source;
   const floating = useFloatingPreview(<FloatingPreviewMedia image={floatingImage} path={solo ? '' : output || target} time={time} playing={playing && !solo} label={solo ? `SOLO · ${solo}` : output ? 'OUTPUT' : 'SOURCE'}/>);

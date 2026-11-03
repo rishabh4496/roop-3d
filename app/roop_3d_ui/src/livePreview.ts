@@ -121,10 +121,14 @@ export function useLiveSwapPreview(payload: LivePayload | null, debounceMs: numb
       try {
         const result = await postLivePreview(JSON.parse(key), { signal: controller.signal });
         if (!live) return;
+        if (result.cancelled) {
+          setState(previous => ({ ...previous, status: previous.url !== null ? 'ready' : 'idle', stale: previous.url !== null }));
+          return;
+        }
         setState({ status: 'ready', url: lease.current.replace(result.blob), blob: result.blob, meta: result.meta,
           cached: result.cached, stage: null, error: null, stale: false });
       } catch (error) {
-        if (!live || (error as Error).name === 'AbortError') return;
+        if (!live || (error as Error).name === 'AbortError' || (error as Error).name === 'DOMException') return;
         if (error instanceof PreviewBusyError) {
           setState(previous => ({ ...previous, status: 'busy', stage: error.stage, error: null, stale: previous.url !== null }));
           timer = setTimeout(() => void run(), error.retryAfterMs);

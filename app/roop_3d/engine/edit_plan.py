@@ -75,7 +75,8 @@ class FrameEditPlan:
     def occluders(self, image, result):
         if self.mask is None:
             return None
-        if self.mask.shape != image.shape[:2]:
-            raise DomainError('MASK_SIZE_MISMATCH', 'Manual mask must match upright media dimensions', 422)
-        return {item.track_id: cv2.warpAffine(self.mask.astype(np.float32) / 255,
+        mask = self.mask
+        if mask.shape != image.shape[:2]:
+            mask = cv2.resize(mask, (image.shape[1], image.shape[0]), interpolation=cv2.INTER_NEAREST)
+        return {item.track_id: cv2.warpAffine(mask.astype(np.float32) / 255,
             cv2.invertAffineTransform(item.inverse), (item.image.shape[1], item.image.shape[0])) for item in result.replacements}

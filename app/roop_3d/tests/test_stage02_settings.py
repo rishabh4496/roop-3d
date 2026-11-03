@@ -6,7 +6,7 @@ from pathlib import Path
 from pydantic import ValidationError
 import pytest
 
-from roop_3d.core.hardware import driver_cuda_version, effective_vram_budget, probe_hardware
+from roop_3d.core.hardware import driver_cuda_version, effective_vram_budget, probe_hardware, resolve_hardware_profile, LOW_VRAM_CEILING_MIB, STANDARD_VRAM_CEILING_MIB
 from roop_3d.core.settings import ConfigStore, Settings, migrate_config
 
 
@@ -53,10 +53,22 @@ def test_config_atomic_backup_and_explicit_migration(tmp_path: Path) -> None:
 
 def test_dynamic_budget_profiles() -> None:
     config = Settings(hardware_profile="6gb", memory_safety_reserve_mb=512)
-    assert effective_vram_budget(12288, 10000, config) == 5632
+    # Low-VRAM profile ceiling is clamped to LOW_VRAM_CEILING_MIB (4600 MiB)
+    assert effective_vram_budget(12288, 10000, config) == 4088  # min(10000, 4600) - 512
     assert effective_vram_budget(12288, 100, config) == 0
     assert effective_vram_budget(12288, 4000, config) == 3488
     assert effective_vram_budget(12288, 10000, Settings(hardware_profile="cpu")) == 0
+
+    # 6GB / low-VRAM auto resolution
+    assert resolve_hardware_profile(6144, 5000, "auto") == "6gb"
+    assert resolve_hardware_profile(12288, 10000, "auto") == "12gb"
+    assert resolve_hardware_profile(12288, 3000, "auto") == "6gb"  # free < 4000
+    assert resolve_hardware_profile(12288, 10000, "cpu") == "cpu"
+    assert resolve_hardware_profile(0, 0, "auto") == "cpu"
+
+    # Auto profile budget enforcement on 6GB GPU
+    six_gb_auto = Settings(hardware_profile="auto", memory_safety_reserve_mb=0)
+    assert effective_vram_budget(6144, 6000, six_gb_auto) == LOW_VRAM_CEILING_MIB
 
 
 def test_corrupt_configs_and_direct_validation_hide_secret_values(tmp_path: Path) -> None:

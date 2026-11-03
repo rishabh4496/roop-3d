@@ -713,3 +713,23 @@ def test_frame_detections_carry_a_standard_frame_pose_beside_the_legacy_one(tmp_
         assert looking_up["pose3d"]["pitch"] == pytest.approx(12, abs=0.5) and looking_up["pose"]["pitch"] == pytest.approx(-12, abs=0.5)
         assert looking_down["pose3d"]["yaw"] == looking_down["pose"]["yaw"] == pytest.approx(28, abs=0.5)
         assert [looking_down["pose_cell"], looking_up["pose_cell"]] == ["right_down", "center_up"]
+
+
+def test_extract_with_faceset_id_and_centroid(tmp_path, monkeypatch):
+    app, service, _ = extraction_app(tmp_path, monkeypatch)
+    with TestClient(app, base_url=BASE) as client:
+        created = extract(client, face_index=1, faceset_name="Alice").json()
+        faceset_id = created["active_source"]["faceset_id"]
+        # Extend using faceset_id instead of faceset_name
+        res = extract(client, face_index=0, destination="active_faceset", faceset_id=faceset_id)
+        assert res.status_code == 201
+        assert res.json()["faceset"]["item_count"] == 2
+
+        # Centroid matching: face 1 is around x=68 in 96-wide frame (norm_cx ~ 0.71, norm_cy ~ 0.5)
+        matched = extract(client, destination="source_gallery", norm_cx=0.71, norm_cy=0.5)
+        assert matched.status_code == 201
+        assert matched.json()["face"]["pose_cell"] == "center_level"
+
+        # Centroid out of bounds: beyond 0.15 * diagonal returns 422
+        out_of_bounds = extract(client, destination="source_gallery", norm_cx=0.05, norm_cy=0.05)
+        assert out_of_bounds.status_code == 422

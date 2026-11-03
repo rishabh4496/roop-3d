@@ -20,7 +20,7 @@ router = APIRouter(prefix='/api/v1/faces/bank')
 
 class DiscoverBank(Contract):
     target_media_path: str = Field(min_length=1,max_length=1024)
-    inspection_id: str = Field(pattern=r'^[0-9a-f]{32}$')
+    inspection_id: str | None = Field(default=None,pattern=r'^[0-9a-f]{32}$')
 
 class EditBank(Contract):
     target_media_path: str = Field(min_length=1,max_length=1024)
@@ -60,17 +60,33 @@ class FaceBank:
 
     def discover(self, value):
         relative,digest=self.location(value.target_media_path)
-        path=owned(self.root,f'roop_3d/.runtime/inspections/{value.inspection_id}.json')
-        if not path.is_file(): raise DomainError('INSPECTION_NOT_FOUND','Inspect the target first',422)
+        resolved_inspection_id = value.inspection_id
+        path = owned(self.root,f'roop_3d/.runtime/inspections/{resolved_inspection_id}.json') if resolved_inspection_id else None
+        if path is None or not path.is_file():
+            inspections_dir = owned(self.root, 'roop_3d/.runtime/inspections')
+            found_path = None
+            if inspections_dir.is_dir():
+                for p in sorted(inspections_dir.glob('*.json'), key=lambda x: x.stat().st_mtime, reverse=True):
+                    try:
+                        data = json.loads(p.read_text('utf-8'))
+                        if data.get('target_sha256') == digest:
+                            found_path = p
+                            resolved_inspection_id = p.stem
+                            break
+                    except (OSError, ValueError):
+                        continue
+            if found_path is None:
+                raise DomainError('INSPECTION_NOT_FOUND','Inspect the target first',422)
+            path = found_path
         inspection=FaceInspection.model_validate_json(path.read_text('utf-8'))
         if inspection.target_sha256!=digest: raise DomainError('INSPECTION_TARGET_MISMATCH','Inspection belongs to different media',409)
         with exclusive(self.root,relative+'.lock'):
             store=self.load(relative,digest)
-            if store.get('inspection_id') != value.inspection_id:
+            if store.get('inspection_id') != resolved_inspection_id:
                 for cluster in store['clusters']:
                     cluster['track_ids']=[]
                     cluster['faces']=[]
-                store['inspection_id']=value.inspection_id
+                store['inspection_id']=resolved_inspection_id
             known={track for cluster in store['clusters'] for track in cluster['track_ids']}
             unresolved=[]
             for track in inspection.tracks[:64]:

@@ -11,6 +11,8 @@ export type FaceMenuTarget = {
   faceRank: number;
   /** Standard-frame pose of that face when known. */
   pose: Pose | null;
+  norm_cx?: number;
+  norm_cy?: number;
 };
 
 type Props = {

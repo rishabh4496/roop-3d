@@ -61,6 +61,10 @@ _TRACK = r"^track_[0-9]{4}$"
 _COMPILE_STAGES = {"COMPILING_TRT": "TENSORRT_COMPILATION", "RUNNING_CANARY": "TENSORRT_CANARY"}
 
 
+class PreviewCancelled(Exception):
+    """Raised when client disconnects or aborts during preview slot acquisition or rendering."""
+
+
 # --------------------------------------------------------------------------- payload
 class MaskStroke(Contract):
     """A paint (keep original target pixels) or erase stroke in frame-normalised coordinates."""
@@ -373,7 +377,7 @@ class LivePreviewService:
     def _acquire_slot(self, cancel: Event) -> None:
         while not self._slot.acquire(timeout=0.05):
             if cancel.is_set():
-                raise DomainError("PREVIEW_CANCELLED", "Preview cancelled", 409)
+                raise PreviewCancelled("Preview cancelled")
 
     def _compute(self, payload: LivePreviewPayload, missing: list[int], digest: str, cancel: Event,
                  deadline: float | None, strict: bool) -> list[FrameOutcome]:
@@ -383,6 +387,8 @@ class LivePreviewService:
             info = self.media_info(payload.target_path)
             results, halted = [], None
             for index in missing:
+                if cancel.is_set():
+                    raise PreviewCancelled("Preview cancelled")
                 key = (payload.inspection_id, index, digest)
                 hit = self.cache.get(key)  # a queued twin may have rendered it while we waited
                 if hit is not None:
@@ -400,7 +406,9 @@ class LivePreviewService:
                         halted = busy.stage
                         results.append(FrameOutcome(index, "busy", stage=busy.stage))
                     except DomainError as error:
-                        if strict or error.code == "PREVIEW_CANCELLED":
+                        if error.code == "PREVIEW_CANCELLED":
+                            raise PreviewCancelled("Preview cancelled") from None
+                        if strict:
                             raise
                         results.append(FrameOutcome(index, "error", error={"code": error.code, "message": error.message}))
             return results
@@ -621,7 +629,12 @@ async def _single(request: Request, payload: LivePreviewPayload, as_json: bool) 
         index = await run_in_threadpool(service.frame_for, payload) if payload.frame_index is None else payload.frame_index
         return await service.frames(payload, [index], cancel)
 
-    digest, (outcome,) = await _cancellable(request, work)
+    try:
+        digest, (outcome,) = await _cancellable(request, work)
+    except (PreviewCancelled, DomainError) as error:
+        if isinstance(error, PreviewCancelled) or getattr(error, "code", None) == "PREVIEW_CANCELLED":
+            return Response(status_code=204, headers={"X-Preview-Status": "cancelled"})
+        raise
     if outcome.status == "busy":
         return busy_response(outcome.stage or REBIND)
     assert outcome.entry is not None
@@ -669,7 +682,12 @@ async def target_preview_grid(request: Request, config: str = Query(min_length=8
         return await service.frames(payload.model_copy(update={"frame_index": 0, "timestamp": None}), indices,
                                     cancel, budget_s=budget_ms / 1000, strict=False)
 
-    digest, outcomes = await _cancellable(request, work)
+    try:
+        digest, outcomes = await _cancellable(request, work)
+    except (PreviewCancelled, DomainError) as error:
+        if isinstance(error, PreviewCancelled) or getattr(error, "code", None) == "PREVIEW_CANCELLED":
+            return Response(status_code=204, headers={"X-Preview-Status": "cancelled"})
+        raise
     ready = [item for item in outcomes if item.status == "ready"]
     if not ready:
         busy = next((item for item in outcomes if item.status == "busy"), None)
@@ -711,7 +729,12 @@ async def target_preview_seq(request: Request, config: str = Query(min_length=8,
         return await service.frames(payload.model_copy(update={"frame_index": 0, "timestamp": None}), indices, cancel,
                                     budget_s=budget_ms / 1000, strict=False)
 
-    digest, outcomes = await _cancellable(request, work)
+    try:
+        digest, outcomes = await _cancellable(request, work)
+    except (PreviewCancelled, DomainError) as error:
+        if isinstance(error, PreviewCancelled) or getattr(error, "code", None) == "PREVIEW_CANCELLED":
+            return Response(status_code=204, headers={"X-Preview-Status": "cancelled"})
+        raise
     if not any(item.status == "ready" for item in outcomes):
         busy = next((item for item in outcomes if item.status == "busy"), None)
         if busy:

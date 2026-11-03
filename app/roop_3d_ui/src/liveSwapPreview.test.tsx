@@ -168,6 +168,20 @@ describe('useLiveSwapPreview', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
+  it('treats HTTP 204 or cancelled response benignly and maintains stale preview without error', async () => {
+    fetchMock.mockImplementationOnce(async () => swapped())
+      .mockImplementationOnce(async () => new Response(null, { status: 204, headers: { 'X-Preview-Status': 'cancelled' } }));
+    const out = { current: null as LivePreview | null };
+    await mount({ frame_index: 1 }, out);
+    await flush(LIVE_DEBOUNCE_MS);
+    expect(out.current).toMatchObject({ status: 'ready', url: 'blob:mock-1', stale: false });
+
+    await mount({ frame_index: 2 }, out);
+    await flush(LIVE_DEBOUNCE_MS);
+    expect(out.current).toMatchObject({ status: 'ready', url: 'blob:mock-1', stale: true, error: null });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
   it('restarts the request when a render is queued so the server can yield the GPU', async () => {
     fetchMock.mockImplementation(async () => swapped());
     const out = { current: null as LivePreview | null };

@@ -244,6 +244,13 @@ class PreviewService:
                             raise DomainError('PREVIEW_FRAME_BUDGET', 'Preview replays tracking from the beginning; select a frame within the first 1200 frames', 422)
                         if frame.image.shape[0] * frame.image.shape[1] > 3840 * 2160:
                             raise DomainError('PREVIEW_SIZE_BUDGET', 'Preview input exceeds the 4K frame budget', 422)
+                        if admission.profile == "6gb":
+                            h, w = frame.image.shape[:2]
+                            if max(h, w) > 512:
+                                scale = 512.0 / max(h, w)
+                                new_w, new_h = max(1, int(round(w * scale))), max(1, int(round(h * scale)))
+                                downscaled = cv2.resize(frame.image, (new_w, new_h), interpolation=cv2.INTER_AREA)
+                                frame = replace(frame, image=downscaled)
                         origin = frame.timestamp.seconds if origin is None else origin
                         edit_plan.apply(session, frame.index)
                         parameters = value.request.parameter_curves.evaluate(frame.index, base_parameters) if value.request.parameter_curves else base_parameters
@@ -267,6 +274,13 @@ class PreviewService:
                             raise DomainError('PREVIEW_FRAME_BUDGET', 'Preview seek exceeded decoder frame budget', 422)
                         if frame.image.shape[0] * frame.image.shape[1] > 3840 * 2160:
                             raise DomainError('PREVIEW_SIZE_BUDGET', 'Preview input exceeds the 4K frame budget', 422)
+                        if admission.profile == "6gb":
+                            h, w = frame.image.shape[:2]
+                            if max(h, w) > 512:
+                                scale = 512.0 / max(h, w)
+                                new_w, new_h = max(1, int(round(w * scale))), max(1, int(round(h * scale)))
+                                downscaled = cv2.resize(frame.image, (new_w, new_h), interpolation=cv2.INTER_AREA)
+                                frame = replace(frame, image=downscaled)
                         last_frame = frame
                         frame_seconds = frame.timestamp.seconds - start_offset
                         if frame_seconds >= target_time:

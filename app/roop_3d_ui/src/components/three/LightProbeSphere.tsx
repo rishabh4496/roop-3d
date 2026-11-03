@@ -1,5 +1,6 @@
 import React, { useRef, useState, useCallback, useMemo } from 'react';
 import type { WorkstationParameters } from '../workstation/pipeline';
+import { kelvinToRgb } from '../../utils/kelvinToRgb';
 
 interface LightProbeSphereProps {
   parameters?: WorkstationParameters;
@@ -95,11 +96,9 @@ export default function LightProbeSphere({
     }
   };
 
-  // Color temperature indicator color
+  // Color temperature indicator color (Tanner Helland algorithm)
   const tempColor = useMemo(() => {
-    if (colorTemperatureK < 4000) return '#f59e0b'; // warm amber
-    if (colorTemperatureK < 6500) return '#38bdf8'; // neutral daylight
-    return '#818cf8'; // cool blue
+    return kelvinToRgb(colorTemperatureK).hex;
   }, [colorTemperatureK]);
 
   return (

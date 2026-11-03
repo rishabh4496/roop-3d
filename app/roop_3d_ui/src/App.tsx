@@ -173,6 +173,14 @@ export default function App() {
     localStorage.setItem('roop3d-theme', t.mode);
   }, [themeName]);
   useEffect(() => {
+    const isHighPerf = Boolean(busy?.toLowerCase().includes('export') || busy?.toLowerCase().includes('render') || (config as any)?.performance_mode === 'high');
+    if (isHighPerf) {
+      document.documentElement.setAttribute('data-perf-mode', 'high');
+    } else {
+      document.documentElement.removeAttribute('data-perf-mode');
+    }
+  }, [busy, config]);
+  useEffect(() => {
     let refresh: ReturnType<typeof setTimeout> | undefined;
     const events = new EventConnection(`${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/api/v1/ws/events`, event => {
       if (event.type === 'system.telemetry' && event.hardware) publishHardware(event.hardware);
@@ -405,7 +413,8 @@ export default function App() {
           </label>
         </div>
       )}</>;
-  return <div className="workstation">
+  const isHighPerf = Boolean(busy?.toLowerCase().includes('export') || busy?.toLowerCase().includes('render') || (config as any)?.performance_mode === 'high');
+  return <div className={`workstation ${isHighPerf ? 'perf-high' : ''}`} data-perf-mode={isHighPerf ? 'high' : 'normal'}>
     <header className="app-header"><a className="brand" href="#/home" aria-label="Roop 3D home"><span className="brand-mark">R<span>3</span></span><strong>roop<span>3D</span></strong></a><span className="header-divider"/><span className="workspace-label">VIDEO WORKSTATION</span>
       <button className={`button small tour-button ${tourSeen() ? '' : 'fresh'}`} data-testid="header-tour-button" aria-haspopup="dialog" title="Four-step guide to the workstation" onClick={() => setTourOpen(true)}>How to Use</button>
       <div className="project-name"><input aria-label="Project name" maxLength={128} value={projectName} onChange={event => setProjectName(event.target.value)} /><span>{projectDirty ? 'UNSAVED' : 'SAVED'}</span></div>

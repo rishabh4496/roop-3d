@@ -77,13 +77,34 @@ class Hardware(BaseModel):
     openvino_version: str | None = None
     openvino_devices: list[str] = Field(default_factory=list)
     heterogeneous_split_mode: bool = False
+    configured_hardware_profile: Literal["auto", "cpu", "6gb", "12gb"] = "auto"
+    resolved_hardware_profile: Literal["cpu", "6gb", "12gb"] = "cpu"
+
+
+LOW_VRAM_CEILING_MIB = 4600
+STANDARD_VRAM_CEILING_MIB = 12288
+
+
+def resolve_hardware_profile(total_vram_mib: int, free_vram_mib: int, profile_setting: str = "auto") -> str:
+    if profile_setting == "cpu":
+        return "cpu"
+    if total_vram_mib <= 0:
+        return "cpu"
+    if profile_setting == "6gb":
+        return "6gb"
+    if profile_setting == "12gb":
+        return "12gb"
+    if total_vram_mib <= 6144 or free_vram_mib < 4000:
+        return "6gb"
+    return "12gb"
 
 
 def effective_vram_budget(total: int, free: int, settings: Settings) -> int:
-    if settings.hardware_profile == "cpu" or settings.preferred_provider == "CPUExecutionProvider":
+    resolved = resolve_hardware_profile(total, free, settings.hardware_profile)
+    if resolved == "cpu" or settings.preferred_provider == "CPUExecutionProvider":
         return 0
-    profile = {"6gb": 6144, "12gb": 12288}.get(settings.hardware_profile, total)
-    ceiling = min(total, profile, settings.vram_limit_mb or total)
+    profile_ceiling = LOW_VRAM_CEILING_MIB if resolved == "6gb" else STANDARD_VRAM_CEILING_MIB
+    ceiling = min(total, profile_ceiling, settings.vram_limit_mb or total)
     return max(0, min(free, ceiling) - settings.memory_safety_reserve_mb)
 
 
@@ -250,6 +271,13 @@ def probe_hardware(settings: Settings | None = None) -> Hardware:
             result.ffmpeg_probe_state = "VERIFIED_LOCAL"
         except (OSError, subprocess.SubprocessError):
             result.probe_notes.append("FFmpeg codec inventory probe failed")
+    if result.gpus:
+        gpu = result.gpus[0]
+        result.configured_hardware_profile = settings.hardware_profile
+        result.resolved_hardware_profile = resolve_hardware_profile(gpu.total_vram_mib, gpu.free_vram_mib, settings.hardware_profile)
+    else:
+        result.configured_hardware_profile = settings.hardware_profile
+        result.resolved_hardware_profile = "cpu"
     _summarize(result)
     try:
         from roop_3d.openvino_coprocessor import get_openvino_device_info

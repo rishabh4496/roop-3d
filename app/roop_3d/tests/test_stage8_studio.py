@@ -67,6 +67,10 @@ def test_bank_discovers_reentry_persists_edits_and_keeps_rank_gaps(tmp_path,monk
         bank=rescanned
         again=client.post('/api/v1/faces/bank/discover',json={**body,'inspection_id':new_id}).json()
         assert again['clusters']==bank['clusters']
+        # Omitting inspection_id auto-looks up the latest inspection by digest
+        found_auto = client.post('/api/v1/faces/bank/discover', json={'target_media_path': request['target_path']})
+        assert found_auto.status_code == 200, found_auto.text
+        assert found_auto.json()['clusters'] == bank['clusters']
         conflict=client.post('/api/v1/faces/bank/edit',json={'target_media_path':request['target_path'],'revision':0,'action':'rename','cluster_ids':[a],'name':'stale'})
         assert conflict.status_code==409
 

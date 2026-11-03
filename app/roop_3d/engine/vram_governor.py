@@ -12,7 +12,7 @@ import sys
 import threading
 from typing import Callable, Literal
 
-from roop_3d.core.hardware import Hardware, probe_hardware
+from roop_3d.core.hardware import Hardware, probe_hardware, resolve_hardware_profile
 from roop_3d.core.settings import Settings
 
 RuntimeProfile = Literal["cpu", "6gb", "12gb"]
@@ -89,12 +89,9 @@ class VRAMGovernor:
             usable = max(0, min(free, int(gpu.total_vram_mib) - active_reserved))
 
             requested = force_profile or settings.hardware_profile
-            if requested == "auto":
-                profile: RuntimeProfile = "6gb" if gpu.total_vram_mib < 12288 else "12gb"
-            elif requested == "12gb" and gpu.total_vram_mib < 12288:
+            profile = resolve_hardware_profile(gpu.total_vram_mib, gpu.free_vram_mib, requested)
+            if profile == "12gb" and gpu.total_vram_mib < 12288:
                 profile = "6gb"
-            else:
-                profile = requested  # type: ignore[assignment]
 
             if usable <= 0:
                 if active_gpu:

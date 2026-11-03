@@ -4,6 +4,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import { THEMES, themeByName, applyThemeToDom } from './themes';
+import { deriveThemeVars } from './themeVars';
 import ThemeGallery from './components/ThemeGallery';
 import FacesetLibrary from './components/facemgr/FacesetLibrary';
 import TimelineWorkstation, { RangeField } from './components/timeline/TimelineWorkstation';
@@ -75,7 +76,29 @@ describe('Themes & Styles Engine (37 Studio Themes)', () => {
     });
     host.remove();
   });
+
+  it('computes dark and light glassmorphic tokens in deriveThemeVars', () => {
+    const darkVars = deriveThemeVars({ mode: 'dark', bg: '#0B0C12', accent: '#E94560' });
+    expect(darkVars['--surface-glass']).toBeDefined();
+    expect(darkVars['--surface-glass-raised']).toBeDefined();
+    expect(darkVars['--glass-bg']).toBe(darkVars['--surface-glass']);
+    expect(darkVars['--glass-blur']).toBe('blur(12px) saturate(180%)');
+    expect(darkVars['--glass-border']).toContain('1px solid');
+    expect(darkVars['--glass-specular']).toContain('inset 0 1px 0');
+    expect(darkVars['--glass-glow']).toContain('0 8px 32px 0');
+    expect(darkVars['--glass-shadow']).toBe(darkVars['--glass-glow']);
+
+    const lightVars = deriveThemeVars({ mode: 'light', bg: '#e5e9f0', accent: '#E94560' });
+    expect(lightVars['--surface-glass']).toBe('rgba(255, 255, 255, 0.75)');
+    expect(lightVars['--surface-glass-raised']).toBe('rgba(245, 247, 248, 0.85)');
+    expect(lightVars['--glass-bg']).toBe('rgba(255, 255, 255, 0.75)');
+    expect(lightVars['--glass-border']).toBe('1px solid rgba(0, 0, 0, 0.08)');
+    expect(lightVars['--glass-specular']).toBe('inset 0 1px 0 rgba(255, 255, 255, 0.6)');
+    expect(lightVars['--glass-highlight']).toBe('rgba(255, 255, 255, 0.65)');
+    expect(lightVars['--glass-glow']).toBe('0 8px 32px 0 rgba(0, 0, 0, 0.08)');
+  });
 });
+
 
 describe('FaceSet Library Component', () => {
   beforeEach(() => {
@@ -132,6 +155,7 @@ describe('FaceSet Library Component', () => {
     host.remove();
   });
 });
+
 
 describe('Timeline Set In and Out Enhancements', () => {
   beforeEach(() => {

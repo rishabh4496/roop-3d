@@ -17,6 +17,7 @@ import datetime
 import hashlib
 import json
 import os
+import math
 from pathlib import Path
 import re
 import threading
@@ -55,11 +56,14 @@ class ExtractRequest(Contract):
     destination: Literal["source_gallery", "active_faceset", "target_cluster"]
     faceset_name: str | None = Field(default=None, min_length=1, max_length=128,
                                      description="source_gallery: display name. active_faceset: the id or name of the FaceSet to extend.")
+    faceset_id: str | None = Field(default=None, pattern=r"^[A-Za-z0-9_-]{1,64}$")
+    norm_cx: float | None = Field(default=None, ge=0.0, le=1.0)
+    norm_cy: float | None = Field(default=None, ge=0.0, le=1.0)
 
     @model_validator(mode="after")
     def named(self) -> "ExtractRequest":
-        if self.destination == "active_faceset" and not self.faceset_name:
-            raise ValueError("active_faceset needs faceset_name (the FaceSet id or name)")
+        if self.destination == "active_faceset" and not (self.faceset_name or self.faceset_id):
+            raise ValueError("active_faceset needs faceset_name or faceset_id (the FaceSet id or name)")
         return self
 
 
@@ -134,9 +138,34 @@ class FaceExtractService:
         image, path = decoded if decoded is not None else self._frame(request)
         detections, _ = self._detector().detect(image, 0.5)
         faces = sorted(detections, key=lambda item: float(np.asarray(item[0])[0]))
-        if request.face_index >= len(faces):
+        if not faces:
+            raise DomainError("FACE_NOT_FOUND", "No faces detected in frame", 422)
+
+        matched_index = request.face_index
+        if request.norm_cx is not None and request.norm_cy is not None:
+            h, w = image.shape[:2]
+            diag = math.sqrt(w * w + h * h)
+            max_dist_px = 0.15 * diag
+            target_cx = request.norm_cx * w
+            target_cy = request.norm_cy * h
+            best_idx = None
+            best_dist = float("inf")
+            for idx, (f_box, _) in enumerate(faces):
+                bx1, by1, bx2, by2 = [float(v) for v in f_box]
+                fcx = (bx1 + bx2) / 2.0
+                fcy = (by1 + by2) / 2.0
+                dist = math.hypot(fcx - target_cx, fcy - target_cy)
+                if dist < best_dist:
+                    best_dist = dist
+                    best_idx = idx
+            if best_idx is not None and best_dist <= max_dist_px:
+                matched_index = best_idx
+            else:
+                raise DomainError("FACE_NOT_FOUND", f"No detected face within spatial threshold of centroid ({request.norm_cx:.2f}, {request.norm_cy:.2f})", 422)
+        elif request.face_index >= len(faces):
             raise DomainError("FACE_NOT_FOUND", f"Frame has {len(faces)} detected face(s); face_index {request.face_index} is out of range", 422)
-        box, points = faces[request.face_index]
+
+        box, points = faces[matched_index]
         points = np.asarray(points, np.float64)
         pose = estimate_pose_5pt(points)
         crop = aligned_crop(image, points, CROP_SIZE)
@@ -149,7 +178,7 @@ class FaceExtractService:
         sharpness = float(min(1.0, cv2.Laplacian(gray, cv2.CV_64F).var() / 500.0))
         box = np.asarray(box, np.float64)
         face = {
-            "face_id": "face_" + uuid.uuid4().hex[:12], "frame_index": request.frame_index, "face_index": request.face_index,
+            "face_id": "face_" + uuid.uuid4().hex[:12], "frame_index": request.frame_index, "face_index": matched_index,
             "bbox": [float(v) for v in box], "landmarks5": points.tolist(), "pose": pose.model_dump(),
             "pose_cell": pose_cell(pose).name, "embedding_dim": int(embedding.shape[0]), "sharpness": sharpness,
             "embedding": [float(x) for x in embedding], "thumbnail_base64": base64.b64encode(jpg.tobytes()).decode("ascii"),
@@ -249,7 +278,7 @@ class FaceExtractService:
         raise DomainError("FACESET_NOT_FOUND", "FaceSet archive is missing", 404)
 
     def _to_faceset(self, request: ExtractRequest, face: dict[str, Any], view: FaceView, path: Path) -> dict[str, Any]:
-        faceset_id, archive = self._resolve_faceset(request.faceset_name or "")
+        faceset_id, archive = self._resolve_faceset(request.faceset_id or request.faceset_name or "")
         with self._lock(faceset_id):
             reader = FaceSetReader(self.state.models, cache_root=self.state.root / "roop_3d/.runtime/cache")
             current = reader.read(archive, faceset_id=faceset_id)

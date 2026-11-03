@@ -40,13 +40,15 @@ export function useFaceExtraction({ target, frameIndex, activeSourceId, onSource
     timer.current = setTimeout(() => setToast(null), toastMs);
   }, [toastMs]);
 
-  const run = useCallback(async (destination: FaceDestination, menu: Pick<FaceMenuTarget, 'faceRank'>) => {
+  const run = useCallback(async (destination: FaceDestination, menu: Pick<FaceMenuTarget, 'faceRank'> & Partial<Pick<FaceMenuTarget, 'norm_cx' | 'norm_cy'>>) => {
     if (!target || busy) return null;
     setBusy(true);
     try {
       const result = await extract({
         target_media_path: target, frame_index: frameIndex, face_index: menu.faceRank, destination,
         ...(destination === 'active_faceset' && activeSourceId ? { faceset_name: activeSourceId } : {}),
+        ...(menu.norm_cx !== undefined ? { norm_cx: menu.norm_cx } : {}),
+        ...(menu.norm_cy !== undefined ? { norm_cy: menu.norm_cy } : {}),
       });
       if (result.active_source) onSourceExtracted?.({ faceset_id: result.active_source.faceset_id, name: result.active_source.name, item_count: 1 });
       else if (result.faceset) onSourceExtracted?.({ faceset_id: result.faceset.faceset_id, name: result.faceset.name, item_count: result.faceset.item_count });

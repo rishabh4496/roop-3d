@@ -356,13 +356,21 @@ let state: FaceSelectionStoreState = {
       }
     }
 
-    const clusters = clusterFaces(faces, 0.65, undefined, existingAssignments);
+    const validTrackIds = new Set(inspection.tracks.map(item => item.track_id));
+    const sanitizedAssignments: Record<string, string> = {};
+    for (const [trackId, facesetId] of Object.entries(existingAssignments)) {
+      if (validTrackIds.has(trackId)) {
+        sanitizedAssignments[trackId] = facesetId;
+      }
+    }
+
+    const clusters = clusterFaces(faces, 0.65, undefined, sanitizedAssignments);
     for (const cluster of clusters) { const track = inspection.tracks.find(item => item.track_id === cluster.id); cluster.originTrackId = cluster.id; cluster.startFrame = track?.first_frame ?? 0; cluster.endFrame = track?.last_frame ?? null; }
     state = {
       ...state,
       detectedFaces: faces,
       targetClusters: clusters,
-      assignments: { ...existingAssignments },
+      assignments: sanitizedAssignments,
       activeSelection: faces[0]?.id ?? null,
       selectedClusterId: faces[0]?.clusterId ?? null,
     };

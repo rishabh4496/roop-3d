@@ -21,10 +21,13 @@ export type LivePreviewMeta = {
   media_id: string; frame_index: number; swap_config_hash: string; solo_node: string; width: number; height: number;
   faces: LiveFace[]; applied: string[]; unsupported: string[]; notes: string[]; latency: Record<string, number>;
 };
-export type LivePreviewResult = { blob: Blob; meta: LivePreviewMeta | null; cached: boolean };
+export type LivePreviewResult = { blob: Blob; meta: LivePreviewMeta | null; cached: boolean; cancelled?: boolean };
 
 export async function postLivePreview(payload: unknown, init: RequestInit = {}): Promise<LivePreviewResult> {
   const response = await fetch('/api/preview', { method: 'POST', body: JSON.stringify(payload), cache: 'no-store', ...init, headers: { 'Content-Type': 'application/json', ...init.headers } });
+  if (response.status === 204 || response.headers.get('X-Preview-Status') === 'cancelled') {
+    return { blob: new Blob([]), meta: null, cached: false, cancelled: true };
+  }
   if (response.status === 503) {
     const body = await response.json().catch(() => null);
     if (body?.busy === true) throw new PreviewBusyError(String(body.stage ?? 'UNKNOWN'), Number(body.retry_after_ms) > 0 ? Number(body.retry_after_ms) : 1000);
@@ -49,8 +52,16 @@ export type ExtractFromFrameResult = {
   cluster?: { rank: number; created: boolean };
 };
 /** Stage 5 "Use Face From Frame": face numbers are 0-based, counted left to right in that frame. */
-export const extractFaceFromFrame = (body: { target_media_path: string; frame_index: number; face_index: number; destination: ExtractFromFrameResult['destination']; faceset_name?: string }) =>
-  post<ExtractFromFrameResult>('/faces/extract_from_frame', body);
+export const extractFaceFromFrame = (body: {
+  target_media_path: string;
+  frame_index: number;
+  face_index: number;
+  destination: ExtractFromFrameResult['destination'];
+  faceset_name?: string;
+  faceset_id?: string;
+  norm_cx?: number;
+  norm_cy?: number;
+}) => post<ExtractFromFrameResult>('/faces/extract_from_frame', body);
 export const mediaURL = (path: string) => `/api/v1/media/content?${new URLSearchParams({ path })}`;
 export async function upload(file: File, capabilities: Capabilities, progress: (value: number) => void, signal: AbortSignal) {
   if (file.size > capabilities.workstation.max_asset_bytes) throw new Error('This file exceeds the advertised upload limit.');

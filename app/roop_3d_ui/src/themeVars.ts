@@ -104,6 +104,22 @@ export function deriveThemeVars(recipe: Partial<ThemeRecipe>): Record<string, st
   const radius = Number.isFinite(Number(t.radius)) ? Number(t.radius) : DEFAULT_RECIPE.radius || 16;
   const accentHover = light ? darken(accent, 0.12) : lighten(accent, 0.14);
 
+  const surfaceGlass = light
+    ? 'rgba(255, 255, 255, 0.75)'
+    : alpha(cardTint, 0.72);
+  const surfaceGlassRaised = light
+    ? 'rgba(245, 247, 248, 0.85)'
+    : alpha(lighten(cardTint, 0.08), 0.78);
+  const glassBorder = light
+    ? '1px solid rgba(0, 0, 0, 0.08)'
+    : `1px solid ${alpha(inkHex, 0.08)}`;
+  const glassSpecular = light
+    ? 'inset 0 1px 0 rgba(255, 255, 255, 0.6)'
+    : `inset 0 1px 0 ${alpha(lighten(bg, 1), 0.06)}`;
+  const glassGlow = light
+    ? '0 8px 32px 0 rgba(0, 0, 0, 0.08)'
+    : '0 8px 32px 0 rgba(0, 0, 0, 0.37)';
+
   return {
     '--bg-gradient': [
       `radial-gradient(at 18% -12%, ${alpha(accent, light ? 0.1 : 0.06)} 0px, transparent 42%)`,
@@ -112,6 +128,15 @@ export function deriveThemeVars(recipe: Partial<ThemeRecipe>): Record<string, st
     ].join(', '),
     '--card-bg': alpha(cardTint, surface),
     '--surface-2': alpha(inkHex, light ? 0.05 : 0.035),
+    '--surface-glass': surfaceGlass,
+    '--surface-glass-raised': surfaceGlassRaised,
+    '--glass-bg': surfaceGlass,
+    '--glass-border': glassBorder,
+    '--glass-specular': glassSpecular,
+    '--glass-highlight': light ? 'rgba(255, 255, 255, 0.65)' : alpha(lighten(bg, 1), 0.06),
+    '--glass-glow': glassGlow,
+    '--glass-shadow': glassGlow,
+    '--glass-blur': 'blur(12px) saturate(180%)',
     '--text-main': ink,
     '--text-muted': alpha(inkHex, 0.55),
     '--accent': accent,

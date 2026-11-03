@@ -100,6 +100,8 @@ def capabilities(request: Request) -> Capabilities:
                          "cancel": ["queued", "preparing", "running", "pausing", "paused", "interrupted"]},
         "upload_chunk_bytes": min(CHUNK_BYTES, state.settings.max_body_bytes), "max_asset_bytes": MAX_ASSET_BYTES}
     workstation["features"]["queue"] = {"enabled": state.worker is not None, "reason": None if state.worker is not None else "Background worker is disabled"}
+    workstation["active_hardware_profile"] = state.settings.hardware_profile
+    workstation["resolved_hardware_profile"] = getattr(hardware, "resolved_hardware_profile", "auto")
     return Capabilities(enabled_modes=("media_probe", "frame_preview", "face_inspection", "persistent_job_queue",
                                        "local_video_render", "workstation", "projects"), workstation=workstation,
                         rendering_worker_available=request.app.state.worker is not None,
