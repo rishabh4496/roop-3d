@@ -65,6 +65,10 @@ def create_clip(path: Path, size: int = 64, *, audio: bool = False):
         stream = container.add_stream("libx264", rate=25)
         stream.width, stream.height, stream.pix_fmt = size, size, "yuv420p"
         stream.codec_context.max_b_frames = 0
+        # A properly tagged BT.709 limited-range source: untagged matrix/range is routed to the colour-managed reference path.
+        context = stream.codec_context
+        context.colorspace = context.color_primaries = context.color_trc = 1
+        context.color_range = 1
         audio_stream = container.add_stream("aac", rate=48000) if audio else None
         if audio_stream:
             audio_stream.layout = "mono"
@@ -72,7 +76,7 @@ def create_clip(path: Path, size: int = 64, *, audio: bool = False):
             image = np.full((size, size, 3), (40, 80, 20), np.uint8)
             if 2 <= index <= 6:
                 image[8:44, :30] = (240, 240, 240)
-            frame = av.VideoFrame.from_ndarray(image, format="bgr24")
+            frame = av.VideoFrame.from_ndarray(image, format="bgr24").reformat(format="yuv420p", dst_colorspace=1, dst_color_range=1)
             frame.pts, frame.time_base = index, Fraction(1, 25)
             for packet in stream.encode(frame):
                 container.mux(packet)

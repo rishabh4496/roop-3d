@@ -24,10 +24,12 @@ from roop_3d.media.detector import Detector
 from roop_3d.engine.detection.face_tracker import FaceTracker
 from roop_3d.engine.detection.track_policy import TrackPolicy
 from roop_3d.identity.report import IdentityReportCollector, write_report
+from roop_3d.color.description import WorkingColor, working_color
 from roop_3d.media.probe import open_media, probe
 from roop_3d.media.timestamps import Timestamp
 from roop_3d.media.video_reader import VideoReader
-from roop_3d.media.schema import AudioTrack, BoundingBox, FaceInspection, FaceTrack, InspectRequest, MediaProbe, PoseRange
+from roop_3d.media.schema import (AudioTrack, BoundingBox, FaceInspection, FaceTrack, InspectRequest, MediaProbe, PoseRange,
+                                  SubtitleTrack)
 from roop_3d.models.catalog import ModelCatalog
 
 VIDEO_SUFFIXES = {".mp4", ".mov", ".mkv", ".avi", ".webm", ".m4v", ".ts"}
@@ -38,6 +40,7 @@ class MediaService:
         self.root = root
         self.detector = Detector(catalog)
         self.settings = settings
+        self._color_cache: dict = {}
 
     def path(self, value: str) -> Path:
         try:
@@ -73,7 +76,35 @@ class MediaService:
                           timing_sample_frames=video.sampled_frames, timing_sample_complete=video.sample_complete,
                           audio_tracks=audio, time_base=str(video.time_base), nominal_frame_rate=str(video.nominal_rate) if video.nominal_rate else None,
                           pixel_format=video.pixel_format, color_space=video.color_space_name,
-                          color_range=video.color_range, rotation_degrees=video.rotation)
+                          color_range=video.color_range, rotation_degrees=video.rotation,
+                          bit_depth=video.bit_depth, chroma_format=video.chroma, **self._color_fields(video),
+                          subtitle_tracks=tuple(SubtitleTrack(stream_index=s.index, codec=s.codec, kind=s.kind,
+                                                              language=s.language, title=s.title) for s in info.subtitles))
+
+    @staticmethod
+    def _color_fields(video) -> dict:
+        from roop_3d.color import codes
+        color = video.color
+        return {"color_primaries": codes.name_of("primaries", color.primaries),
+                "color_transfer": codes.name_of("transfer", color.transfer),
+                "color_matrix": codes.name_of("matrix", color.matrix),
+                "color_range_name": codes.name_of("range", color.range), "dynamic_range": color.dynamic_range,
+                "color_assumed_fields": color.assumed_fields,
+                "hdr_static_metadata": color.hdr.as_dict() if color.hdr else None}
+
+    def working_color(self, value: str, hdr_policy: str = "tonemap_sdr") -> WorkingColor:
+        """What the 8-bit frames of this media mean (primaries, transfer, matrix, range) under an HDR policy."""
+        path = self.path(value)
+        stat = path.stat()
+        key = (str(path), stat.st_mtime_ns, stat.st_size, hdr_policy)
+        cached = self._color_cache.get(key)
+        if cached is None:
+            video = probe(path).videos[0]
+            cached = working_color(video.color, hdr_policy, (video.width, video.height))
+            if len(self._color_cache) > 64:
+                self._color_cache.clear()
+            self._color_cache[key] = cached
+        return cached
 
     def frame(self, value: str, timestamp: float | None, frame_index: int | None) -> np.ndarray:
         if (timestamp is None) == (frame_index is None):

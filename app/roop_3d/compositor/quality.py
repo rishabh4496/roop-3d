@@ -159,15 +159,34 @@ def transfer_fine_texture(source: np.ndarray, target: np.ndarray, alpha: np.ndar
     return out, float(gain[weight > 0.5].mean()) if (weight > 0.5).any() else 0.0
 
 
-# sRGB <-> linear light, used for physically meaningful edge blending.
-_SRGB_TO_LINEAR = np.where((np.arange(256) / 255.0) <= 0.04045, (np.arange(256) / 255.0) / 12.92,
-                           (((np.arange(256) / 255.0) + 0.055) / 1.055) ** 2.4).astype(np.float32)
+# Display-referred code value <-> linear light, used for physically meaningful edge blending. The decode
+# curve is a parameter: material is not always sRGB (BT.709/601/2020 video is graded on a BT.1886 display).
+_LINEAR_LUTS: dict[str, np.ndarray] = {}
 
 
-def blend_linear_light(target: np.ndarray, source: np.ndarray, alpha: np.ndarray) -> np.ndarray:
-    """alpha-blend two uint8 BGR images in linear light; returns float32 sRGB 0..255."""
-    t_lin, s_lin = _SRGB_TO_LINEAR[target], _SRGB_TO_LINEAR[source]
+def linear_lut(transfer: str) -> np.ndarray:
+    """256-entry float32 table: 8-bit code -> relative linear light, for one of ``color.transfer.BLEND_TRANSFERS``."""
+    if transfer not in _LINEAR_LUTS:
+        from roop_3d.color import transfer as curves
+        _LINEAR_LUTS[transfer] = curves.lut_to_linear(transfer, 8)
+    return _LINEAR_LUTS[transfer]
+
+
+def encode_linear(transfer: str, linear: np.ndarray) -> np.ndarray:
+    """Relative linear light 0..1 -> code value 0..255 (float32, unrounded)."""
+    from roop_3d.color import transfer as curves
+    return (curves.from_linear(transfer, np.clip(linear, 0.0, 1.0)) * 255.0).astype(np.float32)
+
+
+def mix_linear_light(target: np.ndarray, source: np.ndarray, alpha: np.ndarray, transfer: str = "srgb") -> np.ndarray:
+    """alpha-mix two images in linear light. ``source`` may be float 0..255; it is clipped and rounded to codes."""
+    lut = linear_lut(transfer)
+    t_lin = lut[target]
+    s_lin = lut[np.clip(np.rint(source), 0, 255).astype(np.uint8)]
     a = np.clip(alpha, 0.0, 1.0)[..., None]
-    mixed = np.clip(t_lin * (1.0 - a) + s_lin * a, 0.0, 1.0)
-    encoded = np.where(mixed <= 0.0031308, mixed * 12.92, 1.055 * np.power(mixed, 1.0 / 2.4) - 0.055)
-    return (encoded * 255.0).astype(np.float32)
+    return encode_linear(transfer, t_lin * (1.0 - a) + s_lin * a)
+
+
+def blend_linear_light(target: np.ndarray, source: np.ndarray, alpha: np.ndarray, transfer: str = "srgb") -> np.ndarray:
+    """alpha-blend two uint8 BGR images in linear light; returns float32 code values 0..255 (sRGB by default)."""
+    return mix_linear_light(target, source, alpha, transfer)

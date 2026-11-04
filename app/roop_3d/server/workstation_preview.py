@@ -211,7 +211,9 @@ class PreviewService:
                 session.set_identity_guard(identity_guard)
             if hasattr(session, 'configure_temporal'):
                 session.configure_temporal(settings)
-            base_parameters = value.effective_parameters
+            # Blend in the same display transfer the render job will use, so a preview matches its export.
+            base_parameters = value.effective_parameters.with_source_transfer(
+                self.state.media.working_color(value.request.target_path).transfer)
             parameters = base_parameters
             needs_restorer = parameters.composite_options().restoration_blend > 0 or any(
                 axis and axis.parameter == 'restoration_blend' and max(axis.values) > 0 for axis in (value.x, value.y))

@@ -33,6 +33,14 @@ class AudioTrack(Contract):
     channel_layout: str | None = None
 
 
+class SubtitleTrack(Contract):
+    stream_index: int
+    codec: str
+    kind: Literal["text", "bitmap"]
+    language: str | None = None
+    title: str | None = None
+
+
 class MediaProbe(Contract):
     container: str
     duration_seconds: float | None
@@ -54,6 +62,17 @@ class MediaProbe(Contract):
     color_space: str = "UNKNOWN"
     color_range: int | None = None
     rotation_degrees: int = 0
+    # Stage 15: resolved colour interpretation. ``color_assumed_fields`` names every field the file did not state.
+    bit_depth: int | None = None
+    chroma_format: str | None = None
+    color_primaries: str | None = None
+    color_transfer: str | None = None
+    color_matrix: str | None = None
+    color_range_name: str | None = None
+    dynamic_range: Literal["SDR", "HDR_PQ", "HDR_HLG"] | None = None
+    color_assumed_fields: tuple[str, ...] = ()
+    hdr_static_metadata: dict | None = None
+    subtitle_tracks: tuple[SubtitleTrack, ...] = ()
 
 
 class BoundingBox(Contract):

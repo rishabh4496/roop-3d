@@ -75,7 +75,8 @@ def _pyramid_blend(target: np.ndarray, source: np.ndarray, alpha: np.ndarray, le
 
 
 def fuse_crop(frame: np.ndarray, crop: np.ndarray, inverse: np.ndarray, mask: np.ndarray, *,
-              mode: BlendMode | str = BlendMode.FEATHER, levels: int = 4) -> np.ndarray:
+              mode: BlendMode | str = BlendMode.FEATHER, levels: int = 4,
+              linear_light: bool = False, transfer: str = "srgb") -> np.ndarray:
     """Composite a transformed crop and guarantee byte-identical pixels outside its dilated ROI."""
     target = np.asarray(frame)
     if target.ndim != 3 or target.shape[2] != 3 or target.dtype != np.uint8:
@@ -85,16 +86,23 @@ def fuse_crop(frame: np.ndarray, crop: np.ndarray, inverse: np.ndarray, mask: np
     except ValueError:
         raise ValueError("Unknown boundary fusion mode") from None
     source, alpha = warp_crop(crop, inverse, target.shape, mask)
-    return fuse_warped(target, source, alpha, mode=blend_mode, levels=levels)
+    return fuse_warped(target, source, alpha, mode=blend_mode, levels=levels, linear_light=linear_light,
+                       transfer=transfer)
 
 
 def fuse_warped(target: np.ndarray, source: np.ndarray, alpha: np.ndarray, *,
-                mode: BlendMode | str = BlendMode.FEATHER, levels: int = 4, linear_light: bool = False) -> np.ndarray:
+                mode: BlendMode | str = BlendMode.FEATHER, levels: int = 4, linear_light: bool = False,
+                transfer: str = "srgb") -> np.ndarray:
     """Blend an already frame-space ``source``/``alpha`` pair into ``target`` (uint8 BGR).
 
-    ``linear_light`` blends the feather mode in linear light (sRGB decoded) instead of gamma space.
+    ``linear_light`` performs the blend arithmetic on linear light instead of on encoded code values, using
+    the named display transfer (``color.transfer.BLEND_TRANSFERS``; the default is sRGB, matching earlier
+    behaviour). It applies to every mode: feather mixes in linear light; multi-band builds and merges its
+    pyramids in linear light; Poisson solves its gradient field on the encoded image (gradient-domain
+    cloning is perceptual by construction) and then performs the final alpha mix in linear light.
     Pixels outside the dilated alpha support are returned byte-identical.
     """
+    from roop_3d.compositor.quality import encode_linear, linear_lut, mix_linear_light
     blend_mode = BlendMode(mode)
     margin = max(2, (2 ** max(1, min(levels, 8))) if blend_mode == BlendMode.MULTI_BAND else 2)
     bounds = _bounds(alpha, margin)
@@ -104,24 +112,31 @@ def fuse_warped(target: np.ndarray, source: np.ndarray, alpha: np.ndarray, *,
     target_roi = target[y0:y1, x0:x1]
     source_roi = source[y0:y1, x0:x1]
     alpha_roi = alpha[y0:y1, x0:x1]
+
+    def mix(foreground: np.ndarray) -> np.ndarray:
+        if linear_light:
+            return mix_linear_light(target_roi, foreground, alpha_roi, transfer)
+        return target_roi.astype(np.float32) * (1 - alpha_roi[..., None]) + foreground.astype(np.float32) * alpha_roi[..., None]
+
     if blend_mode == BlendMode.MULTI_BAND:
-        mixed = _pyramid_blend(target_roi, source_roi, alpha_roi, levels)
+        if linear_light:
+            lut = linear_lut(transfer)
+            clipped = np.clip(np.rint(source_roi), 0, 255).astype(np.uint8)
+            mixed = encode_linear(transfer, _pyramid_blend(lut[target_roi], lut[clipped], alpha_roi, levels))
+        else:
+            mixed = _pyramid_blend(target_roi, source_roi, alpha_roi, levels)
     elif blend_mode == BlendMode.POISSON:
         binary = (alpha_roi > 0.05).astype(np.uint8) * 255
         if int(binary.sum()) == 0 or min(binary.shape) < 2:
-            mixed = target_roi.astype(np.float32) * (1 - alpha_roi[..., None]) + source_roi.astype(np.float32) * alpha_roi[..., None]
+            mixed = mix(source_roi)
         else:
             try:
                 center = ((x1 - x0) // 2, (y1 - y0) // 2)
-                cloned = cv2.seamlessClone(source_roi, target_roi, binary, center, cv2.NORMAL_CLONE)
-                mixed = target_roi.astype(np.float32) * (1 - alpha_roi[..., None]) + cloned.astype(np.float32) * alpha_roi[..., None]
+                mixed = mix(cv2.seamlessClone(source_roi, target_roi, binary, center, cv2.NORMAL_CLONE))
             except cv2.error:
-                mixed = target_roi.astype(np.float32) * (1 - alpha_roi[..., None]) + source_roi.astype(np.float32) * alpha_roi[..., None]
-    elif linear_light:
-        from roop_3d.compositor.quality import blend_linear_light
-        mixed = blend_linear_light(target_roi, np.clip(source_roi, 0, 255).astype(np.uint8), alpha_roi)
+                mixed = mix(source_roi)
     else:
-        mixed = target_roi.astype(np.float32) * (1 - alpha_roi[..., None]) + source_roi.astype(np.float32) * alpha_roi[..., None]
+        mixed = mix(source_roi)
     # Pyramid reconstruction and Poisson gradients can spread beyond nonzero alpha.
     # Clamp their write footprint to the explicitly dilated blend support.
     radius = max(1, margin)

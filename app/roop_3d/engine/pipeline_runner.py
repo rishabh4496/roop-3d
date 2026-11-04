@@ -517,6 +517,9 @@ class MasterPipelineRunner:
         capability: dict = {}
         restorer_sha256: str | None = None
         export = record.request.export
+        hdr_policy = export.hdr_policy if export else 'tonemap_sdr'
+        if hdr_policy != 'tonemap_sdr':  # raises HDR_INPUT_REJECTED for PQ/HLG input before any work is done
+            self.media.working_color(record.request.target_path, hdr_policy)
         scene_cuts: list[int] = []
         swapped_ranges: list[list[int]] = []
         identity_report = None
@@ -566,7 +569,7 @@ class MasterPipelineRunner:
                         session.compositor.restorer = GpenRestorer(self.catalog, runtime_config)
             mark_running()
 
-            reader = VideoReader(target, hardware="auto")
+            reader = VideoReader(target, hardware="auto", hdr_policy=hdr_policy)
             frames = reader.frames()
             iteration_end = time.perf_counter()
             try:
@@ -598,7 +601,8 @@ class MasterPipelineRunner:
                         collector = PassCollector(decoded.image.shape[:2], export.passes)
                     output = session.composite_frame(
                         decoded.image, result,
-                        options=parameters.composite_options() if parameters else CompositeOptions(restoration_blend=(0.35 if session.compositor.restorer else 0.0)),
+                        options=(parameters.with_source_transfer(reader.working.transfer).composite_options() if parameters
+                                 else CompositeOptions(restoration_blend=(0.35 if session.compositor.restorer else 0.0))),
                         occluder_masks=prepared.edit_plan.occluders(decoded.image, result) if prepared.edit_plan and prepared.edit_plan.mask is not None else None,
                         lip_sync_enabled=settings.lip_sync_mode == "wav2lip",
                         **({'observer': collector.observe} if collector else {}))
@@ -743,14 +747,25 @@ class MasterPipelineRunner:
                     self._check_control(control, checkpoint, last_completed)
                 return result
         try:
-            manifest = self.writer(target, f"roop3d_{record.job_id}.mp4", root=self.root,
+            stage15 = {}
+            output_name = f"roop3d_{record.job_id}.mp4"
+            if export and export.profile:
+                from roop_3d.media.export_profiles import get_profile
+                container = get_profile(export.profile).container
+                output_name = f"roop3d_{record.job_id}" + ('' if container == 'sequence' else container)
+                stage15 = {'profile': export.profile, 'sequence_format': export.sequence_format}
+            if export and export.subtitles != 'copy':
+                stage15['subtitles'] = export.subtitles
+            if hdr_policy != 'tonemap_sdr':
+                stage15['hdr_policy'] = hdr_policy
+            manifest = self.writer(target, output_name, root=self.root,
                 hardware="software" if admission.profile == "cpu" else "auto", timing=timing,
                 rate=output_rate, audio_policy=settings.audio_policy, transform=completed_frame,
                 output_dir=settings.output_root, manifest_metadata=metadata,
                 start=Fraction(str(record.request.trim_start_seconds)) if record.request.trim_start_seconds is not None else None,
                 end=Fraction(str(record.request.trim_end_seconds)) if record.request.trim_end_seconds is not None else None,
                 before_publish=lambda: self._check_control(control, checkpoint, last_completed),
-                **({'finishing': export.finishing} if export else {}))
+                **({'finishing': export.finishing} if export else {}), **stage15)
         except BaseException as error:
             if pass_result:
                 from roop_3d.media.vfx import discard_sequences
@@ -784,7 +799,16 @@ class MasterPipelineRunner:
         for relative in artifacts:
             path = owned(self.root, relative)
             if path.exists():
-                if path.is_symlink() or not path.is_file():
+                if path.is_symlink():
+                    raise DomainError("JOB_OUTPUT_INVALID", "Published job output is not an owned regular file", 409)
+                if relative == output.output_path and path.is_dir():  # an image-sequence export is a directory
+                    if any(item.is_symlink() or item.is_dir() for item in path.iterdir()):
+                        raise DomainError("JOB_OUTPUT_INVALID", "Image sequence holds links or nested directories", 409)
+                    for item in path.iterdir():
+                        item.unlink()
+                    path.rmdir()
+                    continue
+                if not path.is_file():
                     raise DomainError("JOB_OUTPUT_INVALID", "Published job output is not an owned regular file", 409)
                 path.unlink()
 

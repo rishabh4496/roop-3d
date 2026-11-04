@@ -160,6 +160,31 @@ def _process_environment():
             "TEMP": str(temporary), "TMPDIR": str(temporary)}
 
 
+#: FFmpeg command-line names for the H.273 codes this chain has been validated for (8-bit 4:2:0 SDR).
+_FF_MATRIX = {1: "bt709", 5: "bt470bg", 6: "smpte170m", 9: "bt2020nc"}
+_FF_PRIMARIES = {1: "bt709", 5: "bt470bg", 6: "smpte170m", 9: "bt2020"}
+_FF_TRC = {1: "bt709", 4: "gamma22", 5: "gamma28", 6: "smpte170m", 8: "linear", 13: "iec61966-2-1", 14: "bt2020-10"}
+
+
+def stream_color_supported(color) -> str | None:
+    """None when the raw-stream chain reproduces this material's colour; otherwise why the reference path is needed.
+
+    The chain decodes through FFmpeg's scaler (which honours the file's matrix and range tags) and encodes 8-bit
+    4:2:0. It cannot resolve an untagged matrix or range the way the reference reader does, and it has no
+    path for >8-bit or non-4:2:0 material, so those require the colour-managed reference path.
+    """
+    if color.is_hdr:
+        return "HDR transfer functions require the preserved color-managed reference path"
+    if color.bit_depth != 8 or color.chroma != "420":
+        return f"{color.bit_depth}-bit {color.chroma} material requires the color-managed reference path"
+    if color.matrix not in _FF_MATRIX or color.primaries not in _FF_PRIMARIES or color.transfer not in _FF_TRC:
+        return "This colour description has no validated raw-stream conversion"
+    untagged = [name for name in ("matrix", "range") if color.provenance.get(name) != "tagged"]
+    if untagged:
+        return f"Untagged {'/'.join(untagged)} must be resolved by the color-managed reference path"
+    return None
+
+
 class NvdecFrameSource:
     def __init__(self, path: Path, *, strict: bool | None = None, hardware: bool = True):
         import os
@@ -180,6 +205,10 @@ class NvdecFrameSource:
         self.shape = (self.info.height, self.info.width, 3)
         if self.info.color_trc in (16, 18):
             raise ValueError("HDR transfer functions require the preserved color-managed reference path")
+        self.color = self.info.color
+        reason = stream_color_supported(self.color)
+        if reason:
+            raise ValueError(reason)
         from roop_3d.media.probe import open_media
         self.keyframes = set()
         with open_media(self.path) as container:
@@ -334,7 +363,10 @@ class NVHardwareVideoWriter:
 
     def __init__(self, destination: Path, shape: tuple[int, int, int], rate: Fraction, *,
                  codec: str = "h264_nvenc", hardware: bool = True, strict: bool = False,
-                 lut_path: Path | None = None, lut_bake: bool = False):
+                 lut_path: Path | None = None, lut_bake: bool = False, color=None):
+        """``color`` (a resolved ``ColorDescription``) makes the RGB->YCbCr matrix and range explicit and tags the file
+        with them. Without it the encoder uses FFmpeg's untagged BT.601 default, which shifts every pixel of
+        BT.709 material by ~40/255; callers that know the source colour must pass it."""
         self.destination = owned_path(destination)
         if self.destination.exists() or self.destination.suffix.lower() != ".mp4":
             raise ValueError("Writer requires a fresh owned MP4 path")
@@ -355,6 +387,15 @@ class NVHardwareVideoWriter:
             raise ValueError("Strict NVENC cannot select a software encoder")
         command = [_binary("ffmpeg"), "-nostdin", "-v", "error", "-n", "-f", "rawvideo", "-pix_fmt", "bgr24",
                    "-s:v", f"{shape[1]}x{shape[0]}", "-r", str(rate), "-i", "pipe:0", "-an"]
+        filters: list[str] = []
+        tags: list[str] = []
+        if color is not None:
+            if color.matrix not in _FF_MATRIX or color.primaries not in _FF_PRIMARIES or color.transfer not in _FF_TRC:
+                raise ValueError("No validated raw-stream conversion for this colour description")
+            span = "pc" if color.range == 2 else "tv"
+            matrix = _FF_MATRIX[color.matrix]
+            tags = ["-colorspace", matrix, "-color_primaries", _FF_PRIMARIES[color.primaries], "-color_trc", _FF_TRC[color.transfer],
+                    "-color_range", span]
         if lut_bake:
             if lut_path is None:
                 raise ValueError("LUT baking requires a local .cube file")
@@ -363,8 +404,17 @@ class NVHardwareVideoWriter:
                 raise ValueError("LUT must be a bounded local .cube file")
             # FFmpeg filter escaping is independent of shell escaping; no shell is used.
             escaped = lut.as_posix().replace("\\", "\\\\").replace(":", "\\:").replace("'", "'\\''")
-            command += ["-vf", f"lut3d=file='{escaped}'"]
-        command += ["-c:v", self.codec, "-pix_fmt", "yuv420p", "-bf", "0", "-movflags", "+faststart", str(self.destination)]
+            filters.append(f"lut3d=file='{escaped}'")
+        if color is not None:
+            # ``scale`` performs the conversion with the explicit matrix/range; ``setparams`` stamps all four colour
+            # properties on the frames, which is where FFmpeg 8's encoder reads them from (the -color_* options alone
+            # leave primaries and transfer unspecified).
+            filters += [f"scale=out_color_matrix={matrix}:out_range={span}:flags=accurate_rnd+full_chroma_int", "format=yuv420p",
+                        f"setparams=colorspace={matrix}:color_primaries={_FF_PRIMARIES[color.primaries]}:"
+                        f"color_trc={_FF_TRC[color.transfer]}:range={span}"]
+        if filters:
+            command += ["-vf", ",".join(filters)]
+        command += ["-c:v", self.codec, "-pix_fmt", "yuv420p", *tags, "-bf", "0", "-movflags", "+faststart", str(self.destination)]
         self.process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, env=_process_environment())
         self.errors = bytearray()
         def drain():

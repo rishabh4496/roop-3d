@@ -408,7 +408,7 @@ def get_job(job_id: str, request: Request) -> JobRecord:
 @router.get("/jobs/{job_id}/artifacts/{kind}")
 def job_artifact(job_id: str, kind: str, request: Request):
     record = request.app.state.jobs.get(job_id)
-    if kind not in {"video", "manifest"}:
+    if kind not in {"video", "manifest", "sequence"}:
         raise DomainError("JOB_ARTIFACT_NOT_FOUND", "Unknown render artifact", 404)
     if record.state.value != "succeeded" or record.output is None:
         raise DomainError("JOB_OUTPUT_NOT_READY", "A verified completed render is required", 409)
@@ -416,11 +416,23 @@ def job_artifact(job_id: str, kind: str, request: Request):
         raise DomainError("JOB_VIDEO_NOT_RENDERED", "This render exported passes only", 409)
     output = owned(request.app.state.root, record.output.output_path)
     manifest = owned(request.app.state.root, record.output.manifest_path)
+    if output.is_dir():
+        # An image-sequence export: the directory's integrity hash is that of its sidecar (which lists every frame hash).
+        sidecar = output / "sequence.json"
+        if kind == "video":
+            raise DomainError("JOB_OUTPUT_IS_SEQUENCE", "This render is an image sequence; fetch the 'sequence' artifact", 409)
+        if not sidecar.is_file() or not manifest.is_file() or sha256_file(sidecar)[1] != record.output.output_sha256:
+            raise DomainError("JOB_OUTPUT_CHANGED", "Published output is missing or its integrity changed", 409)
+        path = sidecar if kind == "sequence" else manifest
+        return FileResponse(path, filename=path.name, headers={"Cache-Control": "no-store"}, media_type="application/json")
+    if kind == "sequence":
+        raise DomainError("JOB_ARTIFACT_NOT_FOUND", "This render is not an image sequence", 404)
     if not output.is_file() or not manifest.is_file() or sha256_file(output)[1] != record.output.output_sha256:
         raise DomainError("JOB_OUTPUT_CHANGED", "Published output is missing or its integrity changed", 409)
     path = output if kind == "video" else manifest
+    video_types = {".mp4": "video/mp4", ".mov": "video/quicktime", ".mkv": "video/x-matroska"}
     return FileResponse(path, filename=path.name, headers={"Cache-Control": "no-store"},
-                        media_type="video/mp4" if kind == "video" else "application/json")
+                        media_type=video_types.get(path.suffix.lower(), "application/octet-stream") if kind == "video" else "application/json")
 
 
 @router.post("/jobs/{job_id}/cancel", response_model=JobRecord)

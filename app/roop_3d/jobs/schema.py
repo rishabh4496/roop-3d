@@ -79,9 +79,14 @@ class JobRequest(Contract):
             value.pop("engine_id", None)
         if self.workstation_parameters:
             # Preserve fingerprints of requests saved before these opt-in controls existed.
-            for field in ('swap_weight', 'erosion_px', 'pose_frontalization', 'tps_expression_weight'):
+            for field in ('swap_weight', 'erosion_px', 'pose_frontalization', 'tps_expression_weight', 'linear_light', 'blend_transfer'):
                 if field not in self.workstation_parameters.model_fields_set:
                     value['workstation_parameters'].pop(field, None)
+        if isinstance(value.get('export'), dict):
+            # Stage 15 options at their defaults must not change the fingerprint of an earlier request.
+            for key, default in (('profile', None), ('hdr_policy', 'tonemap_sdr'), ('subtitles', 'copy'), ('sequence_format', 'png')):
+                if value['export'].get(key) == default:
+                    value['export'].pop(key, None)
         for name in ("identity_blend", "trim_start_seconds", "trim_end_seconds", "mask_base64", "workstation_parameters", "parameter_curves", "face_segments", "export", "identity_lock_id"):
             if value.get(name) is None:
                 value.pop(name, None)

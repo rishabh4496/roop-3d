@@ -17,6 +17,9 @@ class WorkstationParameters(Contract):
     swap_weight: float = Field(default=1, ge=0, le=1)
     erosion_px: float = Field(default=0, ge=-32, le=32)
     bypass: tuple[Literal['restorer', 'color'], ...] = Field(default=(), max_length=2)
+    # Stage 15: blend in linear light. 'auto' follows the source's actual transfer (see composite_options).
+    linear_light: bool = False
+    blend_transfer: Literal['auto', 'srgb', 'bt1886', 'gamma22', 'gamma28', 'bt709_oetf', 'linear'] = 'auto'
     # Pre-swap 3D pose frontalization (reduces profile mismatch before inswapper_128) and TPS expression warping.
     pose_frontalization: float = Field(default=0, ge=0, le=1)
     tps_expression_weight: float = Field(default=0, ge=0, le=1)
@@ -40,7 +43,7 @@ class WorkstationParameters(Contract):
     @model_serializer(mode='wrap')
     def compatible_serialization(self, handler):
         value = handler(self)
-        for field in ('color_method', 'restorer_model', 'identity_blend_t', 'fidelity_weight', 'swap_weight', 'erosion_px', 'pose_mode', 'pose_frontalization', 'tps_expression_weight', 'render_mode', 'occlusion_mode'):
+        for field in ('color_method', 'restorer_model', 'identity_blend_t', 'fidelity_weight', 'swap_weight', 'erosion_px', 'pose_mode', 'pose_frontalization', 'tps_expression_weight', 'render_mode', 'occlusion_mode', 'linear_light', 'blend_transfer'):
             if field not in self.model_fields_set:
                 value.pop(field, None)
         return value
@@ -66,8 +69,17 @@ class WorkstationParameters(Contract):
     def uses_mesh_projection(self) -> bool:
         return self.pose_mode == 'mesh_blend' or self.render_mode == 'pose_3d'
 
+    def with_source_transfer(self, transfer_code: int) -> 'WorkstationParameters':
+        """Resolve ``blend_transfer='auto'`` to the display transfer matching the media's (working) transfer code."""
+        from roop_3d.color.transfer import blend_transfer_for
+        if self.blend_transfer != 'auto':
+            return self
+        return self.model_copy(update={'blend_transfer': blend_transfer_for(transfer_code)})
+
     def composite_options(self):
         from roop_3d.compositor.pipeline import CompositeOptions
+        # Unresolved 'auto' falls back to sRGB, the pre-Stage-15 curve; callers with media context resolve it first.
+        blend = 'srgb' if self.blend_transfer == 'auto' else self.blend_transfer
         return CompositeOptions(color_method=self.color_method, fidelity_weight=self.fidelity_weight, restoration_blend=0 if 'restorer' in self.bypass else self.restoration_blend,
                                 feather_px=self.feather_px,
                                 swap_weight=self.swap_weight, erosion_px=self.erosion_px,
@@ -79,4 +91,5 @@ class WorkstationParameters(Contract):
                                 shadow_preservation=self.shadow_preservation,
                                 lighting_mode=self.lighting_mode,
                                 manual_light_yaw=self.manual_light_yaw,
-                                manual_light_pitch=self.manual_light_pitch)
+                                manual_light_pitch=self.manual_light_pitch,
+                                linear_light=self.linear_light, blend_transfer=blend)

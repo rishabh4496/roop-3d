@@ -22,6 +22,21 @@ COMPATIBLE = {".mp4": {"aac", "mp3", "ac3", "eac3", "alac"},
               ".mkv": {"aac", "mp3", "ac3", "eac3", "alac", "pcm_s16le", "pcm_s24le", "flac", "opus", "vorbis"}}
 
 
+#: Standard layout for a channel count, used when a container stores only the count (PCM in Matroska, AVI,
+#: WAV) and FFmpeg reports an unlabelled layout such as "2 channels", which no encoder accepts by name.
+_DEFAULT_LAYOUTS = {1: "mono", 2: "stereo", 3: "3.0", 4: "4.0", 5: "5.0", 6: "5.1", 7: "6.1", 8: "7.1"}
+
+
+def transcode_layout(layout: av.AudioLayout) -> str:
+    """Layout name safe to hand to an encoder and resampler for this source layout."""
+    count = len(layout.channels)
+    if not layout.name.endswith(" channels"):
+        return layout.name
+    if count not in _DEFAULT_LAYOUTS:
+        raise DomainError("AUDIO_LAYOUT_UNSUPPORTED", f"No standard channel layout for {count} unlabelled channels", 422)
+    return _DEFAULT_LAYOUTS[count]
+
+
 @dataclass(frozen=True)
 class AudioPlan:
     source_index: int
@@ -76,7 +91,7 @@ def audio_packets(container: av.container.InputContainer, output: av.container.O
             target = output.add_stream_from_template(source)
         else:
             target = output.add_stream(plan.codec, rate=source.codec_context.sample_rate)
-            target.layout = source.codec_context.layout.name
+            target.layout = transcode_layout(source.codec_context.layout)
             target.bit_rate = max(320000, 128000 * len(source.codec_context.layout.channels))
             target.time_base = Fraction(1, target.codec_context.sample_rate)
             target.codec_context.time_base = target.time_base

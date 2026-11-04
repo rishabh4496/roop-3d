@@ -148,6 +148,8 @@ class LipSyncAdapter:
                 "provenance": record.provenance_state if record is not None else "UNKNOWN",
                 "license": record.license_id if record is not None else "UNKNOWN",
                 "inference": "UNKNOWN", "three_d_visemes": "UNSUPPORTED",
+                # Pixels only: this feature has no path to any audio track, enabled or not.
+                "audio_modification": "never", "default": "off", "selection": "explicit (lip_sync_mode setting)",
                 "reason": self.reason,
                 "gate_tracks": self.gate.track_count}
 

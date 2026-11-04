@@ -1,0 +1,526 @@
+{
+  "audio_sync_measurements": {
+    "aac_transcode": [
+      {
+        "action": "transcode",
+        "ambiguous": false,
+        "codec": "aac",
+        "correlation": 1.0,
+        "lag_ms": 0.0,
+        "measurable": true,
+        "ok": true,
+        "payload_identical": null,
+        "reason": null,
+        "source_stream": 1,
+        "tolerance_ms": 2.0
+      },
+      {
+        "action": "transcode",
+        "ambiguous": false,
+        "codec": "aac",
+        "correlation": 0.9999,
+        "lag_ms": 0.0,
+        "measurable": true,
+        "ok": true,
+        "payload_identical": null,
+        "reason": null,
+        "source_stream": 2,
+        "tolerance_ms": 2.0
+      }
+    ],
+    "aac_transcode_trimmed_0.2s": [
+      {
+        "action": "transcode",
+        "ambiguous": false,
+        "codec": "aac",
+        "correlation": 1.0,
+        "lag_ms": 0.0,
+        "measurable": true,
+        "ok": true,
+        "payload_identical": null,
+        "reason": null,
+        "source_stream": 1,
+        "tolerance_ms": 2.0
+      },
+      {
+        "action": "transcode",
+        "ambiguous": false,
+        "codec": "aac",
+        "correlation": 1.0,
+        "lag_ms": 0.0,
+        "measurable": true,
+        "ok": true,
+        "payload_identical": null,
+        "reason": null,
+        "source_stream": 2,
+        "tolerance_ms": 2.0
+      }
+    ],
+    "pcm_transcode": [
+      {
+        "action": "transcode",
+        "ambiguous": false,
+        "codec": "pcm_s16le",
+        "correlation": 1.0,
+        "lag_ms": 0.0,
+        "measurable": true,
+        "ok": true,
+        "payload_identical": null,
+        "reason": null,
+        "source_stream": 1,
+        "tolerance_ms": 2.0
+      },
+      {
+        "action": "transcode",
+        "ambiguous": false,
+        "codec": "pcm_s16le",
+        "correlation": 1.0,
+        "lag_ms": 0.0,
+        "measurable": true,
+        "ok": true,
+        "payload_identical": null,
+        "reason": null,
+        "source_stream": 2,
+        "tolerance_ms": 2.0
+      }
+    ],
+    "stream_copy_mov": [
+      {
+        "action": "copy",
+        "ambiguous": false,
+        "codec": "pcm_s16le",
+        "correlation": 1.0,
+        "lag_ms": 0.0,
+        "measurable": true,
+        "ok": true,
+        "payload_identical": true,
+        "reason": null,
+        "source_stream": 1,
+        "tolerance_ms": 0.5
+      },
+      {
+        "action": "copy",
+        "ambiguous": false,
+        "codec": "pcm_s16le",
+        "correlation": 1.0,
+        "lag_ms": 0.0,
+        "measurable": true,
+        "ok": true,
+        "payload_identical": true,
+        "reason": null,
+        "source_stream": 2,
+        "tolerance_ms": 0.5
+      }
+    ]
+  },
+  "before_stage15": {
+    "bt2020_sdr_10bit": [
+      0,
+      2,
+      6,
+      33,
+      17,
+      14,
+      19,
+      7
+    ],
+    "bt601_limited": [
+      2,
+      2,
+      6,
+      3,
+      3,
+      5,
+      6,
+      9
+    ],
+    "bt709_full": [
+      0,
+      0,
+      0,
+      1,
+      7,
+      4,
+      6,
+      1
+    ],
+    "bt709_limited": [
+      0,
+      0,
+      0,
+      2,
+      4,
+      7,
+      6,
+      4
+    ],
+    "method": "tagged source -> encode_video (default settings) -> decode; max |error| per stripe in 8-bit code values",
+    "note": "BT.2020 was encoded with the BT.601 matrix but tagged BT.2020 (green off by 33/255); PQ/HLG were written as 8-bit yuv420p tagged PQ/HLG with SDR processing; untagged HD decoded with BT.601 (up to 23/255).",
+    "stream_backend_709_hd": {
+      "after_encode_error": 41,
+      "decode_error": 2,
+      "output_tags": "all unspecified"
+    }
+  },
+  "decode_vs_oracle_max_error_per_stripe": {
+    "bt2020_sdr_10bit": [
+      0,
+      0,
+      1,
+      2,
+      1,
+      1,
+      2,
+      2
+    ],
+    "bt2020_sdr_10bit_full": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      1
+    ],
+    "bt601_limited": [
+      0,
+      0,
+      2,
+      1,
+      1,
+      0,
+      2,
+      3
+    ],
+    "bt709_full": [
+      0,
+      0,
+      1,
+      1,
+      2,
+      0,
+      1,
+      0
+    ],
+    "bt709_limited": [
+      0,
+      0,
+      1,
+      1,
+      1,
+      0,
+      2,
+      2
+    ]
+  },
+  "encode_roundtrip_max_error_per_stripe": {
+    "bt2020_sdr_10bit": [
+      0,
+      0,
+      13,
+      8,
+      5,
+      3,
+      6,
+      2
+    ],
+    "bt2020_sdr_10bit_full": [
+      1,
+      3,
+      11,
+      9,
+      4,
+      2,
+      6,
+      2
+    ],
+    "bt601_limited": [
+      0,
+      0,
+      6,
+      3,
+      7,
+      7,
+      5,
+      6
+    ],
+    "bt709_full": [
+      1,
+      0,
+      2,
+      3,
+      5,
+      5,
+      4,
+      2
+    ],
+    "bt709_limited": [
+      0,
+      0,
+      5,
+      3,
+      2,
+      4,
+      8,
+      7
+    ]
+  },
+  "encoders": {
+    "dpx": true,
+    "ffv1": true,
+    "h264_nvenc": true,
+    "hevc_nvenc": true,
+    "libvpx-vp9": true,
+    "libx264": true,
+    "libx265": true,
+    "png": true,
+    "prores_ks": true,
+    "tiff": true
+  },
+  "export_profiles": {
+    "archival_hevc10": {
+      "checks": {
+        "hdr_passthrough": {
+          "fidelity_samples": 2,
+          "frames": 4,
+          "pixel_format": "yuv420p10le",
+          "state": "VERIFIED_LOCAL"
+        },
+        "rendered_frames": {
+          "fidelity_samples": 2,
+          "frames": 4,
+          "pixel_format": "yuv420p10le",
+          "state": "VERIFIED_LOCAL"
+        },
+        "unmodified_media": {
+          "fidelity_samples": 2,
+          "frames": 4,
+          "pixel_format": "yuv420p10le",
+          "state": "VERIFIED_LOCAL"
+        }
+      },
+      "encoder": "libx265",
+      "state": "VERIFIED_LOCAL"
+    },
+    "color_preserving": {
+      "checks": {
+        "hdr_passthrough": {
+          "fidelity_samples": 2,
+          "frames": 4,
+          "pixel_format": "yuv420p10le",
+          "state": "VERIFIED_LOCAL"
+        },
+        "rendered_frames": {
+          "fidelity_samples": 2,
+          "frames": 4,
+          "pixel_format": "yuv422p10le",
+          "state": "VERIFIED_LOCAL"
+        },
+        "unmodified_media": {
+          "fidelity_samples": 2,
+          "frames": 4,
+          "pixel_format": "yuv422p10le",
+          "state": "VERIFIED_LOCAL"
+        }
+      },
+      "encoder": "prores_ks",
+      "state": "VERIFIED_LOCAL"
+    },
+    "high_quality_mp4": {
+      "checks": {
+        "rendered_frames": {
+          "fidelity_samples": 2,
+          "frames": 4,
+          "pixel_format": "yuv420p",
+          "state": "VERIFIED_LOCAL"
+        }
+      },
+      "encoder": "libx264",
+      "state": "VERIFIED_LOCAL"
+    },
+    "image_sequence": {
+      "checks": {
+        "rendered_frames": {
+          "fidelity_samples": 2,
+          "frames": 4,
+          "pixel_format": "rgb24",
+          "state": "VERIFIED_LOCAL"
+        }
+      },
+      "encoder": "png",
+      "state": "VERIFIED_LOCAL"
+    },
+    "lossless_intermediate": {
+      "checks": {
+        "hdr_passthrough": {
+          "fidelity_samples": 2,
+          "frames": 4,
+          "pixel_format": "yuv420p10le",
+          "state": "VERIFIED_LOCAL"
+        },
+        "rendered_frames": {
+          "fidelity_samples": 2,
+          "frames": 4,
+          "pixel_format": "bgr0",
+          "state": "VERIFIED_LOCAL"
+        },
+        "unmodified_media": {
+          "fidelity_samples": 2,
+          "frames": 4,
+          "pixel_format": "yuv420p",
+          "state": "VERIFIED_LOCAL"
+        }
+      },
+      "encoder": "ffv1",
+      "state": "VERIFIED_LOCAL"
+    },
+    "mov_workflow": {
+      "checks": {
+        "rendered_frames": {
+          "fidelity_samples": 2,
+          "frames": 4,
+          "pixel_format": "yuv422p10le",
+          "state": "VERIFIED_LOCAL"
+        },
+        "unmodified_media": {
+          "fidelity_samples": 2,
+          "frames": 4,
+          "pixel_format": "yuv422p10le",
+          "state": "VERIFIED_LOCAL"
+        }
+      },
+      "encoder": "prores_ks",
+      "state": "VERIFIED_LOCAL"
+    },
+    "standard_mp4": {
+      "checks": {
+        "rendered_frames": {
+          "fidelity_samples": 2,
+          "frames": 4,
+          "pixel_format": "yuv420p",
+          "state": "VERIFIED_LOCAL"
+        }
+      },
+      "encoder": "libx264",
+      "state": "VERIFIED_LOCAL"
+    }
+  },
+  "generated_unix": 1793813508,
+  "hdr_to_sdr_tone_map": {
+    "pq_peak_1000": {
+      "cd_m2": [
+        0.5,
+        5.0,
+        18.0,
+        36.5,
+        100.0,
+        203.0,
+        400.0,
+        1000.0,
+        4000.0
+      ],
+      "parameters": {
+        "algorithm": "bt2390_eetf_v1",
+        "reference_white_nits": 203.0,
+        "sdr_peak_nits": 100.0,
+        "source_peak_nits": 1000.0
+      },
+      "sdr_8bit_code": [
+        21,
+        54,
+        93,
+        125,
+        189,
+        230,
+        250,
+        255,
+        255
+      ],
+      "sdr_linear": [
+        0.0024999999441206455,
+        0.02459999918937683,
+        0.08869999647140503,
+        0.17980000376701355,
+        0.4884999990463257,
+        0.7799000144004822,
+        0.9520999789237976,
+        1.0,
+        1.0
+      ]
+    },
+    "pq_peak_4000": {
+      "cd_m2": [
+        0.5,
+        5.0,
+        18.0,
+        36.5,
+        100.0,
+        203.0,
+        400.0,
+        1000.0,
+        4000.0
+      ],
+      "parameters": {
+        "algorithm": "bt2390_eetf_v1",
+        "reference_white_nits": 203.0,
+        "sdr_peak_nits": 100.0,
+        "source_peak_nits": 4000.0
+      },
+      "sdr_8bit_code": [
+        21,
+        54,
+        93,
+        125,
+        177,
+        209,
+        232,
+        250,
+        255
+      ],
+      "sdr_linear": [
+        0.0024999999441206455,
+        0.02459999918937683,
+        0.08869999647140503,
+        0.17980000376701355,
+        0.4165000021457672,
+        0.6205000281333923,
+        0.7982000112533569,
+        0.9509999752044678,
+        1.0
+      ]
+    }
+  },
+  "libraries": {
+    "libavcodec": "62.28.101",
+    "libavdevice": "62.3.101",
+    "libavfilter": "11.14.101",
+    "libavformat": "62.12.101",
+    "libavutil": "60.26.101",
+    "libswresample": "6.3.101",
+    "libswscale": "9.5.101"
+  },
+  "opencolorio": {
+    "configs": "built-in ocio:// only",
+    "max_abs_difference": {
+      "bt1886_gamma24": 2.4080276489257812e-05,
+      "bt2020_to_bt709_matrix": 4.921600593732478e-08,
+      "bt709_oetf_rounded_constants": 0.000247191734182306,
+      "bt709_to_bt2020_matrix": 1.899373747171751e-08,
+      "gamma22": 2.2292137145996094e-05,
+      "hlg_oetf_with_inverse_ootf": 3.165412465477857e-08,
+      "pq_inverse_eotf": 4.685124221914805e-08,
+      "srgb_eotf": 2.4080276489257812e-05
+    },
+    "version": "2.6.0"
+  },
+  "published_constants": {
+    "hlg_oetf_1_12": 0.5,
+    "hlg_reference_white_nits": 203.1521453536661,
+    "pq_1000_nit": 0.751827096247041,
+    "pq_203_nit": 0.5806888810416109
+  },
+  "pyav": "17.1.0",
+  "python": "3.10.20",
+  "schema_version": 1
+}

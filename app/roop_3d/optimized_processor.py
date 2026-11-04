@@ -108,7 +108,7 @@ class StreamingProcessor:
                 if writer is None:
                     writer = NVHardwareVideoWriter(workspace.next_path(), source.shape, source.rate,
                         hardware=self.policy.hardware_profile != "cpu", strict=self.policy.strict_nvenc,
-                        lut_path=lut_path, lut_bake=lut_bake)
+                        lut_path=lut_path, lut_bake=lut_bake, color=source.color)
                 with self.timings.measure("encode"):
                     writer.write(output)
                 decoded += 1

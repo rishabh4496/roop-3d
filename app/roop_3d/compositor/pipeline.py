@@ -82,6 +82,9 @@ class CompositeOptions:
     erosion_px: float = 0.0
     occlusion_mode: str = "standard"
     robust: RobustOptions = field(default_factory=RobustOptions)
+    # Stage 15: blend arithmetic in linear light, with the display transfer named explicitly (never assumed sRGB).
+    linear_light: bool = False
+    blend_transfer: str = "srgb"
 
     def __post_init__(self) -> None:
         if not np.isfinite(self.fidelity_weight) or not 0 <= self.fidelity_weight <= 1:
@@ -96,6 +99,9 @@ class CompositeOptions:
             raise ValueError("Invalid mask or pyramid configuration")
         if self.occlusion_mode not in OCCLUSION_MODES:
             raise ValueError(f"occlusion_mode must be one of {OCCLUSION_MODES}")
+        from roop_3d.color.transfer import BLEND_TRANSFERS
+        if self.blend_transfer not in BLEND_TRANSFERS:
+            raise ValueError(f"blend_transfer must be one of {BLEND_TRANSFERS}")
 
 
 @dataclass
@@ -321,7 +327,8 @@ class FrameCompositor:
             if observer is not None:
                 observer('vfx', crop, temporal.inverse, effective_alpha)
             output = fuse_crop(output, harmonized, temporal.inverse, effective_alpha,
-                               mode=options.mode, levels=options.pyramid_levels)
+                               mode=options.mode, levels=options.pyramid_levels,
+                               linear_light=options.linear_light, transfer=options.blend_transfer)
         self.frames_composited += 1
         total_ms = (time.perf_counter() - compose_began) * 1000
         restorer_ms = restorer_seconds * 1000
@@ -445,7 +452,9 @@ class FrameCompositor:
         contexts.sort(key=functools.cmp_to_key(self._depth_order))
         fusion_options = RobustFusionOptions(refine_matte=robust.refine_matte, decontaminate=robust.edge_decontamination,
                                              match_sharpness=robust.sharpness_matching, texture_strength=robust.texture_strength,
-                                             linear_light=robust.linear_light, matte_contrast=robust.matte_contrast)
+                                             linear_light=robust.linear_light or options.linear_light,
+                                             transfer=options.blend_transfer if options.linear_light else "srgb",
+                                             matte_contrast=robust.matte_contrast)
         self.last_reports = {}
         for context in contexts:
             replacement, crop, analysis = context.replacement, context.crop, context.analysis

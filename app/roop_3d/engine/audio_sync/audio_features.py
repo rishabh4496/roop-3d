@@ -106,7 +106,8 @@ def decode_audio(path: Path, *, stream_index: int | None = None,
     if type(target_rate) is not int or target_rate <= 0:
         raise ValueError("target_rate must be a positive integer")
     try:
-        with av.open(str(source), mode="r") as container:
+        # Through a handle with every protocol disabled, like the rest of the media layer: a local file only.
+        with source.open("rb") as handle, av.open(handle, mode="r", options={"protocol_whitelist": ""}) as container:
             streams = list(container.streams.audio)
             if not streams:
                 raise DomainError("AUDIO_STREAM_MISSING", "Media contains no audio stream", 422)
@@ -116,11 +117,18 @@ def decode_audio(path: Path, *, stream_index: int | None = None,
                 stream = next((item for item in streams if item.index == stream_index), None)
                 if stream is None:
                     raise DomainError("AUDIO_STREAM_MISSING", "Requested audio stream index is unavailable", 422)
-            start_time = (Fraction(stream.start_time) * Fraction(stream.time_base)
-                          if stream.start_time is not None and stream.time_base is not None else Fraction(0))
+            declared = (Fraction(stream.start_time) * Fraction(stream.time_base)
+                        if stream.start_time is not None and stream.time_base is not None else None)
+            start_time = declared if declared is not None else Fraction(0)
             resampler = av.AudioResampler(format="fltp", layout="mono", rate=target_rate)
             chunks: list[np.ndarray] = []
+            first = True
             for decoded in container.decode(stream):
+                if first and decoded.pts is not None:
+                    # The first decoded sample's presentation time is authoritative: ``stream.start_time`` is
+                    # frequently absent, and assuming 0 would misalign every video frame against the audio.
+                    start_time = decoded.pts * Fraction(decoded.time_base)
+                first = False
                 for converted in resampler.resample(decoded):
                     chunks.append(converted.to_ndarray().reshape(-1).astype(np.float32))
             for converted in resampler.resample(None):

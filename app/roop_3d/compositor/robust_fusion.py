@@ -28,6 +28,7 @@ class RobustFusionOptions:
     match_sharpness: bool = True
     texture_strength: float = 0.7
     linear_light: bool = True
+    transfer: str = "srgb"  # display transfer used when ``linear_light`` is on
     shutter: float = 0.5
 
 
@@ -106,7 +107,8 @@ def fuse_robust(frame: np.ndarray, crop: np.ndarray, inverse: np.ndarray, face_a
     if options.texture_strength > 0 and skin is not None and np.asarray(skin).any():
         skin_roi = np.clip(warp(np.clip(np.asarray(skin, np.float32), 0, 1)), 0, 1)
         source, gain = transfer_fine_texture(source, target_roi, alpha, skin_roi, footprint, strength=options.texture_strength)
-    fused = fuse_warped(target_roi, source, alpha, mode=mode, levels=levels, linear_light=options.linear_light)
+    fused = fuse_warped(target_roi, source, alpha, mode=mode, levels=levels, linear_light=options.linear_light,
+                        transfer=options.transfer)
     output = target.copy()
     output[y0:y1, x0:x1] = fused
     return output, FusionReport(box, report_sharp, gain, occluded_fraction)

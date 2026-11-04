@@ -4,6 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import hashlib
 import re
+from typing import Literal
 
 import cv2
 import numpy as np
@@ -36,6 +37,13 @@ class ExportOptions(Contract):
     baked_video: bool = True
     passes: tuple[str, ...] = Field(default=(), max_length=5)
     finishing: FinishingOptions = FinishingOptions()
+    # Stage 15 (all optional; omitted = the pre-Stage-15 behaviour): export preset, HDR policy, subtitle policy.
+    profile: Literal['standard_mp4', 'high_quality_mp4', 'archival_hevc10', 'mov_workflow', 'lossless_intermediate',
+                     'image_sequence', 'color_preserving'] | None = None
+    # Rendered frames pass through the 8-bit pipeline, so HDR can be tone-mapped to SDR or refused, never passed through.
+    hdr_policy: Literal['tonemap_sdr', 'reject'] = 'tonemap_sdr'
+    subtitles: Literal['copy', 'require', 'drop'] = 'copy'
+    sequence_format: Literal['png', 'tiff', 'dpx'] = 'png'
 
     @model_validator(mode='after')
     def pass_contract(self):
@@ -45,6 +53,10 @@ class ExportOptions(Contract):
             raise ValueError('Select baked video or at least one pass')
         if not self.baked_video and (self.finishing.cube or self.finishing.grain.intensity or self.finishing.provenance != 'none'):
             raise ValueError('Finishing and embedded provenance require a baked video')
+        if not self.baked_video and self.profile is not None:
+            raise ValueError('An export profile applies to a baked video')
+        if self.profile == 'image_sequence' and self.finishing.provenance != 'none':
+            raise ValueError('Embedded provenance needs a single-file profile; an image sequence has no container to carry it')
         return self
 
 
@@ -114,8 +126,13 @@ class Finisher:
         self.options = options
         self.lut = parse_cube(options.cube) if options.cube else None
 
+    @property
+    def active(self) -> bool:
+        """True when ``apply`` changes pixels (a LUT or grain is configured)."""
+        return self.lut is not None or bool(self.options.grain.intensity)
+
     def apply(self, bgr: np.ndarray, index: int) -> np.ndarray:
-        if self.lut is None and not self.options.grain.intensity:
+        if not self.active:
             return bgr
         rgb = bgr[..., ::-1].astype(np.float32) / 255
         if self.lut:
