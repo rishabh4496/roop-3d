@@ -6,6 +6,8 @@ import { selectEngine, useSelectedEngine } from '../../stores/engineSelection';
 import type { WorkstationParameters } from '../workstation/pipeline';
 import { ErrorRetry } from './FaceSetDetail';
 import { formatClock, trackLabel } from './TargetPanel';
+import EngineExplainer from '../guide/EngineExplainer';
+import HardwareExplainer from '../guide/HardwareExplainer';
 
 const PoseGeometryViewer = lazy(() => import('../../ThreeViewport').then(module => ({ default: module.PoseGeometryViewer })));
 const LightProbeSphere = lazy(() => import('../../ThreeViewport').then(module => ({ default: module.LightProbeSphere })));
@@ -16,7 +18,7 @@ export const RENDER_MODES = [
   { id: 'reenactment_3d', label: '3D reenactment', hint: 'Source identity geometry driven by the target expression. Falls back to standard per frame when geometry is unreliable.' },
 ] as const;
 
-type Engine = { engine_id: string; name: string; status: string; selectable: boolean; actual_inference_available: boolean; evidence: string };
+type Engine = { engine_id: string; name: string; status: string; selectable: boolean; actual_inference_available: boolean; evidence: string; purpose?: string };
 
 /** Engines from the Stage 6 model hub; selection is the same store the Model Hub screen writes. */
 function useEngines() {
@@ -103,6 +105,8 @@ export default function StudioInspector({ caps, track, sheet, sources, assignedI
             </select>
             <small className="muted">{engines.engines.find(item => item.engine_id === engine)?.evidence ?? 'Selection is saved with each job.'}</small>
           </label>)}
+        {engines.engines && <EngineExplainer engines={engines.engines} selectedId={engine} onSelect={selectEngine} />}
+        <HardwareExplainer caps={caps} />
         <label className="inspector-field">Restoration model
           <select aria-label="Restoration model" value={parameters.restorer_model ?? 'gpen'} onChange={event => set({ restorer_model: event.target.value as 'gpen' | 'codeformer' })}>
             <option value="gpen">GPEN</option><option value="codeformer">CodeFormer</option>

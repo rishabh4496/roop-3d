@@ -1,4 +1,5 @@
 import { deriveThemeVars, normalizeRecipe, type ThemeRecipe } from './themeVars';
+import { enforceReadableTokens } from './utils/themeContrast';
 
 export interface ThemeDefinition {
   name: string;
@@ -89,4 +90,6 @@ export function applyThemeToDom(theme?: ThemeDefinition | ThemeRecipe | null) {
 
   root.setAttribute('data-theme-mode', t.mode === 'light' ? 'light' : 'dark');
   root.dataset.theme = t.mode === 'light' ? 'light' : 'dark';
+  // Every theme, including user-made ones, must keep its text readable (WCAG AA); only failing tokens are adjusted.
+  try { enforceReadableTokens(body || root); } catch { /* measurement is best-effort; the theme still applies */ }
 }

@@ -3,6 +3,7 @@ import { useFaceSelectionStore } from '../../useFaceSelectionStore';
 import { api } from '../../api';
 import { drawPoseHud, facePose } from './poseHud';
 import { leftToRightRank } from '../../utils/poseCells';
+import { reducedMotion } from '../../utils/motionPrefs';
 export const FACE_ROLES = { swap: { label: 'Swap Target', color: '#91e6c9' }, ignore: { label: 'Reference Guide', color: '#60a5fa' }, exclude: { label: 'Exclude (Never Swap)', color: '#fb7185' } };
 
 import { calculateLetterbox, mapBoxToPixels, mapPointToPixels } from '../../utils/letterbox';
@@ -484,7 +485,7 @@ export default function FaceOverlayCanvas({
                   });
                   if (typeof document !== 'undefined') {
                     const cardEl = document.querySelector(`[data-cluster-id="${f.clusterId}"]`);
-                    cardEl?.scrollIntoView?.({ behavior: 'smooth', block: 'nearest', inline: 'center' });
+                    cardEl?.scrollIntoView?.({ behavior: reducedMotion() ? 'auto' : 'smooth', block: 'nearest', inline: 'center' });
                   }
                 }}
                 aria-pressed={isSel}

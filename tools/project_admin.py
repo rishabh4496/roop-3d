@@ -15,6 +15,9 @@ import subprocess
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
+# The server's data root is `app/` (roop_3d/server/app.py: parents[2]). Model weights live under `<APP_ROOT>/roop_3d/models/cache`,
+# so the model commands must use the same root, or an imported bundle lands where the server never looks.
+APP_ROOT = ROOT / "app"
 
 
 def owned(relative: str) -> Path:
@@ -99,14 +102,14 @@ def verify_install() -> None:
 def offline_health() -> None:
     ensure_sys_path()
     from roop_3d.installer.offline_cache import check_offline_readiness
-    res = check_offline_readiness(ROOT)
+    res = check_offline_readiness(APP_ROOT)
     print(json.dumps(res, indent=2), flush=True)
 
 
 def model_import(bundle_path: str) -> None:
     ensure_sys_path()
     from roop_3d.installer.model_manager import ModelManager
-    manager = ModelManager(ROOT)
+    manager = ModelManager(APP_ROOT)
     res = manager.import_bundle(Path(bundle_path))
     print(json.dumps(res, indent=2), flush=True)
 
@@ -114,7 +117,7 @@ def model_import(bundle_path: str) -> None:
 def model_verify() -> None:
     ensure_sys_path()
     from roop_3d.installer.model_manager import ModelManager
-    manager = ModelManager(ROOT)
+    manager = ModelManager(APP_ROOT)
     res = manager.verify_all_models()
     print(json.dumps(res, indent=2), flush=True)
 

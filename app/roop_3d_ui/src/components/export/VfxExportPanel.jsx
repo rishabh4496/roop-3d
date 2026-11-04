@@ -3,8 +3,12 @@ import { api, post, mediaURL } from '../../api';
 import { downloadText, exportFCPXML, exportEDL, exportOTIO } from '../../utils/nleExporter';
 import { buildZip } from '../facemgr/fszBuilder';
 import NumericInput from '../controls/NumericInput';
+import { normalizeExport } from './exportOptions';
+import ExportPresetBar from './ExportPresetBar';
 
 export const DEFAULT_EXPORT = { baked_video: true, passes: [], finishing: { cube: null, grain: { size: 1, intensity: 0, shadows: 1, highlights: .5, seed: 0 }, provenance: 'none' } };
+/** Offered by the interface but rejected by the job schema (jobs/schema.py accepts alpha, occluder, uv, normal, depth only). */
+const UNAVAILABLE_PASSES = new Set(['foreground']);
 const PASSES = [['alpha', 'Face-Canvas Alpha Matte'], ['foreground', 'Swapped-Face-Only Foreground (RGBA)'], ['occluder', 'Occluder / XSeg Matte Pass'], ['normal', '3D Normal Map Pass'], ['depth', '3D Depth Map Pass'], ['uv', 'UV Warped Face Pass']];
 
 export function FinishingControls({ value, onChange, capabilities = null, disabled = false }) {
@@ -60,12 +64,13 @@ export default function VfxExportPanel({ value = DEFAULT_EXPORT, onChange, capab
   return <section className="vfx-export-panel" aria-label="VFX export and finishing">
     <h2>VFX compositing exports</h2>
     <fieldset disabled={disabled || busy}><legend>Render deliverables</legend>
-      <label className="export-check"><input type="checkbox" checked={value.baked_video} onChange={event => onChange({ ...value, baked_video: event.target.checked, finishing: event.target.checked ? value.finishing : DEFAULT_EXPORT.finishing })}/>Final baked video</label>
-      {PASSES.map(([id, label]) => <label className="export-check" key={id}><input type="checkbox" checked={value.passes.includes(id)} disabled={['normal', 'depth'].includes(id) && !meshBlend} onChange={() => togglePass(id)}/>{label}</label>)}
+      <label className="export-check"><input type="checkbox" checked={value.baked_video} onChange={event => onChange(normalizeExport({ ...value, baked_video: event.target.checked, profile: event.target.checked ? value.profile : null, finishing: event.target.checked ? value.finishing : DEFAULT_EXPORT.finishing }))}/>Final baked video</label>
+      {PASSES.map(([id, label]) => <label className="export-check" key={id} title={UNAVAILABLE_PASSES.has(id) ? 'The render service does not produce this pass yet, so it cannot be selected.' : undefined}><input type="checkbox" checked={value.passes.includes(id) && !UNAVAILABLE_PASSES.has(id)} disabled={UNAVAILABLE_PASSES.has(id) || (['normal', 'depth'].includes(id) && !meshBlend)} onChange={() => togglePass(id)}/>{label}{UNAVAILABLE_PASSES.has(id) ? ' (not available in this build)' : ''}</label>)}
       <p className="muted">16-bit PNG sequences + lossless FFV1 video. Face RGB is unblended, with straight alpha supplied separately. Occluders use available semantic/manual masks; XSeg inference is not configured.</p>
       <p className="muted">Normal/depth sequences require mesh blend mode. Geometry and camera are estimated; depth uses canonical camera units. Preserve source timing for pass exports.</p>
       {!valid && <p role="alert">Choose a baked video or at least one pass.</p>}
     </fieldset>
+    <ExportPresetBar value={value} onChange={onChange} disabled={disabled || busy} />
     <FinishingControls value={value.finishing} onChange={finishing => onChange({ ...value, finishing })} capabilities={capabilities} disabled={disabled || !value.baked_video || busy}/>
     {onQueue && <button className="button accent" disabled={disabled || busy || !valid || !canQueue || (value.passes.some(name => ['normal', 'depth'].includes(name)) && !meshBlend)} onClick={onQueue}>Queue export render</button>}
     <button className="button" disabled={disabled || busy || !previewRequest || !meshBlend} onClick={() => void perform(async () => {

@@ -1,5 +1,7 @@
 # Roop 3D
 
+**New to Roop 3D?** Start with the [installation guide](docs/INSTALLATION_GUIDE.md) and the [user manual](docs/USER_MANUAL.md); in the app, press **Guide**. All guides are indexed in [docs/README.md](docs/README.md); problems: [common problems and solutions](docs/COMMON_PROBLEMS.md).
+
 Post-production controls are available in **Extras** (`#/extras`): compositing
 passes, FCPXML/EDL/OTIO interchange, LUT/grain finishing, and optional provenance.
 See [Post-production and acceptance limits](docs/POST_PRODUCTION.md) for formats,

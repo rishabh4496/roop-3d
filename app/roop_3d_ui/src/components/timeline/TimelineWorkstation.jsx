@@ -949,7 +949,7 @@ export default function TimelineWorkstation({
         </div>
 
         {/* Chapter markers on the ruler: click to seek, double-click to rename, × to remove */}
-        <div className="chapter-markers-layer" aria-label="Chapter markers">
+        <div className="chapter-markers-layer" role="group" aria-label="Chapter markers">
           {chapters.map(chapter => (
             <div key={chapter.id} className={`chapter-marker ${currentChapter?.id === chapter.id ? 'current' : ''}`} style={{ left: `${Math.min(100, (chapter.time / effectiveDuration) * 100)}%` }}>
               {renamingChapter === chapter.id ? (

@@ -1,4 +1,5 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
+import { useDialogA11y } from '../controls/useDialogA11y';
 import { post } from '../../api';
 
 export default function PreFlightLinterModal({
@@ -36,7 +37,9 @@ export default function PreFlightLinterModal({
     })
       .then(res => {
         if (active) {
-          setLinterData(res);
+          // A malformed answer is a visible, retryable error, never a blank page.
+          if (res && typeof res.status === 'string' && Array.isArray(res.checks)) setLinterData(res);
+          else setLintError('The local service returned an unexpected pre-flight report.');
           setLoading(false);
         }
       })
@@ -77,6 +80,8 @@ export default function PreFlightLinterModal({
     }
   };
 
+  const dialogRef = useRef(null);
+  useDialogA11y(dialogRef, onClose, isOpen);
   if (!isOpen) return null;
 
   const checks = linterData?.checks || [];
@@ -93,11 +98,11 @@ export default function PreFlightLinterModal({
 
   return (
     <div className="modal-backdrop" onClick={onClose} data-testid="preflight-linter-modal">
-      <div className="project-modal preflight-linter-modal" onClick={e => e.stopPropagation()}>
+      <div className="project-modal preflight-linter-modal" ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="preflight-title" onClick={e => e.stopPropagation()}>
         <div className="panel-heading">
           <div>
             <span className="eyebrow">AUTOMATED PIPELINE SAFETY & AUDIT</span>
-            <h2>Pre-Flight Render Linter</h2>
+            <h2 id="preflight-title">Pre-Flight Render Linter</h2>
           </div>
           <button className="icon-button" onClick={onClose} aria-label="Close Pre-Flight Linter">×</button>
         </div>

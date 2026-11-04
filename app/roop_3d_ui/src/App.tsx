@@ -1,5 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState, type ComponentType } from 'react';
-import { api, post, upload } from './api';
+import { api, post, upload, type ApiError } from './api';
 import { renderProbe } from './utils/renderProbe';
 import type { Capabilities, Config, Coverage, FaceSet, IdentityLock, Inspection, Job, JobRequest, Probe, Project, Reconstruction, Track } from './contracts';
 import { IdentityLockBar, IdentityTrackStats, lockProblem, useContactSheet } from './components/facemgr/IdentityLockPanel';
@@ -14,7 +14,7 @@ import { JOB_START_EVENT } from './livePreview';
 import { useFaceSelectionStore, faceEditState, restoreFaceEdit, buildFaceSegments, hydrateFaceSegments } from './useFaceSelectionStore';
 import useHistoryStore, { executeCommand, replaceCurves } from './stores/useHistoryStore';
 import FaceManager from './components/facemgr/FaceManager';
-import AppRouter, { Navigation, useHashRoute } from './router/AppRouter';
+import AppRouter, { Navigation, SCREENS, useHashRoute } from './router/AppRouter';
 import { useShortcutActions } from './components/controls/Hotkeys';
 import NumericInput from './components/controls/NumericInput';
 import { DEFAULT_PARAMETERS, type WorkstationParameters } from './components/workstation/pipeline';
@@ -29,6 +29,18 @@ import FacesetLibrary from './components/facemgr/FacesetLibrary';
 import QuickTour from './components/tour/QuickTour';
 import { tourSeen } from './components/tour/tourSteps';
 import ThemeGallery from './components/ThemeGallery';
+import GuideDialog, { type GuideTab } from './components/guide/GuideDialog';
+import WelcomeDialog from './components/guide/WelcomeDialog';
+import NextStepBar from './components/guide/NextStepBar';
+import RecoveryNotice from './components/guide/RecoveryNotice';
+import { isOfflineError } from './components/guide/errorGuide';
+import DialogFrame from './components/guide/DialogFrame';
+import ExportPresetBar from './components/export/ExportPresetBar';
+import { normalizeExport } from './components/export/exportOptions';
+import { markOnboardingSeen, onboardingSeen, workflowProgress } from './components/guide/workflowState';
+import type { WorkflowStepId } from './components/guide/helpContent';
+import { applyMotionPref, watchSystemMotion } from './utils/motionPrefs';
+import { useDialogA11y } from './components/controls/useDialogA11y';
 import { THEMES, themeByName, applyThemeToDom } from './themes';
 import TargetPanel, { trackLabel } from './components/studio/TargetPanel';
 import FaceSetDetail from './components/studio/FaceSetDetail';
@@ -61,6 +73,9 @@ export default function App() {
   const [maskBase64, setMaskRaw] = useState<string | null>(null);
   const [linterOpen, setLinterOpen] = useState(false);
   const [tourOpen, setTourOpen] = useState(false);
+  const [guideOpen, setGuideOpen] = useState(false), [guideTab, setGuideTab] = useState<GuideTab>('workflow'), [welcomeOpen, setWelcomeOpen] = useState(() => !onboardingSeen());
+  const [errorInfo, setErrorInfo] = useState<{ message: string; code: string | null; requestId: string | null } | null>(null), [projectsLoading, setProjectsLoading] = useState(true);
+  const projectDialog = useRef<HTMLElement>(null), workspaceRef = useRef<HTMLDivElement>(null);
   const [busy, setBusy] = useState(''), [error, setError] = useState(''), [notice, setNotice] = useState(''), [uploadProgress, setUploadProgress] = useState(0);
   const [themeName, setThemeName] = useState(() => localStorage.getItem('roop3d-theme-name') ?? 'Default');
   const [themeGalleryOpen, setThemeGalleryOpen] = useState(false);
@@ -102,6 +117,8 @@ export default function App() {
     };
   }, [bumpZoom, resetZoom]);
   const route = useHashRoute();
+  useEffect(() => { applyMotionPref(); return watchSystemMotion(); }, []);
+  useEffect(() => { document.title = `${SCREENS.find(([id]) => `#/${id}` === route)?.[1] ?? 'Workstation'} · Roop 3D`; }, [route]);
   const [exportOptions, setExportOptions] = useState<ExportOptions>(DEFAULT_EXPORT);
   const [parameters, setParametersRaw] = useState<WorkstationParameters>({ ...DEFAULT_PARAMETERS });
   const assigned = useFaceSelectionStore(state => state.assignments);
@@ -145,7 +162,7 @@ export default function App() {
     || JSON.stringify(project.effective_settings) !== JSON.stringify(config)
     || JSON.stringify({ ...DEFAULT_PARAMETERS, ...project.request.workstation_parameters, pose_mode: project.request.workstation_parameters?.pose_mode ?? 'retarget' }) !== JSON.stringify(parameters)
     || JSON.stringify(project.request.parameter_curves?.tracks ?? {}) !== JSON.stringify(curves)
-    || JSON.stringify(project.request.export ?? DEFAULT_EXPORT) !== JSON.stringify(exportOptions)
+    || JSON.stringify(normalizeExport(project.request.export ?? DEFAULT_EXPORT)) !== JSON.stringify(normalizeExport(exportOptions))
     || (project.request.mask_base64 ?? null) !== maskBase64
     || !!project.request.face_segments && JSON.stringify(project.request.face_segments) !== JSON.stringify(buildFaceSegments(clusters, assigned));
   const reason = (name: string) => featureReason(caps, name);
@@ -176,13 +193,18 @@ export default function App() {
   }, [storeCluster, inspection]);
   const refreshJobs = useCallback(async () => setJobs(await api<Job[]>('/jobs')), []);
   const refreshSources = useCallback(async () => setSources(await api<FaceSet[]>('/facesets')), []);
-  const refreshProjects = useCallback(async () => setProjects(await api<typeof projects>('/projects')), []);
-  const run = async (label: string, work: () => Promise<void>) => { setBusy(label); setError(''); setNotice(''); try { await work(); } catch (error) { if ((error as Error).name !== 'AbortError') setError((error as Error).message); } finally { setBusy(''); } };
+  const refreshProjects = useCallback(async () => { setProjectsLoading(true); try { setProjects(await api<typeof projects>('/projects')); } finally { setProjectsLoading(false); } }, []);
+  const fail = (error: unknown) => { const message = (error as Error).message; setError(message); setErrorInfo({ message, code: (error as ApiError).code ?? null, requestId: (error as ApiError).requestId ?? null }); };
+  const run = async (label: string, work: () => Promise<void>) => { setBusy(label); setError(''); setNotice(''); try { await work(); } catch (error) { if ((error as Error).name !== 'AbortError') fail(error); } finally { setBusy(''); } };
   const connect = useCallback(async () => {
     try {
-      const [capabilities, settings, sourceList, queue, saved] = await Promise.all([api<Capabilities>('/system/capabilities'), api<Config>('/config'), api<FaceSet[]>('/facesets'), api<Job[]>('/jobs'), api<typeof projects>('/projects')]);
-      setCaps(capabilities); setConfig(settings); setSources(sourceList); setJobs(queue); setProjects(saved); setError('');
-    } catch (error) { setError((error as Error).message); }
+      // The project list re-verifies every saved project's input hashes on the server, which can take many seconds with
+      // large videos. It must never hold the rest of the workstation (capabilities, FaceSets, queue) hostage.
+      setProjectsLoading(true);
+      void api<typeof projects>('/projects').then(setProjects).catch(fail).finally(() => setProjectsLoading(false));
+      const [capabilities, settings, sourceList, queue] = await Promise.all([api<Capabilities>('/system/capabilities'), api<Config>('/config'), api<FaceSet[]>('/facesets'), api<Job[]>('/jobs')]);
+      setCaps(capabilities); setConfig(settings); setSources(sourceList); setJobs(queue); setError('');
+    } catch (error) { fail(error); }
   }, []);
   useEffect(() => { void connect(); }, [connect]);
   useEffect(() => {
@@ -211,19 +233,7 @@ export default function App() {
     return () => { events.stop(); if (refresh) clearTimeout(refresh); };
   }, [refreshJobs]);
   useEffect(() => () => uploadAbort.current?.abort(), []);
-  useEffect(() => {
-    if (!projectsOpen) return;
-    const previous = document.activeElement as HTMLElement | null;
-    const dialog = document.querySelector<HTMLElement>('[role="dialog"]');
-    const focusables = () => [...(dialog?.querySelectorAll<HTMLElement>('button:not(:disabled), a[href], input:not(:disabled), select:not(:disabled)') ?? [])];
-    focusables()[0]?.focus();
-    const handle = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setProjectsOpen(false);
-      if (event.key === 'Tab') { const items = focusables(), first = items[0], last = items.at(-1); if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); } else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); } }
-    };
-    document.addEventListener('keydown', handle);
-    return () => { document.removeEventListener('keydown', handle); previous?.focus(); };
-  }, [projectsOpen]);
+  useDialogA11y(projectDialog, () => setProjectsOpen(false), projectsOpen);
   useEffect(() => { setIdentityMesh(null); }, [sourceId]);
   useEffect(() => {
     if (!sourceId) { setCoverage(null); return; }
@@ -238,7 +248,8 @@ export default function App() {
     return info;
   };
   const importAsset = (file: File | undefined) => {
-    if (!file || !caps) return;
+    if (!file) return;
+    if (!caps) { setNotice('Still connecting to the local service. Try again in a moment.'); return; }
     void run('Importing asset', async () => {
       const controller = new AbortController(); uploadAbort.current = controller; setUploadProgress(0);
       const result = await upload(file, caps, setUploadProgress, controller.signal);
@@ -370,7 +381,7 @@ export default function App() {
   };
   const reconstructionPicker = <><label className="reconstruction-choice">Reconstructed artifact<select value="" disabled={!target || !reconstructions.length || !!reason('reconstruction_viewer')} onChange={event => { const id = event.target.value; if (!id) { setMesh(null); return; } void run('Verifying reconstruction', async () => { setIdentityMesh(null); setMesh(await api<Reconstruction>(`/reconstructions/${id}?${new URLSearchParams({ target_path: target })}`)); }); }}><option value="">{mesh ? 'Choose another artifact' : reconstructions.length ? 'No reconstruction loaded' : 'No reconstruction artifacts'}</option>{reconstructions.map(item => <option key={item.reconstruction_id} value={item.reconstruction_id}>{item.reconstruction_id.slice(0, 12)}</option>)}</select></label>{(mesh || identityMesh) && <button className="button small" onClick={() => { setMesh(null); setIdentityMesh(null); }}>Show pose coverage</button>}</>;
   const viewport = <VideoViewport previewView={previewView} onPreviewViewChange={setPreviewView} studio={layoutMode === 'studio' ? { panels: panelsSlot, timeline: timelineSlot, tray: traySlot } : null} activeSourceId={sourceId} onSourceExtracted={faceset => { setSources(previous => previous.some(item => item.faceset_id === faceset.faceset_id) ? previous : [...previous, faceset]); setSourceId(faceset.faceset_id); void refreshSources(); }} maskBase64={maskBase64} captureWorkspace={captureWorkspace} restoreWorkspace={restoreWorkspace} active={route === "#/faceswap"} parameters={parameters} setParameters={setParameters} previewRequest={previewRequest} restorerAvailable={!!caps?.models.some(model => model.name === (parameters.restorer_model === "codeformer" ? "CodeFormerv0.1.onnx" : "gpen_bfr_512.onnx") && model.state === "VERIFIED_LOCAL")} onPreviewLatency={setPreviewLatency} inspector={<SettingsInspector namespace="workstation-setting" caps={caps} config={config} save={saveSettings} busy={!!busy}/>} posePanel={<><Suspense fallback={<p className="muted empty-note">Loading pose inspection…</p>}><PoseCoverageInspector coverage={coverage} track={currentTrack} mesh={mesh} parameters={parameters} setParameters={setParameters}/></Suspense><label className="reconstruction-choice">Reconstructed artifact<select value="" disabled={!target || !reconstructions.length || !!reason('reconstruction_viewer')} onChange={event => { const id = event.target.value; if (!id) { setMesh(null); return; } void run('Verifying reconstruction', async () => setMesh(await api<Reconstruction>(`/reconstructions/${id}?${new URLSearchParams({ target_path: target })}`))); }}><option value="">{mesh ? 'Choose another artifact' : 'No reconstruction loaded'}</option>{reconstructions.map(item => <option key={item.reconstruction_id} value={item.reconstruction_id}>{item.reconstruction_id.slice(0, 12)}</option>)}</select></label>{mesh && <button className="button small" onClick={() => setMesh(null)}>Show pose coverage</button>}</>} target={target} output={output} time={time} setTime={setTime} duration={probe?.duration_seconds ?? 0} enabled={!reason('frame_preview')} keys={keys} probe={probe} sources={sources} onInspectionUpdate={setInspection} onMaskChange={setMaskBase64} trimStart={trimStart} trimEnd={trimEnd} onTrimChange={(start, end) => { setTrimStart(start); setTrimEnd(end); }} onAssignSource={(clusterId, facesetId) => assignTrack(clusterId, facesetId)}/>;
-  const trimBar = <div className="trim-bar">
+  const trimBar = <><div className="trim-bar">
         <span className="eyebrow">EXPORT RANGE</span>
         <button
           type="button"
@@ -425,7 +436,8 @@ export default function App() {
             `${Math.max(0, ((trimEnd ?? probe.duration_seconds) - trimStart)).toFixed(2)}s · ${Math.round(Math.max(0, ((trimEnd ?? probe.duration_seconds) - trimStart)) * (probe.fps_rational ? (parseInt(probe.fps_rational.split('/')[0], 10) / (parseInt(probe.fps_rational.split('/')[1], 10) || 1)) || 30 : 30))} frames`
           ) : 'Full clip'}
         </span>
-      </div>;
+      </div>
+      <ExportPresetBar value={exportOptions} onChange={setExportOptions} disabled={!!busy} /></>;
   const queuePanel = <><QueueDrawer
         jobs={jobs}
         selectedJobId={selectedJob}
@@ -446,12 +458,30 @@ export default function App() {
             />
             Include selected paused/interrupted checkpoint when saving a project
           </label>
+          <small className="muted">Keeps the finished frames with the project, so you can close Roop 3D and resume this render later from Projects.</small>
         </div>
       )}</>;
+  const workflow = workflowProgress({ projectSaved: !!project, target, faceSetCount: sources.length, inspected: !!inspection, mappingCount: renderMappings().length, previewSeen: !!previewLatency, jobs });
+  const openGuide = (tab: GuideTab = 'workflow') => { setGuideTab(tab); setGuideOpen(true); };
+  const goto = (hash: string) => { if (window.location.hash !== hash) window.location.hash = hash; };
+  const guideAction = (id: WorkflowStepId) => {
+    if (id === 'source') { goto('#/facemgr'); return; }
+    goto('#/faceswap');
+    if (id === 'project') window.setTimeout(focusProjectName, 80);
+    else if (id === 'target') { const blocked = reason('uploads'); if (blocked) setNotice(blocked); else if (!busy) window.setTimeout(() => fileInput.current?.click(), 120); }
+    else if (id === 'inspect') { const blocked = reason('face_inspection'); if (!target) setNotice('Import a target video first, then inspect its faces.'); else if (blocked) setNotice(blocked); else if (!busy) inspect(); }
+    else if (id === 'assign') setNotice(inspection ? 'Drag a FaceSet card onto a face track, or choose one in the track’s “Source identity” menu.' : 'Inspect the target faces first; then you can assign a FaceSet to each track.');
+    else if (id === 'preview') setNotice('Move the playhead to a hard moment (a turn, a hand over the face) and use Compare to check the swap.');
+    else if (id === 'render') queue();
+  };
+  const focusProjectName = () => { const input = document.querySelector<HTMLInputElement>('input[aria-label="Project name"]'); input?.focus(); input?.select(); };
+  const dismissWelcome = () => { markOnboardingSeen(); setWelcomeOpen(false); };
   const isHighPerf = Boolean(busy?.toLowerCase().includes('export') || busy?.toLowerCase().includes('render') || (config as any)?.performance_mode === 'high');
   return <div className={`workstation ${isHighPerf ? 'perf-high' : ''}`} data-perf-mode={isHighPerf ? 'high' : 'normal'}>
+    <button type="button" className="skip-link" onClick={() => workspaceRef.current?.focus()}>Skip to main content</button>
     <header className="app-header"><a className="brand" href="#/home" aria-label="Roop 3D home"><span className="brand-mark">R<span>3</span></span><strong>roop<span>3D</span></strong></a><span className="header-divider"/><span className="workspace-label">VIDEO WORKSTATION</span>
       <button className={`button small tour-button ${tourSeen() ? '' : 'fresh'}`} data-testid="header-tour-button" aria-haspopup="dialog" title="Four-step guide to the workstation" onClick={() => setTourOpen(true)}>How to Use</button>
+      <button type="button" className="button small guide-button" data-testid="header-guide-button" aria-haspopup="dialog" title="Step-by-step guide, explanations and recovery help" onClick={() => openGuide()}>Guide</button>
       <div className="project-name"><input aria-label="Project name" maxLength={128} value={projectName} onChange={event => setProjectName(event.target.value)} /><span>{projectDirty ? 'UNSAVED' : 'SAVED'}</span></div>
       <span className="local-status"><i className={`dot ${connection === 'online' ? 'mint' : 'amber'}`}/>{connection === 'online' ? 'Local service' : connection}</span>
       <PipelinePill activeJob={currentJob} />
@@ -502,7 +532,9 @@ export default function App() {
     </header>
     <RunPill />
     <Navigation route={route}/>
-    {(error || notice || busy) && <div className={`notification ${error ? 'error' : ''}`} role={error ? 'alert' : 'status'}><span>{error || busy || notice}</span>{busy === 'Importing asset' && <><progress value={uploadProgress} max={1}/><button onClick={() => uploadAbort.current?.abort()}>Cancel import</button></>}{error && <button onClick={() => void connect()}>Reconnect</button>}{!busy && <button aria-label="Dismiss message" onClick={() => { setError(''); setNotice(''); }}>×</button>}</div>}
+    {route === '#/faceswap' && <NextStepBar progress={workflow} onAction={guideAction} onGuide={() => openGuide()} blockedReason={workflow.next?.id === 'target' ? reason('uploads') : workflow.next?.id === 'inspect' && target ? reason('face_inspection') : null} busy={!!busy} />}
+    {(error || notice || busy) && <div className={`notification ${error ? 'error' : ''}`} role={error ? 'alert' : 'status'}>{error ? <RecoveryNotice message={error} code={errorInfo?.message === error ? errorInfo.code : null} requestId={errorInfo?.message === error ? errorInfo.requestId : null} onGuide={() => openGuide('queue')} /> : <span>{busy || notice}</span>}{busy === 'Importing asset' && <><progress value={uploadProgress} max={1}/><button onClick={() => uploadAbort.current?.abort()}>Cancel import</button></>}{error && isOfflineError({ code: errorInfo?.message === error ? errorInfo.code : null, message: error }) && <button onClick={() => void connect()}>Reconnect</button>}{!busy && <button aria-label="Dismiss message" onClick={() => { setError(''); setNotice(''); }}>×</button>}</div>}
+    <div id="workspace" ref={workspaceRef} tabIndex={-1} className="workspace-root">
     <AppRouter route={route} screen="facemgr">
       <FaceManager
         sources={sources}
@@ -607,9 +639,14 @@ export default function App() {
       </section>
       {queuePanel}
     </main></div></>}</AppRouter>
-    <WorkstationScreens route={route} caps={caps} config={config} sources={sources} jobs={jobs} projects={projects} busy={!!busy} connection={connection} openProject={openProject} showJob={showJob} controlJob={controlJob} saveSettings={saveSettings} refreshJobs={refreshJobs} openLibrary={() => { setProjectsOpen(true); void refreshProjects(); }} latency={previewLatency} target={target} probe={probe} inspection={inspection} refreshProjects={refreshProjects} exportOptions={exportOptions} onExportChange={setExportOptions} meshBlend={parameters.pose_mode === 'mesh_blend'} onQueue={queue} canQueue={!reason('queue') && !!inspection && !!renderMappings().length && !busy} previewRequest={inspection && renderMappings().length ? previewRequest : null} timestamp={time} themeName={themeName} onThemeChange={setThemeName} onStartTour={() => setTourOpen(true)}/>
+    <WorkstationScreens route={route} caps={caps} config={config} sources={sources} jobs={jobs} projects={projects} busy={!!busy} connection={connection} openProject={openProject} showJob={showJob} controlJob={controlJob} saveSettings={saveSettings} refreshJobs={refreshJobs} openLibrary={() => { setProjectsOpen(true); void refreshProjects(); }} latency={previewLatency} target={target} probe={probe} inspection={inspection} refreshProjects={refreshProjects} exportOptions={exportOptions} onExportChange={setExportOptions} meshBlend={parameters.pose_mode === 'mesh_blend'} onQueue={queue} canQueue={!reason('queue') && !!inspection && !!renderMappings().length && !busy} previewRequest={inspection && renderMappings().length ? previewRequest : null} timestamp={time} themeName={themeName} onThemeChange={setThemeName} onStartTour={() => setTourOpen(true)} workflow={workflow} onWorkflowAction={guideAction} onOpenGuide={() => openGuide()} projectsLoading={projectsLoading}/>
+    </div>
     <footer className="app-footer"><span>ROOP 3D / LOCAL WORKSTATION</span><span>Observed identities. Explicit processing. Synthetic media.</span><span>API :{config?.port ?? '—'}</span></footer>
-    {projectsOpen && <div className="modal-backdrop" onClick={() => setProjectsOpen(false)}><section role="dialog" aria-modal="true" aria-labelledby="projects-title" className="project-modal" onClick={event => event.stopPropagation()}><div className="panel-heading"><div><span className="eyebrow">VERSIONED .R3DP MANIFESTS</span><h2 id="projects-title">Project library</h2></div><button aria-label="Close projects" className="icon-button" onClick={() => setProjectsOpen(false)}>×</button></div><p className="muted">Reopening verifies target, inspection, FaceSet, and model hashes. Project files contain references and settings, never raw media.</p><button className="button" disabled={!!busy} onClick={() => projectInput.current?.click()}>Import .r3dp</button><input ref={projectInput} hidden type="file" accept=".r3dp,application/json" onChange={event => { importProject(event.target.files?.[0]); event.target.value = ''; }}/>{!projects.length && <p className="empty-note muted">No saved projects yet.</p>}{projects.map(item => <div key={item.project_id} className="saved-project"><div><strong>{item.name}</strong><small>{new Date(item.saved_at).toLocaleString()} · checkpoint {item.last_completed_frame >= 0 ? item.last_completed_frame : 'none'}</small></div><button className="button small" disabled={!!busy} onClick={() => openProject(item.project_id)}>Verify & open</button><a className="button small" href={`/api/v1/projects/${item.project_id}/download`} download>Export</a></div>)}{project?.checkpoint_job_id && <button className="button accent" disabled={!!busy || !!reason('queue')} onClick={() => void run('Verifying checkpoint continuation', async () => { const resumed = await post<Job>(`/projects/${project.project_id}/resume`, {}); setSelectedJob(resumed.job_id); await refreshJobs(); setProjectsOpen(false); })}>Verify & resume {project.name}</button>}</section></div>}
+    {projectsOpen && <div className="modal-backdrop" onClick={() => setProjectsOpen(false)}><section ref={projectDialog} role="dialog" aria-modal="true" aria-labelledby="projects-title" className="project-modal" onClick={event => event.stopPropagation()}><div className="panel-heading"><div><span className="eyebrow">VERSIONED .R3DP MANIFESTS</span><h2 id="projects-title">Project library</h2></div><button aria-label="Close projects" className="icon-button" onClick={() => setProjectsOpen(false)}>×</button></div><p className="muted">Reopening verifies target, inspection, FaceSet, and model hashes. Project files contain references and settings, never raw media.</p><button className="button" disabled={!!busy} onClick={() => projectInput.current?.click()}>Import .r3dp</button><input ref={projectInput} hidden type="file" accept=".r3dp,application/json" onChange={event => { importProject(event.target.files?.[0]); event.target.value = ''; }}/>{!projects.length && <p className="empty-note muted" role="status">{projectsLoading ? 'Checking saved projects… each one is verified against its video and models, which can take a few seconds.' : 'No saved projects yet.'}</p>}{projects.map(item => <div key={item.project_id} className="saved-project"><div><strong>{item.name}</strong><small>{new Date(item.saved_at).toLocaleString()} · checkpoint {item.last_completed_frame >= 0 ? item.last_completed_frame : 'none'}</small></div><button className="button small" disabled={!!busy} onClick={() => openProject(item.project_id)}>Verify & open</button><a className="button small" href={`/api/v1/projects/${item.project_id}/download`} download>Export</a></div>)}{project?.checkpoint_job_id && <button className="button accent" disabled={!!busy || !!reason('queue')} onClick={() => void run('Verifying checkpoint continuation', async () => { const resumed = await post<Job>(`/projects/${project.project_id}/resume`, {}); setSelectedJob(resumed.job_id); await refreshJobs(); setProjectsOpen(false); })}>Verify & resume {project.name}</button>}</section></div>}
+    {welcomeOpen && route === '#/home' && <WelcomeDialog caps={caps} onClose={dismissWelcome}
+      onStart={() => { dismissWelcome(); goto('#/faceswap'); window.setTimeout(focusProjectName, 150); }}
+      onTour={() => { dismissWelcome(); setTourOpen(true); }} onGuide={() => { dismissWelcome(); openGuide(); }} />}
+    {guideOpen && <GuideDialog onClose={() => setGuideOpen(false)} progress={workflow} onAction={guideAction} onTour={() => { setGuideOpen(false); setTourOpen(true); }} caps={caps} initialTab={guideTab} />}
     <QuickTour open={tourOpen} onClose={() => setTourOpen(false)} onNavigate={route => { if (window.location.hash !== route) window.location.hash = route; }} />
     <PreFlightLinterModal
       isOpen={linterOpen}
@@ -625,30 +662,10 @@ export default function App() {
       onApplyParameter={(name: string, value: number) => setParameters({ ...parameters, [name]: value })}
     />
     {themeGalleryOpen && (
-      <div className="modal-backdrop" onClick={() => setThemeGalleryOpen(false)}>
-        <section
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="theme-modal-title"
-          className="project-modal theme-gallery-modal"
-          onClick={event => event.stopPropagation()}
-        >
-          <div className="panel-heading">
-            <div>
-              <span className="eyebrow">WORKSTATION PALETTE & STYLES</span>
-              <h2 id="theme-modal-title">Theme Gallery ({THEMES.length} Themes)</h2>
-            </div>
-            <button aria-label="Close themes" className="icon-button" onClick={() => setThemeGalleryOpen(false)}>×</button>
-          </div>
-          <p className="muted">Select from 38 studio-calibrated dark, AMOLED pure-black, and high-contrast light themes.</p>
-          <ThemeGallery
-            value={themeName}
-            onChange={(name) => {
-              setThemeName(name);
-            }}
-          />
-        </section>
-      </div>
+      <DialogFrame title={`Theme Gallery (${THEMES.length} Themes)`} eyebrow="WORKSTATION PALETTE & STYLES" onClose={() => setThemeGalleryOpen(false)} className="theme-gallery-modal" testId="theme-gallery">
+        <p className="muted">Select from {THEMES.length} studio-calibrated dark, AMOLED pure-black, and high-contrast light themes.</p>
+        <ThemeGallery value={themeName} onChange={name => setThemeName(name)} />
+      </DialogFrame>
     )}
   </div>;
 }

@@ -4,6 +4,7 @@ import { IdentityTrackStats } from '../facemgr/IdentityLockPanel';
 import { usePlayhead } from '../../stores/playheadStore';
 import { facesetDropProps } from '../../utils/facesetDrag';
 import VirtualList from '../common/VirtualList';
+import { TARGET_FACE_TUTORIAL } from '../guide/helpContent';
 
 export const trackLabel = (trackId: string) => trackId.replace('track_', 'Face ').replace(/ 0+(\d)/, ' $1');
 export function formatClock(seconds: number) {
@@ -93,7 +94,10 @@ export default function TargetPanel(props: TargetPanelProps) {
         <div className="section-title"><span>DETECTED TARGET FACES</span><span>{inspection ? inspection.tracks.length.toString().padStart(2, '0') : '—'}</span></div>
         <button className="button full" disabled={!target || !!inspectReason || busy} title={inspectReason ?? 'Detect and track every face in the target'} onClick={onInspect}>{inspection ? 'Re-inspect faces' : 'Inspect target faces'}</button>
         {busy && !inspection && target && <div className="skeleton-stack" aria-hidden="true"><span className="skeleton-line" /><span className="skeleton-line" style={{ width: '70%' }} /></div>}
-        {!inspection ? <p className="muted studio-hint">{target ? 'Inspect the target to find persistent face tracks, then drag a FaceSet onto a track (or click a face in the video).' : 'Import a target video to begin.'}</p> : <>
+        {!inspection ? <div className="studio-hint empty-guide" data-testid="target-empty-guide">
+          <p className="muted">{target ? 'Next: press “Inspect target faces”. Roop 3D finds every face and follows each person through the video.' : 'Start here: press “Import target video” and choose a video file. It stays on this computer.'}</p>
+          {target && <p className="muted">Afterwards, drag a FaceSet onto a face track (or click a face in the video) to choose who becomes whom.</p>}
+        </div> : <>
           {inspection.truncated && <p className="inline-warning">Bounded sample: inspection was truncated.</p>}
           {inspection.warnings.map(warning => <p key={warning} className="inline-warning">{warning}</p>)}
           {!inspection.tracks.length && <p className="muted studio-hint">No faces were detected. Try another clip or a clearer frame.</p>}
@@ -102,6 +106,9 @@ export default function TargetPanel(props: TargetPanelProps) {
             renderItem={track => <TrackCard track={track} selected={selectedTrack === track.track_id} assignedId={assigned[track.track_id] ?? ''} sources={sources}
               sheetTrack={sheet?.tracks.find(item => item.track_id === track.track_id)} onSelect={onSelectTrack} onAssign={onAssign} />} />
           {lockBar}
+          <details className="help-note" data-testid="target-tutorial"><summary>{TARGET_FACE_TUTORIAL.title}: how does this work?</summary>
+            <ol>{TARGET_FACE_TUTORIAL.steps.map(item => <li key={item}>{item}</li>)}</ol>
+            <ul>{TARGET_FACE_TUTORIAL.tips.map(item => <li key={item}>{item}</li>)}</ul></details>
         </>}
       </div>
     </div>

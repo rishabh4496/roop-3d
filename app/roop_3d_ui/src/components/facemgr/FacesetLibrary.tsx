@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import DialogPanel from '../guide/DialogPanel';
 import { api, post } from '../../api';
 import type { FaceSet } from '../../contracts';
 import VirtualList from '../common/VirtualList';
@@ -198,7 +199,7 @@ export default function FacesetLibrary({
 
   const saveModal = saveModalOpen && (
     <div className="modal-backdrop" onClick={() => setSaveModalOpen(false)}>
-      <div className="project-modal" role="dialog" aria-modal="true" aria-label="Name this FaceSet" style={{ maxWidth: '420px' }} onClick={(e) => e.stopPropagation()}>
+      <DialogPanel className="project-modal" label="Name this FaceSet" style={{ maxWidth: '420px' }} onClose={() => setSaveModalOpen(false)} initialFocus="input">
         <div className="panel-heading"><div><span className="eyebrow">SAVE TO LIBRARY</span><h2>Name this FaceSet</h2></div>
           <button className="icon-button" aria-label="Close" onClick={() => setSaveModalOpen(false)}>×</button></div>
         <p className="muted" style={{ margin: '12px 0' }}>The selected target track's thumbnail becomes a one-view FaceSet in your local library.</p>
@@ -208,7 +209,7 @@ export default function FacesetLibrary({
           <button className="button" onClick={() => setSaveModalOpen(false)}>Cancel</button>
           <button className="button accent" disabled={!newFacesetName.trim() || busy} onClick={handleSaveCurrent}>Save FaceSet</button>
         </div>
-      </div>
+      </DialogPanel>
     </div>
   );
 

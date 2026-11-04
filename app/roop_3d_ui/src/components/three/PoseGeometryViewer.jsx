@@ -3,6 +3,7 @@ import * as THREE from 'three';
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import { OrbitControls, GizmoHelper, GizmoViewport } from '@react-three/drei';
 import { useFaceSelectionStore } from '../../useFaceSelectionStore';
+import { reducedMotion } from '../../utils/motionPrefs';
 
 /**
  * @typedef {{
@@ -210,7 +211,8 @@ function CanonicalHeadMesh({ pose, mode, mesh }) {
   // Smooth slerp interpolation on every render frame
   useFrame((_, delta) => {
     if (groupRef.current) {
-      currentQuat.current.slerp(targetQuat, Math.min(1, delta * 12));
+      // Reduce-motion: jump to the pose instead of easing toward it.
+      currentQuat.current.slerp(targetQuat, reducedMotion() ? 1 : Math.min(1, delta * 12));
       groupRef.current.quaternion.copy(currentQuat.current);
     }
   });

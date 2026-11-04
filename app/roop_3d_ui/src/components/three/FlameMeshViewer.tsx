@@ -3,6 +3,7 @@ import * as THREE from 'three';
 import { Canvas, useFrame } from '@react-three/fiber';
 import { OrbitControls, GizmoHelper, GizmoViewport } from '@react-three/drei';
 import type { Reconstruction } from '../../contracts';
+import { reducedMotion } from '../../utils/motionPrefs';
 
 export interface FlameMeshViewerProps {
   mesh: Reconstruction | null;
@@ -86,9 +87,9 @@ function FlameScene({
     };
   }, [geometry, texture]);
 
-  // Subtle idle turntable rotation
+  // Subtle idle turntable rotation (skipped under the reduce-motion preference; the camera stays user-driven)
   useFrame((_, delta) => {
-    if (meshRef.current) {
+    if (meshRef.current && !reducedMotion()) {
       meshRef.current.rotation.y += delta * 0.15;
     }
   });

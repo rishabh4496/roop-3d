@@ -59,7 +59,7 @@ def save_config(value: Settings, request: Request) -> Settings:
 @router.get("/system/capabilities", response_model=Capabilities)
 def capabilities(request: Request) -> Capabilities:
     from roop_3d.jobs.schema import JobState
-    from roop_3d.core.hardware import probe_hardware
+    from roop_3d.core.hardware import MIN_12GB_PROFILE_VRAM_MIB, probe_hardware
     from roop_3d.server.workstation import CHUNK_BYTES, MAX_ASSET_BYTES
     state = request.app.state
     hardware = probe_hardware(state.settings)
@@ -81,7 +81,7 @@ def capabilities(request: Request) -> Capabilities:
     options = {
         "execution_mode": {"swap": None, "volumetric": None if lp else "LivePortrait weights are unavailable", "hybrid": "No verified diffusion loader is configured", "diffusion_vfx": "No verified diffusion loader is configured"},
         "preferred_provider": {"auto": None, "CPUExecutionProvider": None, "CUDAExecutionProvider": None if gpu else "CUDA is unavailable", "TensorrtExecutionProvider": None if trt else "TensorRT requires the stream backend, NVIDIA GPU and packaged TensorRT libraries"},
-        "hardware_profile": {"auto": None, "cpu": None, "6gb": None if gpu else "No CUDA GPU is available", "12gb": None if gpu and hardware.gpus[0].total_vram_mib >= 12288 else "A 12 GB CUDA GPU is required"},
+        "hardware_profile": {"auto": None, "cpu": None, "6gb": None if gpu else "No CUDA GPU is available", "12gb": None if gpu and hardware.gpus[0].total_vram_mib >= MIN_12GB_PROFILE_VRAM_MIB else "A CUDA GPU with at least 10 GB of video memory is required"},
         "precision_policy": {"auto": None, "fp32": None, "fp16": "The reference session uses observed FP32 graph contracts"},
         "face_restoration_policy": {"off": None, "auto": None, "gfpgan": "No verified GFPGAN adapter",
             "gpen": None if stream and "gpen_bfr_512.onnx" in available else "GPEN requires the stream backend and registered weights",

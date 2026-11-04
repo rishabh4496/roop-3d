@@ -56,7 +56,7 @@ class ExportProfile:
 PROFILES: dict[str, ExportProfile] = {p.id: p for p in (
     ExportProfile(
         "standard_mp4", "Standard MP4",
-        "H.264 8-bit 4:2:0 in MP4: broadest playback compatibility. Identical encoder settings to the pre-Stage-15 default.",
+        "H.264 8-bit 4:2:0 in MP4: broadest playback compatibility. Same encoder settings as the original default output.",
         ".mp4", "libx264", "h264", "yuv420p", 8, {"preset": "fast"}, allow_hardware=True, bias_tolerance=6.0, tail_tolerance=14.0),
     ExportProfile(
         "high_quality_mp4", "High-quality MP4",

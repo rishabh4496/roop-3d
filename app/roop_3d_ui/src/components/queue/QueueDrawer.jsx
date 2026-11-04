@@ -1,6 +1,9 @@
 import React, { useState, useMemo } from 'react';
 import { post } from '../../api';
 import BottleneckFlamegraph from '../diagnostics/BottleneckFlamegraph';
+import RecoveryNotice from '../guide/RecoveryNotice';
+import DialogPanel from '../guide/DialogPanel';
+import { JOB_STATE_HELP, QUEUE_GUIDE } from '../guide/helpContent';
 
 /**
  * Normalized queue state definitions.
@@ -192,9 +195,13 @@ export default function QueueDrawer({
           {actionNotice && (
             <div className="queue-notice-strip">
               <span>{actionNotice}</span>
-              <button type="button" onClick={() => setActionNotice('')}>×</button>
+              <button type="button" aria-label="Dismiss queue message" onClick={() => setActionNotice('')}>×</button>
             </div>
           )}
+          <details className="help-note queue-help" data-testid="queue-help">
+            <summary>How the queue and checkpoints work</summary>
+            <ul>{QUEUE_GUIDE.map(item => <li key={item}>{item}</li>)}</ul>
+          </details>
 
           <div className="drawer-subtabs">
             <button
@@ -251,7 +258,7 @@ export default function QueueDrawer({
           )}
 
           {/* Job Cards List */}
-          <div className="queue-items-list" role="list">
+          <div className="queue-items-list" role={localJobs.length ? 'list' : undefined}>
             {[...localJobs].reverse().map((job) => {
               const normState = normalizeJobState(job.state);
               const isSelected = selectedJobId === job.job_id;
@@ -288,7 +295,7 @@ export default function QueueDrawer({
                   >
                     <div className="job-title-row">
                       <strong>{job.request.target_path.split('/').at(-1)}</strong>
-                      <span className={`state-badge ${normState.toLowerCase()}`}>
+                      <span className={`state-badge ${normState.toLowerCase()}`} title={JOB_STATE_HELP[job.state] ? `${JOB_STATE_HELP[job.state].meaning} ${JOB_STATE_HELP[job.state].action}` : undefined}>
                         {normState}
                       </span>
                     </div>
@@ -303,7 +310,8 @@ export default function QueueDrawer({
                     </div>
 
                     {/* Progress Bar */}
-                    <div className="job-progress-track">
+                    <div className="job-progress-track" role="progressbar" aria-label={`Progress for ${job.request.target_path.split('/').at(-1)}`} aria-valuemin={0} aria-valuemax={job.progress.total_frames || 100}
+                      aria-valuenow={job.progress.total_frames ? job.progress.frame : job.state === 'succeeded' ? 100 : 0}>
                       <div
                         className="job-progress-fill"
                         style={{
@@ -316,7 +324,8 @@ export default function QueueDrawer({
                       />
                     </div>
 
-                    {job.failure && <small className="failure-text">{job.failure.message}</small>}
+                    {['paused', 'interrupted', 'cancelled'].includes(job.state) && JOB_STATE_HELP[job.state] && <small className="job-hint muted">{JOB_STATE_HELP[job.state].meaning} {JOB_STATE_HELP[job.state].action}</small>}
+                    {job.failure && <div className="failure-text"><RecoveryNotice message={job.failure.message} code={job.failure.code} /></div>}
                   </div>
 
                   {/* Actions (Duplicate, Retry, Cancel, Output Download) */}
@@ -384,13 +393,13 @@ export default function QueueDrawer({
         </div>
       )}
       {inspectedOutput && <div className="modal-backdrop" onClick={() => setInspectedOutput(null)}>
-        <section className="project-modal" role="dialog" aria-modal="true" aria-label="Rendered output" onClick={event => event.stopPropagation()}>
+        <DialogPanel className="project-modal" label="Rendered output" onClose={() => setInspectedOutput(null)}>
           <div className="panel-heading"><h2>Rendered output</h2><button className="button" onClick={() => setInspectedOutput(null)}>Close output</button></div>
           <p>Synthetic media processed locally by Roop 3D · {inspectedOutput.output.frames} verified frames</p>
           <video aria-label="Completed render playback" controls preload="metadata" style={{ width: '100%', maxHeight: '60vh' }} src={`/api/v1/jobs/${inspectedOutput.job_id}/artifacts/video`} />
           <a className="button" href={`/api/v1/jobs/${inspectedOutput.job_id}/artifacts/video`} download>Export video</a>
           <a className="button" href={`/api/v1/jobs/${inspectedOutput.job_id}/artifacts/manifest`} download>Render manifest</a>
-        </section>
+        </DialogPanel>
       </div>}
     </aside>
   );

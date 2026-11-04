@@ -14,6 +14,9 @@ import { generateFibonacciSphere, projectViewsToLattice, FaceSetOrientationSpher
 import { api, post } from '../../api';
 import FacesetLibrary from './FacesetLibrary';
 
+/** The 3x3 pose matrix as ARIA rows of three cells, so `role=grid` has the `row` children it requires. */
+const poseRows = cells => Array.from({ length: Math.ceil(cells.length / 3) }, (_, row) => cells.slice(row * 3, row * 3 + 3));
+
 /**
  * Extract face views from an inspection track payload.
  */
@@ -350,6 +353,7 @@ export default function FaceManager({
           <button
             type="button"
             className={`tab-btn ${activeTab === 'builder' ? 'active' : ''}`}
+            role="tab" aria-selected={activeTab === 'builder'}
             onClick={() => setActiveTab('builder')}
           >
             ❖ 3D Studio
@@ -357,6 +361,7 @@ export default function FaceManager({
           <button
             type="button"
             className={`tab-btn ${activeTab === 'library' ? 'active' : ''}`}
+            role="tab" aria-selected={activeTab === 'library'}
             onClick={() => setActiveTab('library')}
           >
             📁 FaceSet Library ({sources?.length || 0})
@@ -560,11 +565,11 @@ export default function FaceManager({
             } catch(error) { setStatusNotice(error.message); } finally {setIsProcessing(false);}
           }}>Fill Missing Angles from Current Target Video</button><small>Only observed faces matching the selected source identity are added. Long scans stop at the reported frame or time budget.</small>
           <div role="grid" aria-label="3 by 3 Yaw x Pitch Pose Matrix" style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:8}}>
-            {(archiveMatrix?.faceset_id === assignedSource ? archiveMatrix.cells : poseGrid(activePerson?.faces || [])).map(cell=><div role="gridcell" key={cell.cell ?? `${cell.yaw}:${cell.pitch}`} style={{padding:12,border:'1px solid currentColor'}}>
+            {poseRows(archiveMatrix?.faceset_id === assignedSource ? archiveMatrix.cells : poseGrid(activePerson?.faces || [])).map((row, rowIndex) => <div role="row" key={rowIndex} style={{display:'contents'}}>{row.map(cell=><div role="gridcell" key={cell.cell ?? `${cell.yaw}:${cell.pitch}`} style={{padding:12,border:'1px solid currentColor'}}>
               <b>{cell.cell ?? `Yaw ${cell.yaw} / Pitch ${cell.pitch}`}</b><p>{(cell.support ?? cell.faces?.length ?? 0) ? `${cell.support ?? cell.faces.length} observed` : 'Missing'}</p>
               {(cell.thumbnailUrl || cell.faces?.[0]?.thumbnailUrl) && <img width="64" src={cell.thumbnailUrl || cell.faces?.[0]?.thumbnailUrl} alt="Best measured cell view"/>}
               <small>Sharpness: {cell.best?.sharpness ?? cell.faces?.[0]?.sharpness ?? 'unmeasured'} / Quality: {cell.best?.quality ?? cell.faces?.[0]?.quality ?? 'unmeasured'}</small>
-            </div>)}
+            </div>)}</div>)}
           </div>
           {/* 5 Pose Columns Grid */}
           <div className="pose-buckets-grid">

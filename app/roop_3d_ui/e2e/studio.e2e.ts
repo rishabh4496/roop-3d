@@ -99,7 +99,7 @@ test('four panels, timeline lanes and a FaceSet dragged onto a target track driv
   await page.getByRole('button', { name: 'Select FaceSet Bob' }).click();
   await expect(page.getByRole('list', { name: 'Bob views' }).locator('img')).toHaveCount(3);
   await expect(page.locator('.coverage-cell:not(.empty)')).toHaveCount(3);
-  await expect(page.locator('.asset-card')).toContainText('partial coverage');
+  await expect(page.locator('.asset-card')).toContainText(/partial coverage/i);
 
   // Drag Bob onto Face 1's card.
   await page.locator('.fs-row[data-faceset-id="bob"]').dragTo(page.locator('[data-track-id="track_0001"]'));

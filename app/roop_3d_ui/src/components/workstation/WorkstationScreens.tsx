@@ -7,6 +7,9 @@ import VirtualList from '../common/VirtualList';
 import { featureReason, jobActions } from '../../state';
 import { SettingsInspector } from '../../SettingsInspector';
 import { HotkeyEditor } from '../controls/Hotkeys';
+import WorkflowChecklist from '../guide/WorkflowChecklist';
+import type { WorkflowProgress } from '../guide/workflowState';
+import type { WorkflowStepId } from '../guide/helpContent';
 import BatchMatrixScreen from '../../screens/BatchMatrixScreen';
 import HistoryScreen from '../../screens/HistoryScreen';
 import BottleneckFlamegraphComponent from '../diagnostics/BottleneckFlamegraph';
@@ -97,6 +100,10 @@ type Props = {
   themeName?: string;
   onThemeChange?: (name: string) => void;
   onStartTour?: () => void;
+  workflow?: WorkflowProgress;
+  onWorkflowAction?: (id: WorkflowStepId) => void;
+  onOpenGuide?: () => void;
+  projectsLoading?: boolean;
 };
 
 export default function WorkstationScreens(props: Props) {
@@ -163,8 +170,8 @@ export default function WorkstationScreens(props: Props) {
         </div>
       ))
     ) : (
-      <p className="muted empty-note">
-        No saved projects yet. Inspect and map a target in the workstation, then save a project.
+      <p className="muted empty-note" role="status">
+        {props.projectsLoading ? 'Checking saved projects… each one is verified against its video and models, which can take a few seconds.' : 'No saved projects yet. Inspect and map a target in the workstation, then save a project.'}
       </p>
     );
 
@@ -174,8 +181,15 @@ export default function WorkstationScreens(props: Props) {
         <main className="screen-page">
           <span className="eyebrow">LOCAL CREATIVE WORKSPACE</span>
           <h1>Dashboard</h1>
-          <p className="muted">New here? Take the four-step tour: source face, target tracking, live preview, then the render queue.</p>
-          <button className="button accent tour-start" data-testid="home-tour-button" onClick={() => props.onStartTour?.()}>How to Use · Quick Tour</button>
+          <p className="muted">New here? Follow the checklist below, take the visual tour, or open the full guide. Everything runs on this computer.</p>
+          <div className="home-help-actions">
+            <button className="button accent tour-start" data-testid="home-tour-button" onClick={() => props.onStartTour?.()}>How to Use · Quick Tour</button>
+            <button className="button" data-testid="home-guide-button" onClick={() => props.onOpenGuide?.()}>Open the guide</button>
+          </div>
+          {props.workflow && <section className="home-workflow" aria-labelledby="home-workflow-title">
+            <h2 id="home-workflow-title">Your video workflow</h2>
+            <WorkflowChecklist progress={props.workflow} onAction={props.onWorkflowAction} compact />
+          </section>}
           <div className="dashboard-cards">
             <a href="#/faceswap" className="screen-card">
               <h2>Start a scene →</h2>

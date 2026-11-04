@@ -3,6 +3,8 @@ import { api, post } from '../../api';
 import type { FaceSet, FaceSetView, IdentityAssetStatus, Reconstruction } from '../../contracts';
 import VirtualList from '../common/VirtualList';
 import { startFacesetDrag } from '../../utils/facesetDrag';
+import { describeCoverage, parseRequest } from '../guide/coverageGuide';
+import { READINESS, SOURCE_PHOTO_RULES } from '../guide/helpContent';
 
 /** Yaw columns (image left → right) and pitch rows used by the pose coverage indicator. Standard frame: + pitch = up. */
 export const YAW_BINS = [
@@ -117,6 +119,8 @@ export default function FaceSetDetail({ faceset, selectedTrackLabel, assignedHer
   const coverage = coverageGrid(list);
   const asset = status.value?.asset ?? null;
   const readiness = status.value?.coverage.readiness;
+  const reading = describeCoverage(coverage.grid);
+  const readinessHelp = readiness ? READINESS[readiness] : undefined;
 
   return (
     <section className="fs-detail" aria-label={`FaceSet ${faceset.name}`}>
@@ -143,12 +147,18 @@ export default function FaceSetDetail({ faceset, selectedTrackLabel, assignedHer
               <span role="rowheader">{pitch.label}</span>
               {YAW_BINS.map((yaw, column) => {
                 const count = coverage.grid[row][column];
-                return <span role="cell" key={yaw.id} className={`coverage-cell ${count === 0 ? 'empty' : count < 2 ? 'sparse' : 'dense'}`} title={`${pitch.label} · yaw ${yaw.label}: ${count} view${count === 1 ? '' : 's'}`}>{count || ''}</span>;
+                return <span role="cell" key={yaw.id} className={`coverage-cell ${count === 0 ? 'empty' : count < 2 ? 'sparse' : 'dense'}`} title={`${pitch.label} · yaw ${yaw.label}: ${count} view${count === 1 ? '' : 's'}`} aria-label={`${pitch.label}, yaw ${yaw.label}: ${count === 0 ? 'no views' : `${count} view${count === 1 ? '' : 's'}`}`}>{count || '–'}</span>;
               })}
             </div>
           ))}
         </div>
       )}
+      {views.state === 'ready' && <div className="coverage-reading" data-testid="coverage-reading">
+        <p role="status">{reading.text}</p>
+        <p className="muted coverage-legend">– no photo at this angle · <b>1</b> one photo (sparse) · <b>2+</b> well covered. Left and right are as seen in the picture.</p>
+        <details className="source-checklist"><summary>Source photo checklist</summary>
+          <ul>{SOURCE_PHOTO_RULES.map(rule => <li key={rule.id}><strong>{rule.rule}.</strong> {rule.detail}</li>)}</ul></details>
+      </div>}
 
       <div className="fs-subhead"><span>MULTI-ANGLE VIEWS</span><span className="muted">{views.state === 'ready' ? list.length : ''}</span></div>
       {views.state === 'loading' && <div className="view-gallery-skeleton" aria-hidden="true">{Array.from({ length: 6 }, (_, i) => <span key={i} className="skeleton-tile" />)}</div>}
@@ -165,7 +175,7 @@ export default function FaceSetDetail({ faceset, selectedTrackLabel, assignedHer
       {status.state === 'error' && <ErrorRetry message={status.error} onRetry={retryStatus} />}
       {status.value && (
         <div className="asset-card">
-          <p className="asset-readiness">Coverage: <strong>{readiness?.replaceAll('_', ' ')}</strong> · {status.value.coverage.usable_count}/{status.value.coverage.view_count} usable views
+          <p className="asset-readiness">Coverage: <strong>{readinessHelp?.label ?? readiness?.replaceAll('_', ' ')}</strong> · {status.value.coverage.usable_count}/{status.value.coverage.view_count} usable views
             {status.value.coverage.yaw_range_deg && <> · yaw {status.value.coverage.yaw_range_deg[0].toFixed(0)}° … {status.value.coverage.yaw_range_deg[1].toFixed(0)}°</>}</p>
           {asset ? (
             <dl className="asset-facts">
@@ -175,7 +185,8 @@ export default function FaceSetDetail({ faceset, selectedTrackLabel, assignedHer
               <div><dt>Views used</dt><dd>{asset.sources_used}/{asset.sources_total}</dd></div>
             </dl>
           ) : <p className="muted">Not built yet. Building runs locally on the CPU from this FaceSet's own views; 3D render modes build it on first use otherwise.</p>}
-          {status.value.coverage.requests.length > 0 && <details className="asset-requests"><summary>{status.value.coverage.requests.length} suggested additional angle{status.value.coverage.requests.length === 1 ? '' : 's'}</summary><ul>{status.value.coverage.requests.map(item => <li key={item}>{item}</li>)}</ul></details>}
+          {readinessHelp && <p className="muted asset-meaning">{readinessHelp.meaning} <em>{readinessHelp.next}</em></p>}
+          {status.value.coverage.requests.length > 0 && <details className="asset-requests" open={readiness !== 'full_coverage'}><summary>{status.value.coverage.requests.length} suggested additional angle{status.value.coverage.requests.length === 1 ? '' : 's'}</summary><ul>{status.value.coverage.requests.map(item => { const request = parseRequest(item); return <li key={item}>{request.level !== 'info' && <span className={`status-chip request-${request.level}`}>{request.level}</span>} {request.text}</li>; })}</ul></details>}
           {asset && asset.missing_information.length > 0 && <details className="asset-requests"><summary>What this asset does not contain</summary><ul>{asset.missing_information.map(item => <li key={item}>{item}</li>)}{asset.limitations.map(item => <li key={item}>{item}</li>)}</ul></details>}
           <div className="asset-actions">
             {!asset && <button type="button" className="button small accent" disabled={build.busy} onClick={() => void runBuild()}>{build.busy ? `Building… ${elapsed}s` : 'Build 3D identity asset'}</button>}

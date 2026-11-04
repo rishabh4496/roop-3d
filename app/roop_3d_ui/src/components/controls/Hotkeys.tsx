@@ -9,7 +9,7 @@ import { createContext, useContext, useEffect, useState, type ReactNode } from '
 export const DEFAULT_KEYS: Record<string, string> = {
   play: 'Space', previous: 'ArrowLeft', next: 'ArrowRight', markIn: 'I', markOut: 'O', jumpIn: 'Shift+I', jumpOut: 'Shift+O', resetRange: 'Alt+R',
   toggleWipe: 'W', toggleDiff: 'D',
-  buffer1: '1', buffer2: '2', buffer3: '3', buffer4: '4', buffer5: '5', buffer6: '6',
+  buffer1: '1', buffer2: '2', buffer3: '3', buffer4: '4', buffer5: '5', buffer6: '6', buffer7: '7', buffer8: '8',
   solo: 'S', bypass: 'B', sweep: 'Shift+P',
   extractFace: 'E',
   snapshotA: 'Shift+A', snapshotB: 'Shift+B', snapshotC: 'Shift+C', snapshotD: 'Shift+D',
@@ -19,7 +19,8 @@ export const DEFAULT_KEYS: Record<string, string> = {
 export const KEY_LABELS: Record<string, string> = {
   play: 'Play / pause', previous: 'Previous frame', next: 'Next frame', markIn: 'Mark trim in', markOut: 'Mark trim out', jumpIn: 'Jump to trim in', jumpOut: 'Jump to trim out', resetRange: 'Reset trim range',
   toggleWipe: 'Toggle split wipe', toggleDiff: 'Toggle diff map',
-  buffer1: 'Solo buffer 1 (Input)', buffer2: 'Solo buffer 2 (3D Pose & TPS)', buffer3: 'Solo buffer 3 (Raw Swap)', buffer4: 'Solo buffer 4 (Matte)', buffer5: 'Solo buffer 5 (Restorer)', buffer6: 'Solo buffer 6 (Final)',
+  // One key per node of the preview pipeline (components/workstation/pipeline.ts), in that order.
+  buffer1: 'Solo buffer 1 (Input)', buffer2: 'Solo buffer 2 (3D Pose & TPS Grid)', buffer3: 'Solo buffer 3 (3D Normal Map)', buffer4: 'Solo buffer 4 (3D Relighting)', buffer5: 'Solo buffer 5 (Raw Swap)', buffer6: 'Solo buffer 6 (Occlusion & Seam Mask)', buffer7: 'Solo buffer 7 (Restorer)', buffer8: 'Solo buffer 8 (Final Output)',
   solo: 'Solo selected pipeline node', bypass: 'Bypass selected pipeline node', sweep: 'Parameter sweep',
   extractFace: 'Extract face from frame',
   snapshotA: 'Capture snapshot A', snapshotB: 'Capture snapshot B', snapshotC: 'Capture snapshot C', snapshotD: 'Capture snapshot D',
@@ -29,7 +30,7 @@ export const KEY_LABELS: Record<string, string> = {
 /** Display grouping for the remapper UI; every action in DEFAULT_KEYS appears in exactly one group. */
 export const KEY_GROUPS: { title: string; actions: string[] }[] = [
   { title: 'Transport & range', actions: ['play', 'previous', 'next', 'markIn', 'markOut', 'jumpIn', 'jumpOut', 'resetRange'] },
-  { title: 'Inspection canvas', actions: ['toggleWipe', 'toggleDiff', 'buffer1', 'buffer2', 'buffer3', 'buffer4', 'buffer5', 'buffer6', 'solo', 'bypass', 'sweep'] },
+  { title: 'Inspection canvas', actions: ['toggleWipe', 'toggleDiff', 'buffer1', 'buffer2', 'buffer3', 'buffer4', 'buffer5', 'buffer6', 'buffer7', 'buffer8', 'solo', 'bypass', 'sweep'] },
   { title: 'Faces & snapshots', actions: ['extractFace', 'snapshotA', 'snapshotB', 'snapshotC', 'snapshotD'] },
   { title: 'Workspace', actions: ['floating', 'pip', 'save', 'undo', 'redo'] },
 ];

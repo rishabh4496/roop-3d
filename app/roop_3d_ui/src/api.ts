@@ -1,9 +1,20 @@
 import type { Capabilities } from './contracts';
+/**
+ * An error from the local service. It is still a plain `Error` (same `message` as before), but keeps the machine
+ * code from the `{error: {code, message}}` envelope so the UI can show a specific recovery instruction for it.
+ */
+export class ApiError extends Error {
+  constructor(message: string, readonly code: string | null = null, readonly status = 0, readonly requestId: string | null = null) {
+    super(message);
+    this.name = 'ApiError';
+  }
+}
+const apiError = (body: any, status: number) => new ApiError(body?.error?.message ?? `Local service returned ${status}`, body?.error?.code ?? null, status, body?.error?.request_id ?? null);
 export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   const response = await fetch(`/api/v1${path}`, { ...init, headers: { ...(typeof init.body === 'string' ? { 'Content-Type': 'application/json' } : {}), ...init.headers } });
   if (!response.ok) {
     const error = await response.json().catch(() => null);
-    throw new Error(error?.error?.message ?? `Local service returned ${response.status}`);
+    throw apiError(error, response.status);
   }
   return response.json() as Promise<T>;
 }
@@ -31,11 +42,11 @@ export async function postLivePreview(payload: unknown, init: RequestInit = {}):
   if (response.status === 503) {
     const body = await response.json().catch(() => null);
     if (body?.busy === true) throw new PreviewBusyError(String(body.stage ?? 'UNKNOWN'), Number(body.retry_after_ms) > 0 ? Number(body.retry_after_ms) : 1000);
-    throw new Error(body?.error?.message ?? 'Local service returned 503');
+    throw apiError(body, 503);
   }
   if (!response.ok) {
     const error = await response.json().catch(() => null);
-    throw new Error(error?.error?.message ?? `Local service returned ${response.status}`);
+    throw apiError(error, response.status);
   }
   let meta: LivePreviewMeta | null = null;
   try { meta = JSON.parse(response.headers.get('X-Preview-Meta') ?? 'null'); } catch { meta = null; }

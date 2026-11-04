@@ -83,6 +83,9 @@ class Hardware(BaseModel):
 
 LOW_VRAM_CEILING_MIB = 4600
 STANDARD_VRAM_CEILING_MIB = 12288
+# A "12 GB" card reports less than 12288 MiB (an RTX 4070 reports 12282), so the 12gb profile is admitted from the
+# documented minimum (docs/HARDWARE_COMPATIBILITY_MATRIX.md: 10,240 MiB), not from the nominal size.
+MIN_12GB_PROFILE_VRAM_MIB = 10240
 
 
 def resolve_hardware_profile(total_vram_mib: int, free_vram_mib: int, profile_setting: str = "auto") -> str:

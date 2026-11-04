@@ -130,7 +130,7 @@ export default function VirtualList<T>({ items, itemKey, renderItem, estimateHei
 
   if (!count) return <>{empty ?? null}</>;
   return (
-    <div ref={outer} className={`virtual-list ${className}`} role={role} aria-label={ariaLabel} aria-rowcount={Math.ceil(count / layout.columns)}
+    <div ref={outer} className={`virtual-list ${className}`} role={role} aria-label={ariaLabel}
       style={{ position: 'relative', ...(maxHeight !== undefined ? { overflowY: 'auto', maxHeight } : {}), ...style }} data-virtual-count={count} data-virtual-mounted={slice.reduce((n, r) => n + r.entries.length, 0)}>
       <div ref={spacer} className="virtual-spacer" style={{ position: 'relative', height: Math.max(layout.total, 0) || undefined, width: '100%' }}>
         <div className="virtual-window" style={{ position: 'absolute', left: 0, right: 0, top: 0, transform: `translateY(${layout.offset}px)` }}>

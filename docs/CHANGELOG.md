@@ -4,6 +4,19 @@ All notable changes to the Roop 3D project are documented in this file.
 
 ---
 
+## [Unreleased]
+
+### Stage 19: Professional UX, Accessibility and Documentation
+- **Guidance:** first-run Welcome dialog, guided project start, a live seven-step checklist (Home, Guide, Next-step bar), target-face tutorial, FaceSet photo checklist with the real quality thresholds, plain-language 3D-coverage reading with prioritised requests, engine recommendation and hardware-profile explanations, queue/checkpoint guidance (resume replays from frame 0), and recovery instructions for 49 backend error codes (codes and request IDs are now kept and shown).
+- **New control:** *Export preset* (seven presets plus HDR, subtitle and image-format policies). The server already supported them; the interface had no way to choose one.
+- **Accessibility:** skip link, a visible focus ring everywhere, one keyboard contract for all dialogs (six had none or partial), repaired ARIA structure, minimum 24 px targets, contrast enforcement across all 37 themes plus light/AMOLED component fixes (axe: 0 violations), *Reduce motion* (system / always / never, including the 3D viewers).
+- **Responsive:** tablet layouts at 1024 and 820 px (preview first and on screen), Face Manager no longer overflows, preview requests are identical at every window size.
+- **Fixed:** a real 12 GB GPU (reports 12282 MiB) was demoted to the 6 GB profile at render time; offline `model-import` wrote to a folder the server never reads; the app was unusable for ~11 s while `/projects` re-verified saved projects; a malformed linter response blanked the page; the unavailable "foreground" pass could be ticked; shortcut labels did not match the pipeline stages (keys 7 and 8 added).
+- **Documentation:** installation, offline models, user manual, FaceSet guide, engine comparison, GPU troubleshooting, performance, export, common problems, developer architecture, and the Stage 19 report (`docs/UX_STAGE19.md`), checked against the code by `test_stage19_docs.py`.
+- **Known limit:** on this checkout the model-governance gate refuses the unreviewed core models (`LICENSE_UNVERIFIED`), so a full real-video render could not be demonstrated; documented in `docs/OFFLINE_MODELS.md`.
+
+---
+
 ## [0.2.1] - 2026-11-05
 
 ### Stage 18: Long-Duration Reliability Engineering

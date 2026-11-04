@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { TOUR_STEPS, markTourSeen, type TourStep } from './tourSteps';
+import { useDialogA11y } from '../controls/useDialogA11y';
 
 type Box = { top: number; left: number; width: number; height: number };
 
@@ -30,6 +31,8 @@ export default function QuickTour({ open, onClose, onNavigate }: { open: boolean
   const last = index === TOUR_STEPS.length - 1;
 
   const close = useCallback(() => { markTourSeen(); setIndex(0); onClose(); }, [onClose]);
+  const card = useRef<HTMLElement>(null);
+  useDialogA11y(card, close, open, '[data-tour-next]');
 
   // Move to the step's screen, then (re)measure its highlight target.
   useEffect(() => {
@@ -50,22 +53,22 @@ export default function QuickTour({ open, onClose, onNavigate }: { open: boolean
 
   useEffect(() => {
     if (!open) return;
-    next.current?.focus();
+    // Escape, focus and the Tab trap come from useDialogA11y; here only the arrow keys step through the tour.
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') { event.preventDefault(); close(); }
-      else if (event.key === 'ArrowRight') setIndex(value => Math.min(TOUR_STEPS.length - 1, value + 1));
+      if ((event.target as HTMLElement | null)?.closest?.('input,select,textarea')) return;
+      if (event.key === 'ArrowRight') setIndex(value => Math.min(TOUR_STEPS.length - 1, value + 1));
       else if (event.key === 'ArrowLeft') setIndex(value => Math.max(0, value - 1));
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [open, close]);
+  }, [open]);
 
   if (!open) return null;
   const pad = 6;
   return <div className="tour-layer" data-testid="quick-tour">
     {box && <div className="tour-spotlight" data-testid="tour-spotlight" style={{ top: box.top - pad, left: box.left - pad, width: box.width + pad * 2, height: box.height + pad * 2 }} />}
     {!box && <div className="tour-dim" />}
-    <section className="tour-card" role="dialog" aria-modal="true" aria-labelledby="tour-title" data-step={step.id}>
+    <section ref={card} className="tour-card" role="dialog" aria-modal="true" aria-labelledby="tour-title" data-step={step.id}>
       <header>
         <span className="eyebrow">QUICK TOUR · STEP {index + 1} OF {TOUR_STEPS.length}</span>
         <button className="icon-button" aria-label="Close tour" onClick={close}>×</button>
@@ -79,7 +82,7 @@ export default function QuickTour({ open, onClose, onNavigate }: { open: boolean
       <footer>
         <button className="button" disabled={index === 0} onClick={() => setIndex(index - 1)}>Back</button>
         <button className="button" onClick={close}>Skip</button>
-        <button ref={next} className="button accent" onClick={() => (last ? close() : setIndex(index + 1))}>{last ? 'Done' : 'Next'}</button>
+        <button ref={next} data-tour-next className="button accent" onClick={() => (last ? close() : setIndex(index + 1))}>{last ? 'Done' : 'Next'}</button>
       </footer>
     </section>
   </div>;

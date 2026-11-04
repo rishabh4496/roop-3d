@@ -3,6 +3,7 @@ import { renderProbe } from './utils/renderProbe';
 import type { Capabilities, Config, Schema } from './contracts';
 import { optionReason } from './state';
 import NumericInput from './components/controls/NumericInput';
+import HardwareExplainer from './components/guide/HardwareExplainer';
 
 const DOMAIN_TABS = [
   { id: 'compute', label: 'Compute', description: 'Hardware acceleration, VRAM allocation, and thread budgets' },
@@ -158,6 +159,7 @@ export function SettingsInspector({
                   )}
                 </div>
               )}
+              {tab.id === 'compute' && <HardwareExplainer caps={caps} configured={String(draft.hardware_profile ?? 'auto')} />}
 
               {items.map(([name, schema]) => {
                 const reason = optionReason(caps, name);
