@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "content_version": "2026.11.04-1",
+  "large_yaw_degrees": 30.0,
+  "trait_map": [
+    {
+      "trait": "frontal",
+      "scene_categories": [
+        "frontal_faces"
+      ]
+    },
+    {
+      "trait": "large_yaw",
+      "scene_categories": [
+        "extreme_yaw_and_profile"
+      ]
+    }
+  ],
+  "low_confidence": "withhold",
+  "occlusion": "not_assessed"
+}

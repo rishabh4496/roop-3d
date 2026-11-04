@@ -1,0 +1,140 @@
+{
+  "schema_version": 1,
+  "content_version": "2026.11.04-1",
+  "profiles": [
+    {
+      "profile_id": "baseline",
+      "description": "Today's standard reference swap: PyAV decode, SCRFD, ArcFace, 106-point landmarks, INSwapper, BiSeNet masks, PyAV encode.",
+      "required": [
+        {
+          "category": "video_decoding",
+          "allowed_engines": [
+            "pyav_video_reader"
+          ]
+        },
+        {
+          "category": "face_detection",
+          "allowed_engines": [
+            "scrfd_detector"
+          ]
+        },
+        {
+          "category": "face_recognition",
+          "allowed_engines": [
+            "arcface_w600k_recognizer"
+          ]
+        },
+        {
+          "category": "dense_landmarks",
+          "allowed_engines": [
+            "landmarks_106"
+          ]
+        },
+        {
+          "category": "identity_swapping",
+          "allowed_engines": [
+            "inswapper_reference"
+          ]
+        },
+        {
+          "category": "expression_transfer",
+          "allowed_engines": [
+            "liveportrait_retarget"
+          ]
+        },
+        {
+          "category": "occlusion_segmentation",
+          "allowed_engines": [
+            "bisenet_face_parser"
+          ]
+        },
+        {
+          "category": "video_encoding",
+          "allowed_engines": [
+            "pyav_video_writer"
+          ]
+        }
+      ],
+      "optional": []
+    },
+    {
+      "profile_id": "adaptive",
+      "description": "Search space for Balanced and Quality: every registered engine, with 3D, expression and restoration optional.",
+      "required": [
+        {
+          "category": "video_decoding",
+          "allowed_engines": [
+            "pyav_video_reader",
+            "ffmpeg_stream_source"
+          ]
+        },
+        {
+          "category": "face_detection",
+          "allowed_engines": [
+            "scrfd_detector"
+          ]
+        },
+        {
+          "category": "face_recognition",
+          "allowed_engines": [
+            "arcface_w600k_recognizer"
+          ]
+        },
+        {
+          "category": "dense_landmarks",
+          "allowed_engines": [
+            "landmarks_106"
+          ]
+        },
+        {
+          "category": "identity_swapping",
+          "allowed_engines": [
+            "inswapper_reference",
+            "inswapper_batch_stream"
+          ]
+        },
+        {
+          "category": "video_encoding",
+          "allowed_engines": [
+            "pyav_video_writer",
+            "ffmpeg_stream_writer"
+          ]
+        }
+      ],
+      "optional": [
+        {
+          "category": "reconstruction_3d",
+          "allowed_engines": [
+            "identity_asset_builder",
+            "pose_blend_projector"
+          ]
+        },
+        {
+          "category": "expression_transfer",
+          "allowed_engines": [
+            "liveportrait_retarget",
+            "tps_expression",
+            "reenactment_3d"
+          ]
+        },
+        {
+          "category": "restoration",
+          "allowed_engines": [
+            "gpen_reference",
+            "codeformer_reference",
+            "stream_restorer_gpen",
+            "stream_restorer_codeformer",
+            "stream_restorer_ultramax"
+          ]
+        },
+        {
+          "category": "occlusion_segmentation",
+          "allowed_engines": [
+            "bisenet_face_parser",
+            "xseg_visible_face"
+          ]
+        }
+      ]
+    }
+  ]
+}

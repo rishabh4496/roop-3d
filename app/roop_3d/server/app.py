@@ -189,6 +189,8 @@ def create_app(settings: Settings | None = None, *, repo_root: Path | None = Non
     app.include_router(identity_lock_router)
     from roop_3d.server.identity_assets import router as identity_assets_router
     app.include_router(identity_assets_router)
+    from roop_3d.server.orchestrator import router as orchestrator_router
+    app.include_router(orchestrator_router)
     app.include_router(finishing_router)
     from roop_3d.server.queue_routes import router as queue_router
     app.include_router(queue_router)
