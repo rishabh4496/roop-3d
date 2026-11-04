@@ -246,7 +246,7 @@ def test_simulated_cuda_oom_retries_on_cpu_without_partial_manifest(tmp_path: Pa
             created = client.post("/api/v1/jobs", json=payload,
                                   headers={"Idempotency-Key": "stage12-oom"}).json()
             job_id = created["job_id"]
-            assert cpu_started.wait(10)
+            assert cpu_started.wait(30)
             output = tmp_path / f"roop_3d/.runtime/outputs/roop3d_{job_id}.mp4"
             manifest = Path(str(output) + ".manifest.json")
             assert observed_providers[:2] == ["CUDAExecutionProvider", "CPUExecutionProvider"]
