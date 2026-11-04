@@ -58,6 +58,11 @@ class JobStore:
                validate: Callable[[], None] | None = None, *,
                project_id: str | None = None, effective_settings: Settings | None = None) -> tuple[JobRecord, bool]:
         request = JobRequest.model_validate(request.model_dump())
+        from roop_3d.security.synthetic_media import SafetyGuard
+        SafetyGuard.inspect_request(
+            request_metadata=request.model_dump(),
+            face_labels=tuple(m.faceset_id for m in request.face_mappings),
+        )
         if not 1 <= len(idempotency_key) <= 128 or not idempotency_key.isascii() or any(ord(c) < 33 or ord(c) > 126 for c in idempotency_key):
             raise DomainError("IDEMPOTENCY_KEY_INVALID", "Idempotency-Key must contain 1 to 128 printable ASCII characters", 422)
         key = hashlib.sha256(idempotency_key.encode()).hexdigest()

@@ -21,6 +21,8 @@ from roop_3d.core.storage import atomic_json, exclusive, owned
 from roop_3d.faceset.faceset_reader import FaceSetReader
 from roop_3d.jobs.project_store import ProjectDraft, ProjectManifest
 from roop_3d.media.service import VIDEO_SUFFIXES
+from roop_3d.security.content_validator import validate_faceset_archive_bytes, validate_video_container
+from roop_3d.security.artifact_cleaner import SafeArtifactCleaner
 
 router = APIRouter(prefix="/api/v1")
 CHUNK_BYTES = 1024 * 1024
@@ -94,7 +96,10 @@ def finish_upload(request: Request, upload_id: str):
             raise DomainError("UPLOAD_INCOMPLETE", "Upload bytes are incomplete", 409)
         suffix = Path(info.filename).suffix.lower()
         digest = sha256_file(path)[1]
+        with open(path, "rb") as sample_stream:
+            header_sample = sample_stream.read(4096)
         if suffix == ".fsz":
+            validate_faceset_archive_bytes(header_sample)
             document = FaceSetReader(state.models, cache_root=root / "roop_3d/.runtime/cache").read(path, faceset_id=upload_id)
             relative = f"roop_3d/outputs/facesets/{upload_id}.fsz"
             destination = owned(root, relative)
@@ -105,6 +110,7 @@ def finish_upload(request: Request, upload_id: str):
             atomic_json(root, f"roop_3d/.runtime/coverage/{upload_id}.json", coverage(document))
             result = {"kind": "faceset", "faceset_id": upload_id, "sha256": digest}
         else:
+            validate_video_container(header_sample, info.filename)
             from roop_3d.media.probe import probe
             probe(path)
             relative = f"roop_3d/.runtime/media/{upload_id}{suffix}"
@@ -507,6 +513,8 @@ def delete_faceset(faceset_id: str, request: Request):
         manifest_path.unlink(missing_ok=True)
     except Exception:
         pass
+    cleaner = SafeArtifactCleaner(root)
+    cleaner.purge_faceset_biometrics(faceset_id)
     coverage_path = owned(root, f"roop_3d/.runtime/coverage/{faceset_id}.json")
     if coverage_path.is_file():
         try:
@@ -671,3 +679,41 @@ def reconstruction(reconstruction_id: str, request: Request, target_path: str = 
                 "face_uvs": mesh.face_uvs.tolist() if mesh.face_uvs is not None else None, "texture": texture}
     except (OSError, ValueError, KeyError, TypeError):
         raise DomainError("RECONSTRUCTION_INVALID", "Reconstruction artifact or receipt failed validation", 422) from None
+
+
+class PurgeArtifactsRequest(Contract):
+    upload_ids: list[str] = Field(default_factory=list)
+    job_ids: list[str] = Field(default_factory=list)
+    faceset_ids: list[str] = Field(default_factory=list)
+    purge_stale_caches: bool = False
+
+
+@router.post("/security/purge-artifacts")
+def purge_artifacts(value: PurgeArtifactsRequest, request: Request):
+    root = request.app.state.root
+    cleaner = SafeArtifactCleaner(root)
+    purged = {
+        "uploads": [uid for uid in value.upload_ids if cleaner.purge_upload(uid)],
+        "jobs": [jid for jid in value.job_ids if cleaner.purge_job_workspace(jid)],
+        "facesets": [cleaner.purge_faceset_biometrics(fid) for fid in value.faceset_ids],
+    }
+    if value.purge_stale_caches:
+        purged["stale_caches"] = cleaner.purge_stale_temp_artifacts()
+    return {"status": "purged", "details": purged}
+
+
+@router.get("/security/policy")
+def security_policy(request: Request):
+    settings = request.app.state.settings
+    from roop_3d.media.provenance import capabilities
+    return {
+        "loopback_bound": settings.host in {"127.0.0.1", "localhost"},
+        "host": settings.host,
+        "port": settings.port,
+        "remote_processing_enabled": settings.remote_processing_enabled,
+        "synthetic_media_notice_required": settings.synthetic_media_notice,
+        "provenance_capabilities": capabilities(),
+        "log_sanitization": True,
+        "content_validation": True,
+        "c2pa_ready": bool(capabilities().get("c2pa")),
+    }

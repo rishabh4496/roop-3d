@@ -174,6 +174,9 @@ class ProjectStore:
             identity_assets=self._assets(inputs), output_history=self.history(project_id))
         if len(manifest.model_dump_json().encode("utf-8")) > 512 * 1024:
             raise DomainError("PROJECT_TOO_LARGE", "Project exceeds the 512 KiB manifest limit", 422)
+        import re
+        if re.search(r'(?i)"(api_key|secret|password|consent_token|private_key|token)"\s*:\s*"[^"]+"', manifest.model_dump_json()):
+            raise DomainError("PROJECT_CREDENTIALS_REJECTED", "Project manifest must not contain credentials or secrets", 422)
         atomic_json(self.root, self.relative(manifest.project_id), manifest.model_dump(mode="json"))
         return manifest
 
@@ -284,7 +287,11 @@ class ProjectStore:
         try:
             if path.stat().st_size > 512 * 1024:
                 raise ValueError()
-            item = ProjectManifest.model_validate_json(path.read_text("utf-8"))
+            raw_text = path.read_text("utf-8")
+            import re
+            if re.search(r'(?i)"(api_key|secret|password|consent_token|private_key|token)"\s*:\s*"[^"]+"', raw_text):
+                raise DomainError("PROJECT_CREDENTIALS_REJECTED", "Project manifest must not contain credentials or secrets", 422)
+            item = ProjectManifest.model_validate_json(raw_text)
             if item.project_id != project_id:
                 raise ValueError()
         except (ValueError, OSError):

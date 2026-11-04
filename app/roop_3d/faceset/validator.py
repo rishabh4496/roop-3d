@@ -8,6 +8,7 @@ and unsafe executable/pickle payloads are rejected fail-closed.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 from pathlib import Path, PurePosixPath, PureWindowsPath
 import stat
 from typing import Literal
@@ -117,6 +118,9 @@ class ArchiveValidator:
                         f"Zip bomb detected: entry '{filename}' compression ratio ({ratio:.1f}) exceeds limit ({MAX_COMPRESSION_RATIO})",
                         400,
                     )
+
+            # 7. Actual content header / magic bytes validation
+            ArchiveValidator._check_entry_content(archive, info, suffix)
 
             if filename.lower() == "metadata.json":
                 has_metadata = True
@@ -231,6 +235,8 @@ class ArchiveValidator:
             if total_bytes > MAX_TOTAL_UNCOMPRESSED_BYTES:
                 raise DomainError("FACESET_SECURITY_VIOLATION", "Directory total size exceeds memory budget", 400)
 
+            ArchiveValidator._check_file_content(entry, suffix)
+
             if entry.name.lower() == "metadata.json":
                 has_metadata = True
 
@@ -247,3 +253,38 @@ class ArchiveValidator:
             has_metadata=has_metadata,
             entry_names=tuple(valid_entries),
         )
+
+    @staticmethod
+    def _check_entry_content(archive: zipfile.ZipFile, info: zipfile.ZipInfo, suffix: str) -> None:
+        if info.file_size == 0:
+            return
+        with archive.open(info, "r") as stream:
+            header = stream.read(min(1024, info.file_size))
+        ArchiveValidator._validate_payload_signature(info.filename, header, suffix)
+
+    @staticmethod
+    def _check_file_content(path: Path, suffix: str) -> None:
+        if path.stat().st_size == 0:
+            return
+        with path.open("rb") as stream:
+            header = stream.read(1024)
+        ArchiveValidator._validate_payload_signature(path.name, header, suffix)
+
+    @staticmethod
+    def _validate_payload_signature(name: str, header: bytes, suffix: str) -> None:
+        if header.startswith((b"MZ", b"\x7fELF", b"#!", b"<?php", b"<script", b"\x80\x02", b"\x80\x03", b"\x80\x04", b"\x80\x05")):
+            raise DomainError("FACESET_SECURITY_VIOLATION", f"Disallowed executable or script payload in '{name}'", 400)
+        if suffix == ".png" and not (header.startswith(b"\x89PNG") or header == b"png"):
+            raise DomainError("FACESET_SECURITY_VIOLATION", f"Entry '{name}' lacks valid PNG header", 400)
+        if suffix in {".jpg", ".jpeg"} and not header.startswith(b"\xff\xd8"):
+            raise DomainError("FACESET_SECURITY_VIOLATION", f"Entry '{name}' lacks valid JPEG header", 400)
+        if suffix == ".webp" and not (header.startswith(b"RIFF") and len(header) >= 12 and header[8:12] == b"WEBP"):
+            raise DomainError("FACESET_SECURITY_VIOLATION", f"Entry '{name}' lacks valid WebP header", 400)
+        if suffix == ".json":
+            try:
+                if len(header) < 1024:
+                    json.loads(header.decode("utf-8"))
+                else:
+                    header.decode("utf-8")
+            except Exception:
+                raise DomainError("FACESET_SECURITY_VIOLATION", f"Entry '{name}' is not valid JSON", 400) from None

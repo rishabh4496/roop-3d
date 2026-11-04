@@ -74,6 +74,8 @@ def create_app(settings: Settings | None = None, *, repo_root: Path | None = Non
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        from roop_3d.security.log_sanitizer import install_log_sanitizer
+        install_log_sanitizer()
         from roop_3d.models.native_libraries import register_native_libraries
         await run_in_threadpool(register_native_libraries)
         await run_in_threadpool(jobs.recover_interrupted)

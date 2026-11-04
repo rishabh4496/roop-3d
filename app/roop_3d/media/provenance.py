@@ -53,7 +53,9 @@ def verify_manifest(media: Path, manifest: dict) -> dict:
         authenticated = hmac.compare_digest(expected, str(authentication.get('value', '')))
     return {'media_hash_matches': matches, 'manifest_authenticated': authenticated,
             'valid': matches and authenticated is not False,
-            'trust': 'shared local key' if authenticated else 'integrity only; no signer identity'}
+            'trust': 'shared local key' if authenticated else 'integrity only; no signer identity',
+            'identity_proof': False,
+            'identity_notice': "A SHA-256 hash establishes artifact byte integrity only; it does not prove a person's legal or biometric identity."}
 
 
 def sign_c2pa(source: Path, destination: Path, claim: dict) -> dict:
