@@ -63,6 +63,90 @@ export default function SettingsScreen({
   const [compatStatus, setCompatStatus] = useState('UNVERIFIED');
   const [compatMessage, setCompatMessage] = useState('Offline-safe operation active. Defaults strictly to 100% offline.');
 
+  // Stage 16: Environment & Offline Installer state
+  const [preflightData, setPreflightData] = useState(null);
+  const [preflightLoading, setPreflightLoading] = useState(false);
+  const [offlineData, setOfflineData] = useState(null);
+  const [offlineLoading, setOfflineLoading] = useState(false);
+  const [installerNotice, setInstallerNotice] = useState('');
+  const [bundleInput, setBundleInput] = useState('');
+  const [scanInput, setScanInput] = useState('');
+
+  const loadPreflight = async () => {
+    setPreflightLoading(true);
+    try {
+      const res = await api('/installer/preflight');
+      setPreflightData(res);
+    } catch (e) {
+      setInstallerNotice(`Preflight error: ${e.message}`);
+    } finally {
+      setPreflightLoading(false);
+    }
+  };
+
+  const loadOfflineHealth = async () => {
+    setOfflineLoading(true);
+    try {
+      const res = await api('/installer/offline-health');
+      setOfflineData(res);
+    } catch (e) {
+      setInstallerNotice(`Offline health error: ${e.message}`);
+    } finally {
+      setOfflineLoading(false);
+    }
+  };
+
+  const handleImportBundle = async () => {
+    if (!bundleInput.trim()) return;
+    setInstallerNotice('Importing bundle…');
+    try {
+      const res = await post('/installer/models/import', { bundle_path: bundleInput.trim() });
+      setInstallerNotice(`Bundle import complete: ${res.imported_count} imported, ${res.skipped_count} skipped, ${res.corrupted_count} corrupted.`);
+      loadOfflineHealth();
+    } catch (e) {
+      setInstallerNotice(`Import error: ${e.message}`);
+    }
+  };
+
+  const handleScanDirectory = async () => {
+    if (!scanInput.trim()) return;
+    setInstallerNotice('Scanning directory…');
+    try {
+      const res = await post('/installer/models/scan', { dir_path: scanInput.trim() });
+      setInstallerNotice(`Scan complete: found ${res.matched_models?.length || 0} registered models in ${res.scanned_files} files.`);
+    } catch (e) {
+      setInstallerNotice(`Scan error: ${e.message}`);
+    }
+  };
+
+  const handleBackupConfig = async () => {
+    setInstallerNotice('Creating configuration backup…');
+    try {
+      const res = await post('/installer/updates/backup', {});
+      setInstallerNotice(`Backup created: ${res.backup_id} (commit ${res.git_commit?.slice(0, 8) || 'unknown'})`);
+    } catch (e) {
+      setInstallerNotice(`Backup error: ${e.message}`);
+    }
+  };
+
+  const handleRollback = async () => {
+    if (!window.confirm('Roll back to the previous configuration snapshot? Preserved FaceSets and rendered outputs will not be deleted.')) return;
+    setInstallerNotice('Rolling back…');
+    try {
+      const res = await post('/installer/updates/rollback', {});
+      setInstallerNotice(res.message || 'Rollback complete.');
+    } catch (e) {
+      setInstallerNotice(`Rollback error: ${e.message}`);
+    }
+  };
+
+  useEffect(() => {
+    if (activeTab === 'installer') {
+      if (!preflightData) loadPreflight();
+      if (!offlineData) loadOfflineHealth();
+    }
+  }, [activeTab]);
+
   const handlePurgeVram = async () => {
     setPurgeLoading(true);
     setPurgeNotice('');
@@ -183,6 +267,13 @@ export default function SettingsScreen({
             data-testid="tab-models"
           >
             Model Hub & TRT Engine Manager
+          </button>
+          <button
+            className={`tab-btn ${activeTab === 'installer' ? 'active' : ''}`}
+            onClick={() => setActiveTab('installer')}
+            data-testid="tab-installer"
+          >
+            Environment & Offline Manager
           </button>
         </div>
       </div>
@@ -604,6 +695,152 @@ export default function SettingsScreen({
       )}
 
       {activeTab === 'models' && <ModelHubPanel active />}
+
+      {activeTab === 'installer' && (
+        <div className="diagnostics-dashboard installer-dashboard" data-testid="installer-tab-content">
+          {installerNotice && (
+            <div className="notification" style={{ padding: '8px 12px', background: 'var(--soft)', borderRadius: '4px', fontSize: '12px', marginBottom: '1rem' }}>
+              {installerNotice}
+            </div>
+          )}
+
+          {/* 1. Environment Preflight Checking HUD */}
+          <section className="environment-health-card">
+            <div className="card-header">
+              <div>
+                <span className="eyebrow">12-POINT PREFLIGHT INSPECTION</span>
+                <h3>Environment Preflight & Hardware Profile</h3>
+              </div>
+              <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                <span className={`badge-${preflightData?.status === 'PASS' ? 'pass' : (preflightData?.status === 'WARN' ? 'warn' : 'fail')}`}>
+                  PROFILE: {preflightData?.resolved_hardware_profile?.toUpperCase() || 'PROBING…'}
+                </span>
+                <button className="button small" onClick={loadPreflight} disabled={preflightLoading}>
+                  {preflightLoading ? 'Checking…' : 'Re-Run Preflight'}
+                </button>
+              </div>
+            </div>
+
+            <div className="env-health-grid">
+              {preflightData?.checks?.map(c => (
+                <div className="health-item" key={c.id}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <span className="item-label">{c.name}</span>
+                    <span className={`badge-${c.status.toLowerCase()}`} style={{ fontSize: '10px' }}>{c.status}</span>
+                  </div>
+                  <strong style={{ fontSize: '12px' }}>{c.message}</strong>
+                </div>
+              ))}
+            </div>
+          </section>
+
+          {/* 2. Offline Inference Health & Core Models */}
+          <section className="environment-health-card">
+            <div className="card-header">
+              <div>
+                <span className="eyebrow">STANDALONE LOCAL PROCESSING</span>
+                <h3>Offline Inference & Core Models</h3>
+              </div>
+              <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                <span className={`badge-${offlineData?.offline_ready ? 'pass' : 'warn'}`}>
+                  {offlineData?.offline_ready ? '100% OFFLINE READY' : 'MODELS NEEDED'}
+                </span>
+                <button className="button small" onClick={loadOfflineHealth} disabled={offlineLoading}>
+                  {offlineLoading ? 'Verifying…' : 'Verify Offline Health'}
+                </button>
+              </div>
+            </div>
+
+            <p className="muted" style={{ fontSize: '12px', marginBottom: '1rem' }}>
+              {offlineData?.message || 'Inspecting core face swap model registry status…'}
+            </p>
+
+            <div className="env-health-grid">
+              {offlineData?.core_models?.map(m => (
+                <div className="health-item" key={m.role}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <span className="item-label">{m.role.toUpperCase()} ({m.name})</span>
+                    <span className={`badge-${m.status === 'VERIFIED_LOCAL' ? 'pass' : 'warn'}`} style={{ fontSize: '10px' }}>
+                      {m.status}
+                    </span>
+                  </div>
+                  <small className="muted" style={{ whiteSpace: 'pre-line' }}>{m.message}</small>
+                </div>
+              ))}
+            </div>
+          </section>
+
+          {/* 3. Model Bundle Importer & Local Directory Scanner */}
+          <section className="environment-health-card">
+            <div className="card-header">
+              <div>
+                <span className="eyebrow">OFFLINE MODEL ACQUISITION</span>
+                <h3>Model Bundle Import & Local Scanner</h3>
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', marginTop: '0.5rem' }}>
+              <div>
+                <label style={{ display: 'block', fontSize: '12px', fontWeight: 'bold', marginBottom: '4px' }}>
+                  Import Model Bundle (.zip archive or directory):
+                </label>
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  <input
+                    type="text"
+                    placeholder="G:\path\to\roop3d_models.zip or folder"
+                    value={bundleInput}
+                    onChange={e => setBundleInput(e.target.value)}
+                    style={{ flex: 1, padding: '6px 10px', fontSize: '12px' }}
+                  />
+                  <button className="button accent small" onClick={handleImportBundle} disabled={!bundleInput.trim()}>
+                    Import Bundle
+                  </button>
+                </div>
+                <small className="muted">Validates SHA-256 digests and guards against archive path traversal.</small>
+              </div>
+
+              <div>
+                <label style={{ display: 'block', fontSize: '12px', fontWeight: 'bold', marginBottom: '4px' }}>
+                  Scan Local Directory for Registered Models:
+                </label>
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  <input
+                    type="text"
+                    placeholder="G:\path\to\models_directory"
+                    value={scanInput}
+                    onChange={e => setScanInput(e.target.value)}
+                    style={{ flex: 1, padding: '6px 10px', fontSize: '12px' }}
+                  />
+                  <button className="button small" onClick={handleScanDirectory} disabled={!scanInput.trim()}>
+                    Scan Directory
+                  </button>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          {/* 4. Configuration Backup & Safe Rollback */}
+          <section className="environment-health-card">
+            <div className="card-header">
+              <div>
+                <span className="eyebrow">UPDATES & ROLLBACK RECOVERY</span>
+                <h3>Configuration Backup & Recovery</h3>
+              </div>
+              <div style={{ display: 'flex', gap: '8px' }}>
+                <button className="button small" onClick={handleBackupConfig}>
+                  Create Config Backup
+                </button>
+                <button className="button small danger" onClick={handleRollback}>
+                  Rollback to Previous Backup
+                </button>
+              </div>
+            </div>
+            <p className="muted" style={{ fontSize: '12px' }}>
+              Safe rollback restores the prior Git commit and config without touching FaceSets, projects, or rendered outputs. Roop Ultimate is never modified.
+            </p>
+          </section>
+        </div>
+      )}
     </main>
   );
 }

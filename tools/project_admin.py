@@ -1,4 +1,7 @@
-"""Own-project launcher preflight; never operates on another Pinokio app."""
+"""Own-project launcher preflight, offline manager, and recovery admin.
+
+Never operates on another Pinokio app (especially roop-ultimate).
+"""
 from __future__ import annotations
 
 import argparse
@@ -11,7 +14,7 @@ import socket
 import subprocess
 import sys
 
-ROOT = Path(__file__).absolute().parents[1]
+ROOT = Path(__file__).resolve().parents[1]
 
 
 def owned(relative: str) -> Path:
@@ -24,41 +27,129 @@ def owned(relative: str) -> Path:
             info = ancestor.lstat()
             if ancestor.is_symlink() or getattr(info, "st_file_attributes", 0) & 0x400:
                 raise RuntimeError("Refusing a symlink/junction in the standalone app write path")
-    if not path.absolute().is_relative_to(ROOT):
+    if not path.resolve().is_relative_to(ROOT):
         raise RuntimeError("External write rejected")
     return path
 
 
-def preflight() -> None:
+def ensure_sys_path() -> None:
+    app_dir = str(owned("app"))
+    if app_dir not in sys.path:
+        sys.path.insert(0, app_dir)
+
+
+def preflight(verbose: bool = False) -> None:
     marker = json.loads(owned(".roop3d-project.json").read_text("utf-8"))
     if marker.get("app_id") != "roop-3d":
         raise RuntimeError("Wrong project identity")
-    sys.path.insert(0, str(owned("app")))
+
+    ensure_sys_path()
     from roop_3d.tools.git_guard import check_branch
     check_branch(ROOT)
-    for relative in ("app/roop_3d", "app/roop_3d/.venv", "cache", "cache/uv", "cache/tmp"):
+
+    for relative in ("app/roop_3d", "app/roop_3d/.venv", "cache", "cache/uv", "cache/tmp", "cache/backups"):
         path = owned(relative)
         if relative.startswith("cache"):
             path.mkdir(parents=True, exist_ok=True)
 
+    # Run the comprehensive 12-point environment preflight
+    from roop_3d.installer.preflight import run_environment_preflight
+    report = run_environment_preflight(ROOT)
+
+    if verbose or report["status"] == "FAIL":
+        for check in report["checks"]:
+            prefix = "[PASS]" if check["status"] == "PASS" else (f"[{check['status']}]")
+            print(f"{prefix} {check['name']}: {check['message']}", flush=True)
+
+    if not report["ready"]:
+        failed = [c["name"] for c in report["checks"] if c["status"] == "FAIL"]
+        raise RuntimeError(f"Environment preflight failed critical checks: {', '.join(failed)}")
+
+    print(f"Roop 3D preflight: PASS (Profile: {report['resolved_hardware_profile']})", flush=True)
+
+
+def check_env() -> None:
+    ensure_sys_path()
+    from roop_3d.installer.preflight import run_environment_preflight
+    report = run_environment_preflight(ROOT)
+    print(json.dumps(report, indent=2), flush=True)
+
 
 def mark_ready() -> None:
     preflight()
-    if Path(sys.prefix).absolute() != owned("app/roop_3d/.venv"):
+    if Path(sys.prefix).resolve() != owned("app/roop_3d/.venv").resolve():
         raise RuntimeError("Install must run inside this app's own virtual environment")
-    for package in ("fastapi", "uvicorn", "pydantic", "numpy", "av", "opencv-python-headless", "httpx", "PyYAML"):
-        importlib.metadata.version(package)
-    sys.path.insert(0, str(owned("app")))
+
+    ensure_sys_path()
     from roop_3d.tools.install_git_guard import install
     install(ROOT)
-    digest = hashlib.sha256(owned("app/roop_3d/requirements.lock").read_bytes()).hexdigest()
-    owned("cache/install-ready.json").write_text(json.dumps({"app_id": "roop-3d", "requirements_sha256": digest,
-                                                           "environment": "app/roop_3d/.venv"}) + "\n", encoding="utf-8")
+
+    from roop_3d.installer.verification import verify_installation
+    res = verify_installation(ROOT)
+    print(f"Installation verified: {res['packages_count']} packages checked. Dist built.", flush=True)
+
+
+def verify_install() -> None:
+    ensure_sys_path()
+    from roop_3d.installer.verification import verify_installation
+    res = verify_installation(ROOT)
+    print(json.dumps(res, indent=2), flush=True)
+
+
+def offline_health() -> None:
+    ensure_sys_path()
+    from roop_3d.installer.offline_cache import check_offline_readiness
+    res = check_offline_readiness(ROOT)
+    print(json.dumps(res, indent=2), flush=True)
+
+
+def model_import(bundle_path: str) -> None:
+    ensure_sys_path()
+    from roop_3d.installer.model_manager import ModelManager
+    manager = ModelManager(ROOT)
+    res = manager.import_bundle(Path(bundle_path))
+    print(json.dumps(res, indent=2), flush=True)
+
+
+def model_verify() -> None:
+    ensure_sys_path()
+    from roop_3d.installer.model_manager import ModelManager
+    manager = ModelManager(ROOT)
+    res = manager.verify_all_models()
+    print(json.dumps(res, indent=2), flush=True)
+
+
+def check_update() -> None:
+    ensure_sys_path()
+    from roop_3d.installer.update_manager import check_update_status
+    res = check_update_status(ROOT)
+    print(json.dumps(res, indent=2), flush=True)
+
+
+def backup_config() -> None:
+    ensure_sys_path()
+    from roop_3d.installer.update_manager import create_configuration_backup
+    res = create_configuration_backup(ROOT)
+    print(json.dumps(res, indent=2), flush=True)
+
+
+def rollback(backup_id: str | None = None) -> None:
+    ensure_sys_path()
+    from roop_3d.installer.update_manager import rollback_to_backup
+    res = rollback_to_backup(ROOT, backup_id)
+    print(json.dumps(res, indent=2), flush=True)
+
+
+def recover() -> None:
+    ensure_sys_path()
+    from roop_3d.installer.verification import recover_interrupted_installation
+    res = recover_interrupted_installation(ROOT)
+    print(json.dumps(res, indent=2), flush=True)
 
 
 def check_reset() -> None:
     preflight()
-    # These are the complete reset targets. No source, model or output directory is removed.
+    # These are the complete reset targets. No source, model, FaceSet, or output directory is removed.
     owned("app/roop_3d/.venv")
     owned("cache/install-ready.json")
     with socket.socket() as probe:
@@ -70,10 +161,45 @@ def check_reset() -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=["preflight", "mark-ready", "check-reset"])
+    parser.add_argument("action", choices=[
+        "preflight", "check-env", "mark-ready", "verify-install",
+        "offline-health", "model-import", "model-verify",
+        "check-update", "backup-config", "rollback", "recover",
+        "check-reset",
+    ])
+    parser.add_argument("--bundle", default=None, help="Path to model bundle (ZIP or directory) for model-import")
+    parser.add_argument("--backup-id", default=None, help="Backup ID for rollback")
+    parser.add_argument("--verbose", "-v", action="store_true", help="Print verbose preflight results")
+
     arguments = parser.parse_args()
     try:
-        {"preflight": preflight, "mark-ready": mark_ready, "check-reset": check_reset}[arguments.action]()
+        if arguments.action == "preflight":
+            preflight(verbose=arguments.verbose)
+        elif arguments.action == "check-env":
+            check_env()
+        elif arguments.action == "mark-ready":
+            mark_ready()
+        elif arguments.action == "verify-install":
+            verify_install()
+        elif arguments.action == "offline-health":
+            offline_health()
+        elif arguments.action == "model-import":
+            if not arguments.bundle:
+                raise RuntimeError("--bundle argument is required for model-import")
+            model_import(arguments.bundle)
+        elif arguments.action == "model-verify":
+            model_verify()
+        elif arguments.action == "check-update":
+            check_update()
+        elif arguments.action == "backup-config":
+            backup_config()
+        elif arguments.action == "rollback":
+            rollback(arguments.backup_id)
+        elif arguments.action == "recover":
+            recover()
+        elif arguments.action == "check-reset":
+            check_reset()
+
         print("Roop 3D project check: PASS", flush=True)
         return 0
     except Exception as error:
