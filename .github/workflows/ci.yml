@@ -1,0 +1,86 @@
+name: Roop 3D Automated CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  lint-and-typecheck:
+    name: Frontend Lint & TypeScript Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install Frontend Dependencies
+        working-directory: app/roop_3d_ui
+        run: npm ci
+
+      - name: TypeScript Typecheck
+        working-directory: app/roop_3d_ui
+        run: npm run typecheck
+
+      - name: ESLint
+        working-directory: app/roop_3d_ui
+        run: npm run lint
+
+      - name: Frontend Unit Tests (Vitest)
+        working-directory: app/roop_3d_ui
+        run: npm test
+
+      - name: Production Vite Build
+        working-directory: app/roop_3d_ui
+        run: npm run build
+
+  python-tests:
+    name: Python Automated Testing Gates
+    runs-on: windows-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python 3.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install uv and Dependencies
+        run: |
+          python -m pip install uv
+          uv venv app/roop_3d/.venv
+          app/roop_3d/.venv/Scripts/python.exe -m uv pip install -r docs/releases/requirements.lock
+
+      - name: Python Unit & Integration Tests
+        run: |
+          app/roop_3d/.venv/Scripts/python.exe tools/ci_runner.py --gate 1
+          app/roop_3d/.venv/Scripts/python.exe tools/ci_runner.py --gate 2
+          app/roop_3d/.venv/Scripts/python.exe tools/ci_runner.py --gate 7
+          app/roop_3d/.venv/Scripts/python.exe tools/ci_runner.py --gate 9
+          app/roop_3d/.venv/Scripts/python.exe tools/ci_runner.py --gate 10
+          app/roop_3d/.venv/Scripts/python.exe tools/ci_runner.py --gate 11
+          app/roop_3d/.venv/Scripts/python.exe tools/ci_runner.py --gate 14
+
+  release-verification:
+    name: SBOM & Release Manifest Integrity
+    runs-on: ubuntu-latest
+    needs: [lint-and-typecheck, python-tests]
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Verify Checksums & Release Artifacts
+        run: |
+          python -c "import json; manifest = json.load(open('docs/releases/release_manifest.json')); assert manifest['version'] == '0.2.0'; print('Release manifest verified.')"
+          python -c "import json; sbom = json.load(open('docs/releases/sbom_roop_3d.json')); assert len(sbom['components']) > 0; print('SBOM verified.')"

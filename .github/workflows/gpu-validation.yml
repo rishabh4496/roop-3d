@@ -1,0 +1,38 @@
+name: Roop 3D Dedicated GPU Validation
+
+on:
+  workflow_dispatch:
+    inputs:
+      hardware_profile:
+        description: "Hardware Profile to Validate"
+        required: true
+        default: "12gb"
+        type: choice
+        options:
+          - "12gb"
+          - "6gb"
+          - "cpu"
+
+jobs:
+  gpu-validation:
+    name: Dedicated GPU Hardware Validation (${{ inputs.hardware_profile }})
+    runs-on: [self-hosted, windows, x64, gpu]
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Environment Preflight Check
+        run: |
+          app/roop_3d/.venv/Scripts/python.exe tools/project_admin.py preflight --verbose
+
+      - name: Run Full 15-Gate CI Pipeline
+        run: |
+          app/roop_3d/.venv/Scripts/python.exe tools/ci_runner.py --all --hardware-profile ${{ inputs.hardware_profile }}
+
+      - name: Golden Clip End-to-End Visual Verification
+        run: |
+          app/roop_3d/.venv/Scripts/python.exe tools/ci_runner.py --gate 12
+
+      - name: Legacy Sibling Isolation Audit
+        run: |
+          app/roop_3d/.venv/Scripts/python.exe tools/ci_runner.py --gate 15

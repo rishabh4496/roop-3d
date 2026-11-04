@@ -159,16 +159,29 @@ def check_reset() -> None:
     print("Verified reset targets are strictly inside this independent Roop 3D project", flush=True)
 
 
+def run_ci_gate(gate: int | None = None, hardware_profile: str | None = None) -> None:
+    import sys
+    if str(ROOT) not in sys.path:
+        sys.path.insert(0, str(ROOT))
+    from tools.ci_runner import run_pipeline
+    report = run_pipeline(gate_filter=gate, hardware_profile=hardware_profile)
+    print(json.dumps(report, indent=2), flush=True)
+    if report["status"] != "PASS":
+        raise RuntimeError(f"CI gate check failed ({report['passed_count']}/{report['total_gates']} passed)")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("action", choices=[
         "preflight", "check-env", "mark-ready", "verify-install",
         "offline-health", "model-import", "model-verify",
         "check-update", "backup-config", "rollback", "recover",
-        "check-reset",
+        "check-reset", "ci-gate",
     ])
     parser.add_argument("--bundle", default=None, help="Path to model bundle (ZIP or directory) for model-import")
     parser.add_argument("--backup-id", default=None, help="Backup ID for rollback")
+    parser.add_argument("--gate", type=int, default=None, help="Specific CI gate (1-15)")
+    parser.add_argument("--hardware-profile", default="12gb", choices=["12gb", "6gb", "cpu"], help="Hardware profile to validate")
     parser.add_argument("--verbose", "-v", action="store_true", help="Print verbose preflight results")
 
     arguments = parser.parse_args()
@@ -199,6 +212,8 @@ def main() -> int:
             recover()
         elif arguments.action == "check-reset":
             check_reset()
+        elif arguments.action == "ci-gate":
+            run_ci_gate(arguments.gate, arguments.hardware_profile)
 
         print("Roop 3D project check: PASS", flush=True)
         return 0

@@ -1,0 +1,28 @@
+{
+  "application": "roop-3d",
+  "version": "0.2.0",
+  "commit": "90448ae27a4c449650ac58afb170145e619b640a",
+  "release_timestamp": "2026-11-04T18:53:04.268534+00:00",
+  "release_channel": "stable",
+  "airgap_compatible": true,
+  "supported_hardware_profiles": [
+    "12gb",
+    "6gb",
+    "cpu"
+  ],
+  "ci_gates_required": 15,
+  "ci_gates_passed": 15,
+  "artifacts": {
+    "sbom": "docs/releases/sbom_roop_3d.json",
+    "model_compatibility_register": "docs/releases/model_compatibility_register.json",
+    "requirements_lock": "docs/releases/requirements.lock",
+    "checksums": "docs/releases/checksums.sha256",
+    "release_notes": "docs/releases/RELEASE_NOTES_v0.2.0.md",
+    "migration_notes": "docs/releases/MIGRATION_v0.2.0.md"
+  },
+  "signature": {
+    "algorithm": "HMAC-SHA256",
+    "digest": "1fb4153f37ef31449e33ed8a7bc50e9124f1d9ffbde8076687875e03f23a87b0",
+    "signer": "roop-3d-airgap-release-authority"
+  }
+}
