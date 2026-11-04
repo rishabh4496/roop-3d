@@ -198,6 +198,18 @@ class QueueJob(Contract):
     updated_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
 
+class _ClosingConnection(sqlite3.Connection):
+    """``with connection:`` on a stock sqlite3 connection commits but never closes it, so every queue call relied on
+    refcounting to release the database/WAL/SHM handles. Closing deterministically keeps that true on any interpreter
+    and while an exception (and its traceback) is still being held by a logger or a caller."""
+
+    def __exit__(self, *exc_info):
+        try:
+            return super().__exit__(*exc_info)
+        finally:
+            self.close()
+
+
 class QueueManager:
     """ACID-safe SQLite + JSON persistent queue manager."""
 
@@ -214,7 +226,7 @@ class QueueManager:
         self.recover_on_startup()
 
     def _get_connection(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(str(self._db_path), timeout=10.0, isolation_level=None)
+        conn = sqlite3.connect(str(self._db_path), timeout=10.0, isolation_level=None, factory=_ClosingConnection)
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA synchronous=NORMAL")
         conn.execute("PRAGMA foreign_keys=ON")

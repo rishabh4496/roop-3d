@@ -32,24 +32,56 @@ class JobStore:
 
     def __init__(self, root: Path, notify: Callable[[dict], None] | None = None):
         self.root, self.notify = root, notify or (lambda event: None)
+        # (stat fingerprint of state.json, parsed database). Records are frozen, so sharing them is safe.
+        self._cache: tuple[tuple[int, int, int], JobDatabase] | None = None
 
-    def _read(self) -> JobDatabase:
+    @staticmethod
+    def _fingerprint(path: Path) -> tuple[int, int, int]:
+        stat = path.stat()
+        return stat.st_mtime_ns, stat.st_size, getattr(stat, "st_ino", 0)
+
+    def _load(self) -> JobDatabase:
+        """The parsed database, re-parsed only when state.json changed on disk (this or any other process).
+
+        Every operation used to parse and validate *every job ever recorded* - 25 ms per ``get()`` and 70 ms per
+        ``progress()`` at 800 jobs, several times per rendered frame. The worker polls this at frame rate, so job
+        history alone capped throughput. Writes replace the file atomically (new mtime/size/inode), which invalidates
+        the fingerprint, so a second process writing the same file is still seen immediately. Never mutate the result.
+        """
         path = owned(self.root, self.relative)
         try:
-            return JobDatabase.model_validate_json(path.read_text("utf-8")) if path.exists() else JobDatabase()
+            fingerprint = self._fingerprint(path)
+        except FileNotFoundError:
+            self._cache = None
+            return JobDatabase()
+        cached = self._cache
+        if cached is not None and cached[0] == fingerprint:
+            return cached[1]
+        try:
+            database = JobDatabase.model_validate_json(path.read_text("utf-8"))
         except (ValueError, OSError):
             raise DomainError("JOB_STORE_INVALID", "Persisted job data is unreadable; it has been preserved") from None
+        self._cache = (fingerprint, database)
+        return database
+
+    def _read(self) -> JobDatabase:
+        """A private, mutable copy for read-modify-write (the records inside are shared and immutable)."""
+        database = self._load()
+        return JobDatabase.model_construct(schema_version=database.schema_version, jobs=dict(database.jobs),
+                                           idempotency=dict(database.idempotency))
 
     def _save(self, data: JobDatabase) -> None:
-        atomic_json(self.root, self.relative, data.model_dump(mode="json"))
+        # Callers hold the cross-process lock, so nobody else can replace the file between this write and the stat.
+        atomic_json(self.root, self.relative, data.model_dump(mode="json"), indent=None)
+        self._cache = (self._fingerprint(owned(self.root, self.relative)), data)
 
     def list(self) -> list[JobRecord]:
         with exclusive(self.root, self.relative + ".lock"):
-            return sorted(self._read().jobs.values(), key=lambda job: (job.created_at, job.job_id))
+            return sorted(self._load().jobs.values(), key=lambda job: (job.created_at, job.job_id))
 
     def get(self, job_id: str) -> JobRecord:
         with exclusive(self.root, self.relative + ".lock"):
-            record = self._read().jobs.get(job_id)
+            record = self._load().jobs.get(job_id)
             if record is None:
                 raise DomainError("JOB_NOT_FOUND", "Job does not exist", 404)
             return record
@@ -96,7 +128,18 @@ class JobStore:
             if expected_revision is not None and before.revision != expected_revision:
                 raise DomainError("JOB_REVISION_CONFLICT", "Job changed since it was read")
             require_transition(before.state, state)
-            record = before.model_copy(update={"state": state, "revision": before.revision + 1, "updated_at": now()})
+            update = {"state": state, "revision": before.revision + 1, "updated_at": now()}
+            if state in {JobState.preparing, JobState.running}:
+                update["failure"] = None  # a resumed job no longer reports the interruption that paused it
+            if state == JobState.preparing:
+                # Every attempt starts counting again from its checkpoint. Progress is persisted per frame but the
+                # checkpoint only every N frames, so after a crash the resumed attempt legitimately reports a lower
+                # frame than the stale value left on disk; without this rewind `progress()` rejected it as
+                # PROGRESS_REGRESSION and failed (terminally) every job that had been hard-killed.
+                update["progress"] = before.progress.model_copy(update={
+                    "frame": 0, "fps": 0.0, "stage_latency_ms": 0.0, "stage_timings_ms": {},
+                    "stage": "resuming" if before.progress.frame else before.progress.stage})
+            record = before.model_copy(update=update)
             data.jobs[job_id] = record
             self._save(data)
         self.notify({"type": "job.state", "job_id": job_id, "previous_state": before.state.value,
@@ -162,6 +205,27 @@ class JobStore:
                 raise DomainError("JOB_NOT_FOUND", "Job does not exist", 404)
             require_transition(before.state, JobState.failed)
             record = before.model_copy(update={"state": JobState.failed, "failure": failure,
+                                               "revision": before.revision + 1, "updated_at": now()})
+            data.jobs[job_id] = record
+            self._save(data)
+        self.notify({"type": "job.state", "job_id": job_id, "previous_state": before.state.value,
+                     "state": record.state.value, "revision": record.revision})
+        return record
+
+    def interrupt(self, job_id: str, failure: JobFailure) -> JobRecord:
+        """Stage 18: stop a job in a *resumable* state and say why (disk full, host out of memory, locked file ...).
+
+        ``failed`` is terminal, so a transient environmental problem must never use it: the checkpoint is intact and
+        the user can fix the cause and resume. The reason stays visible on the record until the job runs again.
+        """
+        failure = JobFailure.model_validate({**failure.model_dump(), "recoverable": True})
+        with exclusive(self.root, self.relative + ".lock"):
+            data = self._read()
+            before = data.jobs.get(job_id)
+            if before is None:
+                raise DomainError("JOB_NOT_FOUND", "Job does not exist", 404)
+            require_transition(before.state, JobState.interrupted)
+            record = before.model_copy(update={"state": JobState.interrupted, "failure": failure,
                                                "revision": before.revision + 1, "updated_at": now()})
             data.jobs[job_id] = record
             self._save(data)

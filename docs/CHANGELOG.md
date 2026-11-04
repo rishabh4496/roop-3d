@@ -4,6 +4,20 @@ All notable changes to the Roop 3D project are documented in this file.
 
 ---
 
+## [0.2.1] - 2026-11-05
+
+### Stage 18: Long-Duration Reliability Engineering
+- **Crash recovery fix:** a job killed mid-render could never be resumed (`PROGRESS_REGRESSION` failed it terminally). Progress now restarts from the checkpoint on every attempt.
+- **Resource leaks fixed:** one OS handle leaked per rendered job (per-path lock cache); `QueueManager` SQLite connections now close deterministically; FFmpeg children are tracked, terminated and bound to the server's lifetime (Windows Job Object, POSIX `PDEATHSIG`) with a pid-reuse-safe startup orphan sweep.
+- **Job store scaling:** read cache and compact JSON take `get()` from 25 ms to 0.7 ms and `progress()` from 71 ms to 16 ms at 800 jobs of history.
+- **Failure handling:** disk exhaustion (`DISK_FULL`, `DISK_SPACE_LOW` preflight), host/GPU memory exhaustion (real ONNX Runtime `bad allocation` is now recognised), locked files and dead encoder pipes leave the job `interrupted` and resumable with a named reason; corrupt model/media get specific codes; failed jobs release their checkpoint frames.
+- **Startup reconciliation and audit:** stale atomic-write files, encoder temp, stranded (manifest-less) outputs, garbage work directories, damaged checkpoints (rolled back), queue mirror drift, stalled jobs. Outputs are quarantined, never deleted.
+- **Diagnostics:** local, redacted `GET /api/v1/reliability/report` (versions, hardware, drivers, models, providers, stage timings, warnings, peak RAM/VRAM, jobs, disk), plus `/audit`, `/repair`, `/resources`.
+- **Leak instrumentation:** server-side lifecycle ledger and bounded-growth analysis; browser object-URL / WebSocket / WebGL-context ledger (`?r3d-diag=1`); soak harness `python -m roop_3d.reliability.soak`.
+- **Not completed:** the 30- and 60-minute video runs were terminated by antivirus behavioural detection on the development machine (see `docs/RELIABILITY_STAGE18.md`).
+
+---
+
 ## [0.2.0] - 2026-11-05
 
 ### Stage 17: Automated CI/CD and Hardware Compatibility

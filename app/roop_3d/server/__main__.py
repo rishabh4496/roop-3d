@@ -89,6 +89,9 @@ def main(argv: list[str] | None = None) -> int:
     handler.setFormatter(JsonFormatter())
     logging.basicConfig(level=logging.INFO, handlers=[handler], force=True)
     share = ShareMode.create() if arguments.server_share else None
+    # Stage 18: if this process dies for any reason (crash, kill, power-off of its parent) the OS reaps its FFmpeg children.
+    from roop_3d.reliability.processes import bind_children_to_process_lifetime
+    bind_children_to_process_lifetime()
     try:
         settings = Settings.from_env()
         listener = reserve_socket(settings, SHARE_BIND_HOST if share else None)

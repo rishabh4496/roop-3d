@@ -80,6 +80,25 @@ def create_app(settings: Settings | None = None, *, repo_root: Path | None = Non
         await run_in_threadpool(register_native_libraries)
         await run_in_threadpool(jobs.recover_interrupted)
         await run_in_threadpool(queue.recover_on_startup)
+        # Stage 18: crash-consistency. Nothing is running yet, so every temp file, half-published output and orphan
+        # FFmpeg child left by the previous process is stale by definition.
+        from roop_3d.reliability.monitor import MONITOR
+        from roop_3d.reliability.ledger import LEDGER
+        from roop_3d.reliability.processes import REGISTRY
+        from roop_3d.reliability.recovery import reconcile_on_startup
+        REGISTRY.configure(root)
+        app.state.orphan_sweep = await run_in_threadpool(REGISTRY.sweep_stale)
+        try:
+            reconciliation = await run_in_threadpool(
+                reconcile_on_startup, root, jobs, lambda: app.state.settings,
+                runner=worker.runner if worker is not None else None, queue=queue)
+            app.state.startup_reconciliation = reconciliation.as_dict()
+        except DomainError as error:  # an unreadable job store must be surfaced, not crash the boot
+            app.state.startup_reconciliation = {"ok": False, "error": error.code}
+        LEDGER.gauge("event_subscribers", lambda: events.subscriber_count)
+        if worker is not None:
+            LEDGER.gauge("worker_active_jobs", lambda: len(worker._futures))
+        MONITOR.start()
         if worker is not None:
             worker.start()
 
@@ -99,6 +118,9 @@ def create_app(settings: Settings | None = None, *, repo_root: Path | None = Non
             await run_in_threadpool(model_downloads.close)
             if worker is not None:
                 await run_in_threadpool(worker.stop)
+            await run_in_threadpool(MONITOR.stop)
+            LEDGER.drop_gauge("event_subscribers")
+            LEDGER.drop_gauge("worker_active_jobs")
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
             await run_in_threadpool(app.state.thread_benchmark.close)
@@ -198,6 +220,8 @@ def create_app(settings: Settings | None = None, *, repo_root: Path | None = Non
     app.include_router(queue_router)
     from roop_3d.server.installer_routes import router as installer_router
     app.include_router(installer_router)
+    from roop_3d.server.reliability_routes import router as reliability_router
+    app.include_router(reliability_router)
     from roop_3d.server.api import benchmark_router
     app.include_router(benchmark_router)
     app.add_api_websocket_route("/ws/telemetry", event_stream)

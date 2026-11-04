@@ -50,6 +50,8 @@ from roop_3d.media.validation import OutputExpectation, validate_output
 from roop_3d.media.video_reader import DecodedFrame, VideoReader, check_cancel
 from roop_3d.media.finishing import Finisher, FinishingOptions
 from roop_3d.media.provenance import recipe_claim, authenticate_manifest, sign_c2pa
+from roop_3d.reliability.disk import is_disk_full
+from roop_3d.reliability.ledger import LEDGER
 
 AV_SYNC_WINDOW_SECONDS = 15.0
 # Signal-lag bounds in seconds. A stream copy is bit-identical, so its lag is zero. Re-encoded audio (AAC with
@@ -197,6 +199,7 @@ def encode_video(source: Path, filename: str, *, root: Path | None = None,
             raise DomainError("OUTPUT_EXISTS", "Output and manifest must be new files", 409)
         frames = None
         audio = None
+        encoder_token = LEDGER.open("video_encoder", filename)
         try:
             check_cancel(cancel)
             source = Path(source)
@@ -584,6 +587,9 @@ def encode_video(source: Path, filename: str, *, root: Path | None = None,
             if published:
                 target = owned(root, final.relative_to(root).as_posix())
                 shutil.rmtree(target, ignore_errors=True) if target.is_dir() else target.unlink(missing_ok=True)
+            if is_disk_full(error):  # keep the cause visible: it is resumable, unlike a corrupt-media encode failure
+                raise DomainError("DISK_FULL", "The output volume ran out of space while encoding. "
+                                  "Free disk space and resume the job.", 507) from None
             if isinstance(error, (av.FFmpegError, OSError)):
                 if os.environ.get("ROOP3D_MEDIA_TRACE"):  # opt-in diagnostics; the API message stays generic
                     import traceback
@@ -591,6 +597,7 @@ def encode_video(source: Path, filename: str, *, root: Path | None = None,
                 raise DomainError("MEDIA_ENCODE_FAILED", "Local encode or mux failed", 422) from None
             raise
         finally:
+            encoder_token.close()
             if frames is not None:
                 frames.close()
             if audio is not None and hasattr(audio, "close"):

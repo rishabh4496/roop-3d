@@ -181,7 +181,10 @@ def is_cuda_oom(error: BaseException) -> bool:
                 "cuda out of memory", "cuda_error_out_of_memory", "cudaerrormemoryallocation",
                 "cuda error: out of memory", "cudnn_status_alloc_failed", "bfc arena allocation",
                 "bfcarena::allocaterawinternal", "failed to allocate memory", "memory allocation failed",
-                "resource exhausted: oom")):
+                "resource exhausted: oom",
+                # ONNX Runtime reports a host (CPU) allocation failure as a RuntimeException "bad allocation"
+                # (std::bad_alloc), verified against onnxruntime 1.23: it is not a MemoryError, so it was missed.
+                "bad allocation", "bad_alloc")):
             return True
         current = current.__cause__ or current.__context__
     return False

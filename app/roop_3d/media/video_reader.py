@@ -20,6 +20,7 @@ from roop_3d.color.hdr import HdrToSdr, ToneMapParams
 from roop_3d.core.errors import DomainError
 from roop_3d.media.probe import open_media
 from roop_3d.media.timestamps import Timestamp, TimestampEngine, rescale
+from roop_3d.reliability.ledger import LEDGER
 
 #: Matrices PyAV can request from swscale on a frame; BT.2020 is applied natively when the file tags it.
 _FRAME_MATRICES = (1, 4, 5, 6, 7)
@@ -174,7 +175,7 @@ class VideoReader:
             check_cancel(self.cancel)
             try:
                 kwargs = {"hwaccel": av.codec.hwaccel.HWAccel("cuda", allow_software_fallback=False)} if hardware else {}
-                with open_media(self.path, **kwargs) as container:
+                with LEDGER.hold("video_decoder", self.path.name), open_media(self.path, **kwargs) as container:
                     stream = container.streams.video[0]
                     threads = self.thread_count or (1 if hardware else max(1, min(8, (os.cpu_count() or 4) - 2)))
                     stream.codec_context.thread_count = threads

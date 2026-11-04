@@ -1,0 +1,84 @@
+{
+  "schema": "roop3d.bounded-profile/1",
+  "meaning": "Allowed growth of each metric across the steady-state window (after 25% warm-up), in the metric unit. A metric is a leak only if its Theil-Sen projected growth, high-water growth AND net growth all exceed the allowance; ceilings always fail.",
+  "in_job": {
+    "name": "roop3d-stage18-v1",
+    "warmup_fraction": 0.25,
+    "min_samples": 8,
+    "default_for_live_counts": {
+      "allowance": 0.0
+    },
+    "bounds": {
+      "children": {
+        "allowance": 3.0
+      },
+      "gpu_process_mib": {
+        "allowance": 96.0
+      },
+      "gpu_used_mib": {
+        "allowance": 96.0
+      },
+      "handles": {
+        "allowance": 12.0
+      },
+      "ort_sessions": {
+        "allowance": 0.0
+      },
+      "os_threads": {
+        "allowance": 32.0
+      },
+      "private_mib": {
+        "allowance": 48.0
+      },
+      "py_heap_blocks": {
+        "allowance": 200000.0
+      },
+      "py_threads": {
+        "allowance": 4.0
+      },
+      "rss_mib": {
+        "allowance": 48.0
+      }
+    }
+  },
+  "at_idle_points": {
+    "name": "roop3d-stage18-v1-idle",
+    "warmup_fraction": 0.25,
+    "min_samples": 8,
+    "default_for_live_counts": {
+      "allowance": 0.0
+    },
+    "bounds": {
+      "children": {
+        "allowance": 1.0
+      },
+      "gpu_process_mib": {
+        "allowance": 96.0
+      },
+      "gpu_used_mib": {
+        "allowance": 96.0
+      },
+      "handles": {
+        "allowance": 12.0
+      },
+      "ort_sessions": {
+        "allowance": 0.0
+      },
+      "os_threads": {
+        "allowance": 6.0
+      },
+      "private_mib": {
+        "allowance": 48.0
+      },
+      "py_heap_blocks": {
+        "allowance": 200000.0
+      },
+      "py_threads": {
+        "allowance": 2.0
+      },
+      "rss_mib": {
+        "allowance": 48.0
+      }
+    }
+  }
+}

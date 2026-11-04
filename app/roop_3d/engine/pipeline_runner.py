@@ -356,6 +356,7 @@ class MasterPipelineRunner:
         request_digest = self._request_digest(record)
         checkpoint = self._read_checkpoint(record.job_id, digest, request_digest, total,
                                            "cpu")
+        self._require_disk_space(record, target, total, checkpoint)
         # Bind actual verified local dependencies, not registry presence. Missing optional models stay optional.
         models = render_dependencies(self.catalog)
         inspection_digest = sha256_file(owned(self.root,
@@ -405,6 +406,22 @@ class MasterPipelineRunner:
         return PreparedPipeline(target, digest, total, by_track, labels_to_ids,
                                 tuple(faceset_ids), checkpoint, settings, edit_plan,
                                 lock, guard, self.tracking_options(record.request))
+
+    def _require_disk_space(self, record: JobRecord, target: Path, total: int | None,
+                            checkpoint: PipelineCheckpoint) -> None:
+        """Stage 18: refuse a job the volume cannot hold *before* any frame is stored (resumes are discounted)."""
+        from roop_3d.reliability import disk
+        try:
+            with self.media.open(record.request.target_path) as container:
+                stream = container.streams.video[0]
+                width, height = stream.width, stream.height
+                frames = total or (int(float(stream.duration * stream.time_base) * float(stream.average_rate or 0))
+                                   if stream.duration and stream.average_rate else 0)
+        except (OSError, IndexError, TypeError, ValueError):
+            return  # geometry unknown: the runtime ENOSPC handling still protects the job
+        needed = disk.estimate(width, height, frames, target.stat().st_size,
+                               remaining_frames=frames - (checkpoint.completed_frame + 1))
+        disk.require(self.root, needed)
 
     @staticmethod
     def _checkpoint_inputs(record: JobRecord) -> dict:
@@ -568,6 +585,9 @@ class MasterPipelineRunner:
                     if gpen is not None:
                         session.compositor.restorer = GpenRestorer(self.catalog, runtime_config)
             mark_running()
+            if checkpoint.completed_frame >= 0:
+                # Show the saved position immediately; inference replays the earlier frames to rebuild tracker state.
+                report_progress(JobProgress(frame=checkpoint.completed_frame + 1, total_frames=total_frames, stage="resume"))
 
             reader = VideoReader(target, hardware="auto", hdr_policy=hdr_policy)
             frames = reader.frames()

@@ -2,10 +2,12 @@
 from __future__ import annotations
 
 from concurrent.futures import Future, ThreadPoolExecutor
+import logging
 from pathlib import Path
 import threading
 import time
 import re
+import shutil
 from typing import Callable
 
 from roop_3d.core.errors import DomainError
@@ -18,9 +20,12 @@ from roop_3d.jobs.schema import JobFailure, JobProgress, JobState
 from roop_3d.jobs.store import JobStore
 from roop_3d.models.catalog import ModelCatalog
 from roop_3d.engine.registry import EngineRegistry
+from roop_3d.reliability.classify import classify, classify_domain
+from roop_3d.reliability.monitor import MONITOR
 
 
 RENDER_JOB = "RENDER_JOB"
+log = logging.getLogger("roop3d.worker")
 
 
 class JobWorker:
@@ -46,6 +51,9 @@ class JobWorker:
         self._executor: ThreadPoolExecutor | None = None
         self._futures: dict[Future, tuple[str, ScheduledJob | None]] = {}
         self._lock = threading.RLock()
+        # Cancelled jobs whose work directory has been released. Without this the poll loop re-ran cleanup for every
+        # cancelled job ever recorded, on every 150 ms tick, for the life of the process.
+        self._cleaned: set[str] = set()
 
     @property
     def running(self) -> bool:
@@ -83,13 +91,19 @@ class JobWorker:
                     if self._stop.is_set():
                         break
                     if record.state == JobState.cancelled and record.job_id not in active_ids:
+                        if record.job_id in self._cleaned:
+                            continue
                         try:
                             cancelled_runner = self.engines.resolve(record.request.engine_id)
                         except DomainError:
                             continue
                         cleanup = getattr(cancelled_runner, "cleanup", None)
-                        if callable(cleanup):
-                            cleanup(record.job_id)
+                        try:
+                            if callable(cleanup):
+                                cleanup(record.job_id)
+                            self._cleaned.add(record.job_id)
+                        except (OSError, DomainError):
+                            pass  # retried on the next tick: a file may be briefly locked
                         continue
                     if record.state != JobState.queued or record.job_id in active_ids:
                         continue
@@ -146,6 +160,8 @@ class JobWorker:
         self.store.transition(job_id, JobState.running, expected_revision=current.revision)
 
     def _report_progress(self, job_id: str, progress: JobProgress) -> None:
+        if progress.stage_timings_ms:
+            MONITOR.observe_stages(job_id, progress.stage_timings_ms)
         current = self.store.get(job_id)
         if current.state == JobState.running:
             self.store.progress(job_id, progress)
@@ -177,7 +193,60 @@ class JobWorker:
         with self.gate.owner(RENDER_JOB):
             self._execute_job(job_id)
 
+    def _release_failed_frames(self, job_id: str) -> None:
+        """A failed job can never resume, so its checkpoint frames (tens of GB for a long video) are garbage."""
+        try:
+            from roop_3d.core.storage import owned
+            frames = owned(self.root, f"roop_3d/.runtime/jobs/{job_id}/frames")
+            if frames.is_dir() and not frames.is_symlink():
+                shutil.rmtree(frames, ignore_errors=True)
+        except Exception:
+            pass  # the startup reconciliation removes whatever is left
+
+    def _stop_resumable(self, job_id: str, code: str, message: str) -> None:
+        """Environmental stop (disk, RAM, locked file): keep the checkpoint, make the job resumable, say why."""
+        current = self.store.get(job_id)
+        if current.state == JobState.cancelling:  # the user already asked to stop: honour that, not the error
+            self._acknowledge_control(job_id, "cancel")
+        elif current.state == JobState.pausing:
+            self._acknowledge_control(job_id, "pause")
+        elif current.state in {JobState.preparing, JobState.running}:
+            self.store.interrupt(job_id, JobFailure(code=code, message=message, recoverable=True))
+        elif current.state == JobState.queued:
+            self.store.fail(job_id, JobFailure(code=code, message=message))
+
+    def _handle_failure(self, job_id: str, error: BaseException) -> None:
+        if isinstance(error, DomainError):
+            resumable = classify_domain(error)
+            if resumable is None:
+                code = error.code if re.fullmatch(r"[A-Z0-9_]+", error.code) else "PIPELINE_FAILED"
+                kind, message, warning = ("fail", "Job processing failed; the local input or configured capability is unavailable.",
+                                          "domain error " + code)
+            else:
+                code, message, kind, warning = resumable.code, resumable.message, "interrupt", resumable.warning
+        else:
+            result = classify(error)
+            code, message, warning = result.code, result.message, result.warning
+            kind = "interrupt" if result.recoverable else "fail"
+        # Exception *text* can carry paths and media names, so only the class-level summary is logged.
+        log.warning("Job %s %s: %s", job_id[:8], "interrupted" if kind == "interrupt" else "failed", warning)
+        try:
+            if kind == "interrupt":
+                self._stop_resumable(job_id, code, message)
+            else:
+                self._fail(job_id, code, message)
+                self._release_failed_frames(job_id)
+        except DomainError:
+            pass  # the job moved on (cancelled / paused) while the error propagated
+
     def _execute_job(self, job_id: str) -> None:
+        MONITOR.job_started(job_id)
+        try:
+            self._run_job(job_id)
+        finally:
+            MONITOR.job_finished(job_id)
+
+    def _run_job(self, job_id: str) -> None:
         admission: ScheduledJob | None = None
         runner = None
         try:
@@ -231,7 +300,12 @@ class JobWorker:
             self.store.succeed(job_id, output)
             cleanup = getattr(runner, "cleanup", None)
             if callable(cleanup):
-                cleanup(job_id)
+                try:
+                    cleanup(job_id)
+                except (OSError, DomainError):
+                    # The job already succeeded and its output is published. A locked scratch file (antivirus, an
+                    # indexer) must neither be reported as a job failure nor block the worker; the audit removes it.
+                    log.warning("Job %s succeeded; its work directory could not be released yet", job_id[:8])
         except PipelinePaused:
             self._acknowledge_control(job_id, "pause")
         except PipelineCancelled:
@@ -258,11 +332,8 @@ class JobWorker:
         except BaseException as error:
             if self._stop.is_set():
                 self._interrupt(job_id)
-            elif isinstance(error, DomainError):
-                self._fail(job_id, error.code if re.fullmatch(r"[A-Z0-9_]+", error.code) else "PIPELINE_FAILED",
-                           "Job processing failed; the local input or configured capability is unavailable.")
             else:
-                self._fail(job_id, "WORKER_FAILED", "Job processing failed due to a local runtime error.")
+                self._handle_failure(job_id, error)
         finally:
             if admission is not None:
                 self.scheduler.release(job_id)

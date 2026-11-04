@@ -20,6 +20,7 @@ import numpy as np
 
 from roop_3d.models.owned_files import owned_path
 from roop_3d.media.probe import probe
+from roop_3d.reliability.processes import REGISTRY, spawn_kwargs, terminate
 
 
 @dataclass(frozen=True)
@@ -246,7 +247,8 @@ class NvdecFrameSource:
         if hardware:
             command += ["-vf", "hwdownload,format=nv12,format=bgr24"]
         command += ["-fps_mode", "passthrough", "-f", "rawvideo", "-pix_fmt", "bgr24", "pipe:1"]
-        process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0, env=_process_environment())
+        process = REGISTRY.track(subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0,
+                                                  env=_process_environment(), **spawn_kwargs()), "ffmpeg_decode")
         with self._process_lock:
             self._process = process
             if self._cancelled.is_set():
@@ -280,12 +282,11 @@ class NvdecFrameSource:
             if code or count != self.expected_frames:
                 raise RuntimeError(f"FFmpeg decode failed ({code}): {errors.decode(errors='replace')}")
         finally:
-            if process.poll() is None:
-                process.terminate()  # Only the subprocess created by this source.
-                process.wait(timeout=10)
+            terminate(process, grace=10)  # Only the subprocess created by this source; terminate -> wait -> kill.
             process.stdout.close()
             thread.join(timeout=5)
             process.stderr.close()
+            REGISTRY.untrack(process)
             with self._process_lock:
                 if self._process is process:
                     self._process = None
@@ -415,7 +416,9 @@ class NVHardwareVideoWriter:
         if filters:
             command += ["-vf", ",".join(filters)]
         command += ["-c:v", self.codec, "-pix_fmt", "yuv420p", *tags, "-bf", "0", "-movflags", "+faststart", str(self.destination)]
-        self.process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, env=_process_environment())
+        self.process = REGISTRY.track(subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
+                                                       stderr=subprocess.PIPE, env=_process_environment(), **spawn_kwargs()),
+                                      "ffmpeg_encode")
         self.errors = bytearray()
         def drain():
             for chunk in iter(lambda: self.process.stderr.read(4096), b""):
@@ -438,24 +441,26 @@ class NVHardwareVideoWriter:
             try:
                 code = self.process.wait(timeout=60)
             except subprocess.TimeoutExpired:
-                self.process.terminate()
-                self.process.wait(timeout=10)
+                terminate(self.process, grace=10)
                 raise
             finally:
                 self.thread.join(timeout=5)
                 self.process.stderr.close()
+                REGISTRY.untrack(self.process)
             if code or not self.frames:
                 raise RuntimeError(f"Video encode failed ({code}): {self.errors.decode(errors='replace')}")
 
     def abort(self):
         if not self.closed:
             self.closed = True
-            self.process.stdin.close()
-            if self.process.poll() is None:
-                self.process.terminate()
-                self.process.wait(timeout=10)
+            try:
+                self.process.stdin.close()
+            except OSError:
+                pass  # the encoder already died (BrokenPipe on flush); we are aborting anyway
+            terminate(self.process, grace=10)
             self.thread.join(timeout=5)
             self.process.stderr.close()
+            REGISTRY.untrack(self.process)
         self.destination.unlink(missing_ok=True)
 
     @staticmethod
