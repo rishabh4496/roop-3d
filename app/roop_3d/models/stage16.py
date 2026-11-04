@@ -36,7 +36,7 @@ def prepare_generator(catalog: ModelCatalog | None = None) -> tuple[Path, str, i
                    if r.name == "liveportrait_warping_spade.onnx" and r.locator), None)
     if record is None:
         raise RuntimeError("No inspected reference LivePortrait generator is registered")
-    source = catalog.provider.resolve(record)
+    source = catalog.resolve_for_inference(record.model_id)
     relative = f"roop_3d/.runtime/stage16/generator_{record.expected_sha256}_4d_v1.onnx"
     path = owned_path(application_root() / relative)
     evidence_relative = relative + ".json"
@@ -67,8 +67,8 @@ def resolve_artifact(model_id: str, catalog: ModelCatalog | None = None, *,
     # An identical preserved artifact is a read-only input, never copied or renamed.
     for local in catalog.registry.records():
         if local.locator and record.expected_sha256 and local.expected_sha256 == record.expected_sha256:
-            return catalog.provider.resolve(local)
-    return catalog.provider.resolve(record)
+            return catalog.resolve_for_inference(local.model_id, precision="FP32")
+    return catalog.resolve_for_inference(record.model_id, precision="FP32")
 
 
 def readiness_report(root: Path | None = None) -> list[dict]:
@@ -101,6 +101,8 @@ def readiness_report(root: Path | None = None) -> list[dict]:
             except DomainError as error:
                 if error.code == "MODEL_DRIFT":
                     report[-1]["readiness_state"] = "CORRUPT HASH"
+                elif error.code in {"LICENSE_UNVERIFIED", "MODEL_INCOMPATIBLE"}:
+                    report[-1]["readiness_state"] = "LICENSE_RESTRICTED" if error.code == "LICENSE_UNVERIFIED" else "INCOMPATIBLE"
                 elif error.code not in {"MODEL_NOT_INSTALLED", "LICENSE_ACCEPTANCE_REQUIRED"}:
                     raise
     return report

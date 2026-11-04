@@ -11,7 +11,7 @@ from roop_3d.models.local_provider import LocalWeightProvider
 from roop_3d.models.stage16 import STAGE16_IDS
 from roop_3d.server.app import create_app
 from roop_3d.tests.test_stage03_downloader import DATA, remote
-from roop_3d.tests.test_stage03_registry import artifact, registry_for
+from roop_3d.tests.test_stage03_registry import artifact, registry_for, reviewed_artifact
 
 STAGE6_IDS = ("minimax_h3_ref2va_faceswap_lora", "bfs_qwen21_dare60_avgrank30",
               "bfs_qwen21_prune20_dare50_avgrank26", "bfs_qwen21_prune20_dare60_avgrank30")
@@ -30,6 +30,10 @@ def test_api_exposes_authoritative_registry_notices_and_blocked_license(tmp_path
         assert flame["expected_sha256"] is None and flame["upstream_url"] is None
         notice = client.get("/api/v1/models/flame-2020/license").json()
         assert notice["manual_acceptance_required"] and not notice["automatic_download_allowed"]
+        h3_notice = client.get("/api/v1/models/minimax_h3_ref2va_faceswap_lora/license").json()
+        assert h3_notice["redistribution_permission"] == "allow"
+        assert h3_notice["base_model_license"]["license_id"] == "LicenseRef-MiniMax-H3-Community"
+        assert h3_notice["automatic_download_allowed"] is False
         for payload in ({}, {"accepted_license": True}):
             denial = client.post("/api/v1/models/flame-2020/download", json=payload)
             assert denial.status_code == 403 and denial.json()["error"]["code"] == "MODEL_BLOCKED"
@@ -44,7 +48,7 @@ def test_api_local_first_reuse_does_not_download_unknown_license_weights(tmp_pat
     root.mkdir(parents=True)
     path = root / "fixture.onnx"
     path.write_bytes(b"local fixture weights")
-    record = artifact(locator={"scope": "fixture", "path": path.name})
+    record = reviewed_artifact(locator={"scope": "fixture", "path": path.name}, commercial_use="deny")
     registry = registry_for(record)
     catalog = ModelCatalog(cache_root=tmp_path, registry=registry)
     catalog.provider = LocalWeightProvider(registry, root=tmp_path, scopes={"fixture": root})

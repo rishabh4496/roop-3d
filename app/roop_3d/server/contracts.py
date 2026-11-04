@@ -97,3 +97,8 @@ class ModelLicenseNotice(Contract):
     manual_acceptance_required: bool
     automatic_download_allowed: bool
     download_gate: str | None
+    redistribution_permission: Literal["allow", "deny", "unknown"] = "unknown"
+    attribution_requirements: str = "UNKNOWN"
+    required_base_model: str = "UNKNOWN"
+    related_license_urls: list[str] = Field(default_factory=list)
+    base_model_license: dict[str, Any] = Field(default_factory=dict)

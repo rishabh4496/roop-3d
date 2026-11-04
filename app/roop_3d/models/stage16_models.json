@@ -24,7 +24,32 @@
       "license_id": "UNKNOWN",
       "commercial_use": "unknown",
       "family_hint": "stage16_liveportrait_eye",
-      "verified_at": "2026-11-02"
+      "verified_at": "2026-11-02",
+      "weight_filenames": [
+        "live_portrait_eye_retargeter.onnx"
+      ],
+      "original_repository": "https://huggingface.co/facefusion/models-3.0.0",
+      "source_revision": "728b9659bd9691bf32cbf7f61af478d94b7ba81e",
+      "version_family": "UNKNOWN",
+      "architecture": "UNKNOWN",
+      "required_base_model": "UNKNOWN",
+      "redistribution_permission": "unknown",
+      "attribution_requirements": "UNKNOWN",
+      "hardware_requirements": {
+        "state": "UNKNOWN"
+      },
+      "precision_requirements": [],
+      "dependency_compatibility": {
+        "state": "UNKNOWN",
+        "requirements": []
+      },
+      "serialization_format": "ONNX",
+      "security_status": "UNKNOWN",
+      "base_model_license_id": "UNKNOWN",
+      "base_model_license_url": null,
+      "base_model_commercial_use": "unknown",
+      "base_model_redistribution_permission": "unknown",
+      "base_model_attribution_requirements": "UNKNOWN"
     },
     {
       "model_id": "stage16_liveportrait_appearance",
@@ -48,7 +73,32 @@
       "license_id": "UNKNOWN",
       "commercial_use": "unknown",
       "family_hint": "stage16_liveportrait_appearance",
-      "verified_at": "2026-11-02"
+      "verified_at": "2026-11-02",
+      "weight_filenames": [
+        "live_portrait_feature_extractor.onnx"
+      ],
+      "original_repository": "https://huggingface.co/facefusion/models-3.0.0",
+      "source_revision": "728b9659bd9691bf32cbf7f61af478d94b7ba81e",
+      "version_family": "UNKNOWN",
+      "architecture": "UNKNOWN",
+      "required_base_model": "UNKNOWN",
+      "redistribution_permission": "unknown",
+      "attribution_requirements": "UNKNOWN",
+      "hardware_requirements": {
+        "state": "UNKNOWN"
+      },
+      "precision_requirements": [],
+      "dependency_compatibility": {
+        "state": "UNKNOWN",
+        "requirements": []
+      },
+      "serialization_format": "ONNX",
+      "security_status": "UNKNOWN",
+      "base_model_license_id": "UNKNOWN",
+      "base_model_license_url": null,
+      "base_model_commercial_use": "unknown",
+      "base_model_redistribution_permission": "unknown",
+      "base_model_attribution_requirements": "UNKNOWN"
     },
     {
       "model_id": "stage16_liveportrait_generator",
@@ -72,7 +122,32 @@
       "license_id": "UNKNOWN",
       "commercial_use": "unknown",
       "family_hint": "stage16_liveportrait_generator",
-      "verified_at": "2026-11-02"
+      "verified_at": "2026-11-02",
+      "weight_filenames": [
+        "live_portrait_generator.onnx"
+      ],
+      "original_repository": "https://huggingface.co/facefusion/models-3.0.0",
+      "source_revision": "728b9659bd9691bf32cbf7f61af478d94b7ba81e",
+      "version_family": "UNKNOWN",
+      "architecture": "UNKNOWN",
+      "required_base_model": "UNKNOWN",
+      "redistribution_permission": "unknown",
+      "attribution_requirements": "UNKNOWN",
+      "hardware_requirements": {
+        "state": "UNKNOWN"
+      },
+      "precision_requirements": [],
+      "dependency_compatibility": {
+        "state": "UNKNOWN",
+        "requirements": []
+      },
+      "serialization_format": "ONNX",
+      "security_status": "UNKNOWN",
+      "base_model_license_id": "UNKNOWN",
+      "base_model_license_url": null,
+      "base_model_commercial_use": "unknown",
+      "base_model_redistribution_permission": "unknown",
+      "base_model_attribution_requirements": "UNKNOWN"
     },
     {
       "model_id": "stage16_liveportrait_lip",
@@ -96,7 +171,32 @@
       "license_id": "UNKNOWN",
       "commercial_use": "unknown",
       "family_hint": "stage16_liveportrait_lip",
-      "verified_at": "2026-11-02"
+      "verified_at": "2026-11-02",
+      "weight_filenames": [
+        "live_portrait_lip_retargeter.onnx"
+      ],
+      "original_repository": "https://huggingface.co/facefusion/models-3.0.0",
+      "source_revision": "728b9659bd9691bf32cbf7f61af478d94b7ba81e",
+      "version_family": "UNKNOWN",
+      "architecture": "UNKNOWN",
+      "required_base_model": "UNKNOWN",
+      "redistribution_permission": "unknown",
+      "attribution_requirements": "UNKNOWN",
+      "hardware_requirements": {
+        "state": "UNKNOWN"
+      },
+      "precision_requirements": [],
+      "dependency_compatibility": {
+        "state": "UNKNOWN",
+        "requirements": []
+      },
+      "serialization_format": "ONNX",
+      "security_status": "UNKNOWN",
+      "base_model_license_id": "UNKNOWN",
+      "base_model_license_url": null,
+      "base_model_commercial_use": "unknown",
+      "base_model_redistribution_permission": "unknown",
+      "base_model_attribution_requirements": "UNKNOWN"
     },
     {
       "model_id": "stage16_liveportrait_motion",
@@ -120,7 +220,32 @@
       "license_id": "UNKNOWN",
       "commercial_use": "unknown",
       "family_hint": "stage16_liveportrait_motion",
-      "verified_at": "2026-11-02"
+      "verified_at": "2026-11-02",
+      "weight_filenames": [
+        "live_portrait_motion_extractor.onnx"
+      ],
+      "original_repository": "https://huggingface.co/facefusion/models-3.0.0",
+      "source_revision": "728b9659bd9691bf32cbf7f61af478d94b7ba81e",
+      "version_family": "UNKNOWN",
+      "architecture": "UNKNOWN",
+      "required_base_model": "UNKNOWN",
+      "redistribution_permission": "unknown",
+      "attribution_requirements": "UNKNOWN",
+      "hardware_requirements": {
+        "state": "UNKNOWN"
+      },
+      "precision_requirements": [],
+      "dependency_compatibility": {
+        "state": "UNKNOWN",
+        "requirements": []
+      },
+      "serialization_format": "ONNX",
+      "security_status": "UNKNOWN",
+      "base_model_license_id": "UNKNOWN",
+      "base_model_license_url": null,
+      "base_model_commercial_use": "unknown",
+      "base_model_redistribution_permission": "unknown",
+      "base_model_attribution_requirements": "UNKNOWN"
     },
     {
       "model_id": "stage16_liveportrait_stitch",
@@ -144,7 +269,32 @@
       "license_id": "UNKNOWN",
       "commercial_use": "unknown",
       "family_hint": "stage16_liveportrait_stitch",
-      "verified_at": "2026-11-02"
+      "verified_at": "2026-11-02",
+      "weight_filenames": [
+        "live_portrait_stitcher.onnx"
+      ],
+      "original_repository": "https://huggingface.co/facefusion/models-3.0.0",
+      "source_revision": "728b9659bd9691bf32cbf7f61af478d94b7ba81e",
+      "version_family": "UNKNOWN",
+      "architecture": "UNKNOWN",
+      "required_base_model": "UNKNOWN",
+      "redistribution_permission": "unknown",
+      "attribution_requirements": "UNKNOWN",
+      "hardware_requirements": {
+        "state": "UNKNOWN"
+      },
+      "precision_requirements": [],
+      "dependency_compatibility": {
+        "state": "UNKNOWN",
+        "requirements": []
+      },
+      "serialization_format": "ONNX",
+      "security_status": "UNKNOWN",
+      "base_model_license_id": "UNKNOWN",
+      "base_model_license_url": null,
+      "base_model_commercial_use": "unknown",
+      "base_model_redistribution_permission": "unknown",
+      "base_model_attribution_requirements": "UNKNOWN"
     },
     {
       "model_id": "arcface_converter_hififace",
@@ -168,7 +318,32 @@
       "license_id": "UNKNOWN",
       "commercial_use": "unknown",
       "family_hint": "arcface_converter_hififace",
-      "verified_at": "2026-11-02"
+      "verified_at": "2026-11-02",
+      "weight_filenames": [
+        "arcface_converter_hififace.onnx"
+      ],
+      "original_repository": "https://huggingface.co/facefusion/models-3.1.0",
+      "source_revision": "c9e3a503d8e84e91c5cd89ee2d510fe5e793e570",
+      "version_family": "UNKNOWN",
+      "architecture": "UNKNOWN",
+      "required_base_model": "UNKNOWN",
+      "redistribution_permission": "unknown",
+      "attribution_requirements": "UNKNOWN",
+      "hardware_requirements": {
+        "state": "UNKNOWN"
+      },
+      "precision_requirements": [],
+      "dependency_compatibility": {
+        "state": "UNKNOWN",
+        "requirements": []
+      },
+      "serialization_format": "ONNX",
+      "security_status": "UNKNOWN",
+      "base_model_license_id": "UNKNOWN",
+      "base_model_license_url": null,
+      "base_model_commercial_use": "unknown",
+      "base_model_redistribution_permission": "unknown",
+      "base_model_attribution_requirements": "UNKNOWN"
     },
     {
       "model_id": "bisenet_resnet_18",
@@ -192,7 +367,32 @@
       "license_id": "UNKNOWN",
       "commercial_use": "unknown",
       "family_hint": "bisenet_resnet_18",
-      "verified_at": "2026-11-02"
+      "verified_at": "2026-11-02",
+      "weight_filenames": [
+        "bisenet_resnet_18.onnx"
+      ],
+      "original_repository": "https://huggingface.co/facefusion/models-3.1.0",
+      "source_revision": "c9e3a503d8e84e91c5cd89ee2d510fe5e793e570",
+      "version_family": "UNKNOWN",
+      "architecture": "UNKNOWN",
+      "required_base_model": "UNKNOWN",
+      "redistribution_permission": "unknown",
+      "attribution_requirements": "UNKNOWN",
+      "hardware_requirements": {
+        "state": "UNKNOWN"
+      },
+      "precision_requirements": [],
+      "dependency_compatibility": {
+        "state": "UNKNOWN",
+        "requirements": []
+      },
+      "serialization_format": "ONNX",
+      "security_status": "UNKNOWN",
+      "base_model_license_id": "UNKNOWN",
+      "base_model_license_url": null,
+      "base_model_commercial_use": "unknown",
+      "base_model_redistribution_permission": "unknown",
+      "base_model_attribution_requirements": "UNKNOWN"
     },
     {
       "model_id": "hififace_unofficial_256",
@@ -216,7 +416,32 @@
       "license_id": "UNKNOWN",
       "commercial_use": "unknown",
       "family_hint": "hififace_unofficial_256",
-      "verified_at": "2026-11-02"
+      "verified_at": "2026-11-02",
+      "weight_filenames": [
+        "hififace_unofficial_256.onnx"
+      ],
+      "original_repository": "https://huggingface.co/facefusion/models-3.1.0",
+      "source_revision": "c9e3a503d8e84e91c5cd89ee2d510fe5e793e570",
+      "version_family": "UNKNOWN",
+      "architecture": "UNKNOWN",
+      "required_base_model": "UNKNOWN",
+      "redistribution_permission": "unknown",
+      "attribution_requirements": "UNKNOWN",
+      "hardware_requirements": {
+        "state": "UNKNOWN"
+      },
+      "precision_requirements": [],
+      "dependency_compatibility": {
+        "state": "UNKNOWN",
+        "requirements": []
+      },
+      "serialization_format": "ONNX",
+      "security_status": "UNKNOWN",
+      "base_model_license_id": "UNKNOWN",
+      "base_model_license_url": null,
+      "base_model_commercial_use": "unknown",
+      "base_model_redistribution_permission": "unknown",
+      "base_model_attribution_requirements": "UNKNOWN"
     },
     {
       "model_id": "real_web_photo_x4",
@@ -240,7 +465,32 @@
       "license_id": "UNKNOWN",
       "commercial_use": "unknown",
       "family_hint": "real_web_photo_x4",
-      "verified_at": "2026-11-02"
+      "verified_at": "2026-11-02",
+      "weight_filenames": [
+        "real_web_photo_x4.onnx"
+      ],
+      "original_repository": "https://huggingface.co/facefusion/models-3.1.0",
+      "source_revision": "c9e3a503d8e84e91c5cd89ee2d510fe5e793e570",
+      "version_family": "UNKNOWN",
+      "architecture": "UNKNOWN",
+      "required_base_model": "UNKNOWN",
+      "redistribution_permission": "unknown",
+      "attribution_requirements": "UNKNOWN",
+      "hardware_requirements": {
+        "state": "UNKNOWN"
+      },
+      "precision_requirements": [],
+      "dependency_compatibility": {
+        "state": "UNKNOWN",
+        "requirements": []
+      },
+      "serialization_format": "ONNX",
+      "security_status": "UNKNOWN",
+      "base_model_license_id": "UNKNOWN",
+      "base_model_license_url": null,
+      "base_model_commercial_use": "unknown",
+      "base_model_redistribution_permission": "unknown",
+      "base_model_attribution_requirements": "UNKNOWN"
     },
     {
       "model_id": "styleganex_age",
@@ -264,7 +514,32 @@
       "license_id": "UNKNOWN",
       "commercial_use": "unknown",
       "family_hint": "styleganex_age",
-      "verified_at": "2026-11-02"
+      "verified_at": "2026-11-02",
+      "weight_filenames": [
+        "styleganex_age.onnx"
+      ],
+      "original_repository": "https://huggingface.co/facefusion/models-3.1.0",
+      "source_revision": "c9e3a503d8e84e91c5cd89ee2d510fe5e793e570",
+      "version_family": "UNKNOWN",
+      "architecture": "UNKNOWN",
+      "required_base_model": "UNKNOWN",
+      "redistribution_permission": "unknown",
+      "attribution_requirements": "UNKNOWN",
+      "hardware_requirements": {
+        "state": "UNKNOWN"
+      },
+      "precision_requirements": [],
+      "dependency_compatibility": {
+        "state": "UNKNOWN",
+        "requirements": []
+      },
+      "serialization_format": "ONNX",
+      "security_status": "UNKNOWN",
+      "base_model_license_id": "UNKNOWN",
+      "base_model_license_url": null,
+      "base_model_commercial_use": "unknown",
+      "base_model_redistribution_permission": "unknown",
+      "base_model_attribution_requirements": "UNKNOWN"
     },
     {
       "model_id": "swin2_sr_x4",
@@ -288,7 +563,32 @@
       "license_id": "UNKNOWN",
       "commercial_use": "unknown",
       "family_hint": "swin2_sr_x4",
-      "verified_at": "2026-11-02"
+      "verified_at": "2026-11-02",
+      "weight_filenames": [
+        "swin2_sr_x4.onnx"
+      ],
+      "original_repository": "https://huggingface.co/facefusion/models-3.1.0",
+      "source_revision": "c9e3a503d8e84e91c5cd89ee2d510fe5e793e570",
+      "version_family": "UNKNOWN",
+      "architecture": "UNKNOWN",
+      "required_base_model": "UNKNOWN",
+      "redistribution_permission": "unknown",
+      "attribution_requirements": "UNKNOWN",
+      "hardware_requirements": {
+        "state": "UNKNOWN"
+      },
+      "precision_requirements": [],
+      "dependency_compatibility": {
+        "state": "UNKNOWN",
+        "requirements": []
+      },
+      "serialization_format": "ONNX",
+      "security_status": "UNKNOWN",
+      "base_model_license_id": "UNKNOWN",
+      "base_model_license_url": null,
+      "base_model_commercial_use": "unknown",
+      "base_model_redistribution_permission": "unknown",
+      "base_model_attribution_requirements": "UNKNOWN"
     },
     {
       "model_id": "xseg_1",
@@ -312,7 +612,32 @@
       "license_id": "UNKNOWN",
       "commercial_use": "unknown",
       "family_hint": "xseg_1",
-      "verified_at": "2026-11-02"
+      "verified_at": "2026-11-02",
+      "weight_filenames": [
+        "xseg_1.onnx"
+      ],
+      "original_repository": "https://huggingface.co/facefusion/models-3.1.0",
+      "source_revision": "c9e3a503d8e84e91c5cd89ee2d510fe5e793e570",
+      "version_family": "UNKNOWN",
+      "architecture": "UNKNOWN",
+      "required_base_model": "UNKNOWN",
+      "redistribution_permission": "unknown",
+      "attribution_requirements": "UNKNOWN",
+      "hardware_requirements": {
+        "state": "UNKNOWN"
+      },
+      "precision_requirements": [],
+      "dependency_compatibility": {
+        "state": "UNKNOWN",
+        "requirements": []
+      },
+      "serialization_format": "ONNX",
+      "security_status": "UNKNOWN",
+      "base_model_license_id": "UNKNOWN",
+      "base_model_license_url": null,
+      "base_model_commercial_use": "unknown",
+      "base_model_redistribution_permission": "unknown",
+      "base_model_attribution_requirements": "UNKNOWN"
     },
     {
       "model_id": "xseg_2",
@@ -336,7 +661,32 @@
       "license_id": "UNKNOWN",
       "commercial_use": "unknown",
       "family_hint": "xseg_2",
-      "verified_at": "2026-11-02"
+      "verified_at": "2026-11-02",
+      "weight_filenames": [
+        "xseg_2.onnx"
+      ],
+      "original_repository": "https://huggingface.co/facefusion/models-3.1.0",
+      "source_revision": "c9e3a503d8e84e91c5cd89ee2d510fe5e793e570",
+      "version_family": "UNKNOWN",
+      "architecture": "UNKNOWN",
+      "required_base_model": "UNKNOWN",
+      "redistribution_permission": "unknown",
+      "attribution_requirements": "UNKNOWN",
+      "hardware_requirements": {
+        "state": "UNKNOWN"
+      },
+      "precision_requirements": [],
+      "dependency_compatibility": {
+        "state": "UNKNOWN",
+        "requirements": []
+      },
+      "serialization_format": "ONNX",
+      "security_status": "UNKNOWN",
+      "base_model_license_id": "UNKNOWN",
+      "base_model_license_url": null,
+      "base_model_commercial_use": "unknown",
+      "base_model_redistribution_permission": "unknown",
+      "base_model_attribution_requirements": "UNKNOWN"
     },
     {
       "model_id": "smirk_em1",
@@ -350,7 +700,30 @@
       "evidence": "No ONNX artifact identity or rights supplied; upstream SMIRK distributes a PyTorch checkpoint.",
       "provenance_state": "CANDIDATE",
       "license_notice": "A reviewed export, FLAME asset permission, and actual graph contract are required. No automatic model download.",
-      "manual_acceptance_required": true
+      "manual_acceptance_required": true,
+      "weight_filenames": [],
+      "original_repository": "UNKNOWN",
+      "source_revision": "UNKNOWN",
+      "version_family": "UNKNOWN",
+      "architecture": "UNKNOWN",
+      "required_base_model": "UNKNOWN",
+      "redistribution_permission": "unknown",
+      "attribution_requirements": "UNKNOWN",
+      "hardware_requirements": {
+        "state": "UNKNOWN"
+      },
+      "precision_requirements": [],
+      "dependency_compatibility": {
+        "state": "UNKNOWN",
+        "requirements": []
+      },
+      "serialization_format": "UNKNOWN",
+      "security_status": "UNKNOWN",
+      "base_model_license_id": "UNKNOWN",
+      "base_model_license_url": null,
+      "base_model_commercial_use": "unknown",
+      "base_model_redistribution_permission": "unknown",
+      "base_model_attribution_requirements": "UNKNOWN"
     },
     {
       "model_id": "emoca_flame",
@@ -364,7 +737,30 @@
       "evidence": "No ONNX artifact identity or rights supplied; upstream SMIRK distributes a PyTorch checkpoint.",
       "provenance_state": "CANDIDATE",
       "license_notice": "A reviewed export, FLAME asset permission, and actual graph contract are required. No automatic model download.",
-      "manual_acceptance_required": true
+      "manual_acceptance_required": true,
+      "weight_filenames": [],
+      "original_repository": "UNKNOWN",
+      "source_revision": "UNKNOWN",
+      "version_family": "UNKNOWN",
+      "architecture": "UNKNOWN",
+      "required_base_model": "UNKNOWN",
+      "redistribution_permission": "unknown",
+      "attribution_requirements": "UNKNOWN",
+      "hardware_requirements": {
+        "state": "UNKNOWN"
+      },
+      "precision_requirements": [],
+      "dependency_compatibility": {
+        "state": "UNKNOWN",
+        "requirements": []
+      },
+      "serialization_format": "UNKNOWN",
+      "security_status": "UNKNOWN",
+      "base_model_license_id": "UNKNOWN",
+      "base_model_license_url": null,
+      "base_model_commercial_use": "unknown",
+      "base_model_redistribution_permission": "unknown",
+      "base_model_attribution_requirements": "UNKNOWN"
     }
   ]
 }

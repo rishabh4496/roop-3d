@@ -37,7 +37,13 @@ def graph(tmp_path):
                                "outputs":[{"name":"output","dtype":"FLOAT","shape":[1,512]},
                                           {"name":"negated","dtype":"FLOAT","shape":[1,512]}]},
         status="verified_local",locator=Locator(scope="fixture",path=path.name),evidence="Bytes generated and hashed in this test",
-        license_notice="Generated unit fixture; no third-party model rights are asserted")
+        license_notice="Generated unit fixture; no third-party model rights are asserted",
+        license_id="LicenseRef-Local-Test",license_url="https://roop3d.invalid/test-fixture-terms",
+        commercial_use="allow",redistribution_permission="allow",attribution_requirements="No third-party attribution",
+        original_repository="LOCAL_TEST_FIXTURE",source_revision="LOCAL_GENERATED_FIXTURE",architecture="Identity",
+        required_base_model="NONE",hardware_requirements={"state":"VERIFIED"},precision_requirements=("FP32",),
+        dependency_compatibility={"state":"COMPATIBLE","requirements":[]},security_status="VERIFIED",
+        serialization_format="ONNX")
     registry=ModelRegistry(manifest=Manifest(schema_version=1,evidence_scope="generated unit fixture",models=(record,)))
     catalog=ModelCatalog(registry=registry)
     catalog.provider=LocalWeightProvider(registry,root=tmp_path,scopes={"fixture":path.parent})

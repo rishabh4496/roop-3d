@@ -16,16 +16,22 @@ from roop_3d.audit.isolation import AuditError
 from roop_3d.core.errors import DomainError
 from roop_3d.core.storage import atomic_json
 from roop_3d.models.downloader import Downloader, validate_url
-from roop_3d.tests.test_stage03_registry import artifact
+from roop_3d.tests.test_stage03_registry import artifact, reviewed_artifact
 
 DATA = b"reviewed fixture bytes" * 8192
 URL = "https://github.com/fixture/model.onnx"
 
 
-def remote(**changes):
+def remote(data=DATA, **changes):
     values = {"status": "verified_remote", "upstream_url": URL, "provenance_state": "VERIFIED_REMOTE",
-              "license_id": "LicenseRef-TestFixture", **changes}
-    return artifact(DATA, **values)
+              "license_id": "LicenseRef-TestFixture", "license_url": "https://example.org/license",
+              "commercial_use": "allow", "redistribution_permission": "allow",
+              "attribution_requirements": "Retain fixture notice", "original_repository": "https://github.com/fixture",
+              "source_revision": "a" * 40, "architecture": "FixtureNet", "required_base_model": "NONE",
+              "hardware_requirements": {"state": "VERIFIED"}, "precision_requirements": ["FP32"],
+              "dependency_compatibility": {"state": "COMPATIBLE", "requirements": []},
+              "security_status": "VERIFIED", "serialization_format": "ONNX", **changes}
+    return reviewed_artifact(data, **values)
 
 
 def prepare_partial(root, record, data=DATA[:65536], identity=None):
@@ -47,12 +53,13 @@ class Interrupted(httpx.SyncByteStream):
 
 def test_atomic_download_digest_and_reuse(tmp_path):
     calls = []
+    states = []
     record = remote()
     def handler(request):
         calls.append(request)
         return httpx.Response(200, content=DATA, headers={"ETag": '"v1"', "Content-Length": str(len(DATA))})
     downloader = Downloader(tmp_path, transport=httpx.MockTransport(handler))
-    result = downloader.download(record)
+    result = downloader.download(record, state_callback=states.append)
     assert result.downloaded and not result.resumed
     assert result.path.read_bytes() == DATA
     assert hashlib.sha256(result.path.read_bytes()).hexdigest() == record.expected_sha256
@@ -60,6 +67,7 @@ def test_atomic_download_digest_and_reuse(tmp_path):
     assert len(calls) == 1
     assert not list(result.path.parent.glob("*.part"))
     assert not list(result.path.parent.glob("*.part.json"))
+    assert states == ["DOWNLOADING", "VERIFYING", "READY"]
 
 
 def test_interruption_is_fsynced_and_next_call_resumes(tmp_path):
@@ -309,18 +317,21 @@ print(json.dumps({'downloaded':result.downloaded}))
     assert (tmp_path / "requests.txt").read_bytes() == b"GET\n"
 
 
-def test_model_archives_remain_opaque_and_are_never_extracted(tmp_path):
+def test_model_archives_are_rejected_before_network_and_never_extracted(tmp_path):
     import io
     import zipfile
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w") as archive:
         archive.writestr("../../should-never-be-created.py", "raise RuntimeError('never execute')")
     payload = buffer.getvalue()
-    record = artifact(payload, filenames=["fixture.zip"], status="verified_remote", upstream_url=URL,
-                      provenance_state="VERIFIED_REMOTE", license_id="LicenseRef-TestFixture")
+    record = remote(payload, filenames=["fixture.zip"], serialization_format="ZIP")
+    calls = []
     downloader = Downloader(tmp_path, transport=httpx.MockTransport(
-        lambda request: httpx.Response(200, content=payload)))
-    assert downloader.download(record).path.read_bytes() == payload
+        lambda request: (calls.append(request), httpx.Response(200, content=payload))[1]))
+    with pytest.raises(DomainError) as failure:
+        downloader.download(record)
+    assert failure.value.code == "DOWNLOAD_FORMAT_BLOCKED"
+    assert not calls
     assert not list(tmp_path.rglob("*.py"))
 
 

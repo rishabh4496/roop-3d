@@ -18,6 +18,7 @@ from roop_3d.engine.volumetric.session import ReferencePipeline
 from roop_3d.faceset.faceset_reader import FaceSetReader
 from roop_3d.models.catalog import ModelCatalog
 from roop_3d.reconstruction.identity_asset import IdentityAssetStore
+from roop_3d.tests.model_governance_support import require_reference_models
 
 SEGMENT_A, SEGMENT_B = 600, 3000       # two different shots of the local video, each with one continuous face
 
@@ -26,7 +27,7 @@ SEGMENT_A, SEGMENT_B = 600, 3000       # two different shots of the local video,
 def real():
     try:
         catalog = ModelCatalog()
-        catalog.detector(), catalog.recognizer()
+        require_reference_models(catalog)
         document = FaceSetReader().read(legacy_root() / "app/facesets/ashna.fsz")
     except (DomainError, OSError, KeyError, ValueError) as error:
         pytest.skip(f"local models or reference FaceSet unavailable: {error}")

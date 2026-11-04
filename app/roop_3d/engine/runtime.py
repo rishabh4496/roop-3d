@@ -67,6 +67,12 @@ def image_bgr(value: np.ndarray) -> np.ndarray:
 
 
 def record_named(catalog: ModelCatalog, name: str) -> dict[str, Any]:
+    # Explicit family pins take precedence over registry order after an update.
+    for registered in catalog.registry.records():
+        selected = catalog.select_version(registered)
+        if selected.model_id != registered.model_id and selected.name == name:
+            catalog.resolve_for_inference(selected.model_id)
+            return catalog._legacy(selected)
     for record in catalog.records():
         if record["name"] == name:
             return record
@@ -104,7 +110,7 @@ class OrtModel:
         authorize(catalog.registry.get(self.record["model_id"]), action="activate")
         if self.record["graph"].get("external_data"):
             raise DomainError("MODEL_GRAPH_UNSUPPORTED", "External tensor references are not supported by this adapter", 422)
-        self.path = catalog._path(self.record)
+        self.path = catalog.resolve_for_inference(self.record["model_id"])
         if config.provider == "CUDAExecutionProvider" and name == "liveportrait_warping_spade.onnx":
             try:
                 from roop_3d.models.stage16 import prepare_generator

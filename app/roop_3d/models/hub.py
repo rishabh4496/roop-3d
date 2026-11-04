@@ -6,10 +6,11 @@ from urllib.parse import urlsplit
 
 from roop_3d.core.errors import DomainError
 from roop_3d.models.catalog import ModelCatalog
+from roop_3d.models.governance import LIFECYCLE_STATES
 from roop_3d.models.registry import ModelRecord, authorize
 
 MODEL_STATES = frozenset({"AVAILABLE", "NOT_INSTALLED", "LICENSE_RESTRICTED", "INCOMPATIBLE",
-                          "UNVERIFIED", "BROKEN", "READY_FOR_INFERENCE"})
+                          "UNVERIFIED", "BROKEN", "QUARANTINED", "READY_FOR_INFERENCE"})
 CORE_INFERENCE_EVIDENCE = {
     "scrfd_10g_bnkps.onnx": ("5838f7fe053675b1c7a08b633df49e7af5495cee0493c7dcf6697200b85b5b91",
                              "tests/test_identity_real_inference.py"),
@@ -67,8 +68,13 @@ class ModelHubService:
             return result
         try:
             path = self.catalog.provider.resolve(record)
-            result = ("READY_FOR_INFERENCE", True, (f"Hash verified at {path.name}; reference adapter is registered; "
-                                                    f"real local inference is covered by {evidence[1]}.") )
+            governance = self.catalog.governance.scan(record, installed=True, integrity_verified=True)
+            if governance["lifecycle_state"] == "READY":
+                result = ("READY_FOR_INFERENCE", True, (f"Hash verified at {path.name}; reference adapter is registered; "
+                                                        f"real local inference is covered by {evidence[1]}.") )
+            else:
+                result = (governance["lifecycle_state"], False,
+                          "Governance gate prevents inference: " + "; ".join(governance["issues"]))
         except DomainError as error:
             if error.code == "MODEL_DRIFT":
                 result = ("BROKEN", False, "A local artifact failed the registered size or SHA-256 check.")
@@ -88,6 +94,8 @@ class ModelHubService:
                 return "NOT_INSTALLED", None
             if error.code in {"MODEL_DRIFT", "MODEL_IDENTITY_UNKNOWN"}:
                 return "BROKEN", None
+            if error.code == "MODEL_QUARANTINED":
+                return "QUARANTINED", None
             return "UNVERIFIED", None
 
     def _entry(self, record: ModelRecord) -> dict[str, Any]:
@@ -97,6 +105,8 @@ class ModelHubService:
         except DomainError:
             download_eligible = False
         code_path = self._is_core(record)
+        artifact_installed: bool | None = None
+        integrity_verified: bool | None = None
         compatibility = "NO_REGISTERED_ADAPTER"
         if record.status == "blocked":
             state, inference, evidence = "LICENSE_RESTRICTED", False, record.license_notice
@@ -105,22 +115,30 @@ class ModelHubService:
         elif code_path:
             state, inference, evidence = self._core_status(record)
             compatibility = "REFERENCE_PIPELINE"
+            artifact_installed = state not in {"NOT_INSTALLED", "FAILED"}
+            integrity_verified = artifact_installed and state not in {"BROKEN", "QUARANTINED"}
         elif record.model_family in {"MiniMax H3 Ref2VA LoRA", "Qwen-Image-2.1 face-swap LoRA"}:
             state, filename = self._local_artifact_state(record)
+            artifact_installed, integrity_verified = state == "AVAILABLE", state == "AVAILABLE"
             if state == "AVAILABLE":
                 evidence = (f"Adapter bytes are hash-verified at {filename}; its workflow remains unavailable to production jobs.")
             elif state == "NOT_INSTALLED":
                 evidence = "No hash-matching adapter file was found in the download cache or configured local model paths."
             elif state == "BROKEN":
                 evidence = "A local adapter file failed its registered size or SHA-256 check."
+            elif state == "QUARANTINED":
+                evidence = "A corrupt managed-cache artifact was moved to quarantine."
             else:
                 evidence = "The configured local model paths could not be fully verified."
             inference = False
             compatibility = "NOT_INTEGRATED"
         elif record.status == "verified_remote":
             local_state, filename = self._local_artifact_state(record)
+            artifact_installed, integrity_verified = local_state == "AVAILABLE", local_state == "AVAILABLE"
             if local_state == "BROKEN":
                 state, inference, evidence = "BROKEN", False, "A local file failed its registered size or SHA-256 check."
+            elif local_state == "QUARANTINED":
+                state, inference, evidence = "QUARANTINED", False, "A corrupt managed-cache artifact was moved to quarantine."
             elif local_state == "UNVERIFIED":
                 state, inference, evidence = "UNVERIFIED", False, "The configured local model paths could not be fully verified."
             else:
@@ -135,6 +153,14 @@ class ModelHubService:
             state, inference, evidence = "LICENSE_RESTRICTED", False, record.license_notice
         else:
             state, inference, evidence = "INCOMPATIBLE", False, "No compatible Roop 3D engine adapter is registered for this artifact."
+
+        governance = self.catalog.governance.scan(record, installed=artifact_installed,
+                                                  integrity_verified=integrity_verified)
+        if state == "QUARANTINED":
+            governance["lifecycle_state"] = "QUARANTINED"
+        inference = inference and governance["lifecycle_state"] == "READY"
+        if not inference and state == "READY_FOR_INFERENCE":
+            state, evidence = governance["lifecycle_state"], "Governance gate prevents inference: " + "; ".join(governance["issues"])
 
         source = record.source_repository
         if source is None and record.upstream_url:
@@ -171,6 +197,10 @@ class ModelHubService:
             "version": (record.version if record.version != "UNKNOWN" else
                         "SHA-256 identified" if record.status == "verified_local" else "UNKNOWN"),
             "family": family,
+            "original_repository": record.original_repository,
+            "source_revision": record.source_revision,
+            "architecture": record.architecture,
+            "required_base_model": record.required_base_model,
             "engine_type": engine_type,
             "purpose": core_purpose or (record.purpose if record.purpose != "UNKNOWN" else record.role_evidence),
             "source_repository": source,
@@ -178,15 +208,30 @@ class ModelHubService:
             "sha256": record.expected_sha256,
             "license": {"id": record.license_id, "commercial_use": record.commercial_use,
                         "url": record.license_url, "notice": record.license_notice,
+                        "redistribution_permission": record.redistribution_permission,
+                        "attribution_requirements": record.attribution_requirements,
+                        "base_model": {"name": record.required_base_model,
+                                       "license_id": record.base_model_license_id,
+                                       "license_url": record.base_model_license_url,
+                                       "commercial_use": record.base_model_commercial_use,
+                                       "redistribution_permission": record.base_model_redistribution_permission,
+                                       "attribution_requirements": record.base_model_attribution_requirements},
                         "acceptance_required": record.manual_acceptance_required,
                         "related_urls": list(record.related_license_urls)},
             "minimum_vram_gib": record.minimum_vram_gib,
             "recommended_vram_gib": record.recommended_vram_gib,
+            "hardware_requirements": record.hardware_requirements,
             "dependencies": dependencies,
             "supported_precision": precision,
+            "precision_requirements": list(record.precision_requirements),
+            "dependency_compatibility": record.dependency_compatibility,
+            "serialization_format": record.serialization_format,
+            "security_status": record.security_status,
             "supported_execution_providers": providers,
             "provider_evidence": provider_evidence,
             "status": state,
+            "lifecycle_state": governance["lifecycle_state"],
+            "governance": governance,
             "status_evidence": evidence,
             "benchmark_status": record.benchmark_status,
             "actual_inference_available": inference,
@@ -212,6 +257,7 @@ class ModelHubService:
         ready = bool(required) and len(required) == 3 and all(state == "READY_FOR_INFERENCE" for state, _, _ in checks)
         states = {state for state, _, _ in checks}
         reference_state = ("READY_FOR_INFERENCE" if ready else "BROKEN" if "BROKEN" in states else
+                           "LICENSE_RESTRICTED" if "LICENSE_RESTRICTED" in states else
                            "NOT_INSTALLED" if "NOT_INSTALLED" in states else "UNVERIFIED")
         return [
             {
@@ -278,5 +324,6 @@ class ModelHubService:
         self._core_cache.clear()
         return {"models": self.models(), "engines": self.engines(),
                 "model_states": sorted(MODEL_STATES),
+                "lifecycle_states": sorted(LIFECYCLE_STATES),
                 "execution_policy": "offline_by_default",
                 "download_policy": "explicit_user_action_hash_verified_cancellable"}

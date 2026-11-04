@@ -19,12 +19,14 @@ class DownloadJob:
     state: str = "queued"
     bytes_downloaded: int = 0
     error_code: str | None = None
+    lifecycle_state: str = "NOT_INSTALLED"
     cancel_event: threading.Event = field(default_factory=threading.Event, repr=False)
     future: Future | None = field(default=None, repr=False)
 
     def public(self) -> dict[str, Any]:
         percent = (100.0 * self.bytes_downloaded / self.total_bytes) if self.total_bytes else 0.0
         return {"download_id": self.download_id, "model_id": self.model_id, "state": self.state,
+                "lifecycle_state": self.lifecycle_state,
                 "bytes_downloaded": self.bytes_downloaded, "total_bytes": self.total_bytes,
                 "percent": min(100.0, percent), "error_code": self.error_code}
 
@@ -66,24 +68,45 @@ class ModelDownloadManager:
                 job.state = "cancelled"
                 return
             job.state = "downloading"
+            job.lifecycle_state = "DOWNLOADING"
         try:
             record = self.catalog.registry.get(job.model_id)
             self.catalog.downloader.download(
                 record, accepted_license=accepted_license, commercial=commercial,
                 cancel_event=job.cancel_event,
-                progress_callback=lambda downloaded, total: self._progress(job, downloaded, total))
+                progress_callback=lambda downloaded, total: self._progress(job, downloaded, total),
+                state_callback=lambda state: self._lifecycle(job, state))
         except DomainError as error:
             with self._lock:
                 job.state = "cancelled" if error.code == "DOWNLOAD_CANCELLED" or job.cancel_event.is_set() else "failed"
                 job.error_code = None if job.state == "cancelled" else error.code
+                job.lifecycle_state = ("NOT_INSTALLED" if job.state == "cancelled" else
+                                       "QUARANTINED" if error.code in {"DOWNLOAD_DIGEST_MISMATCH", "MODEL_QUARANTINED"} else "FAILED")
         except Exception:
             with self._lock:
                 job.state = "cancelled" if job.cancel_event.is_set() else "failed"
                 job.error_code = None if job.state == "cancelled" else "DOWNLOAD_FAILED"
+                job.lifecycle_state = "NOT_INSTALLED" if job.state == "cancelled" else "FAILED"
         else:
             with self._lock:
-                job.bytes_downloaded = job.total_bytes
-                job.state = "completed"
+                if job.lifecycle_state in {"DOWNLOADING", "VERIFYING", "FAILED", "QUARANTINED", "NOT_INSTALLED"}:
+                    job.state = "failed"
+                    job.lifecycle_state = "FAILED"
+                    job.error_code = "DOWNLOAD_NOT_ACTIVATED"
+                else:
+                    job.bytes_downloaded = job.total_bytes
+                    job.state = "completed"
+
+    def _lifecycle(self, job: DownloadJob, state: str) -> None:
+        if state in {"DOWNLOADING", "VERIFYING", "READY", "QUARANTINED", "FAILED"}:
+            if state == "READY":
+                try:
+                    state = self.catalog.lifecycle(job.model_id)["lifecycle_state"]
+                except DomainError:
+                    state = "FAILED"
+            with self._lock:
+                job.lifecycle_state = state if state in {"DOWNLOADING", "VERIFYING", "READY", "LICENSE_RESTRICTED",
+                                                         "INCOMPATIBLE", "QUARANTINED", "FAILED", "NOT_INSTALLED"} else "FAILED"
 
     def get(self, download_id: str) -> dict[str, Any]:
         with self._lock:
@@ -107,6 +130,7 @@ class ModelDownloadManager:
                 job.cancel_event.set()
                 if job.state == "queued" and job.future is not None and job.future.cancel():
                     job.state = "cancelled"
+                    job.lifecycle_state = "NOT_INSTALLED"
                 elif job.state == "downloading":
                     job.state = "cancelling"
             return job.public()

@@ -26,6 +26,7 @@ from roop_3d.core.storage import atomic_json
 from roop_3d.faceset.faceset_reader import FaceSetReader
 from roop_3d.media.probe import probe
 from roop_3d.server.app import create_app
+from roop_3d.tests.model_governance_support import require_reference_models
 
 
 def create_golden_video(path: Path, face_image: np.ndarray, *, count: int = 10, fps: int = 25) -> Path:
@@ -94,6 +95,7 @@ def _wait_state(client: TestClient, job_id: str, state: str, timeout: float = 18
 
 def test_stage15_golden_clip_end_to_end_swap(tmp_path: Path):
     """Run real unmocked video face swap on a short golden clip and assert all Tier 2 contracts."""
+    require_reference_models()
     # 1. Read consented face fixtures from verified local storage
     reader = FaceSetReader()
     source_fsz = legacy_root() / "app/facesets/akansha.fsz"

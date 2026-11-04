@@ -16,10 +16,12 @@ from roop_3d.faceset.faceset_reader import FaceSetReader
 from roop_3d.faceset.recognizer import ARCFACE_REFERENCE_5PTS
 from roop_3d.models.catalog import ModelCatalog
 from roop_3d.models.registry import ModelRegistry
+from roop_3d.tests.model_governance_support import require_reference_models
 
 
 @pytest.fixture(scope="module")
 def real_faces():
+    require_reference_models()
     reader = FaceSetReader()
     source = reader.read(legacy_root() / "app/facesets/akansha.fsz")
     target = reader.read(legacy_root() / "app/facesets/anushree.fsz")

@@ -12,6 +12,7 @@ from roop_3d.core.errors import DomainError
 from roop_3d.media.schema import InspectRequest
 from roop_3d.media.service import MediaService
 from roop_3d.models.catalog import ModelCatalog
+from roop_3d.tests.model_governance_support import require_governed_model
 
 
 @pytest.fixture
@@ -34,6 +35,7 @@ def video(tmp_path: Path) -> tuple[MediaService, str]:
 
 def test_real_container_probe_and_precise_frame_preview(video) -> None:
     service, path = video
+    require_governed_model(service.detector.catalog, service.detector.catalog.detector()["model_id"])
     result = service.probe(path)
     assert result.width == 160 and result.height == 120
     assert result.fps == 10 and result.duration_seconds == pytest.approx(0.8)
@@ -70,6 +72,7 @@ def test_preview_selectors_are_bounded_and_finite(video) -> None:
 
 def test_real_local_scrfd_inference_no_faces_is_not_a_stub(video) -> None:
     service, path = video
+    require_governed_model(service.detector.catalog, service.detector.catalog.detector()["model_id"])
     result = service.inspect(InspectRequest(path=path, max_samples=2))
     assert result.tracks == ()
     assert result.sampled_frames == 2 and result.truncated

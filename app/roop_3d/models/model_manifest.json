@@ -67,7 +67,32 @@
       "license_notice": "Installed bytes are verified locally. Exact upstream provenance, license terms and commercial permission are UNKNOWN. Integrity verification does not grant usage rights; review the original model terms before use.",
       "license_url": null,
       "manual_acceptance_required": false,
-      "family_hint": "recognizer"
+      "family_hint": "recognizer",
+      "original_repository": "UNKNOWN",
+      "source_revision": "UNKNOWN",
+      "version_family": "UNKNOWN",
+      "architecture": "UNKNOWN",
+      "required_base_model": "UNKNOWN",
+      "redistribution_permission": "unknown",
+      "attribution_requirements": "UNKNOWN",
+      "hardware_requirements": {
+        "state": "UNKNOWN"
+      },
+      "precision_requirements": [],
+      "dependency_compatibility": {
+        "state": "UNKNOWN",
+        "requirements": []
+      },
+      "serialization_format": "ONNX",
+      "security_status": "UNKNOWN",
+      "weight_filenames": [
+        "arcface_w600k_r50.batch.onnx"
+      ],
+      "base_model_license_id": "UNKNOWN",
+      "base_model_license_url": null,
+      "base_model_commercial_use": "unknown",
+      "base_model_redistribution_permission": "unknown",
+      "base_model_attribution_requirements": "UNKNOWN"
     },
     {
       "model_id": "b590b3ae760e8d1a29973356",
@@ -129,7 +154,32 @@
       "license_notice": "Installed bytes are verified locally. Exact upstream provenance, license terms and commercial permission are UNKNOWN. Integrity verification does not grant usage rights; review the original model terms before use.",
       "license_url": null,
       "manual_acceptance_required": false,
-      "family_hint": "recognizer"
+      "family_hint": "recognizer",
+      "original_repository": "UNKNOWN",
+      "source_revision": "UNKNOWN",
+      "version_family": "UNKNOWN",
+      "architecture": "UNKNOWN",
+      "required_base_model": "UNKNOWN",
+      "redistribution_permission": "unknown",
+      "attribution_requirements": "UNKNOWN",
+      "hardware_requirements": {
+        "state": "UNKNOWN"
+      },
+      "precision_requirements": [],
+      "dependency_compatibility": {
+        "state": "UNKNOWN",
+        "requirements": []
+      },
+      "serialization_format": "ONNX",
+      "security_status": "UNKNOWN",
+      "weight_filenames": [
+        "arcface_w600k_r50.onnx"
+      ],
+      "base_model_license_id": "UNKNOWN",
+      "base_model_license_url": null,
+      "base_model_commercial_use": "unknown",
+      "base_model_redistribution_permission": "unknown",
+      "base_model_attribution_requirements": "UNKNOWN"
     },
     {
       "model_id": "9aed4e37a414df474326e07a",
@@ -213,7 +263,32 @@
       "license_notice": "Installed bytes are verified locally. Exact upstream provenance, license terms and commercial permission are UNKNOWN. Integrity verification does not grant usage rights; review the original model terms before use.",
       "license_url": null,
       "manual_acceptance_required": false,
-      "family_hint": "parser"
+      "family_hint": "parser",
+      "original_repository": "UNKNOWN",
+      "source_revision": "UNKNOWN",
+      "version_family": "UNKNOWN",
+      "architecture": "UNKNOWN",
+      "required_base_model": "UNKNOWN",
+      "redistribution_permission": "unknown",
+      "attribution_requirements": "UNKNOWN",
+      "hardware_requirements": {
+        "state": "UNKNOWN"
+      },
+      "precision_requirements": [],
+      "dependency_compatibility": {
+        "state": "UNKNOWN",
+        "requirements": []
+      },
+      "serialization_format": "ONNX",
+      "security_status": "UNKNOWN",
+      "weight_filenames": [
+        "bisenet_resnet_34.onnx"
+      ],
+      "base_model_license_id": "UNKNOWN",
+      "base_model_license_url": null,
+      "base_model_commercial_use": "unknown",
+      "base_model_redistribution_permission": "unknown",
+      "base_model_attribution_requirements": "UNKNOWN"
     },
     {
       "model_id": "88471ba8b50416779a55dfa4",
@@ -277,7 +352,32 @@
       "license_notice": "Installed bytes are verified locally. Exact upstream provenance, license terms and commercial permission are UNKNOWN. Integrity verification does not grant usage rights; review the original model terms before use.",
       "license_url": null,
       "manual_acceptance_required": false,
-      "family_hint": "restorer"
+      "family_hint": "restorer",
+      "original_repository": "UNKNOWN",
+      "source_revision": "UNKNOWN",
+      "version_family": "UNKNOWN",
+      "architecture": "UNKNOWN",
+      "required_base_model": "UNKNOWN",
+      "redistribution_permission": "unknown",
+      "attribution_requirements": "UNKNOWN",
+      "hardware_requirements": {
+        "state": "UNKNOWN"
+      },
+      "precision_requirements": [],
+      "dependency_compatibility": {
+        "state": "UNKNOWN",
+        "requirements": []
+      },
+      "serialization_format": "ONNX",
+      "security_status": "UNKNOWN",
+      "weight_filenames": [
+        "gpen_bfr_1024.onnx"
+      ],
+      "base_model_license_id": "UNKNOWN",
+      "base_model_license_url": null,
+      "base_model_commercial_use": "unknown",
+      "base_model_redistribution_permission": "unknown",
+      "base_model_attribution_requirements": "UNKNOWN"
     },
     {
       "model_id": "55516b3e2a451cbd4149ac8f",
@@ -341,7 +441,32 @@
       "license_notice": "Installed bytes are verified locally. Exact upstream provenance, license terms and commercial permission are UNKNOWN. Integrity verification does not grant usage rights; review the original model terms before use.",
       "license_url": null,
       "manual_acceptance_required": false,
-      "family_hint": "restorer"
+      "family_hint": "restorer",
+      "original_repository": "UNKNOWN",
+      "source_revision": "UNKNOWN",
+      "version_family": "UNKNOWN",
+      "architecture": "UNKNOWN",
+      "required_base_model": "UNKNOWN",
+      "redistribution_permission": "unknown",
+      "attribution_requirements": "UNKNOWN",
+      "hardware_requirements": {
+        "state": "UNKNOWN"
+      },
+      "precision_requirements": [],
+      "dependency_compatibility": {
+        "state": "UNKNOWN",
+        "requirements": []
+      },
+      "serialization_format": "ONNX",
+      "security_status": "UNKNOWN",
+      "weight_filenames": [
+        "gpen_bfr_512.batch.onnx"
+      ],
+      "base_model_license_id": "UNKNOWN",
+      "base_model_license_url": null,
+      "base_model_commercial_use": "unknown",
+      "base_model_redistribution_permission": "unknown",
+      "base_model_attribution_requirements": "UNKNOWN"
     },
     {
       "model_id": "6e16549530b5f4a624ca84af",
@@ -405,7 +530,32 @@
       "license_notice": "Installed bytes are verified locally. Exact upstream provenance, license terms and commercial permission are UNKNOWN. Integrity verification does not grant usage rights; review the original model terms before use.",
       "license_url": null,
       "manual_acceptance_required": false,
-      "family_hint": "restorer"
+      "family_hint": "restorer",
+      "original_repository": "UNKNOWN",
+      "source_revision": "UNKNOWN",
+      "version_family": "UNKNOWN",
+      "architecture": "UNKNOWN",
+      "required_base_model": "UNKNOWN",
+      "redistribution_permission": "unknown",
+      "attribution_requirements": "UNKNOWN",
+      "hardware_requirements": {
+        "state": "UNKNOWN"
+      },
+      "precision_requirements": [],
+      "dependency_compatibility": {
+        "state": "UNKNOWN",
+        "requirements": []
+      },
+      "serialization_format": "ONNX",
+      "security_status": "UNKNOWN",
+      "weight_filenames": [
+        "gpen_bfr_512.onnx"
+      ],
+      "base_model_license_id": "UNKNOWN",
+      "base_model_license_url": null,
+      "base_model_commercial_use": "unknown",
+      "base_model_redistribution_permission": "unknown",
+      "base_model_attribution_requirements": "UNKNOWN"
     },
     {
       "model_id": "0d031eef8fa081e19d567b1d",
@@ -487,7 +637,32 @@
       "license_notice": "Installed bytes are verified locally. Exact upstream provenance, license terms and commercial permission are UNKNOWN. Integrity verification does not grant usage rights; review the original model terms before use.",
       "license_url": null,
       "manual_acceptance_required": false,
-      "family_hint": "swapper"
+      "family_hint": "swapper",
+      "original_repository": "UNKNOWN",
+      "source_revision": "UNKNOWN",
+      "version_family": "UNKNOWN",
+      "architecture": "UNKNOWN",
+      "required_base_model": "UNKNOWN",
+      "redistribution_permission": "unknown",
+      "attribution_requirements": "UNKNOWN",
+      "hardware_requirements": {
+        "state": "UNKNOWN"
+      },
+      "precision_requirements": [],
+      "dependency_compatibility": {
+        "state": "UNKNOWN",
+        "requirements": []
+      },
+      "serialization_format": "ONNX",
+      "security_status": "UNKNOWN",
+      "weight_filenames": [
+        "hyperswap_1a_256.batch.onnx"
+      ],
+      "base_model_license_id": "UNKNOWN",
+      "base_model_license_url": null,
+      "base_model_commercial_use": "unknown",
+      "base_model_redistribution_permission": "unknown",
+      "base_model_attribution_requirements": "UNKNOWN"
     },
     {
       "model_id": "2c71cb22e6fa68903da629f6",
@@ -569,7 +744,32 @@
       "license_notice": "Installed bytes are verified locally. Exact upstream provenance, license terms and commercial permission are UNKNOWN. Integrity verification does not grant usage rights; review the original model terms before use.",
       "license_url": null,
       "manual_acceptance_required": false,
-      "family_hint": "swapper"
+      "family_hint": "swapper",
+      "original_repository": "UNKNOWN",
+      "source_revision": "UNKNOWN",
+      "version_family": "UNKNOWN",
+      "architecture": "UNKNOWN",
+      "required_base_model": "UNKNOWN",
+      "redistribution_permission": "unknown",
+      "attribution_requirements": "UNKNOWN",
+      "hardware_requirements": {
+        "state": "UNKNOWN"
+      },
+      "precision_requirements": [],
+      "dependency_compatibility": {
+        "state": "UNKNOWN",
+        "requirements": []
+      },
+      "serialization_format": "ONNX",
+      "security_status": "UNKNOWN",
+      "weight_filenames": [
+        "hyperswap_1a_256.onnx"
+      ],
+      "base_model_license_id": "UNKNOWN",
+      "base_model_license_url": null,
+      "base_model_commercial_use": "unknown",
+      "base_model_redistribution_permission": "unknown",
+      "base_model_attribution_requirements": "UNKNOWN"
     },
     {
       "model_id": "aef3d5b3bd8464faf8784e8f",
@@ -651,7 +851,32 @@
       "license_notice": "Installed bytes are verified locally. Exact upstream provenance, license terms and commercial permission are UNKNOWN. Integrity verification does not grant usage rights; review the original model terms before use.",
       "license_url": null,
       "manual_acceptance_required": false,
-      "family_hint": "swapper"
+      "family_hint": "swapper",
+      "original_repository": "UNKNOWN",
+      "source_revision": "UNKNOWN",
+      "version_family": "UNKNOWN",
+      "architecture": "UNKNOWN",
+      "required_base_model": "UNKNOWN",
+      "redistribution_permission": "unknown",
+      "attribution_requirements": "UNKNOWN",
+      "hardware_requirements": {
+        "state": "UNKNOWN"
+      },
+      "precision_requirements": [],
+      "dependency_compatibility": {
+        "state": "UNKNOWN",
+        "requirements": []
+      },
+      "serialization_format": "ONNX",
+      "security_status": "UNKNOWN",
+      "weight_filenames": [
+        "hyperswap_1b_256.batch.onnx"
+      ],
+      "base_model_license_id": "UNKNOWN",
+      "base_model_license_url": null,
+      "base_model_commercial_use": "unknown",
+      "base_model_redistribution_permission": "unknown",
+      "base_model_attribution_requirements": "UNKNOWN"
     },
     {
       "model_id": "3241bcc2769f3aefa9f93271",
@@ -733,7 +958,32 @@
       "license_notice": "Installed bytes are verified locally. Exact upstream provenance, license terms and commercial permission are UNKNOWN. Integrity verification does not grant usage rights; review the original model terms before use.",
       "license_url": null,
       "manual_acceptance_required": false,
-      "family_hint": "swapper"
+      "family_hint": "swapper",
+      "original_repository": "UNKNOWN",
+      "source_revision": "UNKNOWN",
+      "version_family": "UNKNOWN",
+      "architecture": "UNKNOWN",
+      "required_base_model": "UNKNOWN",
+      "redistribution_permission": "unknown",
+      "attribution_requirements": "UNKNOWN",
+      "hardware_requirements": {
+        "state": "UNKNOWN"
+      },
+      "precision_requirements": [],
+      "dependency_compatibility": {
+        "state": "UNKNOWN",
+        "requirements": []
+      },
+      "serialization_format": "ONNX",
+      "security_status": "UNKNOWN",
+      "weight_filenames": [
+        "hyperswap_1b_256.onnx"
+      ],
+      "base_model_license_id": "UNKNOWN",
+      "base_model_license_url": null,
+      "base_model_commercial_use": "unknown",
+      "base_model_redistribution_permission": "unknown",
+      "base_model_attribution_requirements": "UNKNOWN"
     },
     {
       "model_id": "e961e7c85a84c1c94d95026e",
@@ -815,7 +1065,32 @@
       "license_notice": "Installed bytes are verified locally. Exact upstream provenance, license terms and commercial permission are UNKNOWN. Integrity verification does not grant usage rights; review the original model terms before use.",
       "license_url": null,
       "manual_acceptance_required": false,
-      "family_hint": "swapper"
+      "family_hint": "swapper",
+      "original_repository": "UNKNOWN",
+      "source_revision": "UNKNOWN",
+      "version_family": "UNKNOWN",
+      "architecture": "UNKNOWN",
+      "required_base_model": "UNKNOWN",
+      "redistribution_permission": "unknown",
+      "attribution_requirements": "UNKNOWN",
+      "hardware_requirements": {
+        "state": "UNKNOWN"
+      },
+      "precision_requirements": [],
+      "dependency_compatibility": {
+        "state": "UNKNOWN",
+        "requirements": []
+      },
+      "serialization_format": "ONNX",
+      "security_status": "UNKNOWN",
+      "weight_filenames": [
+        "hyperswap_1c_256.batch.onnx"
+      ],
+      "base_model_license_id": "UNKNOWN",
+      "base_model_license_url": null,
+      "base_model_commercial_use": "unknown",
+      "base_model_redistribution_permission": "unknown",
+      "base_model_attribution_requirements": "UNKNOWN"
     },
     {
       "model_id": "9eb342fe1900e2e971939a8a",
@@ -897,7 +1172,32 @@
       "license_notice": "Installed bytes are verified locally. Exact upstream provenance, license terms and commercial permission are UNKNOWN. Integrity verification does not grant usage rights; review the original model terms before use.",
       "license_url": null,
       "manual_acceptance_required": false,
-      "family_hint": "swapper"
+      "family_hint": "swapper",
+      "original_repository": "UNKNOWN",
+      "source_revision": "UNKNOWN",
+      "version_family": "UNKNOWN",
+      "architecture": "UNKNOWN",
+      "required_base_model": "UNKNOWN",
+      "redistribution_permission": "unknown",
+      "attribution_requirements": "UNKNOWN",
+      "hardware_requirements": {
+        "state": "UNKNOWN"
+      },
+      "precision_requirements": [],
+      "dependency_compatibility": {
+        "state": "UNKNOWN",
+        "requirements": []
+      },
+      "serialization_format": "ONNX",
+      "security_status": "UNKNOWN",
+      "weight_filenames": [
+        "hyperswap_1c_256.onnx"
+      ],
+      "base_model_license_id": "UNKNOWN",
+      "base_model_license_url": null,
+      "base_model_commercial_use": "unknown",
+      "base_model_redistribution_permission": "unknown",
+      "base_model_attribution_requirements": "UNKNOWN"
     },
     {
       "model_id": "eae68e48eb33ac8870a6f39f",
@@ -969,7 +1269,32 @@
       "license_notice": "Installed bytes are verified locally. Exact upstream provenance, license terms and commercial permission are UNKNOWN. Integrity verification does not grant usage rights; review the original model terms before use.",
       "license_url": null,
       "manual_acceptance_required": false,
-      "family_hint": "swapper"
+      "family_hint": "swapper",
+      "original_repository": "UNKNOWN",
+      "source_revision": "UNKNOWN",
+      "version_family": "UNKNOWN",
+      "architecture": "UNKNOWN",
+      "required_base_model": "UNKNOWN",
+      "redistribution_permission": "unknown",
+      "attribution_requirements": "UNKNOWN",
+      "hardware_requirements": {
+        "state": "UNKNOWN"
+      },
+      "precision_requirements": [],
+      "dependency_compatibility": {
+        "state": "UNKNOWN",
+        "requirements": []
+      },
+      "serialization_format": "ONNX",
+      "security_status": "UNKNOWN",
+      "weight_filenames": [
+        "inswapper_128.batch.onnx"
+      ],
+      "base_model_license_id": "UNKNOWN",
+      "base_model_license_url": null,
+      "base_model_commercial_use": "unknown",
+      "base_model_redistribution_permission": "unknown",
+      "base_model_attribution_requirements": "UNKNOWN"
     },
     {
       "model_id": "4387a15d1f7fd7d8741d6d9d",
@@ -1041,7 +1366,32 @@
       "license_notice": "Installed bytes are verified locally. Exact upstream provenance, license terms and commercial permission are UNKNOWN. Integrity verification does not grant usage rights; review the original model terms before use.",
       "license_url": null,
       "manual_acceptance_required": false,
-      "family_hint": "swapper"
+      "family_hint": "swapper",
+      "original_repository": "UNKNOWN",
+      "source_revision": "UNKNOWN",
+      "version_family": "UNKNOWN",
+      "architecture": "UNKNOWN",
+      "required_base_model": "UNKNOWN",
+      "redistribution_permission": "unknown",
+      "attribution_requirements": "UNKNOWN",
+      "hardware_requirements": {
+        "state": "UNKNOWN"
+      },
+      "precision_requirements": [],
+      "dependency_compatibility": {
+        "state": "UNKNOWN",
+        "requirements": []
+      },
+      "serialization_format": "ONNX",
+      "security_status": "UNKNOWN",
+      "weight_filenames": [
+        "inswapper_128.onnx"
+      ],
+      "base_model_license_id": "UNKNOWN",
+      "base_model_license_url": null,
+      "base_model_commercial_use": "unknown",
+      "base_model_redistribution_permission": "unknown",
+      "base_model_attribution_requirements": "UNKNOWN"
     },
     {
       "model_id": "0485fb00ba6d43e2b71a2c50",
@@ -1106,7 +1456,32 @@
       "license_notice": "Installed bytes are verified locally. Exact upstream provenance, license terms and commercial permission are UNKNOWN. Integrity verification does not grant usage rights; review the original model terms before use.",
       "license_url": null,
       "manual_acceptance_required": false,
-      "family_hint": "animation"
+      "family_hint": "animation",
+      "original_repository": "UNKNOWN",
+      "source_revision": "UNKNOWN",
+      "version_family": "UNKNOWN",
+      "architecture": "UNKNOWN",
+      "required_base_model": "UNKNOWN",
+      "redistribution_permission": "unknown",
+      "attribution_requirements": "UNKNOWN",
+      "hardware_requirements": {
+        "state": "UNKNOWN"
+      },
+      "precision_requirements": [],
+      "dependency_compatibility": {
+        "state": "UNKNOWN",
+        "requirements": []
+      },
+      "serialization_format": "ONNX",
+      "security_status": "UNKNOWN",
+      "weight_filenames": [
+        "liveportrait_appearance_feature_extractor.batch.onnx"
+      ],
+      "base_model_license_id": "UNKNOWN",
+      "base_model_license_url": null,
+      "base_model_commercial_use": "unknown",
+      "base_model_redistribution_permission": "unknown",
+      "base_model_attribution_requirements": "UNKNOWN"
     },
     {
       "model_id": "98116e7c72cff8d2131d7b33",
@@ -1171,7 +1546,32 @@
       "license_notice": "Installed bytes are verified locally. Exact upstream provenance, license terms and commercial permission are UNKNOWN. Integrity verification does not grant usage rights; review the original model terms before use.",
       "license_url": null,
       "manual_acceptance_required": false,
-      "family_hint": "animation"
+      "family_hint": "animation",
+      "original_repository": "UNKNOWN",
+      "source_revision": "UNKNOWN",
+      "version_family": "UNKNOWN",
+      "architecture": "UNKNOWN",
+      "required_base_model": "UNKNOWN",
+      "redistribution_permission": "unknown",
+      "attribution_requirements": "UNKNOWN",
+      "hardware_requirements": {
+        "state": "UNKNOWN"
+      },
+      "precision_requirements": [],
+      "dependency_compatibility": {
+        "state": "UNKNOWN",
+        "requirements": []
+      },
+      "serialization_format": "ONNX",
+      "security_status": "UNKNOWN",
+      "weight_filenames": [
+        "liveportrait_appearance_feature_extractor.onnx"
+      ],
+      "base_model_license_id": "UNKNOWN",
+      "base_model_license_url": null,
+      "base_model_commercial_use": "unknown",
+      "base_model_redistribution_permission": "unknown",
+      "base_model_attribution_requirements": "UNKNOWN"
     },
     {
       "model_id": "19afcbd3028e1b64abec0686",
@@ -1249,7 +1649,32 @@
       "license_notice": "Installed bytes are verified locally. Exact upstream provenance, license terms and commercial permission are UNKNOWN. Integrity verification does not grant usage rights; review the original model terms before use.",
       "license_url": null,
       "manual_acceptance_required": false,
-      "family_hint": "animation"
+      "family_hint": "animation",
+      "original_repository": "UNKNOWN",
+      "source_revision": "UNKNOWN",
+      "version_family": "UNKNOWN",
+      "architecture": "UNKNOWN",
+      "required_base_model": "UNKNOWN",
+      "redistribution_permission": "unknown",
+      "attribution_requirements": "UNKNOWN",
+      "hardware_requirements": {
+        "state": "UNKNOWN"
+      },
+      "precision_requirements": [],
+      "dependency_compatibility": {
+        "state": "UNKNOWN",
+        "requirements": []
+      },
+      "serialization_format": "ONNX",
+      "security_status": "UNKNOWN",
+      "weight_filenames": [
+        "liveportrait_landmark.onnx"
+      ],
+      "base_model_license_id": "UNKNOWN",
+      "base_model_license_url": null,
+      "base_model_commercial_use": "unknown",
+      "base_model_redistribution_permission": "unknown",
+      "base_model_attribution_requirements": "UNKNOWN"
     },
     {
       "model_id": "1c06719ae6e9c8374e4310b9",
@@ -1359,7 +1784,32 @@
       "license_notice": "Installed bytes are verified locally. Exact upstream provenance, license terms and commercial permission are UNKNOWN. Integrity verification does not grant usage rights; review the original model terms before use.",
       "license_url": null,
       "manual_acceptance_required": false,
-      "family_hint": "animation"
+      "family_hint": "animation",
+      "original_repository": "UNKNOWN",
+      "source_revision": "UNKNOWN",
+      "version_family": "UNKNOWN",
+      "architecture": "UNKNOWN",
+      "required_base_model": "UNKNOWN",
+      "redistribution_permission": "unknown",
+      "attribution_requirements": "UNKNOWN",
+      "hardware_requirements": {
+        "state": "UNKNOWN"
+      },
+      "precision_requirements": [],
+      "dependency_compatibility": {
+        "state": "UNKNOWN",
+        "requirements": []
+      },
+      "serialization_format": "ONNX",
+      "security_status": "UNKNOWN",
+      "weight_filenames": [
+        "liveportrait_motion_extractor.batch.onnx"
+      ],
+      "base_model_license_id": "UNKNOWN",
+      "base_model_license_url": null,
+      "base_model_commercial_use": "unknown",
+      "base_model_redistribution_permission": "unknown",
+      "base_model_attribution_requirements": "UNKNOWN"
     },
     {
       "model_id": "b9e27bfca5bbd6b991e3cd4a",
@@ -1469,7 +1919,32 @@
       "license_notice": "Installed bytes are verified locally. Exact upstream provenance, license terms and commercial permission are UNKNOWN. Integrity verification does not grant usage rights; review the original model terms before use.",
       "license_url": null,
       "manual_acceptance_required": false,
-      "family_hint": "animation"
+      "family_hint": "animation",
+      "original_repository": "UNKNOWN",
+      "source_revision": "UNKNOWN",
+      "version_family": "UNKNOWN",
+      "architecture": "UNKNOWN",
+      "required_base_model": "UNKNOWN",
+      "redistribution_permission": "unknown",
+      "attribution_requirements": "UNKNOWN",
+      "hardware_requirements": {
+        "state": "UNKNOWN"
+      },
+      "precision_requirements": [],
+      "dependency_compatibility": {
+        "state": "UNKNOWN",
+        "requirements": []
+      },
+      "serialization_format": "ONNX",
+      "security_status": "UNKNOWN",
+      "weight_filenames": [
+        "liveportrait_motion_extractor.onnx"
+      ],
+      "base_model_license_id": "UNKNOWN",
+      "base_model_license_url": null,
+      "base_model_commercial_use": "unknown",
+      "base_model_redistribution_permission": "unknown",
+      "base_model_attribution_requirements": "UNKNOWN"
     },
     {
       "model_id": "9d23c87f183af3147e9facd0",
@@ -1529,7 +2004,32 @@
       "license_notice": "Installed bytes are verified locally. Exact upstream provenance, license terms and commercial permission are UNKNOWN. Integrity verification does not grant usage rights; review the original model terms before use.",
       "license_url": null,
       "manual_acceptance_required": false,
-      "family_hint": "animation"
+      "family_hint": "animation",
+      "original_repository": "UNKNOWN",
+      "source_revision": "UNKNOWN",
+      "version_family": "UNKNOWN",
+      "architecture": "UNKNOWN",
+      "required_base_model": "UNKNOWN",
+      "redistribution_permission": "unknown",
+      "attribution_requirements": "UNKNOWN",
+      "hardware_requirements": {
+        "state": "UNKNOWN"
+      },
+      "precision_requirements": [],
+      "dependency_compatibility": {
+        "state": "UNKNOWN",
+        "requirements": []
+      },
+      "serialization_format": "ONNX",
+      "security_status": "UNKNOWN",
+      "weight_filenames": [
+        "liveportrait_stitching.batch.onnx"
+      ],
+      "base_model_license_id": "UNKNOWN",
+      "base_model_license_url": null,
+      "base_model_commercial_use": "unknown",
+      "base_model_redistribution_permission": "unknown",
+      "base_model_attribution_requirements": "UNKNOWN"
     },
     {
       "model_id": "3bafec2b580cdf85d942454d",
@@ -1589,7 +2089,32 @@
       "license_notice": "Installed bytes are verified locally. Exact upstream provenance, license terms and commercial permission are UNKNOWN. Integrity verification does not grant usage rights; review the original model terms before use.",
       "license_url": null,
       "manual_acceptance_required": false,
-      "family_hint": "animation"
+      "family_hint": "animation",
+      "original_repository": "UNKNOWN",
+      "source_revision": "UNKNOWN",
+      "version_family": "UNKNOWN",
+      "architecture": "UNKNOWN",
+      "required_base_model": "UNKNOWN",
+      "redistribution_permission": "unknown",
+      "attribution_requirements": "UNKNOWN",
+      "hardware_requirements": {
+        "state": "UNKNOWN"
+      },
+      "precision_requirements": [],
+      "dependency_compatibility": {
+        "state": "UNKNOWN",
+        "requirements": []
+      },
+      "serialization_format": "ONNX",
+      "security_status": "UNKNOWN",
+      "weight_filenames": [
+        "liveportrait_stitching.onnx"
+      ],
+      "base_model_license_id": "UNKNOWN",
+      "base_model_license_url": null,
+      "base_model_commercial_use": "unknown",
+      "base_model_redistribution_permission": "unknown",
+      "base_model_attribution_requirements": "UNKNOWN"
     },
     {
       "model_id": "a73b67730c613ef08560f3d9",
@@ -1649,7 +2174,32 @@
       "license_notice": "Installed bytes are verified locally. Exact upstream provenance, license terms and commercial permission are UNKNOWN. Integrity verification does not grant usage rights; review the original model terms before use.",
       "license_url": null,
       "manual_acceptance_required": false,
-      "family_hint": "animation"
+      "family_hint": "animation",
+      "original_repository": "UNKNOWN",
+      "source_revision": "UNKNOWN",
+      "version_family": "UNKNOWN",
+      "architecture": "UNKNOWN",
+      "required_base_model": "UNKNOWN",
+      "redistribution_permission": "unknown",
+      "attribution_requirements": "UNKNOWN",
+      "hardware_requirements": {
+        "state": "UNKNOWN"
+      },
+      "precision_requirements": [],
+      "dependency_compatibility": {
+        "state": "UNKNOWN",
+        "requirements": []
+      },
+      "serialization_format": "ONNX",
+      "security_status": "UNKNOWN",
+      "weight_filenames": [
+        "liveportrait_stitching_eye.batch.onnx"
+      ],
+      "base_model_license_id": "UNKNOWN",
+      "base_model_license_url": null,
+      "base_model_commercial_use": "unknown",
+      "base_model_redistribution_permission": "unknown",
+      "base_model_attribution_requirements": "UNKNOWN"
     },
     {
       "model_id": "d00fb627bc633a6b976c6f18",
@@ -1709,7 +2259,32 @@
       "license_notice": "Installed bytes are verified locally. Exact upstream provenance, license terms and commercial permission are UNKNOWN. Integrity verification does not grant usage rights; review the original model terms before use.",
       "license_url": null,
       "manual_acceptance_required": false,
-      "family_hint": "animation"
+      "family_hint": "animation",
+      "original_repository": "UNKNOWN",
+      "source_revision": "UNKNOWN",
+      "version_family": "UNKNOWN",
+      "architecture": "UNKNOWN",
+      "required_base_model": "UNKNOWN",
+      "redistribution_permission": "unknown",
+      "attribution_requirements": "UNKNOWN",
+      "hardware_requirements": {
+        "state": "UNKNOWN"
+      },
+      "precision_requirements": [],
+      "dependency_compatibility": {
+        "state": "UNKNOWN",
+        "requirements": []
+      },
+      "serialization_format": "ONNX",
+      "security_status": "UNKNOWN",
+      "weight_filenames": [
+        "liveportrait_stitching_eye.onnx"
+      ],
+      "base_model_license_id": "UNKNOWN",
+      "base_model_license_url": null,
+      "base_model_commercial_use": "unknown",
+      "base_model_redistribution_permission": "unknown",
+      "base_model_attribution_requirements": "UNKNOWN"
     },
     {
       "model_id": "74027237be44d5958a528cf7",
@@ -1792,7 +2367,32 @@
       "license_notice": "Installed bytes are verified locally. Exact upstream provenance, license terms and commercial permission are UNKNOWN. Integrity verification does not grant usage rights; review the original model terms before use.",
       "license_url": null,
       "manual_acceptance_required": false,
-      "family_hint": "animation"
+      "family_hint": "animation",
+      "original_repository": "UNKNOWN",
+      "source_revision": "UNKNOWN",
+      "version_family": "UNKNOWN",
+      "architecture": "UNKNOWN",
+      "required_base_model": "UNKNOWN",
+      "redistribution_permission": "unknown",
+      "attribution_requirements": "UNKNOWN",
+      "hardware_requirements": {
+        "state": "UNKNOWN"
+      },
+      "precision_requirements": [],
+      "dependency_compatibility": {
+        "state": "UNKNOWN",
+        "requirements": []
+      },
+      "serialization_format": "ONNX",
+      "security_status": "UNKNOWN",
+      "weight_filenames": [
+        "liveportrait_warping_spade-trt.onnx"
+      ],
+      "base_model_license_id": "UNKNOWN",
+      "base_model_license_url": null,
+      "base_model_commercial_use": "unknown",
+      "base_model_redistribution_permission": "unknown",
+      "base_model_attribution_requirements": "UNKNOWN"
     },
     {
       "model_id": "4b583cf7d4667da7ed3b843e",
@@ -1875,7 +2475,32 @@
       "license_notice": "Installed bytes are verified locally. Exact upstream provenance, license terms and commercial permission are UNKNOWN. Integrity verification does not grant usage rights; review the original model terms before use.",
       "license_url": null,
       "manual_acceptance_required": false,
-      "family_hint": "animation"
+      "family_hint": "animation",
+      "original_repository": "UNKNOWN",
+      "source_revision": "UNKNOWN",
+      "version_family": "UNKNOWN",
+      "architecture": "UNKNOWN",
+      "required_base_model": "UNKNOWN",
+      "redistribution_permission": "unknown",
+      "attribution_requirements": "UNKNOWN",
+      "hardware_requirements": {
+        "state": "UNKNOWN"
+      },
+      "precision_requirements": [],
+      "dependency_compatibility": {
+        "state": "UNKNOWN",
+        "requirements": []
+      },
+      "serialization_format": "ONNX",
+      "security_status": "UNKNOWN",
+      "weight_filenames": [
+        "liveportrait_warping_spade.onnx"
+      ],
+      "base_model_license_id": "UNKNOWN",
+      "base_model_license_url": null,
+      "base_model_commercial_use": "unknown",
+      "base_model_redistribution_permission": "unknown",
+      "base_model_attribution_requirements": "UNKNOWN"
     },
     {
       "model_id": "b97bee507ce21302eaf8b69f",
@@ -2063,7 +2688,32 @@
       "license_notice": "Installed bytes are verified locally. Exact upstream provenance, license terms and commercial permission are UNKNOWN. Integrity verification does not grant usage rights; review the original model terms before use.",
       "license_url": null,
       "manual_acceptance_required": false,
-      "family_hint": "restorer"
+      "family_hint": "restorer",
+      "original_repository": "UNKNOWN",
+      "source_revision": "UNKNOWN",
+      "version_family": "UNKNOWN",
+      "architecture": "UNKNOWN",
+      "required_base_model": "UNKNOWN",
+      "redistribution_permission": "unknown",
+      "attribution_requirements": "UNKNOWN",
+      "hardware_requirements": {
+        "state": "UNKNOWN"
+      },
+      "precision_requirements": [],
+      "dependency_compatibility": {
+        "state": "UNKNOWN",
+        "requirements": []
+      },
+      "serialization_format": "ONNX",
+      "security_status": "UNKNOWN",
+      "weight_filenames": [
+        "restoreformer_plus_plus.batch.onnx"
+      ],
+      "base_model_license_id": "UNKNOWN",
+      "base_model_license_url": null,
+      "base_model_commercial_use": "unknown",
+      "base_model_redistribution_permission": "unknown",
+      "base_model_attribution_requirements": "UNKNOWN"
     },
     {
       "model_id": "f9149e1589882c7a623e750a",
@@ -2251,7 +2901,32 @@
       "license_notice": "Installed bytes are verified locally. Exact upstream provenance, license terms and commercial permission are UNKNOWN. Integrity verification does not grant usage rights; review the original model terms before use.",
       "license_url": null,
       "manual_acceptance_required": false,
-      "family_hint": "restorer"
+      "family_hint": "restorer",
+      "original_repository": "UNKNOWN",
+      "source_revision": "UNKNOWN",
+      "version_family": "UNKNOWN",
+      "architecture": "UNKNOWN",
+      "required_base_model": "UNKNOWN",
+      "redistribution_permission": "unknown",
+      "attribution_requirements": "UNKNOWN",
+      "hardware_requirements": {
+        "state": "UNKNOWN"
+      },
+      "precision_requirements": [],
+      "dependency_compatibility": {
+        "state": "UNKNOWN",
+        "requirements": []
+      },
+      "serialization_format": "ONNX",
+      "security_status": "UNKNOWN",
+      "weight_filenames": [
+        "restoreformer_plus_plus.onnx"
+      ],
+      "base_model_license_id": "UNKNOWN",
+      "base_model_license_url": null,
+      "base_model_commercial_use": "unknown",
+      "base_model_redistribution_permission": "unknown",
+      "base_model_attribution_requirements": "UNKNOWN"
     },
     {
       "model_id": "e7f479d727d4d77a3031de43",
@@ -2332,7 +3007,32 @@
       "license_notice": "Installed bytes are verified locally. Exact upstream provenance, license terms and commercial permission are UNKNOWN. Integrity verification does not grant usage rights; review the original model terms before use.",
       "license_url": null,
       "manual_acceptance_required": false,
-      "family_hint": "detector"
+      "family_hint": "detector",
+      "original_repository": "UNKNOWN",
+      "source_revision": "UNKNOWN",
+      "version_family": "UNKNOWN",
+      "architecture": "UNKNOWN",
+      "required_base_model": "UNKNOWN",
+      "redistribution_permission": "unknown",
+      "attribution_requirements": "UNKNOWN",
+      "hardware_requirements": {
+        "state": "UNKNOWN"
+      },
+      "precision_requirements": [],
+      "dependency_compatibility": {
+        "state": "UNKNOWN",
+        "requirements": []
+      },
+      "serialization_format": "ONNX",
+      "security_status": "UNKNOWN",
+      "weight_filenames": [
+        "retinaface_r50.onnx"
+      ],
+      "base_model_license_id": "UNKNOWN",
+      "base_model_license_url": null,
+      "base_model_commercial_use": "unknown",
+      "base_model_redistribution_permission": "unknown",
+      "base_model_attribution_requirements": "UNKNOWN"
     },
     {
       "model_id": "b1fbfcea24b1928b7aaf2a85",
@@ -2458,7 +3158,32 @@
       "license_notice": "Installed bytes are verified locally. Exact upstream provenance, license terms and commercial permission are UNKNOWN. Integrity verification does not grant usage rights; review the original model terms before use.",
       "license_url": null,
       "manual_acceptance_required": false,
-      "family_hint": "detector"
+      "family_hint": "detector",
+      "original_repository": "UNKNOWN",
+      "source_revision": "UNKNOWN",
+      "version_family": "UNKNOWN",
+      "architecture": "UNKNOWN",
+      "required_base_model": "UNKNOWN",
+      "redistribution_permission": "unknown",
+      "attribution_requirements": "UNKNOWN",
+      "hardware_requirements": {
+        "state": "UNKNOWN"
+      },
+      "precision_requirements": [],
+      "dependency_compatibility": {
+        "state": "UNKNOWN",
+        "requirements": []
+      },
+      "serialization_format": "ONNX",
+      "security_status": "UNKNOWN",
+      "weight_filenames": [
+        "scrfd_10g_bnkps.dims.onnx"
+      ],
+      "base_model_license_id": "UNKNOWN",
+      "base_model_license_url": null,
+      "base_model_commercial_use": "unknown",
+      "base_model_redistribution_permission": "unknown",
+      "base_model_attribution_requirements": "UNKNOWN"
     },
     {
       "model_id": "df98ccc0044455678ade9cbd",
@@ -2586,7 +3311,32 @@
       "license_notice": "Installed bytes are verified locally. Exact upstream provenance, license terms and commercial permission are UNKNOWN. Integrity verification does not grant usage rights; review the original model terms before use.",
       "license_url": null,
       "manual_acceptance_required": false,
-      "family_hint": "detector"
+      "family_hint": "detector",
+      "original_repository": "UNKNOWN",
+      "source_revision": "UNKNOWN",
+      "version_family": "UNKNOWN",
+      "architecture": "UNKNOWN",
+      "required_base_model": "UNKNOWN",
+      "redistribution_permission": "unknown",
+      "attribution_requirements": "UNKNOWN",
+      "hardware_requirements": {
+        "state": "UNKNOWN"
+      },
+      "precision_requirements": [],
+      "dependency_compatibility": {
+        "state": "UNKNOWN",
+        "requirements": []
+      },
+      "serialization_format": "ONNX",
+      "security_status": "UNKNOWN",
+      "weight_filenames": [
+        "scrfd_10g_bnkps.onnx"
+      ],
+      "base_model_license_id": "UNKNOWN",
+      "base_model_license_url": null,
+      "base_model_commercial_use": "unknown",
+      "base_model_redistribution_permission": "unknown",
+      "base_model_attribution_requirements": "UNKNOWN"
     },
     {
       "model_id": "58e30ce4736df56fb21d47e2",
@@ -2654,7 +3404,32 @@
       "license_notice": "Installed bytes are verified locally. Exact upstream provenance, license terms and commercial permission are UNKNOWN. Integrity verification does not grant usage rights; review the original model terms before use.",
       "license_url": null,
       "manual_acceptance_required": false,
-      "family_hint": "parser"
+      "family_hint": "parser",
+      "original_repository": "UNKNOWN",
+      "source_revision": "UNKNOWN",
+      "version_family": "UNKNOWN",
+      "architecture": "UNKNOWN",
+      "required_base_model": "UNKNOWN",
+      "redistribution_permission": "unknown",
+      "attribution_requirements": "UNKNOWN",
+      "hardware_requirements": {
+        "state": "UNKNOWN"
+      },
+      "precision_requirements": [],
+      "dependency_compatibility": {
+        "state": "UNKNOWN",
+        "requirements": []
+      },
+      "serialization_format": "ONNX",
+      "security_status": "UNKNOWN",
+      "weight_filenames": [
+        "xseg.onnx"
+      ],
+      "base_model_license_id": "UNKNOWN",
+      "base_model_license_url": null,
+      "base_model_commercial_use": "unknown",
+      "base_model_redistribution_permission": "unknown",
+      "base_model_attribution_requirements": "UNKNOWN"
     },
     {
       "model_id": "48cc67a78ac3f81a9c5c1499",
@@ -2722,7 +3497,32 @@
       "license_notice": "Installed bytes are verified locally. Exact upstream provenance, license terms and commercial permission are UNKNOWN. Integrity verification does not grant usage rights; review the original model terms before use.",
       "license_url": null,
       "manual_acceptance_required": false,
-      "family_hint": "parser"
+      "family_hint": "parser",
+      "original_repository": "UNKNOWN",
+      "source_revision": "UNKNOWN",
+      "version_family": "UNKNOWN",
+      "architecture": "UNKNOWN",
+      "required_base_model": "UNKNOWN",
+      "redistribution_permission": "unknown",
+      "attribution_requirements": "UNKNOWN",
+      "hardware_requirements": {
+        "state": "UNKNOWN"
+      },
+      "precision_requirements": [],
+      "dependency_compatibility": {
+        "state": "UNKNOWN",
+        "requirements": []
+      },
+      "serialization_format": "ONNX",
+      "security_status": "UNKNOWN",
+      "weight_filenames": [
+        "xseg_3.onnx"
+      ],
+      "base_model_license_id": "UNKNOWN",
+      "base_model_license_url": null,
+      "base_model_commercial_use": "unknown",
+      "base_model_redistribution_permission": "unknown",
+      "base_model_attribution_requirements": "UNKNOWN"
     },
     {
       "model_id": "d1d47cf8fa4f92704da30528",
@@ -2785,7 +3585,32 @@
       "license_notice": "Installed bytes are verified locally. Exact upstream provenance, license terms and commercial permission are UNKNOWN. Integrity verification does not grant usage rights; review the original model terms before use.",
       "license_url": null,
       "manual_acceptance_required": false,
-      "family_hint": "detector"
+      "family_hint": "detector",
+      "original_repository": "UNKNOWN",
+      "source_revision": "UNKNOWN",
+      "version_family": "UNKNOWN",
+      "architecture": "UNKNOWN",
+      "required_base_model": "UNKNOWN",
+      "redistribution_permission": "unknown",
+      "attribution_requirements": "UNKNOWN",
+      "hardware_requirements": {
+        "state": "UNKNOWN"
+      },
+      "precision_requirements": [],
+      "dependency_compatibility": {
+        "state": "UNKNOWN",
+        "requirements": []
+      },
+      "serialization_format": "ONNX",
+      "security_status": "UNKNOWN",
+      "weight_filenames": [
+        "yoloface_8n.onnx"
+      ],
+      "base_model_license_id": "UNKNOWN",
+      "base_model_license_url": null,
+      "base_model_commercial_use": "unknown",
+      "base_model_redistribution_permission": "unknown",
+      "base_model_attribution_requirements": "UNKNOWN"
     },
     {
       "model_id": "a30ba818c9275df4a46a46a6",
@@ -2817,7 +3642,32 @@
       "license_notice": "Installed bytes are verified locally. Exact upstream provenance, license terms and commercial permission are UNKNOWN. Integrity verification does not grant usage rights; review the original model terms before use.",
       "license_url": null,
       "manual_acceptance_required": false,
-      "family_hint": "restorer"
+      "family_hint": "restorer",
+      "original_repository": "UNKNOWN",
+      "source_revision": "UNKNOWN",
+      "version_family": "UNKNOWN",
+      "architecture": "UNKNOWN",
+      "required_base_model": "UNKNOWN",
+      "redistribution_permission": "unknown",
+      "attribution_requirements": "UNKNOWN",
+      "hardware_requirements": {
+        "state": "UNKNOWN"
+      },
+      "precision_requirements": [],
+      "dependency_compatibility": {
+        "state": "UNKNOWN",
+        "requirements": []
+      },
+      "serialization_format": "PTH",
+      "security_status": "UNKNOWN",
+      "weight_filenames": [
+        "DMDNet.pth"
+      ],
+      "base_model_license_id": "UNKNOWN",
+      "base_model_license_url": null,
+      "base_model_commercial_use": "unknown",
+      "base_model_redistribution_permission": "unknown",
+      "base_model_attribution_requirements": "UNKNOWN"
     },
     {
       "model_id": "a2d838fd7490e8db15a508a1",
@@ -2881,7 +3731,32 @@
       "license_notice": "Installed bytes are verified locally. Exact upstream provenance, license terms and commercial permission are UNKNOWN. Integrity verification does not grant usage rights; review the original model terms before use.",
       "license_url": null,
       "manual_acceptance_required": false,
-      "family_hint": "restorer"
+      "family_hint": "restorer",
+      "original_repository": "UNKNOWN",
+      "source_revision": "UNKNOWN",
+      "version_family": "UNKNOWN",
+      "architecture": "UNKNOWN",
+      "required_base_model": "UNKNOWN",
+      "redistribution_permission": "unknown",
+      "attribution_requirements": "UNKNOWN",
+      "hardware_requirements": {
+        "state": "UNKNOWN"
+      },
+      "precision_requirements": [],
+      "dependency_compatibility": {
+        "state": "UNKNOWN",
+        "requirements": []
+      },
+      "serialization_format": "ONNX",
+      "security_status": "UNKNOWN",
+      "weight_filenames": [
+        "GFPGANv1.4.onnx"
+      ],
+      "base_model_license_id": "UNKNOWN",
+      "base_model_license_url": null,
+      "base_model_commercial_use": "unknown",
+      "base_model_redistribution_permission": "unknown",
+      "base_model_attribution_requirements": "UNKNOWN"
     },
     {
       "model_id": "deabe216ed75127c13f6bc13",
@@ -2945,7 +3820,32 @@
       "license_notice": "Installed bytes are verified locally. Exact upstream provenance, license terms and commercial permission are UNKNOWN. Integrity verification does not grant usage rights; review the original model terms before use.",
       "license_url": null,
       "manual_acceptance_required": false,
-      "family_hint": "restorer"
+      "family_hint": "restorer",
+      "original_repository": "UNKNOWN",
+      "source_revision": "UNKNOWN",
+      "version_family": "UNKNOWN",
+      "architecture": "UNKNOWN",
+      "required_base_model": "UNKNOWN",
+      "redistribution_permission": "unknown",
+      "attribution_requirements": "UNKNOWN",
+      "hardware_requirements": {
+        "state": "UNKNOWN"
+      },
+      "precision_requirements": [],
+      "dependency_compatibility": {
+        "state": "UNKNOWN",
+        "requirements": []
+      },
+      "serialization_format": "ONNX",
+      "security_status": "UNKNOWN",
+      "weight_filenames": [
+        "GPEN-BFR-512.onnx"
+      ],
+      "base_model_license_id": "UNKNOWN",
+      "base_model_license_url": null,
+      "base_model_commercial_use": "unknown",
+      "base_model_redistribution_permission": "unknown",
+      "base_model_attribution_requirements": "UNKNOWN"
     },
     {
       "model_id": "11b0f5d2ce2874795e2bbacc",
@@ -3007,7 +3907,32 @@
       "license_notice": "Installed bytes are verified locally. Exact upstream provenance, license terms and commercial permission are UNKNOWN. Integrity verification does not grant usage rights; review the original model terms before use.",
       "license_url": null,
       "manual_acceptance_required": false,
-      "family_hint": "recognizer"
+      "family_hint": "recognizer",
+      "original_repository": "UNKNOWN",
+      "source_revision": "UNKNOWN",
+      "version_family": "UNKNOWN",
+      "architecture": "UNKNOWN",
+      "required_base_model": "UNKNOWN",
+      "redistribution_permission": "unknown",
+      "attribution_requirements": "UNKNOWN",
+      "hardware_requirements": {
+        "state": "UNKNOWN"
+      },
+      "precision_requirements": [],
+      "dependency_compatibility": {
+        "state": "UNKNOWN",
+        "requirements": []
+      },
+      "serialization_format": "ONNX",
+      "security_status": "UNKNOWN",
+      "weight_filenames": [
+        "adaface_ir101.onnx"
+      ],
+      "base_model_license_id": "UNKNOWN",
+      "base_model_license_url": null,
+      "base_model_commercial_use": "unknown",
+      "base_model_redistribution_permission": "unknown",
+      "base_model_attribution_requirements": "UNKNOWN"
     },
     {
       "model_id": "20f409b0562256599e81ad62",
@@ -3067,7 +3992,32 @@
       "license_notice": "Installed bytes are verified locally. Exact upstream provenance, license terms and commercial permission are UNKNOWN. Integrity verification does not grant usage rights; review the original model terms before use.",
       "license_url": null,
       "manual_acceptance_required": false,
-      "family_hint": "swapper"
+      "family_hint": "swapper",
+      "original_repository": "UNKNOWN",
+      "source_revision": "UNKNOWN",
+      "version_family": "UNKNOWN",
+      "architecture": "UNKNOWN",
+      "required_base_model": "UNKNOWN",
+      "redistribution_permission": "unknown",
+      "attribution_requirements": "UNKNOWN",
+      "hardware_requirements": {
+        "state": "UNKNOWN"
+      },
+      "precision_requirements": [],
+      "dependency_compatibility": {
+        "state": "UNKNOWN",
+        "requirements": []
+      },
+      "serialization_format": "ONNX",
+      "security_status": "UNKNOWN",
+      "weight_filenames": [
+        "crossface_hififace.onnx"
+      ],
+      "base_model_license_id": "UNKNOWN",
+      "base_model_license_url": null,
+      "base_model_commercial_use": "unknown",
+      "base_model_redistribution_permission": "unknown",
+      "base_model_attribution_requirements": "UNKNOWN"
     },
     {
       "model_id": "1319dd93b8f37e652b218e8c",
@@ -3229,7 +4179,32 @@
       "license_notice": "Installed bytes are verified locally. Exact upstream provenance, license terms and commercial permission are UNKNOWN. Integrity verification does not grant usage rights; review the original model terms before use.",
       "license_url": null,
       "manual_acceptance_required": false,
-      "family_hint": "detector"
+      "family_hint": "detector",
+      "original_repository": "UNKNOWN",
+      "source_revision": "UNKNOWN",
+      "version_family": "UNKNOWN",
+      "architecture": "UNKNOWN",
+      "required_base_model": "UNKNOWN",
+      "redistribution_permission": "unknown",
+      "attribution_requirements": "UNKNOWN",
+      "hardware_requirements": {
+        "state": "UNKNOWN"
+      },
+      "precision_requirements": [],
+      "dependency_compatibility": {
+        "state": "UNKNOWN",
+        "requirements": []
+      },
+      "serialization_format": "ONNX",
+      "security_status": "UNKNOWN",
+      "weight_filenames": [
+        "face_detection_yunet_2023mar.onnx"
+      ],
+      "base_model_license_id": "UNKNOWN",
+      "base_model_license_url": null,
+      "base_model_commercial_use": "unknown",
+      "base_model_redistribution_permission": "unknown",
+      "base_model_attribution_requirements": "UNKNOWN"
     },
     {
       "model_id": "f9e74901f77ed7ea55e7c44e",
@@ -3297,7 +4272,32 @@
       "license_notice": "Installed bytes are verified locally. Exact upstream provenance, license terms and commercial permission are UNKNOWN. Integrity verification does not grant usage rights; review the original model terms before use.",
       "license_url": null,
       "manual_acceptance_required": false,
-      "family_hint": "parser"
+      "family_hint": "parser",
+      "original_repository": "UNKNOWN",
+      "source_revision": "UNKNOWN",
+      "version_family": "UNKNOWN",
+      "architecture": "UNKNOWN",
+      "required_base_model": "UNKNOWN",
+      "redistribution_permission": "unknown",
+      "attribution_requirements": "UNKNOWN",
+      "hardware_requirements": {
+        "state": "UNKNOWN"
+      },
+      "precision_requirements": [],
+      "dependency_compatibility": {
+        "state": "UNKNOWN",
+        "requirements": []
+      },
+      "serialization_format": "ONNX",
+      "security_status": "UNKNOWN",
+      "weight_filenames": [
+        "face_occluder.onnx"
+      ],
+      "base_model_license_id": "UNKNOWN",
+      "base_model_license_url": null,
+      "base_model_commercial_use": "unknown",
+      "base_model_redistribution_permission": "unknown",
+      "base_model_attribution_requirements": "UNKNOWN"
     },
     {
       "model_id": "5100f8f9ab13ac4c2fd3ad08",
@@ -3359,7 +4359,32 @@
       "license_notice": "Installed bytes are verified locally. Exact upstream provenance, license terms and commercial permission are UNKNOWN. Integrity verification does not grant usage rights; review the original model terms before use.",
       "license_url": null,
       "manual_acceptance_required": false,
-      "family_hint": "recognizer"
+      "family_hint": "recognizer",
+      "original_repository": "UNKNOWN",
+      "source_revision": "UNKNOWN",
+      "version_family": "UNKNOWN",
+      "architecture": "UNKNOWN",
+      "required_base_model": "UNKNOWN",
+      "redistribution_permission": "unknown",
+      "attribution_requirements": "UNKNOWN",
+      "hardware_requirements": {
+        "state": "UNKNOWN"
+      },
+      "precision_requirements": [],
+      "dependency_compatibility": {
+        "state": "UNKNOWN",
+        "requirements": []
+      },
+      "serialization_format": "ONNX",
+      "security_status": "UNKNOWN",
+      "weight_filenames": [
+        "face_recognition_sface_2021dec.onnx"
+      ],
+      "base_model_license_id": "UNKNOWN",
+      "base_model_license_url": null,
+      "base_model_commercial_use": "unknown",
+      "base_model_redistribution_permission": "unknown",
+      "base_model_attribution_requirements": "UNKNOWN"
     },
     {
       "model_id": "b7de913d54d2c95bda3f18cc",
@@ -3421,7 +4446,32 @@
       "license_notice": "Installed bytes are verified locally. Exact upstream provenance, license terms and commercial permission are UNKNOWN. Integrity verification does not grant usage rights; review the original model terms before use.",
       "license_url": null,
       "manual_acceptance_required": false,
-      "family_hint": "recognizer"
+      "family_hint": "recognizer",
+      "original_repository": "UNKNOWN",
+      "source_revision": "UNKNOWN",
+      "version_family": "UNKNOWN",
+      "architecture": "UNKNOWN",
+      "required_base_model": "UNKNOWN",
+      "redistribution_permission": "unknown",
+      "attribution_requirements": "UNKNOWN",
+      "hardware_requirements": {
+        "state": "UNKNOWN"
+      },
+      "precision_requirements": [],
+      "dependency_compatibility": {
+        "state": "UNKNOWN",
+        "requirements": []
+      },
+      "serialization_format": "ONNX",
+      "security_status": "UNKNOWN",
+      "weight_filenames": [
+        "glintr100.onnx"
+      ],
+      "base_model_license_id": "UNKNOWN",
+      "base_model_license_url": null,
+      "base_model_commercial_use": "unknown",
+      "base_model_redistribution_permission": "unknown",
+      "base_model_attribution_requirements": "UNKNOWN"
     },
     {
       "model_id": "0246071cc088dd4e7b018056",
@@ -3485,7 +4535,32 @@
       "license_notice": "Installed bytes are verified locally. Exact upstream provenance, license terms and commercial permission are UNKNOWN. Integrity verification does not grant usage rights; review the original model terms before use.",
       "license_url": null,
       "manual_acceptance_required": false,
-      "family_hint": "restorer"
+      "family_hint": "restorer",
+      "original_repository": "UNKNOWN",
+      "source_revision": "UNKNOWN",
+      "version_family": "UNKNOWN",
+      "architecture": "UNKNOWN",
+      "required_base_model": "UNKNOWN",
+      "redistribution_permission": "unknown",
+      "attribution_requirements": "UNKNOWN",
+      "hardware_requirements": {
+        "state": "UNKNOWN"
+      },
+      "precision_requirements": [],
+      "dependency_compatibility": {
+        "state": "UNKNOWN",
+        "requirements": []
+      },
+      "serialization_format": "ONNX",
+      "security_status": "UNKNOWN",
+      "weight_filenames": [
+        "gpen_bfr_256.onnx"
+      ],
+      "base_model_license_id": "UNKNOWN",
+      "base_model_license_url": null,
+      "base_model_commercial_use": "unknown",
+      "base_model_redistribution_permission": "unknown",
+      "base_model_attribution_requirements": "UNKNOWN"
     },
     {
       "model_id": "8a5bb0b52b4ab71d3890a643",
@@ -3567,7 +4642,32 @@
       "license_notice": "Installed bytes are verified locally. Exact upstream provenance, license terms and commercial permission are UNKNOWN. Integrity verification does not grant usage rights; review the original model terms before use.",
       "license_url": null,
       "manual_acceptance_required": false,
-      "family_hint": "swapper"
+      "family_hint": "swapper",
+      "original_repository": "UNKNOWN",
+      "source_revision": "UNKNOWN",
+      "version_family": "UNKNOWN",
+      "architecture": "UNKNOWN",
+      "required_base_model": "UNKNOWN",
+      "redistribution_permission": "unknown",
+      "attribution_requirements": "UNKNOWN",
+      "hardware_requirements": {
+        "state": "UNKNOWN"
+      },
+      "precision_requirements": [],
+      "dependency_compatibility": {
+        "state": "UNKNOWN",
+        "requirements": []
+      },
+      "serialization_format": "ONNX",
+      "security_status": "UNKNOWN",
+      "weight_filenames": [
+        "hififace_unofficial_256.onnx"
+      ],
+      "base_model_license_id": "UNKNOWN",
+      "base_model_license_url": null,
+      "base_model_commercial_use": "unknown",
+      "base_model_redistribution_permission": "unknown",
+      "base_model_attribution_requirements": "UNKNOWN"
     },
     {
       "model_id": "50c5441891bd229eae1714e5",
@@ -3649,7 +4749,32 @@
       "license_notice": "Installed bytes are verified locally. Exact upstream provenance, license terms and commercial permission are UNKNOWN. Integrity verification does not grant usage rights; review the original model terms before use.",
       "license_url": null,
       "manual_acceptance_required": false,
-      "family_hint": "swapper"
+      "family_hint": "swapper",
+      "original_repository": "UNKNOWN",
+      "source_revision": "UNKNOWN",
+      "version_family": "UNKNOWN",
+      "architecture": "UNKNOWN",
+      "required_base_model": "UNKNOWN",
+      "redistribution_permission": "unknown",
+      "attribution_requirements": "UNKNOWN",
+      "hardware_requirements": {
+        "state": "UNKNOWN"
+      },
+      "precision_requirements": [],
+      "dependency_compatibility": {
+        "state": "UNKNOWN",
+        "requirements": []
+      },
+      "serialization_format": "ONNX",
+      "security_status": "UNKNOWN",
+      "weight_filenames": [
+        "hyperswap_1a_256.onnx"
+      ],
+      "base_model_license_id": "UNKNOWN",
+      "base_model_license_url": null,
+      "base_model_commercial_use": "unknown",
+      "base_model_redistribution_permission": "unknown",
+      "base_model_attribution_requirements": "UNKNOWN"
     },
     {
       "model_id": "703fc12dfd766c46cb034328",
@@ -3731,7 +4856,32 @@
       "license_notice": "Installed bytes are verified locally. Exact upstream provenance, license terms and commercial permission are UNKNOWN. Integrity verification does not grant usage rights; review the original model terms before use.",
       "license_url": null,
       "manual_acceptance_required": false,
-      "family_hint": "swapper"
+      "family_hint": "swapper",
+      "original_repository": "UNKNOWN",
+      "source_revision": "UNKNOWN",
+      "version_family": "UNKNOWN",
+      "architecture": "UNKNOWN",
+      "required_base_model": "UNKNOWN",
+      "redistribution_permission": "unknown",
+      "attribution_requirements": "UNKNOWN",
+      "hardware_requirements": {
+        "state": "UNKNOWN"
+      },
+      "precision_requirements": [],
+      "dependency_compatibility": {
+        "state": "UNKNOWN",
+        "requirements": []
+      },
+      "serialization_format": "ONNX",
+      "security_status": "UNKNOWN",
+      "weight_filenames": [
+        "hyperswap_1b_256.onnx"
+      ],
+      "base_model_license_id": "UNKNOWN",
+      "base_model_license_url": null,
+      "base_model_commercial_use": "unknown",
+      "base_model_redistribution_permission": "unknown",
+      "base_model_attribution_requirements": "UNKNOWN"
     },
     {
       "model_id": "212371b1eade34b6e6e5a7a5",
@@ -3813,7 +4963,32 @@
       "license_notice": "Installed bytes are verified locally. Exact upstream provenance, license terms and commercial permission are UNKNOWN. Integrity verification does not grant usage rights; review the original model terms before use.",
       "license_url": null,
       "manual_acceptance_required": false,
-      "family_hint": "swapper"
+      "family_hint": "swapper",
+      "original_repository": "UNKNOWN",
+      "source_revision": "UNKNOWN",
+      "version_family": "UNKNOWN",
+      "architecture": "UNKNOWN",
+      "required_base_model": "UNKNOWN",
+      "redistribution_permission": "unknown",
+      "attribution_requirements": "UNKNOWN",
+      "hardware_requirements": {
+        "state": "UNKNOWN"
+      },
+      "precision_requirements": [],
+      "dependency_compatibility": {
+        "state": "UNKNOWN",
+        "requirements": []
+      },
+      "serialization_format": "ONNX",
+      "security_status": "UNKNOWN",
+      "weight_filenames": [
+        "hyperswap_1c_256.onnx"
+      ],
+      "base_model_license_id": "UNKNOWN",
+      "base_model_license_url": null,
+      "base_model_commercial_use": "unknown",
+      "base_model_redistribution_permission": "unknown",
+      "base_model_attribution_requirements": "UNKNOWN"
     },
     {
       "model_id": "6e6f38875f643fc8da9559aa",
@@ -3885,7 +5060,32 @@
       "license_notice": "Installed bytes are verified locally. Exact upstream provenance, license terms and commercial permission are UNKNOWN. Integrity verification does not grant usage rights; review the original model terms before use.",
       "license_url": null,
       "manual_acceptance_required": false,
-      "family_hint": "swapper"
+      "family_hint": "swapper",
+      "original_repository": "UNKNOWN",
+      "source_revision": "UNKNOWN",
+      "version_family": "UNKNOWN",
+      "architecture": "UNKNOWN",
+      "required_base_model": "UNKNOWN",
+      "redistribution_permission": "unknown",
+      "attribution_requirements": "UNKNOWN",
+      "hardware_requirements": {
+        "state": "UNKNOWN"
+      },
+      "precision_requirements": [],
+      "dependency_compatibility": {
+        "state": "UNKNOWN",
+        "requirements": []
+      },
+      "serialization_format": "ONNX",
+      "security_status": "UNKNOWN",
+      "weight_filenames": [
+        "inswapper_128.onnx"
+      ],
+      "base_model_license_id": "UNKNOWN",
+      "base_model_license_url": null,
+      "base_model_commercial_use": "unknown",
+      "base_model_redistribution_permission": "unknown",
+      "base_model_attribution_requirements": "UNKNOWN"
     },
     {
       "model_id": "bad2131ff570bec63e49102d",
@@ -3969,7 +5169,32 @@
       "license_notice": "Installed bytes are verified locally. Exact upstream provenance, license terms and commercial permission are UNKNOWN. Integrity verification does not grant usage rights; review the original model terms before use.",
       "license_url": null,
       "manual_acceptance_required": false,
-      "family_hint": "parser"
+      "family_hint": "parser",
+      "original_repository": "UNKNOWN",
+      "source_revision": "UNKNOWN",
+      "version_family": "UNKNOWN",
+      "architecture": "UNKNOWN",
+      "required_base_model": "UNKNOWN",
+      "redistribution_permission": "unknown",
+      "attribution_requirements": "UNKNOWN",
+      "hardware_requirements": {
+        "state": "UNKNOWN"
+      },
+      "precision_requirements": [],
+      "dependency_compatibility": {
+        "state": "UNKNOWN",
+        "requirements": []
+      },
+      "serialization_format": "ONNX",
+      "security_status": "UNKNOWN",
+      "weight_filenames": [
+        "resnet18.onnx"
+      ],
+      "base_model_license_id": "UNKNOWN",
+      "base_model_license_url": null,
+      "base_model_commercial_use": "unknown",
+      "base_model_redistribution_permission": "unknown",
+      "base_model_attribution_requirements": "UNKNOWN"
     },
     {
       "model_id": "617ef8d2a441312c52d7546f",
@@ -4157,7 +5382,32 @@
       "license_notice": "Installed bytes are verified locally. Exact upstream provenance, license terms and commercial permission are UNKNOWN. Integrity verification does not grant usage rights; review the original model terms before use.",
       "license_url": null,
       "manual_acceptance_required": false,
-      "family_hint": "restorer"
+      "family_hint": "restorer",
+      "original_repository": "UNKNOWN",
+      "source_revision": "UNKNOWN",
+      "version_family": "UNKNOWN",
+      "architecture": "UNKNOWN",
+      "required_base_model": "UNKNOWN",
+      "redistribution_permission": "unknown",
+      "attribution_requirements": "UNKNOWN",
+      "hardware_requirements": {
+        "state": "UNKNOWN"
+      },
+      "precision_requirements": [],
+      "dependency_compatibility": {
+        "state": "UNKNOWN",
+        "requirements": []
+      },
+      "serialization_format": "ONNX",
+      "security_status": "UNKNOWN",
+      "weight_filenames": [
+        "restoreformer_plus_plus.batch.onnx"
+      ],
+      "base_model_license_id": "UNKNOWN",
+      "base_model_license_url": null,
+      "base_model_commercial_use": "unknown",
+      "base_model_redistribution_permission": "unknown",
+      "base_model_attribution_requirements": "UNKNOWN"
     },
     {
       "model_id": "01018e12d52a26e47b1a65cd",
@@ -4345,7 +5595,32 @@
       "license_notice": "Installed bytes are verified locally. Exact upstream provenance, license terms and commercial permission are UNKNOWN. Integrity verification does not grant usage rights; review the original model terms before use.",
       "license_url": null,
       "manual_acceptance_required": false,
-      "family_hint": "restorer"
+      "family_hint": "restorer",
+      "original_repository": "UNKNOWN",
+      "source_revision": "UNKNOWN",
+      "version_family": "UNKNOWN",
+      "architecture": "UNKNOWN",
+      "required_base_model": "UNKNOWN",
+      "redistribution_permission": "unknown",
+      "attribution_requirements": "UNKNOWN",
+      "hardware_requirements": {
+        "state": "UNKNOWN"
+      },
+      "precision_requirements": [],
+      "dependency_compatibility": {
+        "state": "UNKNOWN",
+        "requirements": []
+      },
+      "serialization_format": "ONNX",
+      "security_status": "UNKNOWN",
+      "weight_filenames": [
+        "restoreformer_plus_plus.onnx"
+      ],
+      "base_model_license_id": "UNKNOWN",
+      "base_model_license_url": null,
+      "base_model_commercial_use": "unknown",
+      "base_model_redistribution_permission": "unknown",
+      "base_model_attribution_requirements": "UNKNOWN"
     },
     {
       "model_id": "fb1ae498d8c2e08509d4bc4e",
@@ -4471,7 +5746,32 @@
       "license_notice": "Installed bytes are verified locally. Exact upstream provenance, license terms and commercial permission are UNKNOWN. Integrity verification does not grant usage rights; review the original model terms before use.",
       "license_url": null,
       "manual_acceptance_required": false,
-      "family_hint": "detector"
+      "family_hint": "detector",
+      "original_repository": "UNKNOWN",
+      "source_revision": "UNKNOWN",
+      "version_family": "UNKNOWN",
+      "architecture": "UNKNOWN",
+      "required_base_model": "UNKNOWN",
+      "redistribution_permission": "unknown",
+      "attribution_requirements": "UNKNOWN",
+      "hardware_requirements": {
+        "state": "UNKNOWN"
+      },
+      "precision_requirements": [],
+      "dependency_compatibility": {
+        "state": "UNKNOWN",
+        "requirements": []
+      },
+      "serialization_format": "ONNX",
+      "security_status": "UNKNOWN",
+      "weight_filenames": [
+        "retinaface_10g.onnx"
+      ],
+      "base_model_license_id": "UNKNOWN",
+      "base_model_license_url": null,
+      "base_model_commercial_use": "unknown",
+      "base_model_redistribution_permission": "unknown",
+      "base_model_attribution_requirements": "UNKNOWN"
     },
     {
       "model_id": "47ee9cbfecc1fa07c8fa5727",
@@ -4552,7 +5852,32 @@
       "license_notice": "Installed bytes are verified locally. Exact upstream provenance, license terms and commercial permission are UNKNOWN. Integrity verification does not grant usage rights; review the original model terms before use.",
       "license_url": null,
       "manual_acceptance_required": false,
-      "family_hint": "detector"
+      "family_hint": "detector",
+      "original_repository": "UNKNOWN",
+      "source_revision": "UNKNOWN",
+      "version_family": "UNKNOWN",
+      "architecture": "UNKNOWN",
+      "required_base_model": "UNKNOWN",
+      "redistribution_permission": "unknown",
+      "attribution_requirements": "UNKNOWN",
+      "hardware_requirements": {
+        "state": "UNKNOWN"
+      },
+      "precision_requirements": [],
+      "dependency_compatibility": {
+        "state": "UNKNOWN",
+        "requirements": []
+      },
+      "serialization_format": "ONNX",
+      "security_status": "UNKNOWN",
+      "weight_filenames": [
+        "retinaface_r50.onnx"
+      ],
+      "base_model_license_id": "UNKNOWN",
+      "base_model_license_url": null,
+      "base_model_commercial_use": "unknown",
+      "base_model_redistribution_permission": "unknown",
+      "base_model_attribution_requirements": "UNKNOWN"
     },
     {
       "model_id": "e5dae41e467bbb69f2fed955",
@@ -4614,7 +5939,32 @@
       "license_notice": "Installed bytes are verified locally. Exact upstream provenance, license terms and commercial permission are UNKNOWN. Integrity verification does not grant usage rights; review the original model terms before use.",
       "license_url": null,
       "manual_acceptance_required": false,
-      "family_hint": "recognizer"
+      "family_hint": "recognizer",
+      "original_repository": "UNKNOWN",
+      "source_revision": "UNKNOWN",
+      "version_family": "UNKNOWN",
+      "architecture": "UNKNOWN",
+      "required_base_model": "UNKNOWN",
+      "redistribution_permission": "unknown",
+      "attribution_requirements": "UNKNOWN",
+      "hardware_requirements": {
+        "state": "UNKNOWN"
+      },
+      "precision_requirements": [],
+      "dependency_compatibility": {
+        "state": "UNKNOWN",
+        "requirements": []
+      },
+      "serialization_format": "ONNX",
+      "security_status": "UNKNOWN",
+      "weight_filenames": [
+        "w600k_mbf.onnx"
+      ],
+      "base_model_license_id": "UNKNOWN",
+      "base_model_license_url": null,
+      "base_model_commercial_use": "unknown",
+      "base_model_redistribution_permission": "unknown",
+      "base_model_attribution_requirements": "UNKNOWN"
     },
     {
       "model_id": "b5b65e35b7ede220a44241d0",
@@ -4682,7 +6032,32 @@
       "license_notice": "Installed bytes are verified locally. Exact upstream provenance, license terms and commercial permission are UNKNOWN. Integrity verification does not grant usage rights; review the original model terms before use.",
       "license_url": null,
       "manual_acceptance_required": false,
-      "family_hint": "parser"
+      "family_hint": "parser",
+      "original_repository": "UNKNOWN",
+      "source_revision": "UNKNOWN",
+      "version_family": "UNKNOWN",
+      "architecture": "UNKNOWN",
+      "required_base_model": "UNKNOWN",
+      "redistribution_permission": "unknown",
+      "attribution_requirements": "UNKNOWN",
+      "hardware_requirements": {
+        "state": "UNKNOWN"
+      },
+      "precision_requirements": [],
+      "dependency_compatibility": {
+        "state": "UNKNOWN",
+        "requirements": []
+      },
+      "serialization_format": "ONNX",
+      "security_status": "UNKNOWN",
+      "weight_filenames": [
+        "xseg.onnx"
+      ],
+      "base_model_license_id": "UNKNOWN",
+      "base_model_license_url": null,
+      "base_model_commercial_use": "unknown",
+      "base_model_redistribution_permission": "unknown",
+      "base_model_attribution_requirements": "UNKNOWN"
     },
     {
       "model_id": "5d71c07f2cc6d75c17b018d6",
@@ -4750,7 +6125,32 @@
       "license_notice": "Installed bytes are verified locally. Exact upstream provenance, license terms and commercial permission are UNKNOWN. Integrity verification does not grant usage rights; review the original model terms before use.",
       "license_url": null,
       "manual_acceptance_required": false,
-      "family_hint": "parser"
+      "family_hint": "parser",
+      "original_repository": "UNKNOWN",
+      "source_revision": "UNKNOWN",
+      "version_family": "UNKNOWN",
+      "architecture": "UNKNOWN",
+      "required_base_model": "UNKNOWN",
+      "redistribution_permission": "unknown",
+      "attribution_requirements": "UNKNOWN",
+      "hardware_requirements": {
+        "state": "UNKNOWN"
+      },
+      "precision_requirements": [],
+      "dependency_compatibility": {
+        "state": "UNKNOWN",
+        "requirements": []
+      },
+      "serialization_format": "ONNX",
+      "security_status": "UNKNOWN",
+      "weight_filenames": [
+        "xseg_3.onnx"
+      ],
+      "base_model_license_id": "UNKNOWN",
+      "base_model_license_url": null,
+      "base_model_commercial_use": "unknown",
+      "base_model_redistribution_permission": "unknown",
+      "base_model_attribution_requirements": "UNKNOWN"
     },
     {
       "model_id": "8f7d911b4845c7b22bc5ca68",
@@ -4813,7 +6213,32 @@
       "license_notice": "Installed bytes are verified locally. Exact upstream provenance, license terms and commercial permission are UNKNOWN. Integrity verification does not grant usage rights; review the original model terms before use.",
       "license_url": null,
       "manual_acceptance_required": false,
-      "family_hint": "detector"
+      "family_hint": "detector",
+      "original_repository": "UNKNOWN",
+      "source_revision": "UNKNOWN",
+      "version_family": "UNKNOWN",
+      "architecture": "UNKNOWN",
+      "required_base_model": "UNKNOWN",
+      "redistribution_permission": "unknown",
+      "attribution_requirements": "UNKNOWN",
+      "hardware_requirements": {
+        "state": "UNKNOWN"
+      },
+      "precision_requirements": [],
+      "dependency_compatibility": {
+        "state": "UNKNOWN",
+        "requirements": []
+      },
+      "serialization_format": "ONNX",
+      "security_status": "UNKNOWN",
+      "weight_filenames": [
+        "yoloface_8n.onnx"
+      ],
+      "base_model_license_id": "UNKNOWN",
+      "base_model_license_url": null,
+      "base_model_commercial_use": "unknown",
+      "base_model_redistribution_permission": "unknown",
+      "base_model_attribution_requirements": "UNKNOWN"
     },
     {
       "model_id": "233816bbaaa37a87c1b871c1",
@@ -4845,7 +6270,32 @@
       "license_notice": "Installed bytes are verified locally. Exact upstream provenance, license terms and commercial permission are UNKNOWN. Integrity verification does not grant usage rights; review the original model terms before use.",
       "license_url": null,
       "manual_acceptance_required": false,
-      "family_hint": "other"
+      "family_hint": "other",
+      "original_repository": "UNKNOWN",
+      "source_revision": "UNKNOWN",
+      "version_family": "UNKNOWN",
+      "architecture": "UNKNOWN",
+      "required_base_model": "UNKNOWN",
+      "redistribution_permission": "unknown",
+      "attribution_requirements": "UNKNOWN",
+      "hardware_requirements": {
+        "state": "UNKNOWN"
+      },
+      "precision_requirements": [],
+      "dependency_compatibility": {
+        "state": "UNKNOWN",
+        "requirements": []
+      },
+      "serialization_format": "PTH",
+      "security_status": "UNKNOWN",
+      "weight_filenames": [
+        "rd64-uni-refined.pth"
+      ],
+      "base_model_license_id": "UNKNOWN",
+      "base_model_license_url": null,
+      "base_model_commercial_use": "unknown",
+      "base_model_redistribution_permission": "unknown",
+      "base_model_attribution_requirements": "UNKNOWN"
     },
     {
       "model_id": "8d400f8c5291e8e875dc3e2f",
@@ -4933,7 +6383,32 @@
       "license_notice": "Installed bytes are verified locally. Exact upstream provenance, license terms and commercial permission are UNKNOWN. Integrity verification does not grant usage rights; review the original model terms before use.",
       "license_url": null,
       "manual_acceptance_required": false,
-      "family_hint": "restorer"
+      "family_hint": "restorer",
+      "original_repository": "UNKNOWN",
+      "source_revision": "UNKNOWN",
+      "version_family": "UNKNOWN",
+      "architecture": "UNKNOWN",
+      "required_base_model": "UNKNOWN",
+      "redistribution_permission": "unknown",
+      "attribution_requirements": "UNKNOWN",
+      "hardware_requirements": {
+        "state": "UNKNOWN"
+      },
+      "precision_requirements": [],
+      "dependency_compatibility": {
+        "state": "UNKNOWN",
+        "requirements": []
+      },
+      "serialization_format": "ONNX",
+      "security_status": "UNKNOWN",
+      "weight_filenames": [
+        "CodeFormerv0.1.onnx"
+      ],
+      "base_model_license_id": "UNKNOWN",
+      "base_model_license_url": null,
+      "base_model_commercial_use": "unknown",
+      "base_model_redistribution_permission": "unknown",
+      "base_model_attribution_requirements": "UNKNOWN"
     },
     {
       "model_id": "48d4ecd4d27ed5eca7e93e70",
@@ -5021,7 +6496,32 @@
       "license_notice": "Installed bytes are verified locally. Exact upstream provenance, license terms and commercial permission are UNKNOWN. Integrity verification does not grant usage rights; review the original model terms before use.",
       "license_url": null,
       "manual_acceptance_required": false,
-      "family_hint": "restorer"
+      "family_hint": "restorer",
+      "original_repository": "UNKNOWN",
+      "source_revision": "UNKNOWN",
+      "version_family": "UNKNOWN",
+      "architecture": "UNKNOWN",
+      "required_base_model": "UNKNOWN",
+      "redistribution_permission": "unknown",
+      "attribution_requirements": "UNKNOWN",
+      "hardware_requirements": {
+        "state": "UNKNOWN"
+      },
+      "precision_requirements": [],
+      "dependency_compatibility": {
+        "state": "UNKNOWN",
+        "requirements": []
+      },
+      "serialization_format": "ONNX",
+      "security_status": "UNKNOWN",
+      "weight_filenames": [
+        "codeformer.fp16.onnx"
+      ],
+      "base_model_license_id": "UNKNOWN",
+      "base_model_license_url": null,
+      "base_model_commercial_use": "unknown",
+      "base_model_redistribution_permission": "unknown",
+      "base_model_attribution_requirements": "UNKNOWN"
     },
     {
       "model_id": "cd79f39395b65b434c266279",
@@ -5085,7 +6585,32 @@
       "license_notice": "Installed bytes are verified locally. Exact upstream provenance, license terms and commercial permission are UNKNOWN. Integrity verification does not grant usage rights; review the original model terms before use.",
       "license_url": null,
       "manual_acceptance_required": false,
-      "family_hint": "other"
+      "family_hint": "other",
+      "original_repository": "UNKNOWN",
+      "source_revision": "UNKNOWN",
+      "version_family": "UNKNOWN",
+      "architecture": "UNKNOWN",
+      "required_base_model": "UNKNOWN",
+      "redistribution_permission": "unknown",
+      "attribution_requirements": "UNKNOWN",
+      "hardware_requirements": {
+        "state": "UNKNOWN"
+      },
+      "precision_requirements": [],
+      "dependency_compatibility": {
+        "state": "UNKNOWN",
+        "requirements": []
+      },
+      "serialization_format": "ONNX",
+      "security_status": "UNKNOWN",
+      "weight_filenames": [
+        "RealESRGAN_x4plus_anime_6B.onnx"
+      ],
+      "base_model_license_id": "UNKNOWN",
+      "base_model_license_url": null,
+      "base_model_commercial_use": "unknown",
+      "base_model_redistribution_permission": "unknown",
+      "base_model_attribution_requirements": "UNKNOWN"
     },
     {
       "model_id": "38cd4606cf75eae80f046cba",
@@ -5149,7 +6674,32 @@
       "license_notice": "Installed bytes are verified locally. Exact upstream provenance, license terms and commercial permission are UNKNOWN. Integrity verification does not grant usage rights; review the original model terms before use.",
       "license_url": null,
       "manual_acceptance_required": false,
-      "family_hint": "other"
+      "family_hint": "other",
+      "original_repository": "UNKNOWN",
+      "source_revision": "UNKNOWN",
+      "version_family": "UNKNOWN",
+      "architecture": "UNKNOWN",
+      "required_base_model": "UNKNOWN",
+      "redistribution_permission": "unknown",
+      "attribution_requirements": "UNKNOWN",
+      "hardware_requirements": {
+        "state": "UNKNOWN"
+      },
+      "precision_requirements": [],
+      "dependency_compatibility": {
+        "state": "UNKNOWN",
+        "requirements": []
+      },
+      "serialization_format": "ONNX",
+      "security_status": "UNKNOWN",
+      "weight_filenames": [
+        "clear_reality_x4.onnx"
+      ],
+      "base_model_license_id": "UNKNOWN",
+      "base_model_license_url": null,
+      "base_model_commercial_use": "unknown",
+      "base_model_redistribution_permission": "unknown",
+      "base_model_attribution_requirements": "UNKNOWN"
     },
     {
       "model_id": "0296594ef7634462eece9982",
@@ -5213,7 +6763,32 @@
       "license_notice": "Installed bytes are verified locally. Exact upstream provenance, license terms and commercial permission are UNKNOWN. Integrity verification does not grant usage rights; review the original model terms before use.",
       "license_url": null,
       "manual_acceptance_required": false,
-      "family_hint": "other"
+      "family_hint": "other",
+      "original_repository": "UNKNOWN",
+      "source_revision": "UNKNOWN",
+      "version_family": "UNKNOWN",
+      "architecture": "UNKNOWN",
+      "required_base_model": "UNKNOWN",
+      "redistribution_permission": "unknown",
+      "attribution_requirements": "UNKNOWN",
+      "hardware_requirements": {
+        "state": "UNKNOWN"
+      },
+      "precision_requirements": [],
+      "dependency_compatibility": {
+        "state": "UNKNOWN",
+        "requirements": []
+      },
+      "serialization_format": "ONNX",
+      "security_status": "UNKNOWN",
+      "weight_filenames": [
+        "deoldify_artistic.onnx"
+      ],
+      "base_model_license_id": "UNKNOWN",
+      "base_model_license_url": null,
+      "base_model_commercial_use": "unknown",
+      "base_model_redistribution_permission": "unknown",
+      "base_model_attribution_requirements": "UNKNOWN"
     },
     {
       "model_id": "2862a1920c369161e2af89df",
@@ -5277,7 +6852,32 @@
       "license_notice": "Installed bytes are verified locally. Exact upstream provenance, license terms and commercial permission are UNKNOWN. Integrity verification does not grant usage rights; review the original model terms before use.",
       "license_url": null,
       "manual_acceptance_required": false,
-      "family_hint": "other"
+      "family_hint": "other",
+      "original_repository": "UNKNOWN",
+      "source_revision": "UNKNOWN",
+      "version_family": "UNKNOWN",
+      "architecture": "UNKNOWN",
+      "required_base_model": "UNKNOWN",
+      "redistribution_permission": "unknown",
+      "attribution_requirements": "UNKNOWN",
+      "hardware_requirements": {
+        "state": "UNKNOWN"
+      },
+      "precision_requirements": [],
+      "dependency_compatibility": {
+        "state": "UNKNOWN",
+        "requirements": []
+      },
+      "serialization_format": "ONNX",
+      "security_status": "UNKNOWN",
+      "weight_filenames": [
+        "deoldify_stable.onnx"
+      ],
+      "base_model_license_id": "UNKNOWN",
+      "base_model_license_url": null,
+      "base_model_commercial_use": "unknown",
+      "base_model_redistribution_permission": "unknown",
+      "base_model_attribution_requirements": "UNKNOWN"
     },
     {
       "model_id": "f946df2d4dbbd3055e12acc9",
@@ -5451,7 +7051,32 @@
       "license_notice": "Installed bytes are verified locally. Exact upstream provenance, license terms and commercial permission are UNKNOWN. Integrity verification does not grant usage rights; review the original model terms before use.",
       "license_url": null,
       "manual_acceptance_required": false,
-      "family_hint": "other"
+      "family_hint": "other",
+      "original_repository": "UNKNOWN",
+      "source_revision": "UNKNOWN",
+      "version_family": "UNKNOWN",
+      "architecture": "UNKNOWN",
+      "required_base_model": "UNKNOWN",
+      "redistribution_permission": "unknown",
+      "attribution_requirements": "UNKNOWN",
+      "hardware_requirements": {
+        "state": "UNKNOWN"
+      },
+      "precision_requirements": [],
+      "dependency_compatibility": {
+        "state": "UNKNOWN",
+        "requirements": []
+      },
+      "serialization_format": "ONNX",
+      "security_status": "UNKNOWN",
+      "weight_filenames": [
+        "isnet-general-use.onnx"
+      ],
+      "base_model_license_id": "UNKNOWN",
+      "base_model_license_url": null,
+      "base_model_commercial_use": "unknown",
+      "base_model_redistribution_permission": "unknown",
+      "base_model_attribution_requirements": "UNKNOWN"
     },
     {
       "model_id": "bfec9e70b8afaab710f1598c",
@@ -5515,7 +7140,32 @@
       "license_notice": "Installed bytes are verified locally. Exact upstream provenance, license terms and commercial permission are UNKNOWN. Integrity verification does not grant usage rights; review the original model terms before use.",
       "license_url": null,
       "manual_acceptance_required": false,
-      "family_hint": "other"
+      "family_hint": "other",
+      "original_repository": "UNKNOWN",
+      "source_revision": "UNKNOWN",
+      "version_family": "UNKNOWN",
+      "architecture": "UNKNOWN",
+      "required_base_model": "UNKNOWN",
+      "redistribution_permission": "unknown",
+      "attribution_requirements": "UNKNOWN",
+      "hardware_requirements": {
+        "state": "UNKNOWN"
+      },
+      "precision_requirements": [],
+      "dependency_compatibility": {
+        "state": "UNKNOWN",
+        "requirements": []
+      },
+      "serialization_format": "ONNX",
+      "security_status": "UNKNOWN",
+      "weight_filenames": [
+        "lsdir_x4.onnx"
+      ],
+      "base_model_license_id": "UNKNOWN",
+      "base_model_license_url": null,
+      "base_model_commercial_use": "unknown",
+      "base_model_redistribution_permission": "unknown",
+      "base_model_attribution_requirements": "UNKNOWN"
     },
     {
       "model_id": "2832794829a7fadd89748df2",
@@ -5579,7 +7229,32 @@
       "license_notice": "Installed bytes are verified locally. Exact upstream provenance, license terms and commercial permission are UNKNOWN. Integrity verification does not grant usage rights; review the original model terms before use.",
       "license_url": null,
       "manual_acceptance_required": false,
-      "family_hint": "other"
+      "family_hint": "other",
+      "original_repository": "UNKNOWN",
+      "source_revision": "UNKNOWN",
+      "version_family": "UNKNOWN",
+      "architecture": "UNKNOWN",
+      "required_base_model": "UNKNOWN",
+      "redistribution_permission": "unknown",
+      "attribution_requirements": "UNKNOWN",
+      "hardware_requirements": {
+        "state": "UNKNOWN"
+      },
+      "precision_requirements": [],
+      "dependency_compatibility": {
+        "state": "UNKNOWN",
+        "requirements": []
+      },
+      "serialization_format": "ONNX",
+      "security_status": "UNKNOWN",
+      "weight_filenames": [
+        "nomos8k_sc_x4.onnx"
+      ],
+      "base_model_license_id": "UNKNOWN",
+      "base_model_license_url": null,
+      "base_model_commercial_use": "unknown",
+      "base_model_redistribution_permission": "unknown",
+      "base_model_attribution_requirements": "UNKNOWN"
     },
     {
       "model_id": "2b30df692300e4ec9576e8bf",
@@ -5643,7 +7318,32 @@
       "license_notice": "Installed bytes are verified locally. Exact upstream provenance, license terms and commercial permission are UNKNOWN. Integrity verification does not grant usage rights; review the original model terms before use.",
       "license_url": null,
       "manual_acceptance_required": false,
-      "family_hint": "other"
+      "family_hint": "other",
+      "original_repository": "UNKNOWN",
+      "source_revision": "UNKNOWN",
+      "version_family": "UNKNOWN",
+      "architecture": "UNKNOWN",
+      "required_base_model": "UNKNOWN",
+      "redistribution_permission": "unknown",
+      "attribution_requirements": "UNKNOWN",
+      "hardware_requirements": {
+        "state": "UNKNOWN"
+      },
+      "precision_requirements": [],
+      "dependency_compatibility": {
+        "state": "UNKNOWN",
+        "requirements": []
+      },
+      "serialization_format": "ONNX",
+      "security_status": "UNKNOWN",
+      "weight_filenames": [
+        "real_esrgan_x2.onnx"
+      ],
+      "base_model_license_id": "UNKNOWN",
+      "base_model_license_url": null,
+      "base_model_commercial_use": "unknown",
+      "base_model_redistribution_permission": "unknown",
+      "base_model_attribution_requirements": "UNKNOWN"
     },
     {
       "model_id": "661ab6c7c2cdf6149b012291",
@@ -5707,7 +7407,32 @@
       "license_notice": "Installed bytes are verified locally. Exact upstream provenance, license terms and commercial permission are UNKNOWN. Integrity verification does not grant usage rights; review the original model terms before use.",
       "license_url": null,
       "manual_acceptance_required": false,
-      "family_hint": "other"
+      "family_hint": "other",
+      "original_repository": "UNKNOWN",
+      "source_revision": "UNKNOWN",
+      "version_family": "UNKNOWN",
+      "architecture": "UNKNOWN",
+      "required_base_model": "UNKNOWN",
+      "redistribution_permission": "unknown",
+      "attribution_requirements": "UNKNOWN",
+      "hardware_requirements": {
+        "state": "UNKNOWN"
+      },
+      "precision_requirements": [],
+      "dependency_compatibility": {
+        "state": "UNKNOWN",
+        "requirements": []
+      },
+      "serialization_format": "ONNX",
+      "security_status": "UNKNOWN",
+      "weight_filenames": [
+        "real_esrgan_x4.onnx"
+      ],
+      "base_model_license_id": "UNKNOWN",
+      "base_model_license_url": null,
+      "base_model_commercial_use": "unknown",
+      "base_model_redistribution_permission": "unknown",
+      "base_model_attribution_requirements": "UNKNOWN"
     },
     {
       "model_id": "d9d99944b8d9c7455c7a32f4",
@@ -5771,7 +7496,32 @@
       "license_notice": "Installed bytes are verified locally. Exact upstream provenance, license terms and commercial permission are UNKNOWN. Integrity verification does not grant usage rights; review the original model terms before use.",
       "license_url": null,
       "manual_acceptance_required": false,
-      "family_hint": "other"
+      "family_hint": "other",
+      "original_repository": "UNKNOWN",
+      "source_revision": "UNKNOWN",
+      "version_family": "UNKNOWN",
+      "architecture": "UNKNOWN",
+      "required_base_model": "UNKNOWN",
+      "redistribution_permission": "unknown",
+      "attribution_requirements": "UNKNOWN",
+      "hardware_requirements": {
+        "state": "UNKNOWN"
+      },
+      "precision_requirements": [],
+      "dependency_compatibility": {
+        "state": "UNKNOWN",
+        "requirements": []
+      },
+      "serialization_format": "ONNX",
+      "security_status": "UNKNOWN",
+      "weight_filenames": [
+        "realesr-general-x4v3.onnx"
+      ],
+      "base_model_license_id": "UNKNOWN",
+      "base_model_license_url": null,
+      "base_model_commercial_use": "unknown",
+      "base_model_redistribution_permission": "unknown",
+      "base_model_attribution_requirements": "UNKNOWN"
     },
     {
       "model_id": "09c2d8b04e2a3614bbd22a68",
@@ -5852,7 +7602,32 @@
       "license_notice": "Installed bytes are verified locally. Exact upstream provenance, license terms and commercial permission are UNKNOWN. Integrity verification does not grant usage rights; review the original model terms before use.",
       "license_url": null,
       "manual_acceptance_required": false,
-      "family_hint": "other"
+      "family_hint": "other",
+      "original_repository": "UNKNOWN",
+      "source_revision": "UNKNOWN",
+      "version_family": "UNKNOWN",
+      "architecture": "UNKNOWN",
+      "required_base_model": "UNKNOWN",
+      "redistribution_permission": "unknown",
+      "attribution_requirements": "UNKNOWN",
+      "hardware_requirements": {
+        "state": "UNKNOWN"
+      },
+      "precision_requirements": [],
+      "dependency_compatibility": {
+        "state": "UNKNOWN",
+        "requirements": []
+      },
+      "serialization_format": "ONNX",
+      "security_status": "UNKNOWN",
+      "weight_filenames": [
+        "rife49_ensemble_True_scale_1_sim.onnx"
+      ],
+      "base_model_license_id": "UNKNOWN",
+      "base_model_license_url": null,
+      "base_model_commercial_use": "unknown",
+      "base_model_redistribution_permission": "unknown",
+      "base_model_attribution_requirements": "UNKNOWN"
     },
     {
       "model_id": "ea7f6672ee6087d3ae0ec2ec",
@@ -5916,7 +7691,32 @@
       "license_notice": "Installed bytes are verified locally. Exact upstream provenance, license terms and commercial permission are UNKNOWN. Integrity verification does not grant usage rights; review the original model terms before use.",
       "license_url": null,
       "manual_acceptance_required": false,
-      "family_hint": "other"
+      "family_hint": "other",
+      "original_repository": "UNKNOWN",
+      "source_revision": "UNKNOWN",
+      "version_family": "UNKNOWN",
+      "architecture": "UNKNOWN",
+      "required_base_model": "UNKNOWN",
+      "redistribution_permission": "unknown",
+      "attribution_requirements": "UNKNOWN",
+      "hardware_requirements": {
+        "state": "UNKNOWN"
+      },
+      "precision_requirements": [],
+      "dependency_compatibility": {
+        "state": "UNKNOWN",
+        "requirements": []
+      },
+      "serialization_format": "ONNX",
+      "security_status": "UNKNOWN",
+      "weight_filenames": [
+        "span_kendata_x4.onnx"
+      ],
+      "base_model_license_id": "UNKNOWN",
+      "base_model_license_url": null,
+      "base_model_commercial_use": "unknown",
+      "base_model_redistribution_permission": "unknown",
+      "base_model_attribution_requirements": "UNKNOWN"
     },
     {
       "model_id": "ac2b834a819b7a6db273344c",
@@ -5980,7 +7780,32 @@
       "license_notice": "Installed bytes are verified locally. Exact upstream provenance, license terms and commercial permission are UNKNOWN. Integrity verification does not grant usage rights; review the original model terms before use.",
       "license_url": null,
       "manual_acceptance_required": false,
-      "family_hint": "other"
+      "family_hint": "other",
+      "original_repository": "UNKNOWN",
+      "source_revision": "UNKNOWN",
+      "version_family": "UNKNOWN",
+      "architecture": "UNKNOWN",
+      "required_base_model": "UNKNOWN",
+      "redistribution_permission": "unknown",
+      "attribution_requirements": "UNKNOWN",
+      "hardware_requirements": {
+        "state": "UNKNOWN"
+      },
+      "precision_requirements": [],
+      "dependency_compatibility": {
+        "state": "UNKNOWN",
+        "requirements": []
+      },
+      "serialization_format": "ONNX",
+      "security_status": "UNKNOWN",
+      "weight_filenames": [
+        "ultra_sharp_2_x4.onnx"
+      ],
+      "base_model_license_id": "UNKNOWN",
+      "base_model_license_url": null,
+      "base_model_commercial_use": "unknown",
+      "base_model_redistribution_permission": "unknown",
+      "base_model_attribution_requirements": "UNKNOWN"
     },
     {
       "model_id": "f4d0609acdc3491ba09003bc",
@@ -6042,7 +7867,32 @@
       "license_notice": "Installed bytes are verified locally. Exact upstream provenance, license terms and commercial permission are UNKNOWN. Integrity verification does not grant usage rights; review the original model terms before use.",
       "license_url": null,
       "manual_acceptance_required": false,
-      "family_hint": "other"
+      "family_hint": "other",
+      "original_repository": "UNKNOWN",
+      "source_revision": "UNKNOWN",
+      "version_family": "UNKNOWN",
+      "architecture": "UNKNOWN",
+      "required_base_model": "UNKNOWN",
+      "redistribution_permission": "unknown",
+      "attribution_requirements": "UNKNOWN",
+      "hardware_requirements": {
+        "state": "UNKNOWN"
+      },
+      "precision_requirements": [],
+      "dependency_compatibility": {
+        "state": "UNKNOWN",
+        "requirements": []
+      },
+      "serialization_format": "ONNX",
+      "security_status": "UNKNOWN",
+      "weight_filenames": [
+        "1k3d68.onnx"
+      ],
+      "base_model_license_id": "UNKNOWN",
+      "base_model_license_url": null,
+      "base_model_commercial_use": "unknown",
+      "base_model_redistribution_permission": "unknown",
+      "base_model_attribution_requirements": "UNKNOWN"
     },
     {
       "model_id": "7515daa40c84ce8be15c8a3c",
@@ -6104,7 +7954,32 @@
       "license_notice": "Installed bytes are verified locally. Exact upstream provenance, license terms and commercial permission are UNKNOWN. Integrity verification does not grant usage rights; review the original model terms before use.",
       "license_url": null,
       "manual_acceptance_required": false,
-      "family_hint": "other"
+      "family_hint": "other",
+      "original_repository": "UNKNOWN",
+      "source_revision": "UNKNOWN",
+      "version_family": "UNKNOWN",
+      "architecture": "UNKNOWN",
+      "required_base_model": "UNKNOWN",
+      "redistribution_permission": "unknown",
+      "attribution_requirements": "UNKNOWN",
+      "hardware_requirements": {
+        "state": "UNKNOWN"
+      },
+      "precision_requirements": [],
+      "dependency_compatibility": {
+        "state": "UNKNOWN",
+        "requirements": []
+      },
+      "serialization_format": "ONNX",
+      "security_status": "UNKNOWN",
+      "weight_filenames": [
+        "2d106det.onnx"
+      ],
+      "base_model_license_id": "UNKNOWN",
+      "base_model_license_url": null,
+      "base_model_commercial_use": "unknown",
+      "base_model_redistribution_permission": "unknown",
+      "base_model_attribution_requirements": "UNKNOWN"
     },
     {
       "model_id": "caa047119ea73fb50b225d60",
@@ -6232,7 +8107,32 @@
       "license_notice": "Installed bytes are verified locally. Exact upstream provenance, license terms and commercial permission are UNKNOWN. Integrity verification does not grant usage rights; review the original model terms before use.",
       "license_url": null,
       "manual_acceptance_required": false,
-      "family_hint": "detector"
+      "family_hint": "detector",
+      "original_repository": "UNKNOWN",
+      "source_revision": "UNKNOWN",
+      "version_family": "UNKNOWN",
+      "architecture": "UNKNOWN",
+      "required_base_model": "UNKNOWN",
+      "redistribution_permission": "unknown",
+      "attribution_requirements": "UNKNOWN",
+      "hardware_requirements": {
+        "state": "UNKNOWN"
+      },
+      "precision_requirements": [],
+      "dependency_compatibility": {
+        "state": "UNKNOWN",
+        "requirements": []
+      },
+      "serialization_format": "ONNX",
+      "security_status": "UNKNOWN",
+      "weight_filenames": [
+        "det_10g.onnx"
+      ],
+      "base_model_license_id": "UNKNOWN",
+      "base_model_license_url": null,
+      "base_model_commercial_use": "unknown",
+      "base_model_redistribution_permission": "unknown",
+      "base_model_attribution_requirements": "UNKNOWN"
     },
     {
       "model_id": "da81f167ade04a6efa3ff370",
@@ -6294,7 +8194,32 @@
       "license_notice": "Installed bytes are verified locally. Exact upstream provenance, license terms and commercial permission are UNKNOWN. Integrity verification does not grant usage rights; review the original model terms before use.",
       "license_url": null,
       "manual_acceptance_required": false,
-      "family_hint": "other"
+      "family_hint": "other",
+      "original_repository": "UNKNOWN",
+      "source_revision": "UNKNOWN",
+      "version_family": "UNKNOWN",
+      "architecture": "UNKNOWN",
+      "required_base_model": "UNKNOWN",
+      "redistribution_permission": "unknown",
+      "attribution_requirements": "UNKNOWN",
+      "hardware_requirements": {
+        "state": "UNKNOWN"
+      },
+      "precision_requirements": [],
+      "dependency_compatibility": {
+        "state": "UNKNOWN",
+        "requirements": []
+      },
+      "serialization_format": "ONNX",
+      "security_status": "UNKNOWN",
+      "weight_filenames": [
+        "genderage.onnx"
+      ],
+      "base_model_license_id": "UNKNOWN",
+      "base_model_license_url": null,
+      "base_model_commercial_use": "unknown",
+      "base_model_redistribution_permission": "unknown",
+      "base_model_attribution_requirements": "UNKNOWN"
     },
     {
       "model_id": "d9235365b06d994596a8ef35",
@@ -6356,7 +8281,32 @@
       "license_notice": "Installed bytes are verified locally. Exact upstream provenance, license terms and commercial permission are UNKNOWN. Integrity verification does not grant usage rights; review the original model terms before use.",
       "license_url": null,
       "manual_acceptance_required": false,
-      "family_hint": "recognizer"
+      "family_hint": "recognizer",
+      "original_repository": "UNKNOWN",
+      "source_revision": "UNKNOWN",
+      "version_family": "UNKNOWN",
+      "architecture": "UNKNOWN",
+      "required_base_model": "UNKNOWN",
+      "redistribution_permission": "unknown",
+      "attribution_requirements": "UNKNOWN",
+      "hardware_requirements": {
+        "state": "UNKNOWN"
+      },
+      "precision_requirements": [],
+      "dependency_compatibility": {
+        "state": "UNKNOWN",
+        "requirements": []
+      },
+      "serialization_format": "ONNX",
+      "security_status": "UNKNOWN",
+      "weight_filenames": [
+        "w600k_r50.onnx"
+      ],
+      "base_model_license_id": "UNKNOWN",
+      "base_model_license_url": null,
+      "base_model_commercial_use": "unknown",
+      "base_model_redistribution_permission": "unknown",
+      "base_model_attribution_requirements": "UNKNOWN"
     },
     {
       "model_id": "af12098d50a8a08f9847f544",
@@ -6418,7 +8368,32 @@
       "license_notice": "Installed bytes are verified locally. Exact upstream provenance, license terms and commercial permission are UNKNOWN. Integrity verification does not grant usage rights; review the original model terms before use.",
       "license_url": null,
       "manual_acceptance_required": false,
-      "family_hint": "other"
+      "family_hint": "other",
+      "original_repository": "UNKNOWN",
+      "source_revision": "UNKNOWN",
+      "version_family": "UNKNOWN",
+      "architecture": "UNKNOWN",
+      "required_base_model": "UNKNOWN",
+      "redistribution_permission": "unknown",
+      "attribution_requirements": "UNKNOWN",
+      "hardware_requirements": {
+        "state": "UNKNOWN"
+      },
+      "precision_requirements": [],
+      "dependency_compatibility": {
+        "state": "UNKNOWN",
+        "requirements": []
+      },
+      "serialization_format": "ONNX",
+      "security_status": "UNKNOWN",
+      "weight_filenames": [
+        "1k3d68_trt_precision_surgeon_v2_fp16.onnx"
+      ],
+      "base_model_license_id": "UNKNOWN",
+      "base_model_license_url": null,
+      "base_model_commercial_use": "unknown",
+      "base_model_redistribution_permission": "unknown",
+      "base_model_attribution_requirements": "UNKNOWN"
     },
     {
       "model_id": "bafddfe0ad7e2ed62f947577",
@@ -6480,7 +8455,32 @@
       "license_notice": "Installed bytes are verified locally. Exact upstream provenance, license terms and commercial permission are UNKNOWN. Integrity verification does not grant usage rights; review the original model terms before use.",
       "license_url": null,
       "manual_acceptance_required": false,
-      "family_hint": "other"
+      "family_hint": "other",
+      "original_repository": "UNKNOWN",
+      "source_revision": "UNKNOWN",
+      "version_family": "UNKNOWN",
+      "architecture": "UNKNOWN",
+      "required_base_model": "UNKNOWN",
+      "redistribution_permission": "unknown",
+      "attribution_requirements": "UNKNOWN",
+      "hardware_requirements": {
+        "state": "UNKNOWN"
+      },
+      "precision_requirements": [],
+      "dependency_compatibility": {
+        "state": "UNKNOWN",
+        "requirements": []
+      },
+      "serialization_format": "ONNX",
+      "security_status": "UNKNOWN",
+      "weight_filenames": [
+        "2d106det_surgical.onnx"
+      ],
+      "base_model_license_id": "UNKNOWN",
+      "base_model_license_url": null,
+      "base_model_commercial_use": "unknown",
+      "base_model_redistribution_permission": "unknown",
+      "base_model_attribution_requirements": "UNKNOWN"
     },
     {
       "model_id": "01f4b6d0aa010ef6d02ec426",
@@ -6542,7 +8542,32 @@
       "license_notice": "Installed bytes are verified locally. Exact upstream provenance, license terms and commercial permission are UNKNOWN. Integrity verification does not grant usage rights; review the original model terms before use.",
       "license_url": null,
       "manual_acceptance_required": false,
-      "family_hint": "other"
+      "family_hint": "other",
+      "original_repository": "UNKNOWN",
+      "source_revision": "UNKNOWN",
+      "version_family": "UNKNOWN",
+      "architecture": "UNKNOWN",
+      "required_base_model": "UNKNOWN",
+      "redistribution_permission": "unknown",
+      "attribution_requirements": "UNKNOWN",
+      "hardware_requirements": {
+        "state": "UNKNOWN"
+      },
+      "precision_requirements": [],
+      "dependency_compatibility": {
+        "state": "UNKNOWN",
+        "requirements": []
+      },
+      "serialization_format": "ONNX",
+      "security_status": "UNKNOWN",
+      "weight_filenames": [
+        "2d106det_trt_precision_surgeon_v2_fp16.onnx"
+      ],
+      "base_model_license_id": "UNKNOWN",
+      "base_model_license_url": null,
+      "base_model_commercial_use": "unknown",
+      "base_model_redistribution_permission": "unknown",
+      "base_model_attribution_requirements": "UNKNOWN"
     },
     {
       "model_id": "4ead6486b03c5fb77ebed74c",
@@ -6610,7 +8635,32 @@
       "license_notice": "Installed bytes are verified locally. Exact upstream provenance, license terms and commercial permission are UNKNOWN. Integrity verification does not grant usage rights; review the original model terms before use.",
       "license_url": null,
       "manual_acceptance_required": false,
-      "family_hint": "parser"
+      "family_hint": "parser",
+      "original_repository": "UNKNOWN",
+      "source_revision": "UNKNOWN",
+      "version_family": "UNKNOWN",
+      "architecture": "UNKNOWN",
+      "required_base_model": "UNKNOWN",
+      "redistribution_permission": "unknown",
+      "attribution_requirements": "UNKNOWN",
+      "hardware_requirements": {
+        "state": "UNKNOWN"
+      },
+      "precision_requirements": [],
+      "dependency_compatibility": {
+        "state": "UNKNOWN",
+        "requirements": []
+      },
+      "serialization_format": "ONNX",
+      "security_status": "UNKNOWN",
+      "weight_filenames": [
+        "xseg_trt_precision_surgeon_v2_fp16.onnx"
+      ],
+      "base_model_license_id": "UNKNOWN",
+      "base_model_license_url": null,
+      "base_model_commercial_use": "unknown",
+      "base_model_redistribution_permission": "unknown",
+      "base_model_attribution_requirements": "UNKNOWN"
     },
     {
       "model_id": "e24a9a33e86cf009f77eb009",
@@ -6672,7 +8722,32 @@
       "license_notice": "Installed bytes are verified locally. Exact upstream provenance, license terms and commercial permission are UNKNOWN. Integrity verification does not grant usage rights; review the original model terms before use.",
       "license_url": null,
       "manual_acceptance_required": false,
-      "family_hint": "other"
+      "family_hint": "other",
+      "original_repository": "UNKNOWN",
+      "source_revision": "UNKNOWN",
+      "version_family": "UNKNOWN",
+      "architecture": "UNKNOWN",
+      "required_base_model": "UNKNOWN",
+      "redistribution_permission": "unknown",
+      "attribution_requirements": "UNKNOWN",
+      "hardware_requirements": {
+        "state": "UNKNOWN"
+      },
+      "precision_requirements": [],
+      "dependency_compatibility": {
+        "state": "UNKNOWN",
+        "requirements": []
+      },
+      "serialization_format": "ONNX",
+      "security_status": "UNKNOWN",
+      "weight_filenames": [
+        "1k3d68.onnx"
+      ],
+      "base_model_license_id": "UNKNOWN",
+      "base_model_license_url": null,
+      "base_model_commercial_use": "unknown",
+      "base_model_redistribution_permission": "unknown",
+      "base_model_attribution_requirements": "UNKNOWN"
     },
     {
       "model_id": "1296c115d7d2132058cc086b",
@@ -6734,7 +8809,32 @@
       "license_notice": "Installed bytes are verified locally. Exact upstream provenance, license terms and commercial permission are UNKNOWN. Integrity verification does not grant usage rights; review the original model terms before use.",
       "license_url": null,
       "manual_acceptance_required": false,
-      "family_hint": "other"
+      "family_hint": "other",
+      "original_repository": "UNKNOWN",
+      "source_revision": "UNKNOWN",
+      "version_family": "UNKNOWN",
+      "architecture": "UNKNOWN",
+      "required_base_model": "UNKNOWN",
+      "redistribution_permission": "unknown",
+      "attribution_requirements": "UNKNOWN",
+      "hardware_requirements": {
+        "state": "UNKNOWN"
+      },
+      "precision_requirements": [],
+      "dependency_compatibility": {
+        "state": "UNKNOWN",
+        "requirements": []
+      },
+      "serialization_format": "ONNX",
+      "security_status": "UNKNOWN",
+      "weight_filenames": [
+        "2d106det.onnx"
+      ],
+      "base_model_license_id": "UNKNOWN",
+      "base_model_license_url": null,
+      "base_model_commercial_use": "unknown",
+      "base_model_redistribution_permission": "unknown",
+      "base_model_attribution_requirements": "UNKNOWN"
     },
     {
       "model_id": "de9199ffce0dae14435f9dde",
@@ -6862,7 +8962,32 @@
       "license_notice": "Installed bytes are verified locally. Exact upstream provenance, license terms and commercial permission are UNKNOWN. Integrity verification does not grant usage rights; review the original model terms before use.",
       "license_url": null,
       "manual_acceptance_required": false,
-      "family_hint": "detector"
+      "family_hint": "detector",
+      "original_repository": "UNKNOWN",
+      "source_revision": "UNKNOWN",
+      "version_family": "UNKNOWN",
+      "architecture": "UNKNOWN",
+      "required_base_model": "UNKNOWN",
+      "redistribution_permission": "unknown",
+      "attribution_requirements": "UNKNOWN",
+      "hardware_requirements": {
+        "state": "UNKNOWN"
+      },
+      "precision_requirements": [],
+      "dependency_compatibility": {
+        "state": "UNKNOWN",
+        "requirements": []
+      },
+      "serialization_format": "ONNX",
+      "security_status": "UNKNOWN",
+      "weight_filenames": [
+        "det_10g.onnx"
+      ],
+      "base_model_license_id": "UNKNOWN",
+      "base_model_license_url": null,
+      "base_model_commercial_use": "unknown",
+      "base_model_redistribution_permission": "unknown",
+      "base_model_attribution_requirements": "UNKNOWN"
     },
     {
       "model_id": "bdb727a1f8130ae7a6f49de3",
@@ -6924,7 +9049,32 @@
       "license_notice": "Installed bytes are verified locally. Exact upstream provenance, license terms and commercial permission are UNKNOWN. Integrity verification does not grant usage rights; review the original model terms before use.",
       "license_url": null,
       "manual_acceptance_required": false,
-      "family_hint": "other"
+      "family_hint": "other",
+      "original_repository": "UNKNOWN",
+      "source_revision": "UNKNOWN",
+      "version_family": "UNKNOWN",
+      "architecture": "UNKNOWN",
+      "required_base_model": "UNKNOWN",
+      "redistribution_permission": "unknown",
+      "attribution_requirements": "UNKNOWN",
+      "hardware_requirements": {
+        "state": "UNKNOWN"
+      },
+      "precision_requirements": [],
+      "dependency_compatibility": {
+        "state": "UNKNOWN",
+        "requirements": []
+      },
+      "serialization_format": "ONNX",
+      "security_status": "UNKNOWN",
+      "weight_filenames": [
+        "genderage.onnx"
+      ],
+      "base_model_license_id": "UNKNOWN",
+      "base_model_license_url": null,
+      "base_model_commercial_use": "unknown",
+      "base_model_redistribution_permission": "unknown",
+      "base_model_attribution_requirements": "UNKNOWN"
     },
     {
       "model_id": "5d110c668c881b82e3ac6d29",
@@ -6986,7 +9136,32 @@
       "license_notice": "Installed bytes are verified locally. Exact upstream provenance, license terms and commercial permission are UNKNOWN. Integrity verification does not grant usage rights; review the original model terms before use.",
       "license_url": null,
       "manual_acceptance_required": false,
-      "family_hint": "recognizer"
+      "family_hint": "recognizer",
+      "original_repository": "UNKNOWN",
+      "source_revision": "UNKNOWN",
+      "version_family": "UNKNOWN",
+      "architecture": "UNKNOWN",
+      "required_base_model": "UNKNOWN",
+      "redistribution_permission": "unknown",
+      "attribution_requirements": "UNKNOWN",
+      "hardware_requirements": {
+        "state": "UNKNOWN"
+      },
+      "precision_requirements": [],
+      "dependency_compatibility": {
+        "state": "UNKNOWN",
+        "requirements": []
+      },
+      "serialization_format": "ONNX",
+      "security_status": "UNKNOWN",
+      "weight_filenames": [
+        "w600k_r50.onnx"
+      ],
+      "base_model_license_id": "UNKNOWN",
+      "base_model_license_url": null,
+      "base_model_commercial_use": "unknown",
+      "base_model_redistribution_permission": "unknown",
+      "base_model_attribution_requirements": "UNKNOWN"
     },
     {
       "model_id": "5e26b006d0ba29b1422f3462",
@@ -7018,7 +9193,32 @@
       "license_notice": "Installed bytes are verified locally. Exact upstream provenance, license terms and commercial permission are UNKNOWN. Integrity verification does not grant usage rights; review the original model terms before use.",
       "license_url": null,
       "manual_acceptance_required": false,
-      "family_hint": "other"
+      "family_hint": "other",
+      "original_repository": "UNKNOWN",
+      "source_revision": "UNKNOWN",
+      "version_family": "UNKNOWN",
+      "architecture": "UNKNOWN",
+      "required_base_model": "UNKNOWN",
+      "redistribution_permission": "unknown",
+      "attribution_requirements": "UNKNOWN",
+      "hardware_requirements": {
+        "state": "UNKNOWN"
+      },
+      "precision_requirements": [],
+      "dependency_compatibility": {
+        "state": "UNKNOWN",
+        "requirements": []
+      },
+      "serialization_format": "PT",
+      "security_status": "UNKNOWN",
+      "weight_filenames": [
+        "ViT-B-16.pt"
+      ],
+      "base_model_license_id": "UNKNOWN",
+      "base_model_license_url": null,
+      "base_model_commercial_use": "unknown",
+      "base_model_redistribution_permission": "unknown",
+      "base_model_attribution_requirements": "UNKNOWN"
     },
     {
       "model_id": "91f867b3e010925f2cb60596",
@@ -7100,7 +9300,32 @@
       "license_notice": "Installed bytes are verified locally. Exact upstream provenance, license terms and commercial permission are UNKNOWN. Integrity verification does not grant usage rights; review the original model terms before use.",
       "license_url": null,
       "manual_acceptance_required": false,
-      "family_hint": "swapper"
+      "family_hint": "swapper",
+      "original_repository": "UNKNOWN",
+      "source_revision": "UNKNOWN",
+      "version_family": "UNKNOWN",
+      "architecture": "UNKNOWN",
+      "required_base_model": "UNKNOWN",
+      "redistribution_permission": "unknown",
+      "attribution_requirements": "UNKNOWN",
+      "hardware_requirements": {
+        "state": "UNKNOWN"
+      },
+      "precision_requirements": [],
+      "dependency_compatibility": {
+        "state": "UNKNOWN",
+        "requirements": []
+      },
+      "serialization_format": "ONNX",
+      "security_status": "UNKNOWN",
+      "weight_filenames": [
+        "hififace_unofficial_256.fp16.onnx"
+      ],
+      "base_model_license_id": "UNKNOWN",
+      "base_model_license_url": null,
+      "base_model_commercial_use": "unknown",
+      "base_model_redistribution_permission": "unknown",
+      "base_model_attribution_requirements": "UNKNOWN"
     },
     {
       "model_id": "2bd6f378f2f249189ffb13a4",
@@ -7132,7 +9357,32 @@
       "license_notice": "Installed bytes are verified locally. Exact upstream provenance, license terms and commercial permission are UNKNOWN. Integrity verification does not grant usage rights; review the original model terms before use.",
       "license_url": null,
       "manual_acceptance_required": false,
-      "family_hint": "other"
+      "family_hint": "other",
+      "original_repository": "UNKNOWN",
+      "source_revision": "UNKNOWN",
+      "version_family": "UNKNOWN",
+      "architecture": "UNKNOWN",
+      "required_base_model": "UNKNOWN",
+      "redistribution_permission": "unknown",
+      "attribution_requirements": "UNKNOWN",
+      "hardware_requirements": {
+        "state": "UNKNOWN"
+      },
+      "precision_requirements": [],
+      "dependency_compatibility": {
+        "state": "UNKNOWN",
+        "requirements": []
+      },
+      "serialization_format": "PTH",
+      "security_status": "UNKNOWN",
+      "weight_filenames": [
+        "alexnet-owt-7be5be79.pth"
+      ],
+      "base_model_license_id": "UNKNOWN",
+      "base_model_license_url": null,
+      "base_model_commercial_use": "unknown",
+      "base_model_redistribution_permission": "unknown",
+      "base_model_attribution_requirements": "UNKNOWN"
     },
     {
       "model_id": "766f43a16160cb4033994169",
@@ -7194,7 +9444,32 @@
       "license_notice": "Installed bytes are verified locally. Exact upstream provenance, license terms and commercial permission are UNKNOWN. Integrity verification does not grant usage rights; review the original model terms before use.",
       "license_url": null,
       "manual_acceptance_required": false,
-      "family_hint": "other"
+      "family_hint": "other",
+      "original_repository": "UNKNOWN",
+      "source_revision": "UNKNOWN",
+      "version_family": "UNKNOWN",
+      "architecture": "UNKNOWN",
+      "required_base_model": "UNKNOWN",
+      "redistribution_permission": "unknown",
+      "attribution_requirements": "UNKNOWN",
+      "hardware_requirements": {
+        "state": "UNKNOWN"
+      },
+      "precision_requirements": [],
+      "dependency_compatibility": {
+        "state": "UNKNOWN",
+        "requirements": []
+      },
+      "serialization_format": "ONNX",
+      "security_status": "UNKNOWN",
+      "weight_filenames": [
+        "1k3d68.onnx"
+      ],
+      "base_model_license_id": "UNKNOWN",
+      "base_model_license_url": null,
+      "base_model_commercial_use": "unknown",
+      "base_model_redistribution_permission": "unknown",
+      "base_model_attribution_requirements": "UNKNOWN"
     },
     {
       "model_id": "dcfeb41ade111ceca2d677be",
@@ -7256,7 +9531,32 @@
       "license_notice": "Installed bytes are verified locally. Exact upstream provenance, license terms and commercial permission are UNKNOWN. Integrity verification does not grant usage rights; review the original model terms before use.",
       "license_url": null,
       "manual_acceptance_required": false,
-      "family_hint": "other"
+      "family_hint": "other",
+      "original_repository": "UNKNOWN",
+      "source_revision": "UNKNOWN",
+      "version_family": "UNKNOWN",
+      "architecture": "UNKNOWN",
+      "required_base_model": "UNKNOWN",
+      "redistribution_permission": "unknown",
+      "attribution_requirements": "UNKNOWN",
+      "hardware_requirements": {
+        "state": "UNKNOWN"
+      },
+      "precision_requirements": [],
+      "dependency_compatibility": {
+        "state": "UNKNOWN",
+        "requirements": []
+      },
+      "serialization_format": "ONNX",
+      "security_status": "UNKNOWN",
+      "weight_filenames": [
+        "2d106det.onnx"
+      ],
+      "base_model_license_id": "UNKNOWN",
+      "base_model_license_url": null,
+      "base_model_commercial_use": "unknown",
+      "base_model_redistribution_permission": "unknown",
+      "base_model_attribution_requirements": "UNKNOWN"
     },
     {
       "model_id": "3f1189c4cf285ce16e9df499",
@@ -7384,7 +9684,32 @@
       "license_notice": "Installed bytes are verified locally. Exact upstream provenance, license terms and commercial permission are UNKNOWN. Integrity verification does not grant usage rights; review the original model terms before use.",
       "license_url": null,
       "manual_acceptance_required": false,
-      "family_hint": "detector"
+      "family_hint": "detector",
+      "original_repository": "UNKNOWN",
+      "source_revision": "UNKNOWN",
+      "version_family": "UNKNOWN",
+      "architecture": "UNKNOWN",
+      "required_base_model": "UNKNOWN",
+      "redistribution_permission": "unknown",
+      "attribution_requirements": "UNKNOWN",
+      "hardware_requirements": {
+        "state": "UNKNOWN"
+      },
+      "precision_requirements": [],
+      "dependency_compatibility": {
+        "state": "UNKNOWN",
+        "requirements": []
+      },
+      "serialization_format": "ONNX",
+      "security_status": "UNKNOWN",
+      "weight_filenames": [
+        "det_10g.onnx"
+      ],
+      "base_model_license_id": "UNKNOWN",
+      "base_model_license_url": null,
+      "base_model_commercial_use": "unknown",
+      "base_model_redistribution_permission": "unknown",
+      "base_model_attribution_requirements": "UNKNOWN"
     },
     {
       "model_id": "54899d669f7c2c149ff9e968",
@@ -7446,7 +9771,32 @@
       "license_notice": "Installed bytes are verified locally. Exact upstream provenance, license terms and commercial permission are UNKNOWN. Integrity verification does not grant usage rights; review the original model terms before use.",
       "license_url": null,
       "manual_acceptance_required": false,
-      "family_hint": "other"
+      "family_hint": "other",
+      "original_repository": "UNKNOWN",
+      "source_revision": "UNKNOWN",
+      "version_family": "UNKNOWN",
+      "architecture": "UNKNOWN",
+      "required_base_model": "UNKNOWN",
+      "redistribution_permission": "unknown",
+      "attribution_requirements": "UNKNOWN",
+      "hardware_requirements": {
+        "state": "UNKNOWN"
+      },
+      "precision_requirements": [],
+      "dependency_compatibility": {
+        "state": "UNKNOWN",
+        "requirements": []
+      },
+      "serialization_format": "ONNX",
+      "security_status": "UNKNOWN",
+      "weight_filenames": [
+        "genderage.onnx"
+      ],
+      "base_model_license_id": "UNKNOWN",
+      "base_model_license_url": null,
+      "base_model_commercial_use": "unknown",
+      "base_model_redistribution_permission": "unknown",
+      "base_model_attribution_requirements": "UNKNOWN"
     },
     {
       "model_id": "095b591fb8ba162510c2ca21",
@@ -7508,7 +9858,32 @@
       "license_notice": "Installed bytes are verified locally. Exact upstream provenance, license terms and commercial permission are UNKNOWN. Integrity verification does not grant usage rights; review the original model terms before use.",
       "license_url": null,
       "manual_acceptance_required": false,
-      "family_hint": "recognizer"
+      "family_hint": "recognizer",
+      "original_repository": "UNKNOWN",
+      "source_revision": "UNKNOWN",
+      "version_family": "UNKNOWN",
+      "architecture": "UNKNOWN",
+      "required_base_model": "UNKNOWN",
+      "redistribution_permission": "unknown",
+      "attribution_requirements": "UNKNOWN",
+      "hardware_requirements": {
+        "state": "UNKNOWN"
+      },
+      "precision_requirements": [],
+      "dependency_compatibility": {
+        "state": "UNKNOWN",
+        "requirements": []
+      },
+      "serialization_format": "ONNX",
+      "security_status": "UNKNOWN",
+      "weight_filenames": [
+        "w600k_r50.onnx"
+      ],
+      "base_model_license_id": "UNKNOWN",
+      "base_model_license_url": null,
+      "base_model_commercial_use": "unknown",
+      "base_model_redistribution_permission": "unknown",
+      "base_model_attribution_requirements": "UNKNOWN"
     },
     {
       "model_id": "flame-2020",
@@ -7535,7 +9910,30 @@
       "license_notice": "FLAME 2020 requires manual acquisition and acceptance of the official academic model license. Commercial use and redistribution are restricted. Automatic download and activation are blocked; acknowledgement alone cannot unblock this entry.",
       "license_url": "https://flame.is.tue.mpg.de/modellicense.html",
       "manual_acceptance_required": true,
-      "family_hint": "other"
+      "family_hint": "other",
+      "original_repository": "UNKNOWN",
+      "source_revision": "UNKNOWN",
+      "version_family": "UNKNOWN",
+      "architecture": "UNKNOWN",
+      "required_base_model": "UNKNOWN",
+      "redistribution_permission": "unknown",
+      "attribution_requirements": "UNKNOWN",
+      "hardware_requirements": {
+        "state": "UNKNOWN"
+      },
+      "precision_requirements": [],
+      "dependency_compatibility": {
+        "state": "UNKNOWN",
+        "requirements": []
+      },
+      "serialization_format": "UNKNOWN",
+      "security_status": "UNKNOWN",
+      "weight_filenames": [],
+      "base_model_license_id": "UNKNOWN",
+      "base_model_license_url": null,
+      "base_model_commercial_use": "unknown",
+      "base_model_redistribution_permission": "unknown",
+      "base_model_attribution_requirements": "UNKNOWN"
     },
     {
       "model_id": "wav2lip",
@@ -7561,7 +9959,30 @@
       "license_notice": "No exact artifact, reviewed download URL, checksum, or model license is registered. Automatic download is unavailable.",
       "license_url": null,
       "manual_acceptance_required": false,
-      "family_hint": "other"
+      "family_hint": "other",
+      "original_repository": "UNKNOWN",
+      "source_revision": "UNKNOWN",
+      "version_family": "UNKNOWN",
+      "architecture": "UNKNOWN",
+      "required_base_model": "UNKNOWN",
+      "redistribution_permission": "unknown",
+      "attribution_requirements": "UNKNOWN",
+      "hardware_requirements": {
+        "state": "UNKNOWN"
+      },
+      "precision_requirements": [],
+      "dependency_compatibility": {
+        "state": "UNKNOWN",
+        "requirements": []
+      },
+      "serialization_format": "UNKNOWN",
+      "security_status": "UNKNOWN",
+      "weight_filenames": [],
+      "base_model_license_id": "UNKNOWN",
+      "base_model_license_url": null,
+      "base_model_commercial_use": "unknown",
+      "base_model_redistribution_permission": "unknown",
+      "base_model_attribution_requirements": "UNKNOWN"
     },
     {
       "model_id": "instantid",
@@ -7587,7 +10008,30 @@
       "license_notice": "No exact artifact, reviewed download URL, checksum, or model license is registered. Automatic download is unavailable.",
       "license_url": null,
       "manual_acceptance_required": false,
-      "family_hint": "other"
+      "family_hint": "other",
+      "original_repository": "UNKNOWN",
+      "source_revision": "UNKNOWN",
+      "version_family": "UNKNOWN",
+      "architecture": "UNKNOWN",
+      "required_base_model": "UNKNOWN",
+      "redistribution_permission": "unknown",
+      "attribution_requirements": "UNKNOWN",
+      "hardware_requirements": {
+        "state": "UNKNOWN"
+      },
+      "precision_requirements": [],
+      "dependency_compatibility": {
+        "state": "UNKNOWN",
+        "requirements": []
+      },
+      "serialization_format": "UNKNOWN",
+      "security_status": "UNKNOWN",
+      "weight_filenames": [],
+      "base_model_license_id": "UNKNOWN",
+      "base_model_license_url": null,
+      "base_model_commercial_use": "unknown",
+      "base_model_redistribution_permission": "unknown",
+      "base_model_attribution_requirements": "UNKNOWN"
     },
     {
       "model_id": "pulid",
@@ -7613,7 +10057,30 @@
       "license_notice": "No exact artifact, reviewed download URL, checksum, or model license is registered. Automatic download is unavailable.",
       "license_url": null,
       "manual_acceptance_required": false,
-      "family_hint": "other"
+      "family_hint": "other",
+      "original_repository": "UNKNOWN",
+      "source_revision": "UNKNOWN",
+      "version_family": "UNKNOWN",
+      "architecture": "UNKNOWN",
+      "required_base_model": "UNKNOWN",
+      "redistribution_permission": "unknown",
+      "attribution_requirements": "UNKNOWN",
+      "hardware_requirements": {
+        "state": "UNKNOWN"
+      },
+      "precision_requirements": [],
+      "dependency_compatibility": {
+        "state": "UNKNOWN",
+        "requirements": []
+      },
+      "serialization_format": "UNKNOWN",
+      "security_status": "UNKNOWN",
+      "weight_filenames": [],
+      "base_model_license_id": "UNKNOWN",
+      "base_model_license_url": null,
+      "base_model_commercial_use": "unknown",
+      "base_model_redistribution_permission": "unknown",
+      "base_model_attribution_requirements": "UNKNOWN"
     },
     {
       "model_id": "sdxl-turbo",
@@ -7639,7 +10106,30 @@
       "license_notice": "No exact artifact, reviewed download URL, checksum, or model license is registered. Automatic download is unavailable.",
       "license_url": null,
       "manual_acceptance_required": false,
-      "family_hint": "other"
+      "family_hint": "other",
+      "original_repository": "UNKNOWN",
+      "source_revision": "UNKNOWN",
+      "version_family": "UNKNOWN",
+      "architecture": "UNKNOWN",
+      "required_base_model": "UNKNOWN",
+      "redistribution_permission": "unknown",
+      "attribution_requirements": "UNKNOWN",
+      "hardware_requirements": {
+        "state": "UNKNOWN"
+      },
+      "precision_requirements": [],
+      "dependency_compatibility": {
+        "state": "UNKNOWN",
+        "requirements": []
+      },
+      "serialization_format": "UNKNOWN",
+      "security_status": "UNKNOWN",
+      "weight_filenames": [],
+      "base_model_license_id": "UNKNOWN",
+      "base_model_license_url": null,
+      "base_model_commercial_use": "unknown",
+      "base_model_redistribution_permission": "unknown",
+      "base_model_attribution_requirements": "UNKNOWN"
     },
     {
       "model_id": "flux-1-schnell",
@@ -7665,7 +10155,30 @@
       "license_notice": "No exact artifact, reviewed download URL, checksum, or model license is registered. Automatic download is unavailable.",
       "license_url": null,
       "manual_acceptance_required": false,
-      "family_hint": "other"
+      "family_hint": "other",
+      "original_repository": "UNKNOWN",
+      "source_revision": "UNKNOWN",
+      "version_family": "UNKNOWN",
+      "architecture": "UNKNOWN",
+      "required_base_model": "UNKNOWN",
+      "redistribution_permission": "unknown",
+      "attribution_requirements": "UNKNOWN",
+      "hardware_requirements": {
+        "state": "UNKNOWN"
+      },
+      "precision_requirements": [],
+      "dependency_compatibility": {
+        "state": "UNKNOWN",
+        "requirements": []
+      },
+      "serialization_format": "UNKNOWN",
+      "security_status": "UNKNOWN",
+      "weight_filenames": [],
+      "base_model_license_id": "UNKNOWN",
+      "base_model_license_url": null,
+      "base_model_commercial_use": "unknown",
+      "base_model_redistribution_permission": "unknown",
+      "base_model_attribution_requirements": "UNKNOWN"
     }
   ]
 }

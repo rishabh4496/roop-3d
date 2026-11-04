@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import hashlib
+import re
 from pathlib import Path
 from typing import Any, Literal
+from urllib.parse import unquote, urlsplit
 
 from pydantic import Field, field_validator, model_validator
 
@@ -46,6 +48,7 @@ class ModelRecord(Contract):
     role_evidence: str
     upstream_url: str | None = None
     filenames: tuple[str, ...] = Field(default=(), max_length=1)
+    weight_filenames: tuple[str, ...] = Field(default=(), max_length=1)
     expected_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     byte_size: int | None = Field(default=None, gt=0, le=2**40, strict=True)
     input_output_contract: dict[str, Any]
@@ -68,6 +71,25 @@ class ModelRecord(Contract):
     engine_type: str = "UNKNOWN"
     purpose: str = "UNKNOWN"
     source_repository: str | None = None
+    # Governance fields are mandatory in the runtime contract. UNKNOWN is an
+    # explicit evidence state, never an inferred permission or capability.
+    original_repository: str = "UNKNOWN"
+    source_revision: str = "UNKNOWN"
+    version_family: str = "UNKNOWN"
+    architecture: str = "UNKNOWN"
+    required_base_model: str = "UNKNOWN"
+    base_model_license_id: str = "UNKNOWN"
+    base_model_license_url: str | None = None
+    base_model_commercial_use: Literal["allow", "deny", "unknown"] = "unknown"
+    base_model_redistribution_permission: Literal["allow", "deny", "unknown"] = "unknown"
+    base_model_attribution_requirements: str = "UNKNOWN"
+    redistribution_permission: Literal["allow", "deny", "unknown"] = "unknown"
+    attribution_requirements: str = "UNKNOWN"
+    hardware_requirements: dict[str, Any] = Field(default_factory=lambda: {"state": "UNKNOWN"})
+    precision_requirements: tuple[str, ...] = ()
+    dependency_compatibility: dict[str, Any] = Field(default_factory=lambda: {"state": "UNKNOWN"})
+    serialization_format: str = "UNKNOWN"
+    security_status: Literal["UNKNOWN", "REVIEW_REQUIRED", "VERIFIED", "BLOCKED"] = "UNKNOWN"
     minimum_vram_gib: float | None = Field(default=None, gt=0, le=1024)
     recommended_vram_gib: float | None = Field(default=None, gt=0, le=1024)
     dependencies: tuple[str, ...] = ()
@@ -80,17 +102,35 @@ class ModelRecord(Contract):
     def portable_id(cls, value: str) -> str:
         return filename(value)
 
-    @field_validator("filenames")
+    @field_validator("filenames", "weight_filenames")
     @classmethod
     def portable_names(cls, values: tuple[str, ...]) -> tuple[str, ...]:
         return tuple(filename(value) for value in values)
 
     @model_validator(mode="after")
     def evidence_required(self) -> "ModelRecord":
+        if self.weight_filenames and self.filenames and self.weight_filenames != self.filenames:
+            raise ValueError("weight_filenames and legacy filenames must identify the same immutable artifacts")
+        if not self.weight_filenames and self.filenames:
+            object.__setattr__(self, "weight_filenames", self.filenames)
+        if self.weight_filenames and not self.filenames:
+            object.__setattr__(self, "filenames", self.weight_filenames)
         if self.status.startswith("verified_") and (not self.expected_sha256 or not self.byte_size or not self.filenames):
             raise ValueError("Verified identities require observed hash, size and filename")
         if self.status == "verified_remote" and not self.upstream_url:
             raise ValueError("Remote verification requires an upstream URL")
+        # Preserve prior manifests while materializing governance fields from
+        # facts already recorded there. Unknowns remain explicit.
+        if self.original_repository == "UNKNOWN" and self.source_repository:
+            object.__setattr__(self, "original_repository", self.source_repository)
+        if self.source_revision == "UNKNOWN" and self.upstream_url:
+            parts = unquote(urlsplit(self.upstream_url).path).split("/")
+            if "resolve" in parts:
+                index = parts.index("resolve")
+                if index + 1 < len(parts) and re.fullmatch(r"[0-9a-fA-F]{40}", parts[index + 1]):
+                    object.__setattr__(self, "source_revision", parts[index + 1])
+        if self.serialization_format == "UNKNOWN" and self.filenames:
+            object.__setattr__(self, "serialization_format", Path(self.filenames[0]).suffix.lstrip(".").upper() or "UNKNOWN")
         return self
 
 
@@ -148,11 +188,16 @@ def authorize(record: ModelRecord, *, action: Literal["resolve", "activate", "do
         raise DomainError("MODEL_BLOCKED", record.license_notice, 403)
     if commercial and record.commercial_use != "allow":
         raise DomainError("COMMERCIAL_USE_NOT_VERIFIED", record.license_notice, 403)
+    if commercial and record.required_base_model not in {"NONE", "UNKNOWN"} and record.base_model_commercial_use != "allow":
+        raise DomainError("BASE_MODEL_COMMERCIAL_USE_NOT_VERIFIED", record.license_notice, 403)
+    if action in {"activate", "download"} and (
+            record.license_id == "UNKNOWN" or not record.license_url
+            or record.commercial_use == "unknown" or record.redistribution_permission == "unknown"
+            or record.attribution_requirements == "UNKNOWN"):
+        raise DomainError("LICENSE_UNVERIFIED", "License, commercial use, redistribution, and attribution terms must be reviewed before activation", 403)
     if action in {"activate", "download"} and record.manual_acceptance_required and not accepted_license:
         raise DomainError("LICENSE_ACCEPTANCE_REQUIRED", record.license_notice, 403)
     if action == "download":
-        if record.license_id == "UNKNOWN":
-            raise DomainError("LICENSE_UNVERIFIED", record.license_notice, 403)
         if (record.status not in {"verified_local", "verified_remote"}
                 or record.provenance_state != "VERIFIED_REMOTE" or not record.upstream_url
                 or not record.expected_sha256 or not record.byte_size or not record.filenames):
@@ -168,4 +213,13 @@ def license_info(record: ModelRecord) -> dict[str, Any]:
     return {"model_id": record.model_id, "license_id": record.license_id,
             "commercial_use": record.commercial_use, "notice": record.license_notice,
             "license_url": record.license_url, "manual_acceptance_required": record.manual_acceptance_required,
+            "redistribution_permission": record.redistribution_permission,
+            "attribution_requirements": record.attribution_requirements,
+            "required_base_model": record.required_base_model,
+            "related_license_urls": list(record.related_license_urls),
+            "base_model_license": {"model": record.required_base_model, "license_id": record.base_model_license_id,
+                                   "license_url": record.base_model_license_url,
+                                   "commercial_use": record.base_model_commercial_use,
+                                   "redistribution_permission": record.base_model_redistribution_permission,
+                                   "attribution_requirements": record.base_model_attribution_requirements},
             "automatic_download_allowed": allowed, "download_gate": reason}

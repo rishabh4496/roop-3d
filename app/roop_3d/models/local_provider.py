@@ -86,5 +86,10 @@ class LocalWeightProvider:
         record = self.registry.get(model) if isinstance(model, str) else model
         authorize(record, action="activate", accepted_license=accepted_license, commercial=commercial)
         path = self.resolve(record)
+        from roop_3d.models.governance import ModelCompatibilityScanner
+        governance = ModelCompatibilityScanner().scan(record, installed=True, integrity_verified=True)
+        if governance["lifecycle_state"] != "READY":
+            code = "LICENSE_UNVERIFIED" if governance["lifecycle_state"] == "LICENSE_RESTRICTED" else "MODEL_INCOMPATIBLE"
+            raise DomainError(code, "Model is not eligible for inference: " + "; ".join(governance["issues"]), 409)
         with verified_stream(path, record.expected_sha256, record.byte_size) as stream:  # type: ignore[arg-type]
             yield stream

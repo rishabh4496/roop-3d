@@ -13,6 +13,8 @@ import pytest
 from roop_3d.core.errors import DomainError
 from roop_3d.faceset.faceset_reader import FaceSetReader
 from roop_3d.faceset.pose_selector import PoseSelector
+from roop_3d.models.catalog import ModelCatalog
+from roop_3d.tests.model_governance_support import require_governed_model
 
 
 def _create_synthetic_face_image(yaw_offset: float = 0.0) -> bytes:
@@ -105,6 +107,8 @@ def test_reader_legacy_v2(tmp_path: Path):
 
 
 def test_reader_legacy_v1_lazy_computation_and_cache(tmp_path: Path):
+    catalog = ModelCatalog()
+    require_governed_model(catalog, catalog.recognizer()["model_id"])
     img0 = _create_synthetic_face_image(0.0)
     img1 = _create_synthetic_face_image(5.0)
     archive_bytes = _create_v1_zip([img0, img1])
@@ -113,7 +117,7 @@ def test_reader_legacy_v1_lazy_computation_and_cache(tmp_path: Path):
     initial_sha = hashlib.sha256(archive_bytes).hexdigest()
 
     cache_dir = tmp_path / "cache"
-    reader = FaceSetReader(cache_root=cache_dir)
+    reader = FaceSetReader(catalog=catalog, cache_root=cache_dir)
     doc = reader.read(archive_file)
 
     assert doc.faceset_id == "person_v1"
@@ -137,12 +141,14 @@ def test_reader_legacy_v1_lazy_computation_and_cache(tmp_path: Path):
 
 
 def test_reader_image_directory(tmp_path: Path):
+    catalog = ModelCatalog()
+    require_governed_model(catalog, catalog.recognizer()["model_id"])
     img_dir = tmp_path / "face_photos"
     img_dir.mkdir()
     (img_dir / "0.png").write_bytes(_create_synthetic_face_image(0.0))
     (img_dir / "1.png").write_bytes(_create_synthetic_face_image(2.0))
 
-    reader = FaceSetReader(cache_root=tmp_path / "cache")
+    reader = FaceSetReader(catalog=catalog, cache_root=tmp_path / "cache")
     doc = reader.read(img_dir, faceset_id="my_photos")
 
     assert doc.faceset_id == "my_photos"

@@ -16,7 +16,7 @@ from roop_3d.models.downloads import ModelDownloadManager
 from roop_3d.models.hub import ModelHubService
 from roop_3d.models.registry import Manifest, ModelRegistry
 from roop_3d.server.app import create_app
-from roop_3d.tests.test_stage03_registry import artifact
+from roop_3d.tests.test_stage03_registry import artifact, reviewed_artifact
 
 
 def test_hub_exposes_registry_evidence_and_keeps_experimental_engines_gated(tmp_path):
@@ -27,7 +27,7 @@ def test_hub_exposes_registry_evidence_and_keeps_experimental_engines_gated(tmp_
         body = response.json()
         assert body["execution_policy"] == "offline_by_default"
         assert set(body["model_states"]) == {"AVAILABLE", "NOT_INSTALLED", "LICENSE_RESTRICTED", "INCOMPATIBLE",
-                                             "UNVERIFIED", "BROKEN", "READY_FOR_INFERENCE"}
+                                             "UNVERIFIED", "BROKEN", "QUARANTINED", "READY_FOR_INFERENCE"}
         ids = {item["model_id"] for item in body["models"]}
         assert {"minimax_h3_ref2va_faceswap_lora", "bfs_qwen21_dare60_avgrank30",
                 "bfs_qwen21_prune20_dare50_avgrank26", "bfs_qwen21_prune20_dare60_avgrank30"} <= ids
@@ -153,7 +153,7 @@ def test_hub_verify_preserves_license_and_unknown_model_states(tmp_path):
 
 
 def test_active_downloads_are_listed_for_ui_reconnection(tmp_path):
-    record = artifact(b"unneeded fixture bytes", status="verified_remote", upstream_url="https://github.com/fixture/model.bin",
+    record = reviewed_artifact(b"unneeded fixture bytes", filenames=["fixture.onnx"], status="verified_remote", upstream_url="https://github.com/fixture/model.onnx",
                       provenance_state="VERIFIED_REMOTE", license_id="LicenseRef-Fixture", commercial_use="allow",
                       manual_acceptance_required=True)
     registry = ModelRegistry(manifest=Manifest(evidence_scope="Fixture", models=(record,)))
@@ -177,6 +177,10 @@ def test_active_downloads_are_listed_for_ui_reconnection(tmp_path):
 
 def test_active_download_list_route_exposes_a_started_hub_job(tmp_path, monkeypatch):
     app = create_app(Settings(), repo_root=tmp_path, worker_enabled=False)
+    fixture = reviewed_artifact(b"download fixture", model_id="download_fixture",
+                                status="verified_remote", upstream_url="https://github.com/fixture/download.onnx",
+                                provenance_state="VERIFIED_REMOTE", manual_acceptance_required=True)
+    app.state.models.registry._records[fixture.model_id] = fixture
     entered, release = threading.Event(), threading.Event()
 
     def blocked_download(*args, **kwargs):
@@ -188,7 +192,7 @@ def test_active_download_list_route_exposes_a_started_hub_job(tmp_path, monkeypa
     monkeypatch.setattr(app.state.models.downloader, "download", blocked_download)
     try:
         with TestClient(app, base_url="http://127.0.0.1:8030") as client:
-            started = client.post("/api/v1/models/minimax_h3_ref2va_faceswap_lora/downloads",
+            started = client.post("/api/v1/models/download_fixture/downloads",
                                   json={"accepted_license": True})
             assert started.status_code == 202, started.text
             assert entered.wait(3)
@@ -204,7 +208,7 @@ def test_active_download_list_route_exposes_a_started_hub_job(tmp_path, monkeypa
 
 def test_download_manager_cancellation_is_resumable_and_license_gated(tmp_path):
     data = b"verified adapter fixture" * 4096
-    record = artifact(data, status="verified_remote", upstream_url="https://github.com/fixture/adapter.safetensors",
+    record = reviewed_artifact(data, filenames=["adapter.safetensors"], serialization_format="SAFETENSORS", status="verified_remote", upstream_url="https://github.com/fixture/adapter.safetensors",
                       provenance_state="VERIFIED_REMOTE", license_id="LicenseRef-Fixture", commercial_use="allow",
                       manual_acceptance_required=True)
     registry = ModelRegistry(manifest=Manifest(evidence_scope="Fixture", models=(record,)))
@@ -234,6 +238,7 @@ def test_download_manager_cancellation_is_resumable_and_license_gated(tmp_path):
             time.sleep(0.01)
             result = manager.get(job["download_id"])
         assert result["state"] == "cancelled"
+        assert result["lifecycle_state"] == "NOT_INSTALLED"
         final, partial, metadata = catalog.downloader.paths(record)
         assert not (tmp_path / final).exists()
         assert (tmp_path / partial).read_bytes() == data[:65536]

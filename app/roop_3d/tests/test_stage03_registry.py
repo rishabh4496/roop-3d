@@ -26,6 +26,19 @@ def artifact(data: bytes = b"local fixture weights", **changes) -> ModelRecord:
         **changes})
 
 
+def reviewed_artifact(data: bytes = b"local fixture weights", **changes) -> ModelRecord:
+    terms = {"license_id": "LicenseRef-Fixture", "license_url": "https://example.org/license",
+             "commercial_use": "allow", "redistribution_permission": "allow",
+             "attribution_requirements": "Retain fixture attribution",
+             "original_repository": "LOCAL_TEST_FIXTURE", "source_revision": "LOCAL_GENERATED_FIXTURE",
+             "architecture": "FixtureNet", "required_base_model": "NONE",
+             "hardware_requirements": {"state": "VERIFIED"}, "precision_requirements": ["FP32"],
+             "dependency_compatibility": {"state": "COMPATIBLE", "requirements": []},
+             "security_status": "VERIFIED", "serialization_format": "ONNX"}
+    terms.update(changes)
+    return artifact(data, **terms)
+
+
 def registry_for(record: ModelRecord) -> ModelRegistry:
     return ModelRegistry(manifest=Manifest(evidence_scope="Fixture", models=(record,)))
 
@@ -80,7 +93,7 @@ def test_local_provider_returns_original_path_and_never_writes(tmp_path):
     path = source / "fixture.onnx"
     path.write_bytes(b"local fixture weights")
     before = path.stat()
-    record = artifact(locator={"scope": "legacy", "path": "fixture.onnx"})
+    record = reviewed_artifact(locator={"scope": "legacy", "path": "fixture.onnx"})
     provider = LocalWeightProvider(registry_for(record), scopes={"legacy": source})
     assert provider.resolve("fixture") == path
     with provider.open("fixture") as stream:
@@ -152,7 +165,8 @@ def test_license_gate_blocks_restrictions_without_converting_acknowledgement_to_
         with pytest.raises(DomainError) as failure:
             authorize(record, action=action, accepted_license=True)
         assert failure.value.code == "MODEL_BLOCKED"
-    restricted = artifact(manual_acceptance_required=True, license_id="LicenseRef-Fixture")
+    restricted = reviewed_artifact(manual_acceptance_required=True, license_id="LicenseRef-Fixture",
+                                   commercial_use="deny", redistribution_permission="deny")
     with pytest.raises(DomainError) as failure:
         authorize(restricted, action="activate")
     assert failure.value.code == "LICENSE_ACCEPTANCE_REQUIRED"
@@ -166,7 +180,7 @@ def test_license_gate_blocks_restrictions_without_converting_acknowledgement_to_
 def test_provider_manual_acceptance_enforced_before_open(tmp_path):
     path = tmp_path / "fixture.onnx"
     path.write_bytes(b"local fixture weights")
-    record = artifact(locator={"scope": "legacy", "path": path.name}, manual_acceptance_required=True)
+    record = reviewed_artifact(locator={"scope": "legacy", "path": path.name}, manual_acceptance_required=True)
     provider = LocalWeightProvider(registry_for(record), scopes={"legacy": tmp_path})
     with pytest.raises(DomainError):
         with provider.open(record):

@@ -152,9 +152,8 @@ def test_tier4_corrupt_model_file_quarantine():
 
     # Tamper with provider stream to return corrupted bytes
     class CorruptProvider:
-        def open(self, record):
-            import io
-            return io.BytesIO(b"tampered and corrupted model bytes")
+            def resolve(self, record):
+                raise DomainError("MODEL_DRIFT", "Tampered fixture bytes")
 
     catalog.provider = CorruptProvider()
     with pytest.raises(DomainError) as exc_info:

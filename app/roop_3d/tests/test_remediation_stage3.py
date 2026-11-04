@@ -281,6 +281,12 @@ def test_codeformer_adapter_runs_a_real_runtime_fidelity_tensor(tmp_path):
         expected_sha256=hashlib.sha256(data).hexdigest(), byte_size=len(data), status="verified_local",
         locator=Locator(scope="fixture", path=path.name), evidence="Synthetic ONNX graph",
         license_notice="Generated test graph; no production model rights asserted",
+        license_id="LicenseRef-Local-Test", license_url="https://roop3d.invalid/test-fixture-terms",
+        commercial_use="allow", redistribution_permission="allow", attribution_requirements="No third-party attribution",
+        original_repository="LOCAL_TEST_FIXTURE", source_revision="LOCAL_GENERATED_FIXTURE",
+        architecture="FixtureNet", required_base_model="NONE", hardware_requirements={"state": "VERIFIED"},
+        precision_requirements=("FP32",), dependency_compatibility={"state": "COMPATIBLE", "requirements": []},
+        security_status="VERIFIED", serialization_format="ONNX",
         input_output_contract={"inputs": [{"name": "x", "dtype": "FLOAT", "shape": [1, 3, 512, 512]},
             {"name": "w", "dtype": "DOUBLE", "shape": []}],
             "outputs": [{"name": "output", "dtype": "FLOAT", "shape": ["batch", 3, "height", "width"]}]})

@@ -29,6 +29,9 @@ from roop_3d.models.verifier import verify_file
 OFFICIAL_HOSTS = frozenset({"github.com", "raw.githubusercontent.com", "huggingface.co"})
 HF_STORAGE_HOSTS = frozenset({"us.aws.cdn.hf.co"})
 MAX_ARTIFACT_BYTES = 64 * 1024**3
+BLOCKED_SUFFIXES = frozenset({".zip", ".tar", ".tgz", ".gz", ".7z", ".rar", ".exe", ".dll",
+                              ".so", ".dylib", ".py", ".ps1", ".bat", ".cmd", ".sh",
+                              ".pkl", ".pickle", ".pt", ".pth", ".ckpt", ".bin"})
 
 
 def validate_url(value: str) -> str:
@@ -111,7 +114,12 @@ class Downloader:
             return None
         if not record.expected_sha256 or not record.byte_size:
             raise DomainError("MODEL_IDENTITY_UNKNOWN", "No artifact identity is registered")
-        return verify_file(path, record.expected_sha256, record.byte_size)
+        try:
+            return verify_file(path, record.expected_sha256, record.byte_size)
+        except DomainError as error:
+            quarantined = self._path(final + "." + uuid.uuid4().hex + ".quarantined")
+            os.replace(path, quarantined)
+            raise DomainError("MODEL_QUARANTINED", "Managed model cache failed verification and was quarantined", 409) from error
 
     def _remove(self, relative: str) -> None:
         path = self._path(relative)
@@ -145,9 +153,13 @@ class Downloader:
 
     def download(self, record: ModelRecord, *, accepted_license: bool = False,
                  commercial: bool = False, cancel_event: threading.Event | None = None,
-                 progress_callback: Callable[[int, int], None] | None = None) -> DownloadResult:
+                 progress_callback: Callable[[int, int], None] | None = None,
+                 state_callback: Callable[[str], None] | None = None) -> DownloadResult:
         authorize(record, action="download", accepted_license=accepted_license, commercial=commercial)
         url = validate_url(record.upstream_url)  # type: ignore[arg-type]
+        suffix = Path(record.filenames[0]).suffix.lower() if record.filenames else ""
+        if suffix in BLOCKED_SUFFIXES or record.serialization_format.upper() in {"PICKLE", "PYTORCH", "TORCH"}:
+            raise DomainError("DOWNLOAD_FORMAT_BLOCKED", "Executable, pickle, and archive model formats are not accepted", 415)
         if record.byte_size > self.max_bytes:  # type: ignore[operator]
             raise DomainError("DOWNLOAD_SIZE_LIMIT", "Artifact exceeds the configured download limit", 413)
         final, part, metadata = self.paths(record)
@@ -157,17 +169,21 @@ class Downloader:
             self._path(lock)
             existing = self.cached(record)
             if existing:
+                if state_callback:
+                    state_callback("READY")
                 return DownloadResult(existing, False, False)
             # A verified complete part can be recovered after a crash before rename.
             partial = self._path(part)
             if partial.exists() and partial.stat().st_size == record.byte_size:
-                return self._finish(record, final, part, metadata, False)
+                return self._finish(record, final, part, metadata, False, state_callback)
             offset, previous = self._resume(record, part, metadata)
             if progress_callback is not None:
                 try:
                     progress_callback(offset, record.byte_size)
                 except Exception:
                     pass
+            if state_callback:
+                state_callback("DOWNLOADING")
             with httpx.Client(transport=self.transport, timeout=httpx.Timeout(30, read=60),
                               follow_redirects=False, trust_env=False) as client:
                 for _ in range(2):
@@ -241,7 +257,7 @@ class Downloader:
                                     os.fsync(stream.fileno())
                             if total != record.byte_size:
                                 raise DomainError("DOWNLOAD_INCOMPLETE", "Download is incomplete; retry to resume", 502)
-                            return self._finish(record, final, part, metadata, resumed)
+                            return self._finish(record, final, part, metadata, resumed, state_callback)
                     except httpx.HTTPError:
                         raise DomainError("DOWNLOAD_INTERRUPTED", "Download was interrupted; retry to resume", 502) from None
                     except DomainError as error:
@@ -251,11 +267,15 @@ class Downloader:
             raise DomainError("DOWNLOAD_IDENTITY_CHANGED", "Host identity changed while resuming; retry a fresh download", 502)
 
     def _finish(self, record: ModelRecord, final: str, part: str, metadata: str,
-                resumed: bool) -> DownloadResult:
+                resumed: bool, state_callback: Callable[[str], None] | None = None) -> DownloadResult:
+        if state_callback:
+            state_callback("VERIFYING")
         try:
             verify_file(self._path(part), record.expected_sha256, record.byte_size)  # type: ignore[arg-type]
         except DomainError:
             self._quarantine(part, metadata)
+            if state_callback:
+                state_callback("QUARANTINED")
             raise DomainError("DOWNLOAD_DIGEST_MISMATCH", "Downloaded artifact failed verification and was quarantined", 502) from None
         source, destination = self._path(part), self._path(final)
         # Windows FlushFileBuffers requires a writable handle, including recovery
@@ -270,4 +290,6 @@ class Downloader:
                 os.fsync(descriptor)
             finally:
                 os.close(descriptor)
+        if state_callback:
+            state_callback("READY")
         return DownloadResult(destination, True, resumed)

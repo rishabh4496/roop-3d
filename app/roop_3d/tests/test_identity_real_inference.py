@@ -34,6 +34,7 @@ from roop_3d.faceset.faceset_reader import FaceSetReader
 from roop_3d.media.video_reader import VideoReader
 from roop_3d.models.catalog import ModelCatalog
 from roop_3d.server.app import create_app
+from roop_3d.tests.model_governance_support import require_reference_models
 
 WIDTH, HEIGHT, SIZE = 960, 540, 220
 
@@ -42,7 +43,7 @@ WIDTH, HEIGHT, SIZE = 960, 540, 220
 def people():
     try:
         catalog = ModelCatalog()
-        catalog.detector(), catalog.recognizer()
+        require_reference_models(catalog)
         reader = FaceSetReader()
         documents = {name: reader.read(legacy_root() / f"app/facesets/{name}.fsz") for name in ("akansha", "anushree")}
     except (DomainError, OSError, KeyError, ValueError) as error:

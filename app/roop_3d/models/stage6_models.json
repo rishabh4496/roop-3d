@@ -9,10 +9,15 @@
       "role": "diffusion_adapter",
       "role_evidence": "Hugging Face model card identifies this file as a MiniMax H3 Ref2VA face-swap LoRA; not a standalone ONNX swapper.",
       "upstream_url": "https://huggingface.co/UntMods/FaceSwap_MiniMaxH3_REF2VA/resolve/b2a5823ca64bc78d91725fbfcc576095bfceb764/SS_FaceSwap_MiniMax_H3_REF2VA.safetensors",
-      "filenames": ["SS_FaceSwap_MiniMax_H3_REF2VA.safetensors"],
+      "filenames": [
+        "SS_FaceSwap_MiniMax_H3_REF2VA.safetensors"
+      ],
       "expected_sha256": "1e032cf519cc143f434e67516d8ad0aacf4c6e146315b2dcc3b1c2800470326d",
       "byte_size": 65623904,
-      "input_output_contract": {"state": "WORKFLOW_DEPENDENT", "evidence": "The LoRA is consumed by a ComfyUI MiniMax H3 Ref2VA workflow; it does not accept image tensors as a standalone engine."},
+      "input_output_contract": {
+        "state": "WORKFLOW_DEPENDENT",
+        "evidence": "The LoRA is consumed by a ComfyUI MiniMax H3 Ref2VA workflow; it does not accept image tensors as a standalone engine."
+      },
       "supported_providers": [],
       "provider_evidence": "ComfyUI workflow and custom-node runtime required; ONNX Runtime providers do not apply.",
       "license_id": "Apache-2.0",
@@ -22,7 +27,9 @@
       "provenance_state": "VERIFIED_REMOTE",
       "license_notice": "This adapter is Apache-2.0. The MiniMax H3 base model has a separate MiniMax H3 Community License; review and accept that license independently before obtaining or using the base weights.",
       "license_url": "https://huggingface.co/UntMods/FaceSwap_MiniMaxH3_REF2VA",
-      "related_license_urls": ["https://huggingface.co/MiniMaxAI/MiniMax-H3"],
+      "related_license_urls": [
+        "https://huggingface.co/MiniMaxAI/MiniMax-H3"
+      ],
       "manual_acceptance_required": true,
       "family_hint": "minimax_h3_ref2va_lora",
       "version": "b2a5823ca64bc78d91725fbfcc576095bfceb764",
@@ -30,10 +37,41 @@
       "engine_type": "ComfyUI custom-node workflow",
       "purpose": "Experimental generative video identity transfer",
       "source_repository": "https://huggingface.co/UntMods/FaceSwap_MiniMaxH3_REF2VA",
-      "dependencies": ["MiniMax H3 Ref2VA base weights (separate license)", "CRT-Nodes MiniMax H3 nodes", "ComfyUI VideoHelperSuite", "MiniMax H3 Turbo LoRA", "ComfyUI >= 0.43.0"],
+      "dependencies": [
+        "MiniMax H3 Ref2VA base weights (separate license)",
+        "CRT-Nodes MiniMax H3 nodes",
+        "ComfyUI VideoHelperSuite",
+        "MiniMax H3 Turbo LoRA",
+        "ComfyUI >= 0.43.0"
+      ],
       "supported_precision": [],
       "benchmark_status": "NOT_RUN",
-      "inference_availability": "EXPERIMENTAL"
+      "inference_availability": "EXPERIMENTAL",
+      "weight_filenames": [
+        "SS_FaceSwap_MiniMax_H3_REF2VA.safetensors"
+      ],
+      "original_repository": "https://huggingface.co/UntMods/FaceSwap_MiniMaxH3_REF2VA",
+      "source_revision": "b2a5823ca64bc78d91725fbfcc576095bfceb764",
+      "version_family": "UNKNOWN",
+      "architecture": "LoRA adapter",
+      "required_base_model": "MiniMax H3 Ref2VA base weights; separate license and explicit acceptance required",
+      "redistribution_permission": "allow",
+      "attribution_requirements": "Include Apache-2.0 license; retain upstream copyright, attribution and NOTICE notices; mark modified files.",
+      "hardware_requirements": {
+        "state": "UNKNOWN"
+      },
+      "precision_requirements": [],
+      "dependency_compatibility": {
+        "state": "UNKNOWN",
+        "requirements": []
+      },
+      "serialization_format": "SAFETENSORS",
+      "security_status": "UNKNOWN",
+      "base_model_license_id": "LicenseRef-MiniMax-H3-Community",
+      "base_model_license_url": "https://huggingface.co/MiniMaxAI/MiniMax-H3",
+      "base_model_commercial_use": "unknown",
+      "base_model_redistribution_permission": "unknown",
+      "base_model_attribution_requirements": "UNKNOWN"
     },
     {
       "model_id": "bfs_qwen21_dare60_avgrank30",
@@ -41,10 +79,15 @@
       "role": "diffusion_adapter",
       "role_evidence": "Hugging Face model card identifies this safetensors file as a Qwen-Image-2.1 face-swap LoRA variant.",
       "upstream_url": "https://huggingface.co/maximsobolev275/BFS-Qwen21-Best-Face-Swap-Fix/resolve/2260bd560b8182b59a65238aed503ab5619b1d45/bfs_dare60-avgrank30.safetensors",
-      "filenames": ["bfs_dare60-avgrank30.safetensors"],
+      "filenames": [
+        "bfs_dare60-avgrank30.safetensors"
+      ],
       "expected_sha256": "b4ef1478f24ad4fbd8746df4738f67c1eca5091aab91a9d12b5294e3289c8e77",
       "byte_size": 148894072,
-      "input_output_contract": {"state": "WORKFLOW_DEPENDENT", "evidence": "Qwen-Image-2.1 image editing LoRA; no Roop 3D inference adapter or video contract is registered."},
+      "input_output_contract": {
+        "state": "WORKFLOW_DEPENDENT",
+        "evidence": "Qwen-Image-2.1 image editing LoRA; no Roop 3D inference adapter or video contract is registered."
+      },
       "supported_providers": [],
       "provider_evidence": "ComfyUI/diffusion execution provider and Qwen base model required; not verified in this application.",
       "license_id": "MIT",
@@ -54,7 +97,9 @@
       "provenance_state": "VERIFIED_REMOTE",
       "license_notice": "The adapter is MIT-licensed. Its required Qwen-Image-2.1 base is under the separate Qwen Research License, which permits non-commercial use only unless a separate commercial license is obtained.",
       "license_url": "https://huggingface.co/maximsobolev275/BFS-Qwen21-Best-Face-Swap-Fix",
-      "related_license_urls": ["https://huggingface.co/Qwen/Qwen-Image-2.1/blob/main/LICENSE"],
+      "related_license_urls": [
+        "https://huggingface.co/Qwen/Qwen-Image-2.1/blob/main/LICENSE"
+      ],
       "manual_acceptance_required": true,
       "family_hint": "qwen_image_21_faceswap_lora",
       "version": "2260bd560b8182b59a65238aed503ab5619b1d45",
@@ -62,10 +107,39 @@
       "engine_type": "ComfyUI image-edit workflow",
       "purpose": "Experimental still-image or keyframe identity correction",
       "source_repository": "https://huggingface.co/maximsobolev275/BFS-Qwen21-Best-Face-Swap-Fix",
-      "dependencies": ["Qwen/Qwen-Image-2.1 base weights (Qwen Research License; non-commercial)", "Compatible ComfyUI Qwen-Image-2.1 workflow", "ComfyUI diffusion nodes"],
+      "dependencies": [
+        "Qwen/Qwen-Image-2.1 base weights (Qwen Research License; non-commercial)",
+        "Compatible ComfyUI Qwen-Image-2.1 workflow",
+        "ComfyUI diffusion nodes"
+      ],
       "supported_precision": [],
       "benchmark_status": "NOT_RUN",
-      "inference_availability": "EXPERIMENTAL"
+      "inference_availability": "EXPERIMENTAL",
+      "weight_filenames": [
+        "bfs_dare60-avgrank30.safetensors"
+      ],
+      "original_repository": "https://huggingface.co/maximsobolev275/BFS-Qwen21-Best-Face-Swap-Fix",
+      "source_revision": "2260bd560b8182b59a65238aed503ab5619b1d45",
+      "version_family": "UNKNOWN",
+      "architecture": "LoRA adapter",
+      "required_base_model": "Qwen-Image-2.1 base weights; separate Qwen Research License applies",
+      "redistribution_permission": "allow",
+      "attribution_requirements": "Include the upstream copyright notice and MIT permission notice in copies or substantial portions.",
+      "hardware_requirements": {
+        "state": "UNKNOWN"
+      },
+      "precision_requirements": [],
+      "dependency_compatibility": {
+        "state": "UNKNOWN",
+        "requirements": []
+      },
+      "serialization_format": "SAFETENSORS",
+      "security_status": "UNKNOWN",
+      "base_model_license_id": "LicenseRef-Qwen-Research",
+      "base_model_license_url": "https://huggingface.co/Qwen/Qwen-Image-2.1/blob/main/LICENSE",
+      "base_model_commercial_use": "deny",
+      "base_model_redistribution_permission": "unknown",
+      "base_model_attribution_requirements": "UNKNOWN"
     },
     {
       "model_id": "bfs_qwen21_prune20_dare50_avgrank26",
@@ -73,10 +147,15 @@
       "role": "diffusion_adapter",
       "role_evidence": "Hugging Face model card identifies this safetensors file as a Qwen-Image-2.1 face-swap LoRA variant.",
       "upstream_url": "https://huggingface.co/maximsobolev275/BFS-Qwen21-Best-Face-Swap-Fix/resolve/2260bd560b8182b59a65238aed503ab5619b1d45/bfs_prune20_dare50-avgrank26.safetensors",
-      "filenames": ["bfs_prune20_dare50-avgrank26.safetensors"],
+      "filenames": [
+        "bfs_prune20_dare50-avgrank26.safetensors"
+      ],
       "expected_sha256": "25e5983a94fffe2bbe18c349a8d0ff489f8a3c47626b121e0915de90d1aa414f",
       "byte_size": 116303072,
-      "input_output_contract": {"state": "WORKFLOW_DEPENDENT", "evidence": "Qwen-Image-2.1 image editing LoRA; no Roop 3D inference adapter or video contract is registered."},
+      "input_output_contract": {
+        "state": "WORKFLOW_DEPENDENT",
+        "evidence": "Qwen-Image-2.1 image editing LoRA; no Roop 3D inference adapter or video contract is registered."
+      },
       "supported_providers": [],
       "provider_evidence": "ComfyUI/diffusion execution provider and Qwen base model required; not verified in this application.",
       "license_id": "MIT",
@@ -86,7 +165,9 @@
       "provenance_state": "VERIFIED_REMOTE",
       "license_notice": "The adapter is MIT-licensed. Its required Qwen-Image-2.1 base is under the separate Qwen Research License, which permits non-commercial use only unless a separate commercial license is obtained.",
       "license_url": "https://huggingface.co/maximsobolev275/BFS-Qwen21-Best-Face-Swap-Fix",
-      "related_license_urls": ["https://huggingface.co/Qwen/Qwen-Image-2.1/blob/main/LICENSE"],
+      "related_license_urls": [
+        "https://huggingface.co/Qwen/Qwen-Image-2.1/blob/main/LICENSE"
+      ],
       "manual_acceptance_required": true,
       "family_hint": "qwen_image_21_faceswap_lora",
       "version": "2260bd560b8182b59a65238aed503ab5619b1d45",
@@ -94,10 +175,39 @@
       "engine_type": "ComfyUI image-edit workflow",
       "purpose": "Experimental still-image or keyframe identity correction",
       "source_repository": "https://huggingface.co/maximsobolev275/BFS-Qwen21-Best-Face-Swap-Fix",
-      "dependencies": ["Qwen/Qwen-Image-2.1 base weights (Qwen Research License; non-commercial)", "Compatible ComfyUI Qwen-Image-2.1 workflow", "ComfyUI diffusion nodes"],
+      "dependencies": [
+        "Qwen/Qwen-Image-2.1 base weights (Qwen Research License; non-commercial)",
+        "Compatible ComfyUI Qwen-Image-2.1 workflow",
+        "ComfyUI diffusion nodes"
+      ],
       "supported_precision": [],
       "benchmark_status": "NOT_RUN",
-      "inference_availability": "EXPERIMENTAL"
+      "inference_availability": "EXPERIMENTAL",
+      "weight_filenames": [
+        "bfs_prune20_dare50-avgrank26.safetensors"
+      ],
+      "original_repository": "https://huggingface.co/maximsobolev275/BFS-Qwen21-Best-Face-Swap-Fix",
+      "source_revision": "2260bd560b8182b59a65238aed503ab5619b1d45",
+      "version_family": "UNKNOWN",
+      "architecture": "LoRA adapter",
+      "required_base_model": "Qwen-Image-2.1 base weights; separate Qwen Research License applies",
+      "redistribution_permission": "allow",
+      "attribution_requirements": "Include the upstream copyright notice and MIT permission notice in copies or substantial portions.",
+      "hardware_requirements": {
+        "state": "UNKNOWN"
+      },
+      "precision_requirements": [],
+      "dependency_compatibility": {
+        "state": "UNKNOWN",
+        "requirements": []
+      },
+      "serialization_format": "SAFETENSORS",
+      "security_status": "UNKNOWN",
+      "base_model_license_id": "LicenseRef-Qwen-Research",
+      "base_model_license_url": "https://huggingface.co/Qwen/Qwen-Image-2.1/blob/main/LICENSE",
+      "base_model_commercial_use": "deny",
+      "base_model_redistribution_permission": "unknown",
+      "base_model_attribution_requirements": "UNKNOWN"
     },
     {
       "model_id": "bfs_qwen21_prune20_dare60_avgrank30",
@@ -105,10 +215,15 @@
       "role": "diffusion_adapter",
       "role_evidence": "Hugging Face model card identifies this safetensors file as a Qwen-Image-2.1 face-swap LoRA variant.",
       "upstream_url": "https://huggingface.co/maximsobolev275/BFS-Qwen21-Best-Face-Swap-Fix/resolve/2260bd560b8182b59a65238aed503ab5619b1d45/bfs_prune20_dare60-avgrank30.safetensors",
-      "filenames": ["bfs_prune20_dare60-avgrank30.safetensors"],
+      "filenames": [
+        "bfs_prune20_dare60-avgrank30.safetensors"
+      ],
       "expected_sha256": "98b42b2d4f994a07b68450ee6ed1542eb39941e6360bcd374b3a7f548759d9d4",
       "byte_size": 133629072,
-      "input_output_contract": {"state": "WORKFLOW_DEPENDENT", "evidence": "Qwen-Image-2.1 image editing LoRA; no Roop 3D inference adapter or video contract is registered."},
+      "input_output_contract": {
+        "state": "WORKFLOW_DEPENDENT",
+        "evidence": "Qwen-Image-2.1 image editing LoRA; no Roop 3D inference adapter or video contract is registered."
+      },
       "supported_providers": [],
       "provider_evidence": "ComfyUI/diffusion execution provider and Qwen base model required; not verified in this application.",
       "license_id": "MIT",
@@ -118,7 +233,9 @@
       "provenance_state": "VERIFIED_REMOTE",
       "license_notice": "The adapter is MIT-licensed. Its required Qwen-Image-2.1 base is under the separate Qwen Research License, which permits non-commercial use only unless a separate commercial license is obtained.",
       "license_url": "https://huggingface.co/maximsobolev275/BFS-Qwen21-Best-Face-Swap-Fix",
-      "related_license_urls": ["https://huggingface.co/Qwen/Qwen-Image-2.1/blob/main/LICENSE"],
+      "related_license_urls": [
+        "https://huggingface.co/Qwen/Qwen-Image-2.1/blob/main/LICENSE"
+      ],
       "manual_acceptance_required": true,
       "family_hint": "qwen_image_21_faceswap_lora",
       "version": "2260bd560b8182b59a65238aed503ab5619b1d45",
@@ -126,10 +243,39 @@
       "engine_type": "ComfyUI image-edit workflow",
       "purpose": "Experimental still-image or keyframe identity correction",
       "source_repository": "https://huggingface.co/maximsobolev275/BFS-Qwen21-Best-Face-Swap-Fix",
-      "dependencies": ["Qwen/Qwen-Image-2.1 base weights (Qwen Research License; non-commercial)", "Compatible ComfyUI Qwen-Image-2.1 workflow", "ComfyUI diffusion nodes"],
+      "dependencies": [
+        "Qwen/Qwen-Image-2.1 base weights (Qwen Research License; non-commercial)",
+        "Compatible ComfyUI Qwen-Image-2.1 workflow",
+        "ComfyUI diffusion nodes"
+      ],
       "supported_precision": [],
       "benchmark_status": "NOT_RUN",
-      "inference_availability": "EXPERIMENTAL"
+      "inference_availability": "EXPERIMENTAL",
+      "weight_filenames": [
+        "bfs_prune20_dare60-avgrank30.safetensors"
+      ],
+      "original_repository": "https://huggingface.co/maximsobolev275/BFS-Qwen21-Best-Face-Swap-Fix",
+      "source_revision": "2260bd560b8182b59a65238aed503ab5619b1d45",
+      "version_family": "UNKNOWN",
+      "architecture": "LoRA adapter",
+      "required_base_model": "Qwen-Image-2.1 base weights; separate Qwen Research License applies",
+      "redistribution_permission": "allow",
+      "attribution_requirements": "Include the upstream copyright notice and MIT permission notice in copies or substantial portions.",
+      "hardware_requirements": {
+        "state": "UNKNOWN"
+      },
+      "precision_requirements": [],
+      "dependency_compatibility": {
+        "state": "UNKNOWN",
+        "requirements": []
+      },
+      "serialization_format": "SAFETENSORS",
+      "security_status": "UNKNOWN",
+      "base_model_license_id": "LicenseRef-Qwen-Research",
+      "base_model_license_url": "https://huggingface.co/Qwen/Qwen-Image-2.1/blob/main/LICENSE",
+      "base_model_commercial_use": "deny",
+      "base_model_redistribution_permission": "unknown",
+      "base_model_attribution_requirements": "UNKNOWN"
     }
   ]
 }

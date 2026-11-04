@@ -14,7 +14,7 @@ from typing import Any, Callable, Literal
 
 from roop_3d.core.errors import DomainError
 from roop_3d.models.catalog import ModelCatalog
-from roop_3d.models.registry import ModelRecord, authorize
+from roop_3d.models.registry import ModelRecord
 
 from .identity_adapter import ModelFamily, validate_adapter
 
@@ -204,8 +204,7 @@ class DiffusionBackend(ABC):
         result = []
         for model_id in (self.base_model_id, self.adapter_id):
             record = self.catalog.registry.get(model_id)
-            authorize(record, action="activate")
-            result.append(self.catalog.provider.resolve(record))
+            result.append(self.catalog.resolve_for_inference(record.model_id))
         return tuple(result)
 
     def load(self, loader: PipelineLoader) -> Any:

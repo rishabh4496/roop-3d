@@ -75,7 +75,7 @@ class LivePortraitTRT:
             record = next((r for r in catalog.registry.records() if r.name == filename and r.locator), None)
             if record is None:
                 raise RuntimeError(f"The inspected modular LivePortrait export is unavailable: {filename}")
-            path = catalog.provider.resolve(record)
+            path = catalog.resolve_for_inference(record.model_id, precision="FP32")
             sessions[role] = CheckedSession(path, record.expected_sha256, record.byte_size,
                                             provider=provider, profile=profile)
         sessions["generator"] = CheckedSession(generator, digest, size, provider=provider, profile=profile)
