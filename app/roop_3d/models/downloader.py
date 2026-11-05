@@ -11,6 +11,7 @@ import json
 import os
 from pathlib import Path
 import re
+import ssl
 import stat
 import threading
 from urllib.parse import unquote, urljoin, urlsplit
@@ -32,6 +33,23 @@ MAX_ARTIFACT_BYTES = 64 * 1024**3
 BLOCKED_SUFFIXES = frozenset({".zip", ".tar", ".tgz", ".gz", ".7z", ".rar", ".exe", ".dll",
                               ".so", ".dylib", ".py", ".ps1", ".bat", ".cmd", ".sh",
                               ".pkl", ".pickle", ".pt", ".pth", ".ckpt", ".bin"})
+
+
+def tls_context() -> ssl.SSLContext:
+    """Verify servers against the operating-system trust store plus certifi.
+
+    HTTPS-inspecting security software (for example antivirus web scanning) re-signs
+    traffic with a root that is installed in the OS store but absent from certifi, so
+    certifi alone fails intermittently with CERTIFICATE_VERIFY_FAILED. Verification and
+    hostname checking stay on, and the artifact SHA-256 is verified independently.
+    """
+    context = ssl.create_default_context()  # loads the OS root/CA stores
+    try:
+        import certifi
+        context.load_verify_locations(certifi.where())
+    except (ImportError, OSError):
+        pass
+    return context
 
 
 def validate_url(value: str) -> str:
@@ -185,7 +203,7 @@ class Downloader:
             if state_callback:
                 state_callback("DOWNLOADING")
             with httpx.Client(transport=self.transport, timeout=httpx.Timeout(30, read=60),
-                              follow_redirects=False, trust_env=False) as client:
+                              follow_redirects=False, trust_env=False, verify=tls_context()) as client:
                 for _ in range(2):
                     if cancel_event is not None and cancel_event.is_set():
                         raise DomainError("DOWNLOAD_CANCELLED", "Model download was cancelled; verified partial bytes are retained for resume", 409)

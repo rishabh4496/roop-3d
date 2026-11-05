@@ -10,7 +10,7 @@ type Model = {
   minimum_vram_gib: number | null; recommended_vram_gib: number | null; dependencies: string[];
   supported_precision: string[]; supported_execution_providers: string[]; provider_evidence: string;
   status: ModelState; status_evidence: string; benchmark_status: string; actual_inference_available: boolean;
-  inference_evidence: string; engine_compatibility: string; download_allowed: boolean; role: string | null;
+  inference_evidence: string; engine_compatibility: string; download_allowed: boolean; download_blocker?: string | null; role: string | null;
 };
 type Engine = {
   engine_id: string; name: string; family: string; engine_type: string; purpose: string; model_ids: string[];
@@ -192,7 +192,9 @@ export default function ModelHubPanel({ active }: { active: boolean }) {
                   <label style={{ fontSize: 12 }}>
                     <input type="checkbox" checked={Boolean(licenseAccepted[model.model_id])}
                       onChange={event => setLicenseAccepted(current => ({ ...current, [model.model_id]: event.target.checked }))} />
-                    {' '}I reviewed the adapter license and separate base-model terms.
+                    {' '}{model.license.id === 'UNKNOWN'
+                      ? 'The source publishes no license for these weights. I understand usage rights are unverified and that commercial use is not permitted.'
+                      : 'I reviewed the adapter license and separate base-model terms.'}
                   </label>
                 )}
                 {job && <div role="status">Download {job.state}: {job.percent.toFixed(1)}%{job.error_code ? ` · ${job.error_code}` : ''}</div>}
@@ -203,7 +205,7 @@ export default function ModelHubPanel({ active }: { active: boolean }) {
                     disabled={Boolean(model.license.acceptance_required && !licenseAccepted[model.model_id])}>
                     Download this model
                   </button>
-                ) : <span className="muted">Download unavailable until provenance and license are reviewed.</span>}
+                ) : <span className="muted">{model.download_blocker ?? 'Download unavailable until provenance and license are reviewed.'}</span>}
               </article>
             );
           })}

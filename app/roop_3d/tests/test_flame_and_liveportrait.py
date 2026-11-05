@@ -171,10 +171,19 @@ def test_stage16_official_metadata_and_rights_are_separate():
             assert record.status == "verified_remote" and len(record.expected_sha256) == 64
             assert len(record.upstream_url.split("/resolve/")[1].split("/")[0]) == 40
             assert record.input_output_contract["state"] == "UNKNOWN"
+        # Unpublished rights: a verified source may download behind an explicit acknowledgement.
+        # Candidates have no source or digest and stay refused.
         with pytest.raises(DomainError):
+            authorize(record, action="download")
+        if record.status == "candidate":
+            with pytest.raises(DomainError):
+                authorize(record, action="download", accepted_license=True)
+        else:
             authorize(record, action="download", accepted_license=True)
+            with pytest.raises(DomainError):
+                authorize(record, action="download", accepted_license=True, commercial=True)
         with pytest.raises(DomainError):
-            authorize(record, action="activate", accepted_license=True, commercial=True)
+            authorize(record, action="activate", accepted_license=True)
 
 
 def test_age_years_require_measured_calibration_and_bounds():

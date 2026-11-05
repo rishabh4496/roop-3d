@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 from pathlib import Path
 from typing import Any, Literal
@@ -65,6 +66,10 @@ class ModelRecord(Contract):
     license_url: str | None = None
     related_license_urls: tuple[str, ...] = ()
     manual_acceptance_required: bool = False
+    # True when the exact bytes are verified at a public source that publishes no license
+    # for them. Download needs explicit acknowledgement and never grants commercial use or
+    # inference activation; those gates still require a reviewed license.
+    rights_unpublished: bool = False
     family_hint: str = "other"
     version: str = "UNKNOWN"
     model_family: str = "UNKNOWN"
@@ -148,6 +153,35 @@ class Manifest(Contract):
         return self
 
 
+def _apply_verified_sources(manifest: Manifest, document: dict[str, Any]) -> Manifest:
+    """Attach reviewed public sources without rewriting the preserved local evidence.
+
+    Each entry must name the same SHA-256 and size as the registered artifact; a mismatch
+    makes the registry invalid rather than silently trusting the overlay.
+    """
+    sources = document["sources"]
+    models = []
+    for record in manifest.models:
+        source = sources.get(record.model_id)
+        if source is None or record.status == "blocked":
+            models.append(record)
+            continue
+        if source["sha256"] != record.expected_sha256 or source["byte_size"] != record.byte_size:
+            raise ValueError("Verified source does not match the registered artifact identity")
+        update = {"upstream_url": source["upstream_url"], "original_repository": source["original_repository"],
+                  "source_revision": source["source_revision"], "source_repository": source["original_repository"],
+                  "provenance_state": "VERIFIED_REMOTE", "evidence": record.evidence + " Public source verified by identical SHA-256 and size: "
+                  + source["upstream_url"]}
+        if record.license_id == "UNKNOWN":
+            update.update(rights_unpublished=True, manual_acceptance_required=True,
+                          license_notice=("The public source publishes no license for these weights. Downloading requires an explicit "
+                                          "acknowledgement that usage rights are unverified; commercial use and inference activation "
+                                          "stay blocked until a license is reviewed."))
+        models.append(ModelRecord.model_validate({**record.model_dump(), **update}))
+    return Manifest(evidence_scope=manifest.evidence_scope + " " + document["evidence_scope"],
+                    source_documents=manifest.source_documents, models=tuple(models))
+
+
 class ModelRegistry:
     def __init__(self, root: Path | None = None, *, manifest: Manifest | None = None):
         self.root = root or application_root()
@@ -167,6 +201,9 @@ class ModelRegistry:
                             evidence_scope=self.manifest.evidence_scope + " " + extension.evidence_scope,
                             source_documents=self.manifest.source_documents,
                             models=self.manifest.models + extension.models)
+                overlay = safe_path(self.root, "roop_3d/models/verified_sources.json")
+                if overlay.is_file():
+                    self.manifest = _apply_verified_sources(self.manifest, json.loads(overlay.read_text("utf-8")))
         except (OSError, ValueError):
             raise DomainError("MODEL_REGISTRY_INVALID", "Model manifest or its discovery evidence is invalid", 503) from None
         self._records = {item.model_id: item for item in self.manifest.models}
@@ -190,7 +227,10 @@ def authorize(record: ModelRecord, *, action: Literal["resolve", "activate", "do
         raise DomainError("COMMERCIAL_USE_NOT_VERIFIED", record.license_notice, 403)
     if commercial and record.required_base_model not in {"NONE", "UNKNOWN"} and record.base_model_commercial_use != "allow":
         raise DomainError("BASE_MODEL_COMMERCIAL_USE_NOT_VERIFIED", record.license_notice, 403)
-    if action in {"activate", "download"} and (
+    # Unpublished rights allow a bytes-only download behind an explicit acknowledgement;
+    # activation (inference) keeps the full license review requirement.
+    unpublished_download = action == "download" and record.rights_unpublished
+    if action in {"activate", "download"} and not unpublished_download and (
             record.license_id == "UNKNOWN" or not record.license_url
             or record.commercial_use == "unknown" or record.redistribution_permission == "unknown"
             or record.attribution_requirements == "UNKNOWN"):

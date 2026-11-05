@@ -11,6 +11,13 @@ from roop_3d.models.registry import ModelRecord, authorize
 
 MODEL_STATES = frozenset({"AVAILABLE", "NOT_INSTALLED", "LICENSE_RESTRICTED", "INCOMPATIBLE",
                           "UNVERIFIED", "BROKEN", "QUARANTINED", "READY_FOR_INFERENCE"})
+DOWNLOAD_BLOCKERS = {
+    "DOWNLOAD_EVIDENCE_REQUIRED": "No public source with identical bytes (SHA-256 and size) is registered. This file is a local or "
+                                  "modified build, so it can be used from disk but cannot be downloaded.",
+    "LICENSE_UNVERIFIED": "The license for these weights is not reviewed, and the source does not publish one.",
+    "MODEL_BLOCKED": "This model is blocked by its license.",
+    "DOWNLOAD_FORMAT_BLOCKED": "Pickle-based formats (.pt/.pth) are not downloaded because loading them can execute code.",
+}
 CORE_INFERENCE_EVIDENCE = {
     "scrfd_10g_bnkps.onnx": ("5838f7fe053675b1c7a08b633df49e7af5495cee0493c7dcf6697200b85b5b91",
                              "tests/test_identity_real_inference.py"),
@@ -99,11 +106,15 @@ class ModelHubService:
             return "UNVERIFIED", None
 
     def _entry(self, record: ModelRecord) -> dict[str, Any]:
+        blocker: str | None = None
         try:
             authorize(record, action="download", accepted_license=True)
             download_eligible = True
-        except DomainError:
+        except DomainError as error:
             download_eligible = False
+            blocker = error.code
+        if download_eligible and record.serialization_format.upper() in {"PICKLE", "PYTORCH", "TORCH", "PT", "PTH", "CKPT", "PKL", "BIN"}:
+            download_eligible, blocker = False, "DOWNLOAD_FORMAT_BLOCKED"
         code_path = self._is_core(record)
         artifact_installed: bool | None = None
         integrity_verified: bool | None = None
@@ -132,7 +143,8 @@ class ModelHubService:
                 evidence = "The configured local model paths could not be fully verified."
             inference = False
             compatibility = "NOT_INTEGRATED"
-        elif record.status == "verified_remote":
+        elif record.status == "verified_remote" or (record.rights_unpublished
+                                                    and record.provenance_state == "VERIFIED_REMOTE"):
             local_state, filename = self._local_artifact_state(record)
             artifact_installed, integrity_verified = local_state == "AVAILABLE", local_state == "AVAILABLE"
             if local_state == "BROKEN":
@@ -143,7 +155,8 @@ class ModelHubService:
                 state, inference, evidence = "UNVERIFIED", False, "The configured local model paths could not be fully verified."
             else:
                 state = ("AVAILABLE" if local_state == "AVAILABLE" else
-                         "LICENSE_RESTRICTED" if record.license_id == "UNKNOWN" else "NOT_INSTALLED")
+                         "LICENSE_RESTRICTED" if record.license_id == "UNKNOWN" and not record.rights_unpublished
+                         else "NOT_INSTALLED")
                 inference = False
                 compatibility = "NO_REGISTERED_ADAPTER"
                 evidence = (f"Artifact hash-verified at {filename}; no compatible inference adapter is registered."
@@ -239,6 +252,11 @@ class ModelHubService:
             "inference_evidence": (evidence if inference
                                     else "No verified inference path for this model in Roop 3D."),
             "download_allowed": download_eligible and state == "NOT_INSTALLED",
+            "download_blocker": (DOWNLOAD_BLOCKERS.get(blocker or "", "Download is not available for this model.")
+                                 if not download_eligible else
+                                 None if state == "NOT_INSTALLED" else
+                                 "Already installed locally; no download needed." if state in {"AVAILABLE", "LICENSE_RESTRICTED", "READY_FOR_INFERENCE"}
+                                 else "Download is not available in the model's current state."),
             "role": record.role,
         }
 

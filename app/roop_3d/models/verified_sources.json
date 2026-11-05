@@ -1,0 +1,518 @@
+{
+  "schema_version": 1,
+  "evidence_scope": "Exact public Hugging Face file matches for already-registered artifacts, found by comparing the registered SHA-256 and size to the Git LFS object ids of the listed repositories at the pinned revisions on 2026-11-06. Matching proves the bytes are identical to the public file; it grants no usage rights. None of these repositories publish a license for the weights.",
+  "sources": {
+    "b590b3ae760e8d1a29973356": {
+      "name": "arcface_w600k_r50.onnx",
+      "sha256": "f1f79dc3b0b79a69f94799af1fffebff09fbd78fd96a275fd8f0cbbea23270d1",
+      "byte_size": 174388474,
+      "upstream_url": "https://huggingface.co/facefusion/models-3.0.0/resolve/728b9659bd9691bf32cbf7f61af478d94b7ba81e/arcface_w600k_r50.onnx",
+      "original_repository": "https://huggingface.co/facefusion/models-3.0.0",
+      "source_revision": "728b9659bd9691bf32cbf7f61af478d94b7ba81e"
+    },
+    "9aed4e37a414df474326e07a": {
+      "name": "bisenet_resnet_34.onnx",
+      "sha256": "4a0b8c958a3c938913bd06a8365dbb3c8761afba6ecbf0d14b3b1f77eb230c96",
+      "byte_size": 93632546,
+      "upstream_url": "https://huggingface.co/facefusion/models-3.0.0/resolve/728b9659bd9691bf32cbf7f61af478d94b7ba81e/bisenet_resnet_34.onnx",
+      "original_repository": "https://huggingface.co/facefusion/models-3.0.0",
+      "source_revision": "728b9659bd9691bf32cbf7f61af478d94b7ba81e"
+    },
+    "88471ba8b50416779a55dfa4": {
+      "name": "gpen_bfr_1024.onnx",
+      "sha256": "bcd31aa52110a2005efc96abbab4546d57e42482648f08715b552423d96b381b",
+      "byte_size": 285203703,
+      "upstream_url": "https://huggingface.co/facefusion/models-3.0.0/resolve/728b9659bd9691bf32cbf7f61af478d94b7ba81e/gpen_bfr_1024.onnx",
+      "original_repository": "https://huggingface.co/facefusion/models-3.0.0",
+      "source_revision": "728b9659bd9691bf32cbf7f61af478d94b7ba81e"
+    },
+    "6e16549530b5f4a624ca84af": {
+      "name": "gpen_bfr_512.onnx",
+      "sha256": "d5f066b9068a8b74217f9712e28e875a6144629b108a6f7355acbdb3a2832c54",
+      "byte_size": 284340240,
+      "upstream_url": "https://huggingface.co/facefusion/models-3.0.0/resolve/728b9659bd9691bf32cbf7f61af478d94b7ba81e/gpen_bfr_512.onnx",
+      "original_repository": "https://huggingface.co/facefusion/models-3.0.0",
+      "source_revision": "728b9659bd9691bf32cbf7f61af478d94b7ba81e"
+    },
+    "2c71cb22e6fa68903da629f6": {
+      "name": "hyperswap_1a_256.onnx",
+      "sha256": "c0e98a8a03a238f461ed3d2570e426b49f46745ee400854a60dceeb70c246add",
+      "byte_size": 402742682,
+      "upstream_url": "https://huggingface.co/facefusion/models-3.3.0/resolve/6271ab1c4619ceb2e534d65e0ec973f22a9aec38/hyperswap_1a_256.onnx",
+      "original_repository": "https://huggingface.co/facefusion/models-3.3.0",
+      "source_revision": "6271ab1c4619ceb2e534d65e0ec973f22a9aec38"
+    },
+    "3241bcc2769f3aefa9f93271": {
+      "name": "hyperswap_1b_256.onnx",
+      "sha256": "5124031789c42f71b9558fb71954ef7aedb6da7ed9fac79293e23c61a792a73e",
+      "byte_size": 402742682,
+      "upstream_url": "https://huggingface.co/facefusion/models-3.3.0/resolve/6271ab1c4619ceb2e534d65e0ec973f22a9aec38/hyperswap_1b_256.onnx",
+      "original_repository": "https://huggingface.co/facefusion/models-3.3.0",
+      "source_revision": "6271ab1c4619ceb2e534d65e0ec973f22a9aec38"
+    },
+    "9eb342fe1900e2e971939a8a": {
+      "name": "hyperswap_1c_256.onnx",
+      "sha256": "5528c2d76fe9986c99d829278987ef9f3a630cb606db7628d02b57b330f406a5",
+      "byte_size": 402742682,
+      "upstream_url": "https://huggingface.co/facefusion/models-3.3.0/resolve/6271ab1c4619ceb2e534d65e0ec973f22a9aec38/hyperswap_1c_256.onnx",
+      "original_repository": "https://huggingface.co/facefusion/models-3.3.0",
+      "source_revision": "6271ab1c4619ceb2e534d65e0ec973f22a9aec38"
+    },
+    "4387a15d1f7fd7d8741d6d9d": {
+      "name": "inswapper_128.onnx",
+      "sha256": "e4a3f08c753cb72d04e10aa0f7dbe3deebbf39567d4ead6dce08e98aa49e16af",
+      "byte_size": 554253681,
+      "upstream_url": "https://huggingface.co/ezioruan/inswapper_128.onnx/resolve/6ffdf0e83c5996cc425e77b59913fc48d79441be/inswapper_128.onnx",
+      "original_repository": "https://huggingface.co/ezioruan/inswapper_128.onnx",
+      "source_revision": "6ffdf0e83c5996cc425e77b59913fc48d79441be"
+    },
+    "98116e7c72cff8d2131d7b33": {
+      "name": "liveportrait_appearance_feature_extractor.onnx",
+      "sha256": "d070afccca7f528ffb0ef5052b21588b42225a996661833f7bdede562d1ab921",
+      "byte_size": 3355896,
+      "upstream_url": "https://huggingface.co/hacksider/deep-live-cam/resolve/581e70b61240b7928404c17900437f47cfe94133/live_portrait/appearance_feature_extractor.onnx",
+      "original_repository": "https://huggingface.co/hacksider/deep-live-cam",
+      "source_revision": "581e70b61240b7928404c17900437f47cfe94133"
+    },
+    "19afcbd3028e1b64abec0686": {
+      "name": "liveportrait_landmark.onnx",
+      "sha256": "31d22a5041326c31f19b78886939a634a5aedcaa5ab8b9b951a1167595d147db",
+      "byte_size": 114666491,
+      "upstream_url": "https://huggingface.co/hacksider/deep-live-cam/resolve/581e70b61240b7928404c17900437f47cfe94133/liveportrait2/landmark.onnx",
+      "original_repository": "https://huggingface.co/hacksider/deep-live-cam",
+      "source_revision": "581e70b61240b7928404c17900437f47cfe94133"
+    },
+    "b9e27bfca5bbd6b991e3cd4a": {
+      "name": "liveportrait_motion_extractor.onnx",
+      "sha256": "219a46174297b2b411bb3c5dce48d3a8c8e07a9d82120a0da21f49f58b67fca6",
+      "byte_size": 112648514,
+      "upstream_url": "https://huggingface.co/hacksider/deep-live-cam/resolve/581e70b61240b7928404c17900437f47cfe94133/live_portrait/motion_extractor.onnx",
+      "original_repository": "https://huggingface.co/hacksider/deep-live-cam",
+      "source_revision": "581e70b61240b7928404c17900437f47cfe94133"
+    },
+    "3bafec2b580cdf85d942454d": {
+      "name": "liveportrait_stitching.onnx",
+      "sha256": "8e33658425e3f1014dc35b28f60ca7459189e8f78f20540262a2fe5ac1dc6ec7",
+      "byte_size": 182363,
+      "upstream_url": "https://huggingface.co/hacksider/deep-live-cam/resolve/581e70b61240b7928404c17900437f47cfe94133/live_portrait/stitching.onnx",
+      "original_repository": "https://huggingface.co/hacksider/deep-live-cam",
+      "source_revision": "581e70b61240b7928404c17900437f47cfe94133"
+    },
+    "4b583cf7d4667da7ed3b843e": {
+      "name": "liveportrait_warping_spade.onnx",
+      "sha256": "b0e7a566db8fba690c23523bcd2faa4f0d13f05418db84a779397a851062ad69",
+      "byte_size": 421233096,
+      "upstream_url": "https://huggingface.co/hacksider/deep-live-cam/resolve/581e70b61240b7928404c17900437f47cfe94133/live_portrait/warping_spade.onnx.opset16.bak",
+      "original_repository": "https://huggingface.co/hacksider/deep-live-cam",
+      "source_revision": "581e70b61240b7928404c17900437f47cfe94133"
+    },
+    "f9149e1589882c7a623e750a": {
+      "name": "restoreformer_plus_plus.onnx",
+      "sha256": "f4db5a89902b6a2d452446f5721245a6f7185f699b6aec7b77285adb4d504337",
+      "byte_size": 294264812,
+      "upstream_url": "https://huggingface.co/datasets/Gourieff/ReActor/resolve/079e0e459cd4261bbcba8c71d47df54a4ded7642/models/facerestore_models/RestoreFormer_PP.onnx",
+      "original_repository": "https://huggingface.co/datasets/Gourieff/ReActor",
+      "source_revision": "079e0e459cd4261bbcba8c71d47df54a4ded7642"
+    },
+    "df98ccc0044455678ade9cbd": {
+      "name": "scrfd_10g_bnkps.onnx",
+      "sha256": "5838f7fe053675b1c7a08b633df49e7af5495cee0493c7dcf6697200b85b5b91",
+      "byte_size": 16923827,
+      "upstream_url": "https://huggingface.co/Aitrepreneur/insightface/resolve/fd887cdef0c73f32251198b8160d6771ac413fc0/models/buffalo_l/det_10g.onnx",
+      "original_repository": "https://huggingface.co/Aitrepreneur/insightface",
+      "source_revision": "fd887cdef0c73f32251198b8160d6771ac413fc0"
+    },
+    "58e30ce4736df56fb21d47e2": {
+      "name": "xseg.onnx",
+      "sha256": "0b57328efcb839d85973164b617ceee9dfe6cfcb2c82e8a033bba9f4f09b27e5",
+      "byte_size": 70327737,
+      "upstream_url": "https://huggingface.co/hacksider/deep-live-cam/resolve/581e70b61240b7928404c17900437f47cfe94133/xseg.onnx",
+      "original_repository": "https://huggingface.co/hacksider/deep-live-cam",
+      "source_revision": "581e70b61240b7928404c17900437f47cfe94133"
+    },
+    "48cc67a78ac3f81a9c5c1499": {
+      "name": "xseg_3.onnx",
+      "sha256": "48ccd7e8541e159a5a754ec9e62df2f12065f7df8f9af842c1750342c6533559",
+      "byte_size": 70327709,
+      "upstream_url": "https://huggingface.co/facefusion/models-3.2.0/resolve/f9cbb5a090256d304f662b81b85880853a9d62cc/xseg_3.onnx",
+      "original_repository": "https://huggingface.co/facefusion/models-3.2.0",
+      "source_revision": "f9cbb5a090256d304f662b81b85880853a9d62cc"
+    },
+    "d1d47cf8fa4f92704da30528": {
+      "name": "yoloface_8n.onnx",
+      "sha256": "821cdbb1e65fbbabdde7dd0933f754797a343e56fd962729c61ffcefcd135929",
+      "byte_size": 12659761,
+      "upstream_url": "https://huggingface.co/facefusion/models-3.0.0/resolve/728b9659bd9691bf32cbf7f61af478d94b7ba81e/yoloface_8n.onnx",
+      "original_repository": "https://huggingface.co/facefusion/models-3.0.0",
+      "source_revision": "728b9659bd9691bf32cbf7f61af478d94b7ba81e"
+    },
+    "20f409b0562256599e81ad62": {
+      "name": "crossface_hififace.onnx",
+      "sha256": "dfb75f960cb8ef1967a82838e64963b9ff621c4af3e22f9fda48ad958dddec9a",
+      "byte_size": 22083800,
+      "upstream_url": "https://huggingface.co/facefusion/models-3.4.0/resolve/048c61c265ba4dc737b43856e007c97be330c621/crossface_hififace.onnx",
+      "original_repository": "https://huggingface.co/facefusion/models-3.4.0",
+      "source_revision": "048c61c265ba4dc737b43856e007c97be330c621"
+    },
+    "b7de913d54d2c95bda3f18cc": {
+      "name": "glintr100.onnx",
+      "sha256": "4ab1d6435d639628a6f3e5008dd4f929edf4c4124b1a7169e1048f9fef534cdf",
+      "byte_size": 260665334,
+      "upstream_url": "https://huggingface.co/Aitrepreneur/insightface/resolve/fd887cdef0c73f32251198b8160d6771ac413fc0/models/antelopev2/glintr100.onnx",
+      "original_repository": "https://huggingface.co/Aitrepreneur/insightface",
+      "source_revision": "fd887cdef0c73f32251198b8160d6771ac413fc0"
+    },
+    "0246071cc088dd4e7b018056": {
+      "name": "gpen_bfr_256.onnx",
+      "sha256": "bad8bf0426873828df2dbf4e3b3d9ababba9da7965b8b72426569486f7ae5c25",
+      "byte_size": 75792988,
+      "upstream_url": "https://huggingface.co/facefusion/models-3.0.0/resolve/728b9659bd9691bf32cbf7f61af478d94b7ba81e/gpen_bfr_256.onnx",
+      "original_repository": "https://huggingface.co/facefusion/models-3.0.0",
+      "source_revision": "728b9659bd9691bf32cbf7f61af478d94b7ba81e"
+    },
+    "8a5bb0b52b4ab71d3890a643": {
+      "name": "hififace_unofficial_256.onnx",
+      "sha256": "9de9751617976195114d7f067b9b6cf933748363355cf473cab2da57a739c2ef",
+      "byte_size": 203784742,
+      "upstream_url": "https://huggingface.co/facefusion/models-3.1.0/resolve/c9e3a503d8e84e91c5cd89ee2d510fe5e793e570/hififace_unofficial_256.onnx",
+      "original_repository": "https://huggingface.co/facefusion/models-3.1.0",
+      "source_revision": "c9e3a503d8e84e91c5cd89ee2d510fe5e793e570"
+    },
+    "50c5441891bd229eae1714e5": {
+      "name": "hyperswap_1a_256.onnx",
+      "sha256": "c0e98a8a03a238f461ed3d2570e426b49f46745ee400854a60dceeb70c246add",
+      "byte_size": 402742682,
+      "upstream_url": "https://huggingface.co/facefusion/models-3.3.0/resolve/6271ab1c4619ceb2e534d65e0ec973f22a9aec38/hyperswap_1a_256.onnx",
+      "original_repository": "https://huggingface.co/facefusion/models-3.3.0",
+      "source_revision": "6271ab1c4619ceb2e534d65e0ec973f22a9aec38"
+    },
+    "703fc12dfd766c46cb034328": {
+      "name": "hyperswap_1b_256.onnx",
+      "sha256": "5124031789c42f71b9558fb71954ef7aedb6da7ed9fac79293e23c61a792a73e",
+      "byte_size": 402742682,
+      "upstream_url": "https://huggingface.co/facefusion/models-3.3.0/resolve/6271ab1c4619ceb2e534d65e0ec973f22a9aec38/hyperswap_1b_256.onnx",
+      "original_repository": "https://huggingface.co/facefusion/models-3.3.0",
+      "source_revision": "6271ab1c4619ceb2e534d65e0ec973f22a9aec38"
+    },
+    "212371b1eade34b6e6e5a7a5": {
+      "name": "hyperswap_1c_256.onnx",
+      "sha256": "5528c2d76fe9986c99d829278987ef9f3a630cb606db7628d02b57b330f406a5",
+      "byte_size": 402742682,
+      "upstream_url": "https://huggingface.co/facefusion/models-3.3.0/resolve/6271ab1c4619ceb2e534d65e0ec973f22a9aec38/hyperswap_1c_256.onnx",
+      "original_repository": "https://huggingface.co/facefusion/models-3.3.0",
+      "source_revision": "6271ab1c4619ceb2e534d65e0ec973f22a9aec38"
+    },
+    "6e6f38875f643fc8da9559aa": {
+      "name": "inswapper_128.onnx",
+      "sha256": "e4a3f08c753cb72d04e10aa0f7dbe3deebbf39567d4ead6dce08e98aa49e16af",
+      "byte_size": 554253681,
+      "upstream_url": "https://huggingface.co/ezioruan/inswapper_128.onnx/resolve/6ffdf0e83c5996cc425e77b59913fc48d79441be/inswapper_128.onnx",
+      "original_repository": "https://huggingface.co/ezioruan/inswapper_128.onnx",
+      "source_revision": "6ffdf0e83c5996cc425e77b59913fc48d79441be"
+    },
+    "01018e12d52a26e47b1a65cd": {
+      "name": "restoreformer_plus_plus.onnx",
+      "sha256": "f4db5a89902b6a2d452446f5721245a6f7185f699b6aec7b77285adb4d504337",
+      "byte_size": 294264812,
+      "upstream_url": "https://huggingface.co/datasets/Gourieff/ReActor/resolve/079e0e459cd4261bbcba8c71d47df54a4ded7642/models/facerestore_models/RestoreFormer_PP.onnx",
+      "original_repository": "https://huggingface.co/datasets/Gourieff/ReActor",
+      "source_revision": "079e0e459cd4261bbcba8c71d47df54a4ded7642"
+    },
+    "fb1ae498d8c2e08509d4bc4e": {
+      "name": "retinaface_10g.onnx",
+      "sha256": "808399c3d0b40ed340634ed590ae564a7caa09e5659916923a95d4470b54ff5a",
+      "byte_size": 16926877,
+      "upstream_url": "https://huggingface.co/facefusion/models-3.0.0/resolve/728b9659bd9691bf32cbf7f61af478d94b7ba81e/retinaface_10g.onnx",
+      "original_repository": "https://huggingface.co/facefusion/models-3.0.0",
+      "source_revision": "728b9659bd9691bf32cbf7f61af478d94b7ba81e"
+    },
+    "b5b65e35b7ede220a44241d0": {
+      "name": "xseg.onnx",
+      "sha256": "0b57328efcb839d85973164b617ceee9dfe6cfcb2c82e8a033bba9f4f09b27e5",
+      "byte_size": 70327737,
+      "upstream_url": "https://huggingface.co/hacksider/deep-live-cam/resolve/581e70b61240b7928404c17900437f47cfe94133/xseg.onnx",
+      "original_repository": "https://huggingface.co/hacksider/deep-live-cam",
+      "source_revision": "581e70b61240b7928404c17900437f47cfe94133"
+    },
+    "5d71c07f2cc6d75c17b018d6": {
+      "name": "xseg_3.onnx",
+      "sha256": "48ccd7e8541e159a5a754ec9e62df2f12065f7df8f9af842c1750342c6533559",
+      "byte_size": 70327709,
+      "upstream_url": "https://huggingface.co/facefusion/models-3.2.0/resolve/f9cbb5a090256d304f662b81b85880853a9d62cc/xseg_3.onnx",
+      "original_repository": "https://huggingface.co/facefusion/models-3.2.0",
+      "source_revision": "f9cbb5a090256d304f662b81b85880853a9d62cc"
+    },
+    "8f7d911b4845c7b22bc5ca68": {
+      "name": "yoloface_8n.onnx",
+      "sha256": "821cdbb1e65fbbabdde7dd0933f754797a343e56fd962729c61ffcefcd135929",
+      "byte_size": 12659761,
+      "upstream_url": "https://huggingface.co/facefusion/models-3.0.0/resolve/728b9659bd9691bf32cbf7f61af478d94b7ba81e/yoloface_8n.onnx",
+      "original_repository": "https://huggingface.co/facefusion/models-3.0.0",
+      "source_revision": "728b9659bd9691bf32cbf7f61af478d94b7ba81e"
+    },
+    "38cd4606cf75eae80f046cba": {
+      "name": "clear_reality_x4.onnx",
+      "sha256": "bbce9d5a653281cfae07788d620bd4ec45712709bdf6349a06a893159efd97ce",
+      "byte_size": 1718947,
+      "upstream_url": "https://huggingface.co/facefusion/models-3.0.0/resolve/728b9659bd9691bf32cbf7f61af478d94b7ba81e/clear_reality_x4.onnx",
+      "original_repository": "https://huggingface.co/facefusion/models-3.0.0",
+      "source_revision": "728b9659bd9691bf32cbf7f61af478d94b7ba81e"
+    },
+    "09c2d8b04e2a3614bbd22a68": {
+      "name": "rife49_ensemble_True_scale_1_sim.onnx",
+      "sha256": "76e4cef9ab42fa7dd4e8f6e4aba47462051e3faa969e4bca6479784fbab0ac6f",
+      "byte_size": 21458882,
+      "upstream_url": "https://huggingface.co/hacksider/deep-live-cam/resolve/581e70b61240b7928404c17900437f47cfe94133/rife.onnx",
+      "original_repository": "https://huggingface.co/hacksider/deep-live-cam",
+      "source_revision": "581e70b61240b7928404c17900437f47cfe94133"
+    },
+    "ea7f6672ee6087d3ae0ec2ec": {
+      "name": "span_kendata_x4.onnx",
+      "sha256": "7478c40953a5902efd785ef1fe8e07a8bb7e7ee9b1977273550813ceefae6348",
+      "byte_size": 1718947,
+      "upstream_url": "https://huggingface.co/facefusion/models-3.0.0/resolve/728b9659bd9691bf32cbf7f61af478d94b7ba81e/span_kendata_x4.onnx",
+      "original_repository": "https://huggingface.co/facefusion/models-3.0.0",
+      "source_revision": "728b9659bd9691bf32cbf7f61af478d94b7ba81e"
+    },
+    "ac2b834a819b7a6db273344c": {
+      "name": "ultra_sharp_2_x4.onnx",
+      "sha256": "6c0201e3403745f39a9aa5273c50ed084cf6c4af5a71a4654c30252cf19bf0a5",
+      "byte_size": 51800517,
+      "upstream_url": "https://huggingface.co/facefusion/models-3.3.0/resolve/6271ab1c4619ceb2e534d65e0ec973f22a9aec38/ultra_sharp_2_x4.onnx",
+      "original_repository": "https://huggingface.co/facefusion/models-3.3.0",
+      "source_revision": "6271ab1c4619ceb2e534d65e0ec973f22a9aec38"
+    },
+    "f4d0609acdc3491ba09003bc": {
+      "name": "1k3d68.onnx",
+      "sha256": "df5c06b8a0c12e422b2ed8947b8869faa4105387f199c477af038aa01f9a45cc",
+      "byte_size": 143607619,
+      "upstream_url": "https://huggingface.co/Aitrepreneur/insightface/resolve/fd887cdef0c73f32251198b8160d6771ac413fc0/models/buffalo_l/1k3d68.onnx",
+      "original_repository": "https://huggingface.co/Aitrepreneur/insightface",
+      "source_revision": "fd887cdef0c73f32251198b8160d6771ac413fc0"
+    },
+    "7515daa40c84ce8be15c8a3c": {
+      "name": "2d106det.onnx",
+      "sha256": "f001b856447c413801ef5c42091ed0cd516fcd21f2d6b79635b1e733a7109dbf",
+      "byte_size": 5030888,
+      "upstream_url": "https://huggingface.co/Aitrepreneur/insightface/resolve/fd887cdef0c73f32251198b8160d6771ac413fc0/models/buffalo_l/2d106det.onnx",
+      "original_repository": "https://huggingface.co/Aitrepreneur/insightface",
+      "source_revision": "fd887cdef0c73f32251198b8160d6771ac413fc0"
+    },
+    "caa047119ea73fb50b225d60": {
+      "name": "det_10g.onnx",
+      "sha256": "5838f7fe053675b1c7a08b633df49e7af5495cee0493c7dcf6697200b85b5b91",
+      "byte_size": 16923827,
+      "upstream_url": "https://huggingface.co/Aitrepreneur/insightface/resolve/fd887cdef0c73f32251198b8160d6771ac413fc0/models/buffalo_l/det_10g.onnx",
+      "original_repository": "https://huggingface.co/Aitrepreneur/insightface",
+      "source_revision": "fd887cdef0c73f32251198b8160d6771ac413fc0"
+    },
+    "da81f167ade04a6efa3ff370": {
+      "name": "genderage.onnx",
+      "sha256": "4fde69b1c810857b88c64a335084f1c3fe8f01246c9a191b48c7bb756d6652fb",
+      "byte_size": 1322532,
+      "upstream_url": "https://huggingface.co/Aitrepreneur/insightface/resolve/fd887cdef0c73f32251198b8160d6771ac413fc0/models/buffalo_l/genderage.onnx",
+      "original_repository": "https://huggingface.co/Aitrepreneur/insightface",
+      "source_revision": "fd887cdef0c73f32251198b8160d6771ac413fc0"
+    },
+    "d9235365b06d994596a8ef35": {
+      "name": "w600k_r50.onnx",
+      "sha256": "4c06341c33c2ca1f86781dab0e829f88ad5b64be9fba56e56bc9ebdefc619e43",
+      "byte_size": 174383860,
+      "upstream_url": "https://huggingface.co/Aitrepreneur/insightface/resolve/fd887cdef0c73f32251198b8160d6771ac413fc0/models/buffalo_l/w600k_r50.onnx",
+      "original_repository": "https://huggingface.co/Aitrepreneur/insightface",
+      "source_revision": "fd887cdef0c73f32251198b8160d6771ac413fc0"
+    },
+    "e24a9a33e86cf009f77eb009": {
+      "name": "1k3d68.onnx",
+      "sha256": "df5c06b8a0c12e422b2ed8947b8869faa4105387f199c477af038aa01f9a45cc",
+      "byte_size": 143607619,
+      "upstream_url": "https://huggingface.co/Aitrepreneur/insightface/resolve/fd887cdef0c73f32251198b8160d6771ac413fc0/models/buffalo_l/1k3d68.onnx",
+      "original_repository": "https://huggingface.co/Aitrepreneur/insightface",
+      "source_revision": "fd887cdef0c73f32251198b8160d6771ac413fc0"
+    },
+    "1296c115d7d2132058cc086b": {
+      "name": "2d106det.onnx",
+      "sha256": "f001b856447c413801ef5c42091ed0cd516fcd21f2d6b79635b1e733a7109dbf",
+      "byte_size": 5030888,
+      "upstream_url": "https://huggingface.co/Aitrepreneur/insightface/resolve/fd887cdef0c73f32251198b8160d6771ac413fc0/models/buffalo_l/2d106det.onnx",
+      "original_repository": "https://huggingface.co/Aitrepreneur/insightface",
+      "source_revision": "fd887cdef0c73f32251198b8160d6771ac413fc0"
+    },
+    "de9199ffce0dae14435f9dde": {
+      "name": "det_10g.onnx",
+      "sha256": "5838f7fe053675b1c7a08b633df49e7af5495cee0493c7dcf6697200b85b5b91",
+      "byte_size": 16923827,
+      "upstream_url": "https://huggingface.co/Aitrepreneur/insightface/resolve/fd887cdef0c73f32251198b8160d6771ac413fc0/models/buffalo_l/det_10g.onnx",
+      "original_repository": "https://huggingface.co/Aitrepreneur/insightface",
+      "source_revision": "fd887cdef0c73f32251198b8160d6771ac413fc0"
+    },
+    "bdb727a1f8130ae7a6f49de3": {
+      "name": "genderage.onnx",
+      "sha256": "4fde69b1c810857b88c64a335084f1c3fe8f01246c9a191b48c7bb756d6652fb",
+      "byte_size": 1322532,
+      "upstream_url": "https://huggingface.co/Aitrepreneur/insightface/resolve/fd887cdef0c73f32251198b8160d6771ac413fc0/models/buffalo_l/genderage.onnx",
+      "original_repository": "https://huggingface.co/Aitrepreneur/insightface",
+      "source_revision": "fd887cdef0c73f32251198b8160d6771ac413fc0"
+    },
+    "5d110c668c881b82e3ac6d29": {
+      "name": "w600k_r50.onnx",
+      "sha256": "4c06341c33c2ca1f86781dab0e829f88ad5b64be9fba56e56bc9ebdefc619e43",
+      "byte_size": 174383860,
+      "upstream_url": "https://huggingface.co/Aitrepreneur/insightface/resolve/fd887cdef0c73f32251198b8160d6771ac413fc0/models/buffalo_l/w600k_r50.onnx",
+      "original_repository": "https://huggingface.co/Aitrepreneur/insightface",
+      "source_revision": "fd887cdef0c73f32251198b8160d6771ac413fc0"
+    },
+    "766f43a16160cb4033994169": {
+      "name": "1k3d68.onnx",
+      "sha256": "df5c06b8a0c12e422b2ed8947b8869faa4105387f199c477af038aa01f9a45cc",
+      "byte_size": 143607619,
+      "upstream_url": "https://huggingface.co/Aitrepreneur/insightface/resolve/fd887cdef0c73f32251198b8160d6771ac413fc0/models/buffalo_l/1k3d68.onnx",
+      "original_repository": "https://huggingface.co/Aitrepreneur/insightface",
+      "source_revision": "fd887cdef0c73f32251198b8160d6771ac413fc0"
+    },
+    "dcfeb41ade111ceca2d677be": {
+      "name": "2d106det.onnx",
+      "sha256": "f001b856447c413801ef5c42091ed0cd516fcd21f2d6b79635b1e733a7109dbf",
+      "byte_size": 5030888,
+      "upstream_url": "https://huggingface.co/Aitrepreneur/insightface/resolve/fd887cdef0c73f32251198b8160d6771ac413fc0/models/buffalo_l/2d106det.onnx",
+      "original_repository": "https://huggingface.co/Aitrepreneur/insightface",
+      "source_revision": "fd887cdef0c73f32251198b8160d6771ac413fc0"
+    },
+    "3f1189c4cf285ce16e9df499": {
+      "name": "det_10g.onnx",
+      "sha256": "5838f7fe053675b1c7a08b633df49e7af5495cee0493c7dcf6697200b85b5b91",
+      "byte_size": 16923827,
+      "upstream_url": "https://huggingface.co/Aitrepreneur/insightface/resolve/fd887cdef0c73f32251198b8160d6771ac413fc0/models/buffalo_l/det_10g.onnx",
+      "original_repository": "https://huggingface.co/Aitrepreneur/insightface",
+      "source_revision": "fd887cdef0c73f32251198b8160d6771ac413fc0"
+    },
+    "54899d669f7c2c149ff9e968": {
+      "name": "genderage.onnx",
+      "sha256": "4fde69b1c810857b88c64a335084f1c3fe8f01246c9a191b48c7bb756d6652fb",
+      "byte_size": 1322532,
+      "upstream_url": "https://huggingface.co/Aitrepreneur/insightface/resolve/fd887cdef0c73f32251198b8160d6771ac413fc0/models/buffalo_l/genderage.onnx",
+      "original_repository": "https://huggingface.co/Aitrepreneur/insightface",
+      "source_revision": "fd887cdef0c73f32251198b8160d6771ac413fc0"
+    },
+    "095b591fb8ba162510c2ca21": {
+      "name": "w600k_r50.onnx",
+      "sha256": "4c06341c33c2ca1f86781dab0e829f88ad5b64be9fba56e56bc9ebdefc619e43",
+      "byte_size": 174383860,
+      "upstream_url": "https://huggingface.co/Aitrepreneur/insightface/resolve/fd887cdef0c73f32251198b8160d6771ac413fc0/models/buffalo_l/w600k_r50.onnx",
+      "original_repository": "https://huggingface.co/Aitrepreneur/insightface",
+      "source_revision": "fd887cdef0c73f32251198b8160d6771ac413fc0"
+    },
+    "stage16_liveportrait_eye": {
+      "name": "live_portrait_eye_retargeter.onnx",
+      "sha256": "13cf8b06f0a314e6e65b4a47fea5ce270edb79cd54359c4d273f2c139820276b",
+      "byte_size": 581421,
+      "upstream_url": "https://huggingface.co/facefusion/models-3.0.0/resolve/728b9659bd9691bf32cbf7f61af478d94b7ba81e/live_portrait_eye_retargeter.onnx",
+      "original_repository": "https://huggingface.co/facefusion/models-3.0.0",
+      "source_revision": "728b9659bd9691bf32cbf7f61af478d94b7ba81e"
+    },
+    "stage16_liveportrait_appearance": {
+      "name": "live_portrait_feature_extractor.onnx",
+      "sha256": "980d26afc9af6d1b6c946329df08b89a4a8582c9bb668d9475f5254e69434d15",
+      "byte_size": 3354251,
+      "upstream_url": "https://huggingface.co/facefusion/models-3.0.0/resolve/728b9659bd9691bf32cbf7f61af478d94b7ba81e/live_portrait_feature_extractor.onnx",
+      "original_repository": "https://huggingface.co/facefusion/models-3.0.0",
+      "source_revision": "728b9659bd9691bf32cbf7f61af478d94b7ba81e"
+    },
+    "stage16_liveportrait_generator": {
+      "name": "live_portrait_generator.onnx",
+      "sha256": "db9274114fed504226c5921fc736b9558505e68682e7448631aea7b62cb3048a",
+      "byte_size": 222263347,
+      "upstream_url": "https://huggingface.co/facefusion/models-3.0.0/resolve/728b9659bd9691bf32cbf7f61af478d94b7ba81e/live_portrait_generator.onnx",
+      "original_repository": "https://huggingface.co/facefusion/models-3.0.0",
+      "source_revision": "728b9659bd9691bf32cbf7f61af478d94b7ba81e"
+    },
+    "stage16_liveportrait_lip": {
+      "name": "live_portrait_lip_retargeter.onnx",
+      "sha256": "0f5b76344d0bfbb44c8a0b1ec57a4a7c36fd38db530338777a48c4a33a02d71f",
+      "byte_size": 151022,
+      "upstream_url": "https://huggingface.co/facefusion/models-3.0.0/resolve/728b9659bd9691bf32cbf7f61af478d94b7ba81e/live_portrait_lip_retargeter.onnx",
+      "original_repository": "https://huggingface.co/facefusion/models-3.0.0",
+      "source_revision": "728b9659bd9691bf32cbf7f61af478d94b7ba81e"
+    },
+    "stage16_liveportrait_motion": {
+      "name": "live_portrait_motion_extractor.onnx",
+      "sha256": "ef4a00ff50d5d864994eeecb226dc3b298e62afacec8fa4fc8b912835ec4b0ab",
+      "byte_size": 112636642,
+      "upstream_url": "https://huggingface.co/facefusion/models-3.0.0/resolve/728b9659bd9691bf32cbf7f61af478d94b7ba81e/live_portrait_motion_extractor.onnx",
+      "original_repository": "https://huggingface.co/facefusion/models-3.0.0",
+      "source_revision": "728b9659bd9691bf32cbf7f61af478d94b7ba81e"
+    },
+    "stage16_liveportrait_stitch": {
+      "name": "live_portrait_stitcher.onnx",
+      "sha256": "c6683427edf3e0c3a86e61b1dea1e6dad56c557f5e711fec93966cfb34fd5f87",
+      "byte_size": 193259,
+      "upstream_url": "https://huggingface.co/facefusion/models-3.0.0/resolve/728b9659bd9691bf32cbf7f61af478d94b7ba81e/live_portrait_stitcher.onnx",
+      "original_repository": "https://huggingface.co/facefusion/models-3.0.0",
+      "source_revision": "728b9659bd9691bf32cbf7f61af478d94b7ba81e"
+    },
+    "arcface_converter_hififace": {
+      "name": "arcface_converter_hififace.onnx",
+      "sha256": "34255826c8da689858a7d3c1615cde2df0e115674a0136e05296a1291b31cf66",
+      "byte_size": 20993559,
+      "upstream_url": "https://huggingface.co/facefusion/models-3.1.0/resolve/c9e3a503d8e84e91c5cd89ee2d510fe5e793e570/arcface_converter_hififace.onnx",
+      "original_repository": "https://huggingface.co/facefusion/models-3.1.0",
+      "source_revision": "c9e3a503d8e84e91c5cd89ee2d510fe5e793e570"
+    },
+    "bisenet_resnet_18": {
+      "name": "bisenet_resnet_18.onnx",
+      "sha256": "2218b6183c26ca5c83303232d682a536c670c13ea9695f716c777d1f244eefe9",
+      "byte_size": 53205356,
+      "upstream_url": "https://huggingface.co/facefusion/models-3.1.0/resolve/c9e3a503d8e84e91c5cd89ee2d510fe5e793e570/bisenet_resnet_18.onnx",
+      "original_repository": "https://huggingface.co/facefusion/models-3.1.0",
+      "source_revision": "c9e3a503d8e84e91c5cd89ee2d510fe5e793e570"
+    },
+    "hififace_unofficial_256": {
+      "name": "hififace_unofficial_256.onnx",
+      "sha256": "9de9751617976195114d7f067b9b6cf933748363355cf473cab2da57a739c2ef",
+      "byte_size": 203784742,
+      "upstream_url": "https://huggingface.co/facefusion/models-3.1.0/resolve/c9e3a503d8e84e91c5cd89ee2d510fe5e793e570/hififace_unofficial_256.onnx",
+      "original_repository": "https://huggingface.co/facefusion/models-3.1.0",
+      "source_revision": "c9e3a503d8e84e91c5cd89ee2d510fe5e793e570"
+    },
+    "real_web_photo_x4": {
+      "name": "real_web_photo_x4.onnx",
+      "sha256": "ac378843a6cefa190b2d4972e93a2f53f9c7277c542142f5f57babb688f8a25d",
+      "byte_size": 116790337,
+      "upstream_url": "https://huggingface.co/facefusion/models-3.1.0/resolve/c9e3a503d8e84e91c5cd89ee2d510fe5e793e570/real_web_photo_x4.onnx",
+      "original_repository": "https://huggingface.co/facefusion/models-3.1.0",
+      "source_revision": "c9e3a503d8e84e91c5cd89ee2d510fe5e793e570"
+    },
+    "styleganex_age": {
+      "name": "styleganex_age.onnx",
+      "sha256": "212cdf55a9b66c382016119f7d642a227ca16c833348dd78d1e129ae5cf9ec7c",
+      "byte_size": 1340360455,
+      "upstream_url": "https://huggingface.co/facefusion/models-3.1.0/resolve/c9e3a503d8e84e91c5cd89ee2d510fe5e793e570/styleganex_age.onnx",
+      "original_repository": "https://huggingface.co/facefusion/models-3.1.0",
+      "source_revision": "c9e3a503d8e84e91c5cd89ee2d510fe5e793e570"
+    },
+    "swin2_sr_x4": {
+      "name": "swin2_sr_x4.onnx",
+      "sha256": "5a797560950146389fa938bc40f63c70ad4a84d6c7cf1abb06967c3624e35280",
+      "byte_size": 57340967,
+      "upstream_url": "https://huggingface.co/facefusion/models-3.1.0/resolve/c9e3a503d8e84e91c5cd89ee2d510fe5e793e570/swin2_sr_x4.onnx",
+      "original_repository": "https://huggingface.co/facefusion/models-3.1.0",
+      "source_revision": "c9e3a503d8e84e91c5cd89ee2d510fe5e793e570"
+    },
+    "xseg_1": {
+      "name": "xseg_1.onnx",
+      "sha256": "c4d1498b8a03b5fe2a3a5d2ef2a0402ab03bd51edaf5b2d8d5fb764702a97dd3",
+      "byte_size": 70324286,
+      "upstream_url": "https://huggingface.co/facefusion/models-3.1.0/resolve/c9e3a503d8e84e91c5cd89ee2d510fe5e793e570/xseg_1.onnx",
+      "original_repository": "https://huggingface.co/facefusion/models-3.1.0",
+      "source_revision": "c9e3a503d8e84e91c5cd89ee2d510fe5e793e570"
+    },
+    "xseg_2": {
+      "name": "xseg_2.onnx",
+      "sha256": "cd9a0879eaf43841d765472cf1f8c330dbf9dcb03da0eace93e95f3bcc399042",
+      "byte_size": 70324286,
+      "upstream_url": "https://huggingface.co/facefusion/models-3.1.0/resolve/c9e3a503d8e84e91c5cd89ee2d510fe5e793e570/xseg_2.onnx",
+      "original_repository": "https://huggingface.co/facefusion/models-3.1.0",
+      "source_revision": "c9e3a503d8e84e91c5cd89ee2d510fe5e793e570"
+    }
+  }
+}
