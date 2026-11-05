@@ -276,6 +276,64 @@
       "base_model_commercial_use": "deny",
       "base_model_redistribution_permission": "unknown",
       "base_model_attribution_requirements": "UNKNOWN"
+    },
+    {
+      "model_id": "public_nomos8k_sc_x4",
+      "name": "nomos8k_sc_x4.onnx",
+      "role": "frame_upscaler",
+      "role_evidence": "Nomos8k SC x4 upscaler (public FaceFusion build); a different build from the locally installed file of the same name.",
+      "upstream_url": "https://huggingface.co/facefusion/models-3.0.0/resolve/728b9659bd9691bf32cbf7f61af478d94b7ba81e/nomos8k_sc_x4.onnx",
+      "filenames": [
+        "nomos8k_sc_x4.onnx"
+      ],
+      "expected_sha256": "7747a7dd0b115761cf9c34bbf67bb1e98218ff5b459492a13215c8deb046a9d0",
+      "byte_size": 67002465,
+      "input_output_contract": {
+        "state": "UNKNOWN"
+      },
+      "supported_providers": [],
+      "provider_evidence": "Not inspected.",
+      "license_id": "UNKNOWN",
+      "commercial_use": "unknown",
+      "status": "verified_remote",
+      "evidence": "Hugging Face revision 728b9659bd9691bf32cbf7f61af478d94b7ba81e; LFS object id (SHA-256) and size read from the repository tree on 2026-11-06.",
+      "provenance_state": "VERIFIED_REMOTE",
+      "license_notice": "The hosting repository publishes no weight license. Acknowledge unverified rights before download; commercial use and activation stay blocked.",
+      "manual_acceptance_required": true,
+      "rights_unpublished": true,
+      "version": "728b9659bd9691bf32cbf7f61af478d94b7ba81e",
+      "source_repository": "https://huggingface.co/facefusion/models-3.0.0",
+      "source_revision": "728b9659bd9691bf32cbf7f61af478d94b7ba81e",
+      "original_repository": "facefusion/models-3.0.0"
+    },
+    {
+      "model_id": "public_realesrgan_x4plus_anime_6b",
+      "name": "RealESRGAN_x4plus_anime_6B.onnx",
+      "role": "frame_upscaler",
+      "role_evidence": "Real-ESRGAN x4plus anime 6B upscaler (public ONNX build); a different build from the locally installed file of the same name.",
+      "upstream_url": "https://huggingface.co/mhmtaufiq/realesrgan-onnx/resolve/c524eb8bdc8563e03d66e332a22886af1b08be21/RealESRGAN_x4plus_anime_6B.onnx",
+      "filenames": [
+        "RealESRGAN_x4plus_anime_6B.onnx"
+      ],
+      "expected_sha256": "82f458db35dd94f2200f9a32fd0232c581da861c1b2e5c956d5574b0e9c5aea2",
+      "byte_size": 18406820,
+      "input_output_contract": {
+        "state": "UNKNOWN"
+      },
+      "supported_providers": [],
+      "provider_evidence": "Not inspected.",
+      "license_id": "UNKNOWN",
+      "commercial_use": "unknown",
+      "status": "verified_remote",
+      "evidence": "Hugging Face revision c524eb8bdc8563e03d66e332a22886af1b08be21; LFS object id (SHA-256) and size read from the repository tree on 2026-11-06.",
+      "provenance_state": "VERIFIED_REMOTE",
+      "license_notice": "The hosting repository publishes no weight license. Acknowledge unverified rights before download; commercial use and activation stay blocked.",
+      "manual_acceptance_required": true,
+      "rights_unpublished": true,
+      "version": "c524eb8bdc8563e03d66e332a22886af1b08be21",
+      "source_repository": "https://huggingface.co/mhmtaufiq/realesrgan-onnx",
+      "source_revision": "c524eb8bdc8563e03d66e332a22886af1b08be21",
+      "original_repository": "mhmtaufiq/realesrgan-onnx"
     }
   ]
 }

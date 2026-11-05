@@ -656,6 +656,38 @@
       "original_repository": "https://github.com/yakhyo/face-parsing",
       "source_revision": "313d1f9c9dbcb98fae12babdfea327369722682a",
       "license_note": "Listed by roop-ultimate's model manifest; the release publishes no license for the weights."
+    },
+    "e5dae41e467bbb69f2fed955": {
+      "name": "w600k_mbf.onnx",
+      "sha256": "9cc6e4a75f0e2bf0b1aed94578f144d15175f357bdc05e815e5c4a02b319eb4f",
+      "byte_size": 13616099,
+      "upstream_url": "https://huggingface.co/immich-app/buffalo_s/resolve/0ff1751885575e62e084dff70549ce24a11fa5dc/recognition/model.onnx",
+      "original_repository": "immich-app/buffalo_s",
+      "source_revision": "0ff1751885575e62e084dff70549ce24a11fa5dc"
+    },
+    "11b0f5d2ce2874795e2bbacc": {
+      "name": "adaface_ir101.onnx",
+      "sha256": "d177da5864546e761579af1a91e308d7c868a32670f37e7b8b04628a78d7e5b5",
+      "byte_size": 260701576,
+      "upstream_url": "https://huggingface.co/Evn9172/cvlface_adaface_ir101_webface4m_onnx/resolve/15413adeaf362981d5bdd60d6d3d3536c1323cf1/adaface_ir101.onnx",
+      "original_repository": "Evn9172/cvlface_adaface_ir101_webface4m_onnx",
+      "source_revision": "15413adeaf362981d5bdd60d6d3d3536c1323cf1"
+    },
+    "d9d99944b8d9c7455c7a32f4": {
+      "name": "realesr-general-x4v3.onnx",
+      "sha256": "09b757accd747d7e423c1d352b3e8f23e77cc5742d04bae958d4eb8082b76fa4",
+      "byte_size": 4871181,
+      "upstream_url": "https://huggingface.co/Heliosoph/realesrgan-onnx/resolve/488e5dda07333179f229a6205d92135eea4c25e9/realesr-general-x4v3.onnx",
+      "original_repository": "Heliosoph/realesrgan-onnx",
+      "source_revision": "488e5dda07333179f229a6205d92135eea4c25e9"
+    },
+    "f9e74901f77ed7ea55e7c44e": {
+      "name": "face_occluder.onnx",
+      "sha256": "ad9bfb90510790711a429935f846eaba2dcf2935d9afc2bda7349f5bfb92a104",
+      "byte_size": 70324403,
+      "upstream_url": "https://huggingface.co/datvtn/face_occluder/resolve/1eb61ffa05b1548675dea08facbf3c7edcfcb28f/face_occluder.onnx",
+      "original_repository": "datvtn/face_occluder",
+      "source_revision": "1eb61ffa05b1548675dea08facbf3c7edcfcb28f"
     }
   }
 }
