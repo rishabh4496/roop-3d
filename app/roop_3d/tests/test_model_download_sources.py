@@ -70,3 +70,32 @@ def test_hub_explains_every_model_that_cannot_be_downloaded():
             assert model["download_blocker"]
         if model["status"] == "NOT_INSTALLED" and model["weight_files"][0]["source_url"]:
             assert model["download_allowed"]
+
+
+def test_github_release_redirect_is_allowed_only_to_release_storage():
+    from roop_3d.models.downloader import validate_hf_redirect
+    source = "https://github.com/yakhyo/face-parsing/releases/download/weights/resnet18.onnx"
+    good = "https://release-assets.githubusercontent.com/github-production-release-asset/1/abc?sp=r"
+    assert validate_hf_redirect(source, good) == good
+    for bad in ("https://evil.example/resnet18.onnx", "http://release-assets.githubusercontent.com/x",
+                "https://objects.githubusercontent.com/x"):
+        with pytest.raises(DomainError):
+            validate_hf_redirect(source, bad)
+    with pytest.raises(DomainError):
+        validate_hf_redirect("https://example.com/x", good)
+
+
+def test_published_licenses_are_recorded_and_unlock_activation_checks():
+    registry = ModelRegistry()
+    by_name = {r.name: r for r in registry.records() if r.upstream_url}
+    for name, license_id in (("face_detection_yunet_2023mar.onnx", "MIT"), ("face_recognition_sface_2021dec.onnx", "Apache-2.0")):
+        record = by_name[name]
+        assert record.license_id == license_id and record.license_url and not record.rights_unpublished
+        authorize(record, action="download")  # no acknowledgement needed for a published permissive license
+
+
+def test_unsourced_models_report_missing_public_source():
+    models = ModelHubService(ModelCatalog()).snapshot()["models"]
+    unsourced = [m for m in models if m["weight_files"] and not m["weight_files"][0]["source_url"]]
+    assert unsourced
+    assert all(m["download_blocker"] for m in unsourced)

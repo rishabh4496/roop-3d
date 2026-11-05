@@ -38,12 +38,17 @@ class WorkstationFiles(StaticFiles):
         if portable == "api" or portable.startswith("api/") or portable == "openapi.json":
             raise HTTPException(404)
         try:
-            return await super().get_response(path, scope)
+            response = await super().get_response(path, scope)
         except HTTPException as error:
             ui_route = portable.split("/", 1)[0] in {"projects", "workstation"}
             if error.status_code != 404 or Path(path).suffix or not ui_route:
                 raise
-            return await super().get_response("index.html", scope)
+            response = await super().get_response("index.html", scope)
+        # Hashed files under assets/ are immutable; the HTML entry point must be revalidated
+        # or a browser keeps loading the previous build after an update.
+        if not portable.startswith("assets/"):
+            response.headers["Cache-Control"] = "no-cache"
+        return response
 
 
 def mount_workstation(app, root: Path) -> None:

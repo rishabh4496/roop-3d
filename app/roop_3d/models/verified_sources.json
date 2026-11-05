@@ -513,6 +513,149 @@
       "upstream_url": "https://huggingface.co/facefusion/models-3.1.0/resolve/c9e3a503d8e84e91c5cd89ee2d510fe5e793e570/xseg_2.onnx",
       "original_repository": "https://huggingface.co/facefusion/models-3.1.0",
       "source_revision": "c9e3a503d8e84e91c5cd89ee2d510fe5e793e570"
+    },
+    "8d400f8c5291e8e875dc3e2f": {
+      "name": "CodeFormerv0.1.onnx",
+      "sha256": "9aa48fc4b21224d85784c9a58885201284ec8e590b988126db2c07495b421d36",
+      "byte_size": 376821951,
+      "upstream_url": "https://huggingface.co/CountFloyd/deepfake/resolve/ee7d0fe0c284700192ff11e14ecdab5b40185204/CodeFormerv0.1.onnx",
+      "original_repository": "https://huggingface.co/CountFloyd/deepfake",
+      "source_revision": "ee7d0fe0c284700192ff11e14ecdab5b40185204"
+    },
+    "a2d838fd7490e8db15a508a1": {
+      "name": "GFPGANv1.4.onnx",
+      "sha256": "5060d6c8d84851bbb8da630bea59b56414b49923a2b9304fb08f72d4c98f0aeb",
+      "byte_size": 340256688,
+      "upstream_url": "https://huggingface.co/CountFloyd/deepfake/resolve/ee7d0fe0c284700192ff11e14ecdab5b40185204/GFPGANv1.4.onnx",
+      "original_repository": "https://huggingface.co/CountFloyd/deepfake",
+      "source_revision": "ee7d0fe0c284700192ff11e14ecdab5b40185204"
+    },
+    "deabe216ed75127c13f6bc13": {
+      "name": "GPEN-BFR-512.onnx",
+      "sha256": "0960f836488735444d508b588e44fb5dfd19c68fde9163ad7878aa24d1d5115e",
+      "byte_size": 284250449,
+      "upstream_url": "https://huggingface.co/CountFloyd/deepfake/resolve/ee7d0fe0c284700192ff11e14ecdab5b40185204/GPEN-BFR-512.onnx",
+      "original_repository": "https://huggingface.co/CountFloyd/deepfake",
+      "source_revision": "ee7d0fe0c284700192ff11e14ecdab5b40185204"
+    },
+    "0296594ef7634462eece9982": {
+      "name": "deoldify_artistic.onnx",
+      "sha256": "be026e17c47c85527b3084cacad352f7ca0e021c33aa827062c5997ebe72c61f",
+      "byte_size": 255024891,
+      "upstream_url": "https://huggingface.co/CountFloyd/deepfake/resolve/ee7d0fe0c284700192ff11e14ecdab5b40185204/deoldify_artistic.onnx",
+      "original_repository": "https://huggingface.co/CountFloyd/deepfake",
+      "source_revision": "ee7d0fe0c284700192ff11e14ecdab5b40185204"
+    },
+    "2862a1920c369161e2af89df": {
+      "name": "deoldify_stable.onnx",
+      "sha256": "98d69dbecde018fe3d630a35ac850ac590b23e359c8349d8404b467bbfe4a0b9",
+      "byte_size": 873359997,
+      "upstream_url": "https://huggingface.co/CountFloyd/deepfake/resolve/ee7d0fe0c284700192ff11e14ecdab5b40185204/deoldify_stable.onnx",
+      "original_repository": "https://huggingface.co/CountFloyd/deepfake",
+      "source_revision": "ee7d0fe0c284700192ff11e14ecdab5b40185204"
+    },
+    "f946df2d4dbbd3055e12acc9": {
+      "name": "isnet-general-use.onnx",
+      "sha256": "60920e99c45464f2ba57bee2ad08c919a52bbf852739e96947fbb4358c0d964a",
+      "byte_size": 178648008,
+      "upstream_url": "https://huggingface.co/CountFloyd/deepfake/resolve/ee7d0fe0c284700192ff11e14ecdab5b40185204/isnet-general-use.onnx",
+      "original_repository": "https://huggingface.co/CountFloyd/deepfake",
+      "source_revision": "ee7d0fe0c284700192ff11e14ecdab5b40185204"
+    },
+    "bfec9e70b8afaab710f1598c": {
+      "name": "lsdir_x4.onnx",
+      "sha256": "2c0073607ab48e91a56a180f6928597362fef9f0924cc91325aab8ce8cf1032c",
+      "byte_size": 66938051,
+      "upstream_url": "https://huggingface.co/CountFloyd/deepfake/resolve/ee7d0fe0c284700192ff11e14ecdab5b40185204/lsdir_x4.onnx",
+      "original_repository": "https://huggingface.co/CountFloyd/deepfake",
+      "source_revision": "ee7d0fe0c284700192ff11e14ecdab5b40185204"
+    },
+    "2b30df692300e4ec9576e8bf": {
+      "name": "real_esrgan_x2.onnx",
+      "sha256": "28e6925e46301ba7a4cbfeaae41cefe043dd5941423094a3db8b176d837bf1dd",
+      "byte_size": 69524246,
+      "upstream_url": "https://huggingface.co/CountFloyd/deepfake/resolve/ee7d0fe0c284700192ff11e14ecdab5b40185204/real_esrgan_x2.onnx",
+      "original_repository": "https://huggingface.co/CountFloyd/deepfake",
+      "source_revision": "ee7d0fe0c284700192ff11e14ecdab5b40185204"
+    },
+    "661ab6c7c2cdf6149b012291": {
+      "name": "real_esrgan_x4.onnx",
+      "sha256": "4139cc1585d04851ccd41570b0f76e775c96e064ca292d5372b6031704dda0d3",
+      "byte_size": 69464831,
+      "upstream_url": "https://huggingface.co/CountFloyd/deepfake/resolve/ee7d0fe0c284700192ff11e14ecdab5b40185204/real_esrgan_x4.onnx",
+      "original_repository": "https://huggingface.co/CountFloyd/deepfake",
+      "source_revision": "ee7d0fe0c284700192ff11e14ecdab5b40185204"
+    },
+    "d00fb627bc633a6b976c6f18": {
+      "name": "liveportrait_stitching_eye.onnx",
+      "sha256": "b9a2086c4d757c9be71b9b290d020678406da6a33c6247252c4bb0aeeff48afc",
+      "byte_size": 580926,
+      "upstream_url": "https://huggingface.co/warmshao/FasterLivePortrait/resolve/eb937f4bec7186598df2d1f68e1ddbb488ae1de5/liveportrait_onnx/stitching_eye.onnx",
+      "original_repository": "https://huggingface.co/warmshao/FasterLivePortrait",
+      "source_revision": "eb937f4bec7186598df2d1f68e1ddbb488ae1de5",
+      "license_note": "roop-ultimate's model zoo says to see the upstream LivePortrait / FasterLivePortrait terms."
+    },
+    "e7f479d727d4d77a3031de43": {
+      "name": "retinaface_r50.onnx",
+      "sha256": "ea3f7d12894980d52d3fd7f3f5cab463d48e9cfbcc06f40616bdeeab3e3f31d1",
+      "byte_size": 109110500,
+      "upstream_url": "https://huggingface.co/nakamura196/retinaface-r50-onnx/resolve/b4181a5aca26d7ccf0e236c7c6d9acf5d9c78f2b/retinaface_r50.onnx",
+      "original_repository": "https://huggingface.co/nakamura196/retinaface-r50-onnx",
+      "source_revision": "b4181a5aca26d7ccf0e236c7c6d9acf5d9c78f2b",
+      "license_note": "roop-ultimate's model zoo lists MIT (biubug6/Pytorch_Retinaface) for the architecture code. The weights license is not verified here."
+    },
+    "47ee9cbfecc1fa07c8fa5727": {
+      "name": "retinaface_r50.onnx",
+      "sha256": "ea3f7d12894980d52d3fd7f3f5cab463d48e9cfbcc06f40616bdeeab3e3f31d1",
+      "byte_size": 109110500,
+      "upstream_url": "https://huggingface.co/nakamura196/retinaface-r50-onnx/resolve/b4181a5aca26d7ccf0e236c7c6d9acf5d9c78f2b/retinaface_r50.onnx",
+      "original_repository": "https://huggingface.co/nakamura196/retinaface-r50-onnx",
+      "source_revision": "b4181a5aca26d7ccf0e236c7c6d9acf5d9c78f2b",
+      "license_note": "roop-ultimate's model zoo lists MIT (biubug6/Pytorch_Retinaface) for the architecture code. The weights license is not verified here."
+    },
+    "48d4ecd4d27ed5eca7e93e70": {
+      "name": "codeformer.fp16.onnx",
+      "sha256": "5414b2c989eb93feb7b5bccd22a1a9f3842a127411932663d03884af140a48b6",
+      "byte_size": 188576500,
+      "upstream_url": "https://huggingface.co/netrunner-exe/Face-Upscalers-onnx/resolve/c0d6e7796b70241abe2fc29b398b3c6a5c766783/codeformer.fp16.onnx",
+      "original_repository": "https://huggingface.co/netrunner-exe/Face-Upscalers-onnx",
+      "source_revision": "c0d6e7796b70241abe2fc29b398b3c6a5c766783",
+      "license_note": "roop-ultimate's model zoo lists S-Lab License 1.0 (CodeFormer). Reported there, not verified here."
+    },
+    "1319dd93b8f37e652b218e8c": {
+      "name": "face_detection_yunet_2023mar.onnx",
+      "sha256": "8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4",
+      "byte_size": 232589,
+      "upstream_url": "https://huggingface.co/opencv/face_detection_yunet/resolve/3cc26e7f1014a5ee5d74a42acee58bafc9d0a310/face_detection_yunet_2023mar.onnx",
+      "original_repository": "https://huggingface.co/opencv/face_detection_yunet",
+      "source_revision": "3cc26e7f1014a5ee5d74a42acee58bafc9d0a310",
+      "license": {
+        "id": "MIT",
+        "url": "https://huggingface.co/opencv/face_detection_yunet/blob/3cc26e7f1014a5ee5d74a42acee58bafc9d0a310/LICENSE",
+        "attribution": "Retain the MIT copyright and permission notice (Copyright (c) 2020 Shiqi Yu)."
+      }
+    },
+    "5100f8f9ab13ac4c2fd3ad08": {
+      "name": "face_recognition_sface_2021dec.onnx",
+      "sha256": "0ba9fbfa01b5270c96627c4ef784da859931e02f04419c829e83484087c34e79",
+      "byte_size": 38696353,
+      "upstream_url": "https://huggingface.co/opencv/face_recognition_sface/resolve/3d7082438a6e4551e840c9b2bb60b71e8da4b524/face_recognition_sface_2021dec.onnx",
+      "original_repository": "https://huggingface.co/opencv/face_recognition_sface",
+      "source_revision": "3d7082438a6e4551e840c9b2bb60b71e8da4b524",
+      "license": {
+        "id": "Apache-2.0",
+        "url": "https://huggingface.co/opencv/face_recognition_sface/blob/3d7082438a6e4551e840c9b2bb60b71e8da4b524/LICENSE",
+        "attribution": "Retain the Apache-2.0 license and NOTICE; state changes if modified."
+      }
+    },
+    "bad2131ff570bec63e49102d": {
+      "name": "resnet18.onnx",
+      "sha256": "0d9bd318e46987c3bdbfacae9e2c0f461cae1c6ac6ea6d43bbe541a91727e33f",
+      "byte_size": 53205364,
+      "upstream_url": "https://github.com/yakhyo/face-parsing/releases/download/weights/resnet18.onnx",
+      "original_repository": "https://github.com/yakhyo/face-parsing",
+      "source_revision": "313d1f9c9dbcb98fae12babdfea327369722682a",
+      "license_note": "Listed by roop-ultimate's model manifest; the release publishes no license for the weights."
     }
   }
 }

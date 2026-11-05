@@ -29,6 +29,8 @@ from roop_3d.models.verifier import verify_file
 # Exact hosts only. Model-specific URLs and provenance still require manifest review.
 OFFICIAL_HOSTS = frozenset({"github.com", "raw.githubusercontent.com", "huggingface.co"})
 HF_STORAGE_HOSTS = frozenset({"us.aws.cdn.hf.co"})
+# GitHub release assets redirect to this storage host; bytes are still verified by SHA-256.
+GITHUB_STORAGE_HOSTS = frozenset({"release-assets.githubusercontent.com"})
 MAX_ARTIFACT_BYTES = 64 * 1024**3
 BLOCKED_SUFFIXES = frozenset({".zip", ".tar", ".tgz", ".gz", ".7z", ".rar", ".exe", ".dll",
                               ".so", ".dylib", ".py", ".ps1", ".bat", ".cmd", ".sh",
@@ -70,11 +72,12 @@ def validate_url(value: str) -> str:
 def validate_hf_redirect(source: str, location: str) -> str:
     """Permit the observed Hugging Face LFS redirect without trusting arbitrary hosts."""
     try:
-        if urlsplit(source).hostname != "huggingface.co":
-            raise ValueError("Redirect source is not Hugging Face")
+        allowed = {"huggingface.co": HF_STORAGE_HOSTS, "github.com": GITHUB_STORAGE_HOSTS}.get(urlsplit(source).hostname)
+        if allowed is None:
+            raise ValueError("Redirect source is not Hugging Face or GitHub")
         target = urlsplit(urljoin(source, location))
         decoded = unquote(unquote(target.path))
-        if (target.scheme != "https" or target.hostname not in HF_STORAGE_HOSTS or target.port not in (None, 443)
+        if (target.scheme != "https" or target.hostname not in allowed or target.port not in (None, 443)
                 or target.username or target.password or target.fragment
                 or any(c in target.geturl() for c in "\r\n\t\\")
                 or any(p in {".", ".."} for p in decoded.split("/"))

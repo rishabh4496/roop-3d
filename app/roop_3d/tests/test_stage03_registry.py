@@ -53,9 +53,11 @@ def test_manifest_preserves_all_observed_identities_without_inventing_rights():
         (m["sha256"], m["size_bytes"]) for m in old["models"]}
     for record in local:
         # A URL is only allowed where verified_sources.json matched identical SHA-256 and size.
-        assert (record.upstream_url is None) != record.rights_unpublished
-        assert record.commercial_use == "unknown"
-        assert record.license_id == "UNKNOWN"
+        assert (record.upstream_url is None) == (record.provenance_state != "VERIFIED_REMOTE")
+        if record.license_id == "UNKNOWN":
+            assert record.commercial_use == "unknown"
+        else:  # rights are only ever taken from a license published in the verified source repository
+            assert record.license_url and record.upstream_url and record.license_id in {"MIT", "Apache-2.0"}
         assert record.input_output_contract == next(m["graph"] for m in old["models"]
                                                    if m["sha256"] == record.expected_sha256)
     assert {"liveportrait_appearance", "liveportrait_motion", "liveportrait_warp",

@@ -172,11 +172,19 @@ def _apply_verified_sources(manifest: Manifest, document: dict[str, Any]) -> Man
                   "source_revision": source["source_revision"], "source_repository": source["original_repository"],
                   "provenance_state": "VERIFIED_REMOTE", "evidence": record.evidence + " Public source verified by identical SHA-256 and size: "
                   + source["upstream_url"]}
-        if record.license_id == "UNKNOWN":
+        published = source.get("license")
+        if published:
+            # A license published in the source repository itself (for example its LICENSE file).
+            update.update(license_id=published["id"], license_url=published["url"], commercial_use="allow",
+                          redistribution_permission="allow", attribution_requirements=published["attribution"],
+                          license_notice=f"{published['id']} license published in the source repository: {published['url']}")
+        elif record.license_id == "UNKNOWN":
+            note = source.get("license_note")
             update.update(rights_unpublished=True, manual_acceptance_required=True,
                           license_notice=("The public source publishes no license for these weights. Downloading requires an explicit "
                                           "acknowledgement that usage rights are unverified; commercial use and inference activation "
-                                          "stay blocked until a license is reviewed."))
+                                          "stay blocked until a license is reviewed."
+                                          + (" " + note if note else "")))
         models.append(ModelRecord.model_validate({**record.model_dump(), **update}))
     return Manifest(evidence_scope=manifest.evidence_scope + " " + document["evidence_scope"],
                     source_documents=manifest.source_documents, models=tuple(models))

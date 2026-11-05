@@ -112,7 +112,9 @@ class ModelHubService:
             download_eligible = True
         except DomainError as error:
             download_eligible = False
-            blocker = error.code
+            # Report the most fundamental reason: no identical public bytes beats an unreviewed license.
+            blocker = ("DOWNLOAD_EVIDENCE_REQUIRED" if not record.upstream_url and record.status != "blocked"
+                       else error.code)
         if download_eligible and record.serialization_format.upper() in {"PICKLE", "PYTORCH", "TORCH", "PT", "PTH", "CKPT", "PKL", "BIN"}:
             download_eligible, blocker = False, "DOWNLOAD_FORMAT_BLOCKED"
         code_path = self._is_core(record)
@@ -143,7 +145,7 @@ class ModelHubService:
                 evidence = "The configured local model paths could not be fully verified."
             inference = False
             compatibility = "NOT_INTEGRATED"
-        elif record.status == "verified_remote" or (record.rights_unpublished
+        elif record.status == "verified_remote" or (record.upstream_url
                                                     and record.provenance_state == "VERIFIED_REMOTE"):
             local_state, filename = self._local_artifact_state(record)
             artifact_installed, integrity_verified = local_state == "AVAILABLE", local_state == "AVAILABLE"
