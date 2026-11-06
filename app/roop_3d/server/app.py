@@ -224,6 +224,9 @@ def create_app(settings: Settings | None = None, *, repo_root: Path | None = Non
     app.include_router(reliability_router)
     from roop_3d.server.api import benchmark_router
     app.include_router(benchmark_router)
+    from roop_3d.server.unified_state import router as unified_state_router, state as unified_state
+    app.state.unified_state = unified_state
+    app.include_router(unified_state_router)
     app.add_api_websocket_route("/ws/telemetry", event_stream)
     app.add_api_websocket_route("/ws/events", event_stream)
     app.add_api_websocket_route("/ws/queue", event_stream)

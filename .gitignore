@@ -1,28 +1,64 @@
-# This is an independent Pinokio application. Runtime state stays local.
-!/AGENTS.md
+# Roop 3D - Unified Gitignore
+
+# Virtual environments
 **/.venv/
 **/venv/
 **/env/
+app/env/
+
+# Python bytecode & test caches
 **/__pycache__/
 *.py[cod]
+*$py.class
 **/.pytest_cache/
 **/.ruff_cache/
 **/.mypy_cache/
-**/.runtime/
+
+# Node & Frontend build outputs
 **/node_modules/
 **/dist/
-cache/
-logs/
-outputs/
+.vite/
+coverage/
+playwright-report/
+test-results/
+*.tsbuildinfo
+
+# Heavy weights & compiled TensorRT engines
+app/models/
+models/
+roop_3d/models/
+roop_3d/models/cache/
+*.onnx
+*.pth
+*.pt
+*.bin
+*.safetensors
 *.engine
 *.trt
 *.plan
-app/models/
+trt_cache/
+engines/
+
+# Local facesets & media caches
+app/facesets/
+facesets/
+*.fsz
+
+# Local runtime data, logs, and outputs
+cache/
+.cache/
+logs/
+outputs/
+.runtime/
 *.part
 *.log
+
+# Secrets & local env
 .env
 .env.*
 !.env.example
+
+# Audit generated artifacts
 app/roop_3d/audit/protected_all_paths.json
 app/roop_3d/audit/stage00_verification.json
 app/roop_3d/audit/stage01_verification.json

@@ -16,7 +16,10 @@ import os
 from pathlib import Path
 from typing import Any, Mapping
 
-from isolation import AuditError, is_link, safe_path, sha256_file, write_json, write_text
+try:
+    from isolation import AuditError, is_link, safe_path, sha256_file, write_json, write_text
+except ImportError:
+    from roop_3d.audit.isolation import AuditError, is_link, safe_path, sha256_file, write_json, write_text
 from project_paths import legacy_root
 
 

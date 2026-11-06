@@ -13,7 +13,10 @@ import uvicorn
 from roop_3d.core.settings import Settings
 from roop_3d.core.redaction import redact
 from roop_3d.audit.isolation import AuditError
-from roop_3d.server.app import create_app
+try:
+    from app.api import create_unified_app as create_app
+except ImportError:
+    from roop_3d.server.app import create_app
 from roop_3d.server.security import ShareMode
 
 SHARE_BIND_HOST = "0.0.0.0"

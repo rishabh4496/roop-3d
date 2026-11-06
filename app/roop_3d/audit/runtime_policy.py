@@ -8,7 +8,10 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Callable
 
-from isolation import protected_directories, relative_path, verify, walk_files
+try:
+    from isolation import protected_directories, relative_path, verify, walk_files
+except ImportError:
+    from roop_3d.audit.isolation import protected_directories, relative_path, verify, walk_files
 
 RUNTIME_ROOTS = ("app/output", "app/projects", "app/temp", "logs")
 RUNTIME_FILES = ("app/run_history.json", "app/runtime_calibration.json", "app/vram_calibration.json",

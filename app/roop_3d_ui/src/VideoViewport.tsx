@@ -49,7 +49,7 @@ async function blobToDataUrl(blob: Blob): Promise<string> {
   return `data:${blob.type.startsWith('image/') ? blob.type : 'image/png'};base64,${btoa(binary)}`;
 }
 
-function usePreview(path: string, time: number, playing: boolean) {
+function usePreview(path: string, time: number, duration: number, fps: number, playing: boolean) {
   const [source, setSource] = useState('');
   const [error, setError] = useState('');
   useEffect(() => {
@@ -59,12 +59,26 @@ function usePreview(path: string, time: number, playing: boolean) {
     const lease = new PreviewURL();
     let active = true;
     const timer = setTimeout(() => {
-      void fetch(`/api/v1/media/preview-frame?${new URLSearchParams({ path, timestamp: String(time) })}`, { signal: controller.signal, cache: 'no-store' })
-        .then(async response => { if (!response.ok) throw new Error('Frame preview unavailable at this position'); const blob = await response.blob(); if (active) setSource(lease.replace(blob)); })
+      // Seeking to duration asks the decoder for a frame after the final frame's start time.
+      // Back up one nominal frame so the final timeline position remains previewable.
+      const previewTime = duration > 0 ? Math.min(time, Math.max(0, duration - 1 / Math.max(fps, 1))) : time;
+      void fetch(`/api/v1/media/preview-frame?${new URLSearchParams({ path, timestamp: String(previewTime) })}`, { signal: controller.signal, cache: 'no-store' })
+        .then(async response => {
+          if (!response.ok) {
+            let message = `Frame preview failed (${response.status})`;
+            try {
+              const body = await response.json();
+              if (typeof body?.error?.message === 'string') message = body.error.message;
+            } catch { /* Keep the status-based message when the response is not JSON. */ }
+            throw new Error(message);
+          }
+          const blob = await response.blob();
+          if (active) setSource(lease.replace(blob));
+        })
         .catch(error => { if (active && error.name !== 'AbortError') setError(error.message); });
     }, 100);
     return () => { active = false; clearTimeout(timer); controller.abort(); lease.clear(); };
-  }, [path, time, playing]);
+  }, [path, time, duration, fps, playing]);
   return { source, error };
 }
 
@@ -221,8 +235,8 @@ export function VideoViewport({
   const selectSolo = (node: string) => { if (PIPELINE_NODES.find(item => item.id === node)?.unavailable || !previewRequest) return; history.live(); setSolo(previous => previous === node ? null : node); setIsMaskEditing(false); };
   const bypassNode = (node: string) => { if (node !== 'restorer') return; setParameters({ ...parameters, bypass: parameters.bypass.includes(node) ? parameters.bypass.filter(item => item !== node) : [...parameters.bypass, node] }); setSolo('final'); setIsMaskEditing(false); };
 
-  const sourcePreview = usePreview(enabled && previewLive ? target : '', time, playing);
-  const outputPreview = usePreview(enabled && previewLive ? output : '', time, playing);
+  const sourcePreview = usePreview(enabled && previewLive ? target : '', time, duration, fps, playing);
+  const outputPreview = usePreview(enabled && previewLive ? output : '', time, duration, fps, playing);
   // The real swapped frame (or, when a node is soloed, that stage's buffer) from POST /api/preview: debounced, 503-aware.
   const [liveSwap, setLiveSwap] = preference('live_swap');
   const live = useLiveSwapPreview(previewLive && enabled && liveSwap && !playing && !isMaskEditing

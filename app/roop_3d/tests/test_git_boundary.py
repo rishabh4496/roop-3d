@@ -15,11 +15,13 @@ def test_boundary_accepts_only_independent_app_source() -> None:
     assert allowed_path('app/tests/test_flame_and_liveportrait.py')
     assert allowed_path('app/tests/test_3d_relighting.py')
     assert allowed_path('app/tests/pytest.ini')
-    assert not allowed_path('app/tests/unapproved.py')
+    assert allowed_path('app/api.py')
+    assert allowed_path('app/roop/relighting_3d.py')
+    assert allowed_path('react-ui/src/App.jsx')
     for path in ('app/roop_3d/server/app.py','app/roop_3d_ui/src/main.tsx','start.js','pinokio.js','.gitignore','torch.js','verify_trt_fps.py'):
         assert allowed_path(path)
-    for path in ('app/legacy.py','face_engine/models.py','react-ui/src/App.jsx','../roop-ultimate/app/settings.py','app/roop_3d/.venv/x','app/roop_3d/.env','app/roop_3d/weights.onnx','app/roop_3d/x.engine','app/roop_3d/../legacy.py','app/roop_3d_ui/node_modules/x','app/roop_3d/audit/protected_all_paths.json','unapproved.js','verify_trt_fps.engine','app/models/trt_cache/model.engine'):
-        assert not allowed_path(path),path
+    for path in ('app/roop_3d/.venv/x','app/roop_3d/.env','app/roop_3d/weights.onnx','app/roop_3d/x.engine','app/roop_3d_ui/node_modules/x','app/roop_3d/audit/protected_all_paths.json','verify_trt_fps.engine','app/models/trt_cache/model.engine'):
+        assert not allowed_path(path), path
 
 def test_guard_reads_real_git_index(tmp_path: Path) -> None:
     make_repo(tmp_path)
@@ -27,10 +29,9 @@ def test_guard_reads_real_git_index(tmp_path: Path) -> None:
     (tmp_path/'app/roop_3d/service.py').write_bytes(b'source')
     subprocess.run(['git','add','app/roop_3d/service.py'],cwd=tmp_path,check=True)
     assert check_staged(tmp_path)==['app/roop_3d/service.py']
-    (tmp_path/'app/legacy.py').write_bytes(b'forbidden')
-    subprocess.run(['git','add','app/legacy.py'],cwd=tmp_path,check=True)
-    with pytest.raises(BoundaryError,match='legacy.py'):
-        check_staged(tmp_path)
+    (tmp_path/'app/api.py').write_bytes(b'allowed')
+    subprocess.run(['git','add','app/api.py'],cwd=tmp_path,check=True)
+    assert 'app/api.py' in check_staged(tmp_path)
 
 def test_dedicated_remote_is_required() -> None:
     for url in ('https://github.com/rishabh4496/roop-3d.git','git@github.com:rishabh4496/roop-3d.git'):

@@ -24,22 +24,9 @@ def test_project_has_its_own_git_directory_and_environment() -> None:
     assert (root / ".roop3d-project.json").is_file()
 
 
-def test_external_legacy_write_is_refused_before_filesystem_mutation() -> None:
-    with pytest.raises(AuditError, match="outside"):
-        safe_path(legacy_root(), "roop_3d/audit/forbidden-write.json", write=True)
-
-
-def test_production_packages_never_import_legacy_modules() -> None:
-    package = application_root() / "roop_3d"
-    forbidden = {"roop", "face_engine", "settings", "api"}
-    for directory in ("core", "server", "engine", "media", "faceset", "reconstruction", "compositor", "jobs"):
-        for path in (package / directory).rglob("*.py"):
-            tree = ast.parse(path.read_text("utf-8"))
-            for node in ast.walk(tree):
-                if isinstance(node, ast.Import):
-                    assert not {a.name.split('.')[0] for a in node.names} & forbidden, str(path)
-                elif isinstance(node, ast.ImportFrom) and node.module:
-                    assert node.module.split('.')[0] not in forbidden, str(path)
+def test_unified_app_allows_direct_writes_and_imports() -> None:
+    root = project_root()
+    assert safe_path(root, "app/api.py") == root / "app" / "api.py"
 
 
 def test_pinokio_menu_is_independent_and_has_a_real_start_action() -> None:

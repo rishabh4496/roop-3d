@@ -52,9 +52,15 @@ class WorkstationFiles(StaticFiles):
 
 
 def mount_workstation(app, root: Path) -> None:
-    ui = safe_path(root, "roop_3d_ui/dist")
-    if ui.is_dir() and (ui / "index.html").is_file():
-        safe_path(root, "roop_3d_ui/dist/index.html")
+    candidates = [
+        root / "roop_3d_ui/dist",
+        root / "app/roop_3d_ui/dist",
+        root / "react-ui/dist",
+        root / "app/react-ui/dist",
+        Path(__file__).resolve().parents[2] / "roop_3d_ui/dist",
+    ]
+    ui = next((c for c in candidates if c.is_dir() and (c / "index.html").is_file()), None)
+    if ui is not None:
         app.mount("/", WorkstationFiles(directory=str(ui), html=True), name="workstation")
     else:
         @app.get("/", response_class=HTMLResponse)
