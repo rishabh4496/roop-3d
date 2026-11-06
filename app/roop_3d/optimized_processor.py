@@ -243,6 +243,9 @@ def make_stream_runner(root, catalog, media, settings_provider, *, pipeline_trac
             from roop_3d.vectorized_pipeline import CpuBatchPipeline, GpuBatchPipeline
             from roop_3d.render_policy import CudaWorkerContext
             config = self._runtime_config(admission, settings)
+            from roop_3d.core.hardware import probe_hardware, resolve_accelerator
+            hardware = probe_hardware(settings)
+            accelerator = resolve_accelerator(settings.preferred_provider, hardware.advertised_providers, bool(hardware.gpus))
             context = CudaWorkerContext(enabled=admission.profile != "cpu")
             tracker = detector = model = restorer = None
             def check():
@@ -271,14 +274,22 @@ def make_stream_runner(root, catalog, media, settings_provider, *, pipeline_trac
                             workers=settings.restorer_threads, pool_size=settings.restorer_pool_size,
                             cuda=admission.profile != "cpu", ultramax_native_bypass=settings.ultramax_native_bypass,
                             ultramax_min_pixels=settings.ultramax_min_pixels,
-                            cuda_provider=('TensorrtExecutionProvider' if settings.preferred_provider == 'TensorrtExecutionProvider'
-                                           else 'CUDAExecutionProvider'),
+                            cuda_provider=accelerator if accelerator != 'CPUExecutionProvider' else 'CUDAExecutionProvider',
                             hardware_profile=admission.profile if admission.profile != 'cpu' else '6gb')
                     selected_session = model.session
-                    if settings.preferred_provider == "TensorrtExecutionProvider":
+                    if accelerator == "TensorrtExecutionProvider" and admission.profile != "cpu":
                         from roop_3d.trt_session_builder import TensorRTSessionBuilder
-                        selected_session = TensorRTSessionBuilder(hardware_profile=admission.profile,
-                            telemetry=pipeline_tracker.compilation_event if pipeline_tracker else None).build(model.path)
+                        try:
+                            selected_session = TensorRTSessionBuilder(hardware_profile=admission.profile,
+                                telemetry=pipeline_tracker.compilation_event if pipeline_tracker else None).build(model.path)
+                            __import__("logging").getLogger("roop3d.render").info(
+                                "Swap session provider: %s", selected_session.get_providers()[0])
+                        except Exception as error:
+                            if settings.preferred_provider == "TensorrtExecutionProvider":
+                                raise
+                            # `auto` prefers TensorRT but must never leave the user without a working swap.
+                            __import__("logging").getLogger("roop3d.render").warning(
+                                "TensorRT engine unavailable (%s); continuing on CUDA", str(error)[:300])
                     if admission.profile == "cpu":
                         pipeline = CpuBatchPipeline(lambda target, source: selected_session.run(None, {"target": target,
                             "source": source})[0], embeddings=embeddings, restorer=restorer)
@@ -288,7 +299,7 @@ def make_stream_runner(root, catalog, media, settings_provider, *, pipeline_trac
                 timings = StageTimings()
                 def detect(image):
                     with context.activate(), timings.measure("detection"):
-                        return detector.detect(image)[0]
+                        return detector.detect(image, 0.5)[0]
                 def track(image):
                     with context.activate(), timings.measure("detection"):
                         return [(v.track_id, v.observation.box, v.observation.landmarks5) for v in tracker.process(image)

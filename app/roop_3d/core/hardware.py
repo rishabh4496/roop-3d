@@ -111,6 +111,19 @@ def effective_vram_budget(total: int, free: int, settings: Settings) -> int:
     return max(0, min(free, ceiling) - settings.memory_safety_reserve_mb)
 
 
+def resolve_accelerator(preferred: str, advertised: list[str] | None, has_gpu: bool = True) -> str:
+    """Concrete provider for a preference: `auto` means TensorRT when ORT advertises it, else CUDA."""
+    advertised = advertised or []
+    if preferred == "CPUExecutionProvider" or not has_gpu:
+        return "CPUExecutionProvider"
+    if preferred == "auto":
+        for candidate in ("TensorrtExecutionProvider", "CUDAExecutionProvider"):
+            if candidate in advertised:
+                return candidate
+        return "CPUExecutionProvider"
+    return preferred
+
+
 def tensor_core_precisions(compute_capability: str | None) -> list[str]:
     """Tensor Core math modes documented for each NVIDIA architecture generation.
 

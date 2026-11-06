@@ -226,6 +226,12 @@ class JobWorker:
                 code, message, kind, warning = resumable.code, resumable.message, "interrupt", resumable.warning
         else:
             result = classify(error)
+            if result.code == "WORKER_FAILED":
+                # Frames only (file:line function): no exception text, which can carry paths and media names.
+                import traceback
+                log.warning("Job %s unclassified failure at %s", job_id[:8], " <- ".join(
+                    f"{frame.filename.replace(chr(92), '/').rsplit('/roop_3d/', 1)[-1]}:{frame.lineno} {frame.name}"
+                    for frame in reversed(traceback.extract_tb(error.__traceback__)[-6:])))
             code, message, warning = result.code, result.message, result.warning
             kind = "interrupt" if result.recoverable else "fail"
         # Exception *text* can carry paths and media names, so only the class-level summary is logged.
