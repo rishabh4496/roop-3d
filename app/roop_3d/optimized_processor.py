@@ -27,11 +27,13 @@ from roop_3d.render_policy import RenderPolicy
 class StreamingProcessor:
     def __init__(self, root: Path, project_id: str, source: Path, *, detect, track, pipeline,
                  policy: RenderPolicy = RenderPolicy(), identity=None, emit=None,
-                 check=lambda: None, progress=lambda *_: None, timings: StageTimings | None = None):
+                 check=lambda: None, progress=lambda *_: None, timings: StageTimings | None = None,
+                 execution_provider: str = "CPUExecutionProvider", settings_3d: dict | None = None):
         self.timings = timings if timings is not None else StageTimings()
         self.root, self.project_id, self.source = root, project_id, source
         self.detect, self.track, self.pipeline, self.policy = detect, track, pipeline, policy
         self.identity, self.emit, self.check, self.progress = identity or {}, emit, check, progress
+        self.execution_provider, self.settings_3d = execution_provider, settings_3d or {}
 
     def run(self, destination: Path, *, audio=True, lut_path=None, lut_bake=False, prepass_reader=None):
         from roop_3d.models.owned_files import owned_path
@@ -47,11 +49,29 @@ class StreamingProcessor:
                                   hardware=self.policy.hardware_profile != "cpu")
         workspace = SegmentWorkspace(owned(self.root, f"roop_3d/.runtime/stream/{self.project_id}"))
         by_frame = locked.by_frame()
+        # Stage 9: resume from the last verified finished segment of an earlier attempt of this job.
+        from roop_3d.stream_checkpoint import StreamSegmentCheckpoint
+        fingerprint = hashlib.sha256(json.dumps(
+            {"identity": self.identity, "segment_frames": self.policy.segment_frames, "lut": [str(lut_path), lut_bake],
+             "audio": audio, "source": [self.source.name, self.source.stat().st_size, source.expected_frames]},
+            sort_keys=True, default=str).encode()).hexdigest()
+        checkpoint = StreamSegmentCheckpoint(
+            self.root, self.project_id, fingerprint,
+            inputs={"target": self.source.name, "segment_frames": self.policy.segment_frames,
+                    "lut_path": str(lut_path) if lut_path else None, "lut_bake": lut_bake, "audio": audio},
+            settings_3d=self.settings_3d, execution_provider=self.execution_provider, fps=float(source.rate),
+            width=source.shape[1], height=source.shape[0], total_frames=locked.total_frames)
+        reused, resume_from = checkpoint.resume()
+        if resume_from >= locked.total_frames or resume_from % self.policy.segment_frames:
+            reused, resume_from = [], 0  # nothing left to resume, or not on this run's segment grid: render afresh
+            checkpoint.reset()
+        workspace.segments.extend(reused)
         if self.emit:
             self.emit({"stage": MAIN, "state": "RUNNING", "active_ranges_count": len(locked.ranges),
                        "verified_target_frames": locked.verified_target_frames, "skipped_frames_pct": locked.skipped_frames_pct})
-        writer = None
-        decoded = 0
+        writer = segment_path = None
+        segment_start = 0
+        decoded = resume_from
         failures = []
         started = time.perf_counter()
         ring = SharedMemoryFrameRing(source.shape, self.policy.ring_slots)
@@ -61,6 +81,8 @@ class StreamingProcessor:
                 for frame, metadata in iterator:
                     if ring.cancelled.is_set():
                         break
+                    if metadata.index < resume_from:
+                        continue  # already inside a finished segment
                     ring.put(frame, metadata)
             except BaseException as error:
                 failures.append(error)
@@ -73,7 +95,7 @@ class StreamingProcessor:
         executor = ThreadPoolExecutor(max_workers=self.policy.execution_threads, thread_name_prefix="roop3d-render")
         local = threading.local()
         pending = deque()
-        submitted = 0
+        submitted = resume_from
         bundle_frames, bundle_faces, bundle_metadata = [], [], []
         batch_limit = min(self.policy.batch_size, self.policy.ring_slots)
         max_pending = max(1, min(self.policy.execution_threads,
@@ -97,7 +119,7 @@ class StreamingProcessor:
                 pending.append((executor.submit(infer, bundle_frames, bundle_faces), bundle_metadata))
                 bundle_frames, bundle_faces, bundle_metadata = [], [], []
         def write_next():
-            nonlocal writer, decoded
+            nonlocal writer, decoded, segment_start, segment_path
             future, metadata_batch = pending.popleft()
             outputs = future.result()
             if len(outputs) != len(metadata_batch):
@@ -106,15 +128,17 @@ class StreamingProcessor:
                 if metadata.index != decoded:
                     raise RuntimeError("Renderer reordered source frames")
                 if writer is None:
-                    writer = NVHardwareVideoWriter(workspace.next_path(), source.shape, source.rate,
+                    segment_start, segment_path = decoded, workspace.next_path()
+                    writer = NVHardwareVideoWriter(segment_path, source.shape, source.rate,
                         hardware=self.policy.hardware_profile != "cpu", strict=self.policy.strict_nvenc,
                         lut_path=lut_path, lut_bake=lut_bake, color=source.color)
                 with self.timings.measure("encode"):
                     writer.write(output)
                 decoded += 1
-                self.progress(decoded, locked.total_frames, decoded / max(1e-6, time.perf_counter() - started))
+                self.progress(decoded, locked.total_frames, (decoded - resume_from) / max(1e-6, time.perf_counter() - started))
                 if decoded % self.policy.segment_frames == 0:
                     writer.close()
+                    checkpoint.record(segment_path, segment_start, decoded - segment_start, writer.codec)
                     writer = None
         try:
             while True:
@@ -154,6 +178,7 @@ class StreamingProcessor:
                 raise RuntimeError("Rendered frame count differs from the verified prepass source")
             if writer:
                 writer.close()
+                checkpoint.record(segment_path, segment_start, decoded - segment_start, writer.codec)
                 writer = None
             self.check()
             final_video = owned(self.root, f"roop_3d/.runtime/stream/{self.project_id}/video_{workspace.run_id}.mp4")
@@ -177,7 +202,8 @@ class StreamingProcessor:
                 raise RuntimeError("Final stream-copy output failed frame-count verification")
             if self.emit:
                 self.emit({"stage": MAIN, "state": "DONE"})
-            return {"frames": decoded, "prepass_restored": locked.restored,
+            checkpoint.finish({"output": destination.name, "frames": decoded, "verified": True})
+            return {"frames": decoded, "resumed_from_frame": resume_from, "prepass_restored": locked.restored,
                     "active_ranges_count": len(locked.ranges), "verified_target_frames": locked.verified_target_frames,
                     "skipped_frames_pct": locked.skipped_frames_pct, "decoder": source.backend,
                     "pipeline": self.pipeline.backend, "segments": [p.name for p in workspace.segments],
@@ -313,7 +339,7 @@ def make_stream_runner(root, catalog, media, settings_provider, *, pipeline_trac
                     range_padding=settings.sparse_interval, segment_frames=settings.stream_segment_frames)
                 destination = owned(self.root, f"{settings.output_root}/roop3d_{record.job_id}_{time.time_ns()}.mp4")
                 processor = StreamingProcessor(self.root, record.job_id, prepared.target, detect=detect, track=track,
-                    pipeline=pipeline, policy=policy, emit=emit, check=check, timings=timings,
+                    pipeline=pipeline, policy=policy, emit=emit, check=check, timings=timings, execution_provider=accelerator,
                     identity={"request": self._request_digest(record), "settings": settings.model_dump(),
                               "model_sha256": model.record["sha256"]},
                     progress=lambda frame, total, fps: report_progress(__import__("roop_3d.jobs.schema", fromlist=["JobProgress"]).JobProgress(

@@ -8,7 +8,7 @@ import { DEFAULT_PARAMETERS } from './components/workstation/pipeline';
 import type { JobRequest } from './contracts';
 
 const post = vi.fn();
-vi.mock('./api', () => ({ post: (...args: unknown[]) => post(...args) }));
+vi.mock('./api', () => ({ post: (...args: unknown[]) => post(...args), api: () => Promise.resolve({ available: false }) }));
 vi.mock('./components/diagnostics/BottleneckFlamegraph', () => ({ default: () => null }));
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 let host: HTMLDivElement, root: Root;

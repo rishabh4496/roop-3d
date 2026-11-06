@@ -3,6 +3,7 @@ import { post } from '../../api';
 import BottleneckFlamegraph from '../diagnostics/BottleneckFlamegraph';
 import RecoveryNotice from '../guide/RecoveryNotice';
 import DialogPanel from '../guide/DialogPanel';
+import ResumeNote from './ResumeNote';
 import { JOB_STATE_HELP, QUEUE_GUIDE } from '../guide/helpContent';
 
 /**
@@ -325,6 +326,7 @@ export default function QueueDrawer({
                     </div>
 
                     {['paused', 'interrupted', 'cancelled'].includes(job.state) && JOB_STATE_HELP[job.state] && <small className="job-hint muted">{JOB_STATE_HELP[job.state].meaning} {JOB_STATE_HELP[job.state].action}</small>}
+                    {['paused', 'interrupted', 'failed'].includes(job.state) && <ResumeNote job={job} />}
                     {job.failure && <div className="failure-text"><RecoveryNotice message={job.failure.message} code={job.failure.code} /></div>}
                   </div>
 

@@ -406,8 +406,8 @@ def test_fastapi_server_restart_restores_queued_and_paused_jobs_intact(tmp_path:
         assert caps_res.status_code == 200
         workstation = caps_res.json().get("workstation", {})
         canonical_states = workstation.get("canonical_job_states", [])
-        assert len(canonical_states) == 10
-        for s in ("QUEUED", "PREFLIGHT", "PRESCANNING", "PREPASSING", "RENDERING", "MUXING", "PAUSED", "COMPLETED", "FAILED", "CANCELLED"):
+        assert len(canonical_states) == 12
+        for s in ("QUEUED", "PREFLIGHT", "ANALYZING", "RETRYING", "PRESCANNING", "PREPASSING", "RENDERING", "MUXING", "PAUSED", "COMPLETED", "FAILED", "CANCELLED"):
             assert s in canonical_states
 
     # 2. Simulate Server Shutdown / Crash / Restart:

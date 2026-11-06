@@ -97,7 +97,7 @@ def capabilities(request: Request) -> Capabilities:
         ("schema_version", "host", "port", "dev_cors", "max_body_bytes", "cache_root", "output_root", "model_search_paths", "diagnostics_level")},
         "disabled_parameters": {"remote_processing_enabled": "No remote adapter is configured", "synthetic_media_notice": "Synthetic media notice is required"},
         "job_states": [item.value for item in JobState],
-        "canonical_job_states": ["QUEUED", "PREFLIGHT", "PRESCANNING", "PREPASSING", "RENDERING", "MUXING", "PAUSED", "COMPLETED", "FAILED", "CANCELLED"],
+        "canonical_job_states": ["QUEUED", "PREFLIGHT", "ANALYZING", "PRESCANNING", "PREPASSING", "RENDERING", "MUXING", "PAUSED", "COMPLETED", "FAILED", "RETRYING", "CANCELLED"],
         "job_controls": {"pause": ["queued", "preparing", "running"], "resume": ["paused", "interrupted"],
                          "cancel": ["queued", "preparing", "running", "pausing", "paused", "interrupted"]},
         "upload_chunk_bytes": min(CHUNK_BYTES, state.settings.max_body_bytes), "max_asset_bytes": MAX_ASSET_BYTES}
@@ -403,6 +403,26 @@ def get_jobs(request: Request) -> list[JobRecord]:
 @router.get("/jobs/{job_id}", response_model=JobRecord)
 def get_job(job_id: str, request: Request) -> JobRecord:
     return request.app.state.jobs.get(job_id)
+
+
+@router.get("/jobs/{job_id}/checkpoint")
+def job_checkpoint(job_id: str, request: Request) -> dict:
+    """Stage 9: what a re-run of this job would resume from (streaming path ``job_checkpoint.json``)."""
+    request.app.state.jobs.get(job_id)  # 404 for an unknown job
+    path = safe_path(request.app.state.root, f"roop_3d/.runtime/stream/{job_id}/job_checkpoint.json")
+    if not path.is_file():
+        return {"available": False}
+    import json
+    try:
+        data = json.loads(path.read_text("utf-8"))
+    except (OSError, ValueError):
+        return {"available": False}
+    done = [s for s in data.get("segments", []) if s.get("status") == "COMPLETED"]
+    return {"available": True, "state": data.get("state"), "execution_provider": data.get("execution_provider"),
+            "encoder": data.get("encoder"), "completed_segments": len(done),
+            "resume_frame": done[-1]["end_frame"] if done else 0,
+            "completed_frames": data.get("frame_progress", {}).get("completed_frames", 0),
+            "total_frames": data.get("frame_progress", {}).get("total_frames", 0), "updated_at": data.get("updated_at")}
 
 
 @router.get("/jobs/{job_id}/artifacts/{kind}")

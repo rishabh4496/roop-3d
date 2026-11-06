@@ -13,7 +13,7 @@ export interface Capabilities {
     job_controls: Record<string, string[]>; upload_chunk_bytes: number; max_asset_bytes: number };
 }
 export type JobState = 'queued' | 'preparing' | 'running' | 'pausing' | 'paused' | 'cancelling' | 'cancelled' | 'succeeded' | 'failed' | 'interrupted';
-export type CanonicalJobState = 'QUEUED' | 'PREFLIGHT' | 'PRESCANNING' | 'PREPASSING' | 'RENDERING' | 'MUXING' | 'PAUSED' | 'COMPLETED' | 'FAILED' | 'CANCELLED';
+export type CanonicalJobState = 'QUEUED' | 'PREFLIGHT' | 'ANALYZING' | 'PRESCANNING' | 'PREPASSING' | 'RENDERING' | 'MUXING' | 'PAUSED' | 'COMPLETED' | 'FAILED' | 'RETRYING' | 'CANCELLED';
 
 export interface QueueSlice {
   slice_id: string;

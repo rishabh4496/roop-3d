@@ -1,6 +1,6 @@
 """Backend-owned 10-state persistent job queue with ACID-safe SQLite/JSON storage.
 
-Supported Canonical Job States (exactly 10):
+Supported Canonical Job States (the original 10 plus ANALYZING and RETRYING from Stage 9):
   1. QUEUED
   2. PREFLIGHT
   3. PRESCANNING
@@ -46,6 +46,7 @@ from roop_3d.segment_dispatcher import SegmentSlice, concat_lossless
 class CanonicalJobState(str, Enum):
     QUEUED = "QUEUED"
     PREFLIGHT = "PREFLIGHT"
+    ANALYZING = "ANALYZING"
     PRESCANNING = "PRESCANNING"
     PREPASSING = "PREPASSING"
     RENDERING = "RENDERING"
@@ -53,6 +54,7 @@ class CanonicalJobState(str, Enum):
     PAUSED = "PAUSED"
     COMPLETED = "COMPLETED"
     FAILED = "FAILED"
+    RETRYING = "RETRYING"
     CANCELLED = "CANCELLED"
 
 
@@ -120,6 +122,17 @@ CANONICAL_TRANSITIONS: dict[CanonicalJobState, frozenset[CanonicalJobState]] = {
     CanonicalJobState.COMPLETED: frozenset(),
     CanonicalJobState.CANCELLED: frozenset(),
 }
+# Stage 9: ANALYZING (GOP / keyframe analysis) is reachable from every pre-render state; RETRYING is the visible
+# hop between FAILED and a fresh attempt, so a retry is never mistaken for a first run.
+CANONICAL_TRANSITIONS[CanonicalJobState.ANALYZING] = frozenset(
+    CANONICAL_TRANSITIONS[CanonicalJobState.PRESCANNING] | {CanonicalJobState.PRESCANNING})
+for _pre in (CanonicalJobState.QUEUED, CanonicalJobState.PREFLIGHT):
+    CANONICAL_TRANSITIONS[_pre] = frozenset(CANONICAL_TRANSITIONS[_pre] | {CanonicalJobState.ANALYZING})
+CANONICAL_TRANSITIONS[CanonicalJobState.FAILED] = frozenset(
+    CANONICAL_TRANSITIONS[CanonicalJobState.FAILED] | {CanonicalJobState.RETRYING})
+CANONICAL_TRANSITIONS[CanonicalJobState.RETRYING] = frozenset({
+    CanonicalJobState.QUEUED, CanonicalJobState.PREFLIGHT, CanonicalJobState.ANALYZING,
+    CanonicalJobState.RENDERING, CanonicalJobState.PAUSED, CanonicalJobState.CANCELLED, CanonicalJobState.FAILED})
 
 
 def normalize_canonical_state(state: Any) -> CanonicalJobState:
@@ -134,6 +147,9 @@ def normalize_canonical_state(state: Any) -> CanonicalJobState:
         "QUEUED": CanonicalJobState.QUEUED,
         "PREFLIGHT": CanonicalJobState.PREFLIGHT,
         "PREPARING": CanonicalJobState.PREFLIGHT,
+        "ANALYZING": CanonicalJobState.ANALYZING,
+        "RETRYING": CanonicalJobState.RETRYING,
+        "RETRY": CanonicalJobState.RETRYING,
         "PRESCANNING": CanonicalJobState.PRESCANNING,
         "INSPECTING": CanonicalJobState.PRESCANNING,
         "PREPASSING": CanonicalJobState.PREPASSING,
@@ -479,6 +495,8 @@ class QueueManager:
             default_cp = owned(self.root, f"roop_3d/.runtime/jobs/{job_id}/checkpoint.npz")
             if default_cp.is_file():
                 checkpoint_rel = f"roop_3d/.runtime/jobs/{job_id}/checkpoint.npz"
+            else:
+                checkpoint_rel = job.checkpoint_path  # keep e.g. the Stage 9 job_checkpoint.json
 
         with self._lock, self._get_connection() as conn:
             now_iso = datetime.now(timezone.utc).isoformat()
@@ -496,7 +514,7 @@ class QueueManager:
             raise DomainError("ILLEGAL_JOB_TRANSITION", f"Only PAUSED jobs can be resumed (current: {job.state.value})", 422)
 
         # Verify checkpoint validity if present
-        if job.checkpoint_path:
+        if job.checkpoint_path and job.checkpoint_path.endswith(".npz"):
             cp_path = owned(self.root, job.checkpoint_path)
             if cp_path.is_file():
                 try:
@@ -505,6 +523,21 @@ class QueueManager:
                     raise DomainError("CHECKPOINT_INVALID", f"Checkpoint at {job.checkpoint_path} is corrupt: {err}", 422)
 
         return self.transition(job_id, CanonicalJobState.QUEUED)
+
+    def set_slices(self, job_id: str, slices: list[QueueSlice | SegmentSlice | dict[str, Any]]) -> QueueJob:
+        """Replace a job's slice manifest (segments are only known after ANALYZING)."""
+        raw = [x.model_dump(mode="json") if hasattr(x, "model_dump") else dict(x) for x in slices]
+        validated = [QueueSlice.model_validate(x).model_dump(mode="json") for x in raw]
+        with self._lock, self._get_connection() as conn:
+            conn.execute("UPDATE queue_jobs SET slices_json = ?, revision = revision + 1, updated_at = ? WHERE job_id = ?",
+                         (json.dumps(validated), datetime.now(timezone.utc).isoformat(), job_id))
+        self._sync_json()
+        return self.get(job_id)
+
+    def set_checkpoint_path(self, job_id: str, relative_path: str | None) -> None:
+        with self._lock, self._get_connection() as conn:
+            conn.execute("UPDATE queue_jobs SET checkpoint_path = ?, updated_at = ? WHERE job_id = ?",
+                         (relative_path, datetime.now(timezone.utc).isoformat(), job_id))
 
     def reorder(self, ordered_job_ids: list[str]) -> list[QueueJob]:
         """Drag-and-drop reordering: atomically update queue_order for all supplied job IDs."""
@@ -573,6 +606,7 @@ class QueueManager:
             )
 
         if job.state == CanonicalJobState.FAILED:
+            self.transition(job_id, CanonicalJobState.RETRYING)
             self.transition(job_id, CanonicalJobState.QUEUED)
 
         self._sync_json()
@@ -644,6 +678,8 @@ class QueueManager:
                 elif st == CanonicalJobState.PAUSED.value:
                     counts["paused"] += 1
                 elif st in (
+                    CanonicalJobState.ANALYZING.value,
+                    CanonicalJobState.RETRYING.value,
                     CanonicalJobState.PREFLIGHT.value,
                     CanonicalJobState.PRESCANNING.value,
                     CanonicalJobState.PREPASSING.value,
