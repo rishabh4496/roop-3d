@@ -9,6 +9,8 @@ export interface FaceSelectionStoreState extends FaceSelectionState {
   addDetectedFaces: (faces: DetectedFace[]) => void;
   setActiveSelection: (faceId: string | null) => void;
   setHoveredFace: (faceId: string | null) => void;
+  /** Keeps a stored face's pose current with the frame it is on screen in (the 3D viewer's Live Pose reads it). */
+  updateFacePose: (faceId: string, pose: { yaw: number; pitch: number; roll: number }, pose3d?: { yaw: number; pitch: number; roll: number }) => void;
   assignSource: (targetClusterId: string, sourceFaceId: string | null) => void;
   setClusterMode: (targetClusterId: string, mode: 'swap' | 'ignore' | 'exclude') => void;
   computeClusters: (similarityThreshold?: number) => void;
@@ -207,6 +209,15 @@ let state: FaceSelectionStoreState = {
       ...state,
       hoveredFaceId: faceId,
     };
+    notify();
+  },
+
+  updateFacePose: (faceId, pose, pose3d) => {
+    const face = state.detectedFaces.find(item => item.id === faceId);
+    if (!face) return;
+    const same = (a?: { yaw: number; pitch: number; roll: number }, b?: { yaw: number; pitch: number; roll: number }) => !!a === !!b && (!a || (a.yaw === b!.yaw && a.pitch === b!.pitch && a.roll === b!.roll));
+    if (same(face.pose, pose) && same(face.pose3d, pose3d)) return;
+    state = { ...state, detectedFaces: state.detectedFaces.map(item => (item.id === faceId ? { ...item, pose, ...(pose3d ? { pose3d } : {}) } : item)) };
     notify();
   },
 

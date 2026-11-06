@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { useFaceSelectionStore } from '../../useFaceSelectionStore';
 import { api } from '../../api';
-import { drawPoseHud, facePose } from './poseHud';
+import { drawPoseHud, facePose, LANDMARK_COLORS } from './poseHud';
 import { leftToRightRank } from '../../utils/poseCells';
 import { reducedMotion } from '../../utils/motionPrefs';
 export const FACE_ROLES = { swap: { label: 'Swap Target', color: '#91e6c9' }, ignore: { label: 'Reference Guide', color: '#60a5fa' }, exclude: { label: 'Exclude (Never Swap)', color: '#fb7185' } };
@@ -25,6 +25,10 @@ export { calculateLetterbox, mapBoxToPixels, mapPointToPixels };
  *   showLandmarks?: boolean;
  *   showPose?: boolean;
  *   interactive?: boolean;
+ *   frameFaces?: import('../../utils/frameFaces').MatchedFrameFace[] | null;
+ *   frameMeta?: import('../../frameScrub').FrameMeta | null;
+ *   onLockFace?: (face: import('../../utils/frameFaces').MatchedFrameFace) => void;
+ *   lockingId?: string | null;
  *   onFaceContextMenu?: (menu: { face: any; faceRank: number; pose: { yaw: number; pitch: number; roll: number } | null; x: number; y: number }) => void;
  * }} props
  */
@@ -42,6 +46,10 @@ export default function FaceOverlayCanvas({
   showPose = true,
   interactive = true,
   onFaceContextMenu,
+  frameFaces = null,
+  frameMeta = null,
+  onLockFace,
+  lockingId = null,
 }) {
   const canvasRef = useRef(null);
   const containerRef = useRef(null);
@@ -87,8 +95,8 @@ export default function FaceOverlayCanvas({
   }, [updateSize]);
 
   // Media natural dimensions
-  const mediaW = videoRef?.current?.videoWidth || mediaDimensions?.width || 1920;
-  const mediaH = videoRef?.current?.videoHeight || mediaDimensions?.height || 1080;
+  const mediaW = frameMeta?.width || videoRef?.current?.videoWidth || mediaDimensions?.width || 1920;
+  const mediaH = frameMeta?.height || videoRef?.current?.videoHeight || mediaDimensions?.height || 1080;
 
   const letterbox = useMemo(() => {
     return calculateLetterbox(containerSize.width, containerSize.height, mediaW, mediaH);
@@ -100,12 +108,18 @@ export default function FaceOverlayCanvas({
     return getFacesAtTimestamp(currentTime, fps);
   }, [detectedFaces, currentTime, fps, getFacesAtTimestamp]);
 
+  // Per-frame detection: when the server has detected this exact frame's faces, those (at their real position) replace the
+  // track boxes, which only know where a track first appeared. A detection that overlaps a stored face IS that face.
+  const frameMode = Array.isArray(frameFaces) && !!frameMeta;
+  const overlayFaces = useMemo(() => (frameMode ? frameFaces.map(match => toOverlayFace(match, frameMeta)) : []), [frameMode, frameFaces, frameMeta]);
+  const interactiveFaces = frameMode ? overlayFaces : visibleFaces;
+
   // Close popover when active face is not in current frame
   useEffect(() => {
-    if (popover && !visibleFaces.some(f => f.id === popover.face.id)) {
+    if (popover && !interactiveFaces.some(f => f.id === popover.face.id)) {
       setPopover(null);
     }
-  }, [visibleFaces, popover]);
+  }, [interactiveFaces, popover]);
 
   // Draw overlay on canvas
   useEffect(() => {
@@ -122,6 +136,12 @@ export default function FaceOverlayCanvas({
     ctx.save();
     ctx.scale(dpr, dpr);
     ctx.clearRect(0, 0, containerSize.width, containerSize.height);
+
+    if (frameMode) {
+      drawFrameFaces(ctx, overlayFaces, { letterbox, hoveredFaceId, lockingId, showLandmarks, showPose, bounds: containerSize });
+      ctx.restore();
+      return;
+    }
 
     for (const face of visibleFaces) {
       const coords = mapBoxToPixels(face.bbox, letterbox);
@@ -293,6 +313,9 @@ export default function FaceOverlayCanvas({
     sources,
     showLandmarks,
     showPose,
+    frameMode,
+    overlayFaces,
+    lockingId,
   ]);
 
   // Mouse move: Hit testing for hover
@@ -305,7 +328,7 @@ export default function FaceOverlayCanvas({
       const mouseY = e.clientY - rect.top;
 
       let hit = null;
-      for (const face of visibleFaces) {
+      for (const face of interactiveFaces) {
         const coords = mapBoxToPixels(face.bbox, letterbox);
         if (
           mouseX >= coords.x - 4 &&
@@ -326,7 +349,7 @@ export default function FaceOverlayCanvas({
         canvas.style.cursor = 'default';
       }
     },
-    [visibleFaces, letterbox, setHoveredFace]
+    [interactiveFaces, letterbox, setHoveredFace]
   );
 
   const handleMouseLeave = useCallback(() => {
@@ -346,7 +369,7 @@ export default function FaceOverlayCanvas({
       const mouseY = e.clientY - rect.top;
 
       let hit = null;
-      for (const face of visibleFaces) {
+      for (const face of interactiveFaces) {
         const coords = mapBoxToPixels(face.bbox, letterbox);
         if (
           mouseX >= coords.x - 4 &&
@@ -357,6 +380,13 @@ export default function FaceOverlayCanvas({
           hit = face;
           break;
         }
+      }
+
+      if (hit?.candidate) {
+        // A detected face that is not a target yet: clicking it locks it (the server creates its track).
+        setPopover(null);
+        onLockFace?.(frameFaces.find(match => match.id === hit.id));
+        return;
       }
 
       if (hit) {
@@ -375,7 +405,7 @@ export default function FaceOverlayCanvas({
         setPopover(null);
       }
     },
-    [visibleFaces, letterbox, targetClusters, setActiveSelection]
+    [interactiveFaces, letterbox, targetClusters, setActiveSelection, onLockFace, frameFaces]
   );
 
   // Close popover on Escape
@@ -416,7 +446,7 @@ export default function FaceOverlayCanvas({
         onContextMenu={event => {
           event.preventDefault();
           const rect = event.currentTarget.getBoundingClientRect();
-          const hit = visibleFaces.find(face => {
+          const hit = interactiveFaces.find(face => {
             const box = mapBoxToPixels(face.bbox, letterbox);
             const x = event.clientX - rect.left, y = event.clientY - rect.top;
             return x >= box.x - 4 && x <= box.x + box.w + 4 && y >= box.y - 4 && y <= box.y + box.h + 4;
@@ -424,7 +454,7 @@ export default function FaceOverlayCanvas({
           if (hit && onFaceContextMenu) {
             setActiveSelection(hit.id);
             setPopover(null);
-            onFaceContextMenu({ face: hit, faceRank: leftToRightRank(visibleFaces, hit), pose: facePose(hit), x: event.clientX, y: event.clientY });
+            onFaceContextMenu({ face: hit, faceRank: leftToRightRank(interactiveFaces, hit), pose: facePose(hit), x: event.clientX, y: event.clientY });
           } else {
             handleClick(event);
           }
@@ -433,7 +463,7 @@ export default function FaceOverlayCanvas({
           // Stage 7: a FaceSet dragged from the identity panel can be dropped straight onto a face in the video.
           if (!carriesFaceset(event)) return;
           const rect = event.currentTarget.getBoundingClientRect(), x = event.clientX - rect.left, y = event.clientY - rect.top;
-          if (visibleFaces.some(face => { const box = mapBoxToPixels(face.bbox, letterbox); return x >= box.x - 4 && x <= box.x + box.w + 4 && y >= box.y - 4 && y <= box.y + box.h + 4; })) {
+          if (interactiveFaces.some(face => { if (face.candidate) return false; const box = mapBoxToPixels(face.bbox, letterbox); return x >= box.x - 4 && x <= box.x + box.w + 4 && y >= box.y - 4 && y <= box.y + box.h + 4; })) {
             event.preventDefault(); event.dataTransfer.dropEffect = 'copy';
           }
         }}
@@ -441,7 +471,7 @@ export default function FaceOverlayCanvas({
           const facesetId = droppedFaceset(event);
           if (!facesetId) return;
           const rect = event.currentTarget.getBoundingClientRect(), x = event.clientX - rect.left, y = event.clientY - rect.top;
-          const hit = visibleFaces.find(face => { const box = mapBoxToPixels(face.bbox, letterbox); return x >= box.x - 4 && x <= box.x + box.w + 4 && y >= box.y - 4 && y <= box.y + box.h + 4; });
+          const hit = interactiveFaces.find(face => { if (face.candidate) return false; const box = mapBoxToPixels(face.bbox, letterbox); return x >= box.x - 4 && x <= box.x + box.w + 4 && y >= box.y - 4 && y <= box.y + box.h + 4; });
           if (!hit) return;
           event.preventDefault();
           setActiveSelection(hit.id);
@@ -449,7 +479,7 @@ export default function FaceOverlayCanvas({
         }}
         tabIndex={0}
         aria-label="Detected face bounding boxes"
-        onKeyDown={event => { if (event.key !== 'ContextMenu' && !(event.shiftKey && event.key === 'F10')) return; const face = visibleFaces.find(face => face.id === activeSelection) ?? visibleFaces[0]; if (!face) return; event.preventDefault(); const coords = mapBoxToPixels(face.bbox, letterbox); setPopover({ ...coords, face, cluster: targetClusters.find(cluster => cluster.id === face.clusterId) }); }}
+        onKeyDown={event => { if (event.key !== 'ContextMenu' && !(event.shiftKey && event.key === 'F10')) return; const face = interactiveFaces.find(face => face.id === activeSelection) ?? interactiveFaces[0]; if (!face) return; event.preventDefault(); const coords = mapBoxToPixels(face.bbox, letterbox); setPopover({ ...coords, face, cluster: targetClusters.find(cluster => cluster.id === face.clusterId) }); }}
         style={{
           width: '100%',
           height: '100%',
@@ -459,10 +489,10 @@ export default function FaceOverlayCanvas({
       />
 
       {/* Quick target face selector strip on top of preview box */}
-      {visibleFaces.length > 1 && (
+      {!frameMode && interactiveFaces.length > 1 && (
         <div className="preview-face-selector-strip" role="toolbar" aria-label="Select target face from preview">
           <span className="strip-title">🎯 TARGET FACE:</span>
-          {visibleFaces.map((f, i) => {
+          {interactiveFaces.map((f, i) => {
             const cluster = targetClusters.find(c => c.id === f.clusterId);
             const isSel = activeSelection === f.id;
             const assigned = sources.find(s => s.faceset_id === assignments[f.clusterId]);
@@ -501,7 +531,7 @@ export default function FaceOverlayCanvas({
       )}
 
       {/* Floating 1-click face detection prompt when no faces detected on current preview frame */}
-      {visibleFaces.length === 0 && onExtractFaces && (
+      {interactiveFaces.length === 0 && onExtractFaces && (
         <div className="preview-detect-prompt">
           <button
             type="button"
@@ -690,4 +720,80 @@ function drawCornerBrackets(ctx, x, y, width, height, length) {
   ctx.lineTo(x, y + height);
   ctx.lineTo(x, y + height - length);
   ctx.stroke();
+}
+
+/** A detected frame face as the overlay's face shape: normalised box and landmarks, both pose frames. */
+function toOverlayFace(match, meta) {
+  const { face } = match;
+  return {
+    id: match.id, clusterId: match.clusterId, frameIndex: meta.frame_index, bbox: face.bbox_norm, landmarks5: match.landmarks5,
+    pose: face.pose, pose3d: face.pose3d, confidence: face.confidence ?? undefined,
+    candidate: !match.stored, locked: match.locked, rank: face.face_index,
+  };
+}
+
+const FRAME_CYAN = '#22d3ee', FRAME_LOCKED = '#34d399';
+const signed = value => `${value >= 0 ? '+' : '-'}${Math.abs(value).toFixed(0)}`;
+
+function pill(ctx, text, x, y, { fill, stroke, color, font = '600 10px ui-monospace, Menlo, Consolas, monospace' }) {
+  ctx.save();
+  ctx.font = font;
+  const width = ctx.measureText(text).width + 10, height = 16;
+  ctx.fillStyle = fill; ctx.strokeStyle = stroke; ctx.lineWidth = 1;
+  drawRoundedRect(ctx, x, y, width, height, 3); ctx.fill(); ctx.stroke();
+  ctx.fillStyle = color; ctx.fillText(text, x + 5, y + 11.5);
+  ctx.restore();
+  return width;
+}
+
+/**
+ * Per-frame face boxes. Unselected: dashed cyan with its `#n` badge and a yaw / pitch pill. Hovered: glow and the 5-point
+ * landmarks. Selected target: solid emerald with a TARGET LOCKED badge. `#n` is the left-to-right rank face extraction uses.
+ */
+function drawFrameFaces(ctx, faces, { letterbox, hoveredFaceId, lockingId, showLandmarks, showPose, bounds }) {
+  for (const face of faces) {
+    const box = mapBoxToPixels(face.bbox, letterbox);
+    const locked = face.locked, hovered = hoveredFaceId === face.id && !locked, locking = lockingId === face.id;
+    const accent = locked ? FRAME_LOCKED : FRAME_CYAN;
+
+    ctx.save();
+    ctx.strokeStyle = accent;
+    ctx.lineWidth = locked || hovered ? 2.5 : 1.5;
+    if (locked || hovered) { ctx.shadowColor = accent; ctx.shadowBlur = hovered ? 16 : 12; }
+    ctx.setLineDash(locked || hovered ? [] : [6, 4]);
+    drawRoundedRect(ctx, box.x, box.y, box.w, box.h, 4);
+    ctx.stroke();
+    if (locked || hovered) { ctx.shadowBlur = 0; ctx.fillStyle = locked ? 'rgba(52, 211, 153, 0.08)' : 'rgba(34, 211, 238, 0.10)'; ctx.fill(); }
+    ctx.restore();
+
+    // `#n` badge, then TARGET LOCKED / Locking… beside it; above the box unless that leaves the frame.
+    const top = box.y - 20 >= letterbox.offsetY ? box.y - 20 : box.y + 4;
+    const badge = pill(ctx, `#${face.rank + 1}`, box.x, top, { fill: 'rgba(8, 14, 16, 0.92)', stroke: accent, color: accent });
+    if (locked) pill(ctx, 'TARGET LOCKED', box.x + badge + 4, top, { fill: FRAME_LOCKED, stroke: FRAME_LOCKED, color: '#04130d' });
+    else if (locking) pill(ctx, 'Locking…', box.x + badge + 4, top, { fill: 'rgba(8, 14, 16, 0.92)', stroke: accent, color: '#e8f1f2' });
+
+    if (showPose) {
+      const attitude = facePose(face);
+      if (attitude) {
+        const text = `Y ${signed(attitude.yaw)}° P ${signed(attitude.pitch)}°`;
+        ctx.save(); ctx.font = '600 10px ui-monospace, Menlo, Consolas, monospace';
+        const width = ctx.measureText(text).width + 10;
+        ctx.restore();
+        const left = Math.max(letterbox.offsetX, Math.min(box.x + box.w - width, letterbox.offsetX + letterbox.displayW - width));
+        const below = Math.min(bounds.height - 18, box.y + box.h + 3);
+        pill(ctx, text, left, below, { fill: 'rgba(8, 14, 16, 0.88)', stroke: 'rgba(232, 241, 242, 0.25)', color: '#e8f1f2' });
+      }
+    }
+
+    if ((hovered || locked || showLandmarks) && Array.isArray(face.landmarks5)) {
+      ctx.save();
+      face.landmarks5.forEach((point, index) => {
+        const { x, y } = mapPointToPixels(point, letterbox);
+        ctx.beginPath(); ctx.arc(x, y, hovered || locked ? 3.5 : 2.5, 0, Math.PI * 2);
+        ctx.fillStyle = LANDMARK_COLORS[index]; ctx.fill();
+        ctx.lineWidth = 1; ctx.strokeStyle = 'rgba(0,0,0,0.65)'; ctx.stroke();
+      });
+      ctx.restore();
+    }
+  }
 }

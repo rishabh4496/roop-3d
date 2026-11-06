@@ -6,6 +6,12 @@ All notable changes to the Roop 3D project are documented in this file.
 
 ## [Unreleased]
 
+### Stage 5: Timeline scrubbing, filmstrip and on-canvas face selection
+- **New:** `GET /media/info`, `/media/frame` (JPEG + `X-Frame-Meta`, optional faces) and `/media/filmstrip`, served by a persistent LRU `VideoFrameService`: ~88 frames/s consecutive, ~30 ms random seek, one container for a whole session.
+- **UI:** latest-frame-wins scrubbing, a one-request filmstrip, per-frame face boxes (dashed cyan `#n` + pose pill, hover glow, emerald `TARGET LOCKED`), a Detected Faces in Frame strip above the timeline, and a one-click Live Frame Swap Preview (split wipe). Locking a face creates its track, maps it to the active source and drives the 3D viewer's Live Pose.
+- **Fixed:** frame indices >= 10 000 were refused (Use as source failed past ~5.5 min at 30 fps); the filmstrip decoded a whole GOP per thumbnail; a continuous drag never produced a frame.
+- **Not provided, by design:** `embedding_norm` (always 1.0 after L2 normalisation), per-frame `track_id`, a duplicate `/media/preview-swap`. See STAGE05_TIMELINE_SCRUBBING.md.
+
 ### Stage 19: Professional UX, Accessibility and Documentation
 - **Guidance:** first-run Welcome dialog, guided project start, a live seven-step checklist (Home, Guide, Next-step bar), target-face tutorial, FaceSet photo checklist with the real quality thresholds, plain-language 3D-coverage reading with prioritised requests, engine recommendation and hardware-profile explanations, queue/checkpoint guidance (resume replays from frame 0), and recovery instructions for 49 backend error codes (codes and request IDs are now kept and shown).
 - **New control:** *Export preset* (seven presets plus HDR, subtitle and image-format policies). The server already supported them; the interface had no way to choose one.

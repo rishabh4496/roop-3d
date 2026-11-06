@@ -463,7 +463,7 @@ test.describe('responsive behaviour and visual sweep', () => {
       const { seen } = await boot(page, { openProject: true, width, height });
       await page.waitForTimeout(1200);
       // The filmstrip asks for as many thumbnails as fit the width; the playhead frame itself must never change.
-      const result = { previews: JSON.stringify(seen.previews.slice(0, 2)), frames: seen.previewFrames.filter(url => /timestamp=0$/.test(url)).slice(0, 1) };
+      const result = { previews: JSON.stringify(seen.previews.slice(0, 2)), frames: seen.frames.filter(query => /frame_index=0(&|$)/.test(query) && !/detect_faces/.test(query)).slice(0, 1) };
       await context.close();
       return result;
     };
@@ -475,6 +475,7 @@ test.describe('responsive behaviour and visual sweep', () => {
     expect(tablet.frames).toEqual(desktop.frames);
     expect(laptop.frames).toEqual(desktop.frames);
     for (const url of desktop.frames) expect(url).not.toMatch(/width|height|scale|size/i);
+    expect(desktop.frames[0]).toMatch(/frame_index=0/);
   });
 
   test('Face Manager keeps all three panels reachable on a tablet', async ({ page }) => {

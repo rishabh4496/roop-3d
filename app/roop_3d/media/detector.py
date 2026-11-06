@@ -26,6 +26,15 @@ class Detector:
 
     @guarded
     def detect(self, image: np.ndarray, threshold: float) -> tuple[list[tuple[np.ndarray, np.ndarray]], dict]:
+        scored, record = self._detect(image, threshold)
+        return [(box, points) for box, points, _ in scored], record
+
+    @guarded
+    def detect_scored(self, image: np.ndarray, threshold: float) -> tuple[list[tuple[np.ndarray, np.ndarray, float]], dict]:
+        """`detect`, plus each face's detector confidence (the SCRFD score the face was kept with)."""
+        return self._detect(image, threshold)
+
+    def _detect(self, image: np.ndarray, threshold: float) -> tuple[list[tuple[np.ndarray, np.ndarray, float]], dict]:
         record = self.catalog.detector()
         # Rehash cached model inputs; never continue inference after artifact drift.
         with self._lock:
@@ -69,14 +78,14 @@ class Detector:
             boxes.extend(bounds[keep] / scale)
             points.extend((landmarks[keep] + centers[keep, None, :]) / scale)
             scores.extend(confidence[keep])
-        retained: list[tuple[np.ndarray, np.ndarray]] = []
+        retained: list[tuple[np.ndarray, np.ndarray, float]] = []
         order = list(np.argsort(scores)[::-1])
         while order and len(retained) < 32:
             index = order.pop(0)
             box = np.asarray(boxes[index]).clip([0, 0, 0, 0], [width, height, width, height])
             if box[2] <= box[0] or box[3] <= box[1]:
                 continue
-            retained.append((box, points[index]))
+            retained.append((box, points[index], float(scores[index])))
             order = [other for other in order if iou(box, boxes[other]) < 0.4]
         return retained, record
 

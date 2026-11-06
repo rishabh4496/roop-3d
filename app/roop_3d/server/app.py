@@ -116,6 +116,7 @@ def create_app(settings: Settings | None = None, *, repo_root: Path | None = Non
             yield
         finally:
             await run_in_threadpool(model_downloads.close)
+            await run_in_threadpool(media.frames.close)
             if worker is not None:
                 await run_in_threadpool(worker.stop)
             await run_in_threadpool(MONITOR.stop)
@@ -205,6 +206,8 @@ def create_app(settings: Settings | None = None, *, repo_root: Path | None = Non
     app.include_router(preview_router)
     app.include_router(live_preview_router)
     app.include_router(face_extract_router)
+    from roop_3d.server.media_frames import router as media_frames_router
+    app.include_router(media_frames_router)
     from roop_3d.server.face_bank import router as face_bank_router
     app.include_router(face_bank_router)
     from roop_3d.server.identity_lock import router as identity_lock_router

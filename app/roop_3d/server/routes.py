@@ -309,7 +309,7 @@ def inspect(value: InspectRequest, request: Request) -> FaceInspection:
 class FrameFaceDetectionRequest(Contract):
     path: str = Field(min_length=1, max_length=1024)
     timestamp: float | None = Field(default=None, ge=0, le=86400)
-    frame_index: int | None = Field(default=None, ge=0, le=9999)
+    frame_index: int | None = Field(default=None, ge=0, le=10_000_000)   # converted to a timestamp, so any index of a long video works
     threshold: float = Field(default=0.5, ge=0.1, le=0.99)
 
 

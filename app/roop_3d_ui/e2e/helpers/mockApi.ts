@@ -40,6 +40,27 @@ export const PROFILES = [
 ].map(([id, label, container, depth, lossless]) => ({ id, label, description: `${label} description`, container, encoder: 'x', codec_family: 'h264', pix_fmt: null, container_bit_depth: depth, lossless, rgb_native: false,
   hdr_passthrough: false, audio_default: 'copy', limits: [], verification: { state: 'UNKNOWN' } }));
 
+/** Two faces of the mocked 960x540 frame, in native pixels: what GET /media/frame?detect_faces=true returns. */
+export const FRAME_FACES = [
+  { face_index: 0, track_id: null, bbox: [140, 120, 300, 340], bbox_norm: [140 / 960, 120 / 540, 300 / 960, 340 / 540], kps_5: [[185, 190], [255, 190], [220, 235], [190, 290], [250, 290]],
+    pose: { yaw: -12, pitch: 3, roll: 0 }, pose3d: { yaw: -12, pitch: -3, roll: 0 }, pose_cell: 'center', confidence: 0.97 },
+  { face_index: 1, track_id: null, bbox: [620, 120, 780, 340], bbox_norm: [620 / 960, 120 / 540, 780 / 960, 340 / 540], kps_5: [[665, 190], [735, 190], [700, 235], [670, 290], [730, 290]],
+    pose: { yaw: 25, pitch: 0, roll: 2 }, pose3d: { yaw: 25, pitch: 0, roll: 2 }, pose_cell: 'right', confidence: 0.91 },
+];
+/** GET /media/frame: a JPEG whose X-Frame-Meta header carries the metadata (and the faces when asked), as the real service answers. */
+export function mockFrame(url: URL) {
+  const index = Number(url.searchParams.get('frame_index') ?? 0);
+  const meta = { frame_index: index, requested_index: index, timestamp_sec: index / 25, width: 960, height: 540, image_width: 960, image_height: 540, total_frames: 100, fps: 25, cache: 'miss', decode_ms: 1,
+    ...(url.searchParams.get('detect_faces') === 'true' ? { faces: FRAME_FACES, unsupported: ['embedding_norm', 'track_id'] } : {}) };
+  return { status: 200, contentType: 'image/jpeg', body: tinyJpeg, headers: { 'X-Frame-Meta': JSON.stringify(meta) } };
+}
+export const MEDIA_INFO = { width: 960, height: 540, fps: 25, fps_rational: '25/1', total_frames: 100, duration_sec: 4, rotation_degrees: 0, frame_count_declared: true };
+export function mockFilmstrip(url: URL) {
+  const count = Number(url.searchParams.get('count') ?? 16);
+  return { count, thumb_width: 160, thumb_height: 90, total_frames: 100, duration_sec: 4,
+    frames: Array.from({ length: count }, (_, slot) => ({ slot, frame_index: Math.floor((slot + 0.5) / count * 100), requested_frame_index: Math.floor((slot + 0.5) / count * 100), timestamp_sec: ((slot + 0.5) / count) * 4, data_url: `data:image/gif;base64,${gif}` })) };
+}
+
 export interface BootOptions {
   jobs?: unknown[];
   /** `POST /media/inspect-faces` answers with this API error instead of the inspection. */
@@ -58,7 +79,7 @@ export interface BootOptions {
 }
 
 export async function boot(page: Page, options: BootOptions = {}) {
-  const seen = { previews: [] as any[], previewFrames: [] as string[], projects: [] as any[], queued: [] as any[] };
+  const seen = { previews: [] as any[], previewFrames: [] as string[], frames: [] as string[], filmstrips: [] as string[], projects: [] as any[], queued: [] as any[] };
   await page.addInitScript((firstRun: boolean) => {
     sessionStorage.setItem('roop3d_skip_linter', 'true');
     if (!firstRun) localStorage.setItem('roop3d-onboarding-v1', '1');
@@ -92,6 +113,9 @@ export async function boot(page: Page, options: BootOptions = {}) {
     if (path === '/media/probe') return json({ width: 960, height: 540, duration_seconds: 4, fps_rational: '25/1', declared_frame_count: 100, audio_tracks: [] });
     if (path === '/media/keyframes') return json({ timestamps: [0, 2] });
     if (path === '/media/preview-frame') { seen.previewFrames.push(url.pathname + url.search); return route.fulfill({ status: 200, contentType: 'image/jpeg', body: tinyJpeg }); }
+    if (path === '/media/frame') { seen.frames.push(url.search); return route.fulfill(mockFrame(url)); }
+    if (path === '/media/info') return json(MEDIA_INFO);
+    if (path === '/media/filmstrip') { seen.filmstrips.push(url.search); return json(mockFilmstrip(url)); }
     if (path === '/media/content') return route.fulfill({ status: 204 });
     if (path === '/media/inspect-faces' && options.inspectError) return json({ error: { code: options.inspectError.code, message: options.inspectError.message, request_id: 'r1abc' } }, options.inspectError.status);
     if (path === `/media/inspections/${ID}` || path === '/media/inspect-faces') return json(INSPECTION);

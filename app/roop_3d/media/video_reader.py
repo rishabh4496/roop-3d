@@ -143,6 +143,18 @@ class VideoReader:
             frame.colorspace = self._matrix_override
         return upright(frame, self.format, rotation)
 
+    def convert(self, frame: av.VideoFrame, stream: av.video.stream.VideoStream, rotation: int | None = None) -> np.ndarray:
+        """A software-decoded frame as an upright image under this reader's colour policy.
+
+        For callers that keep a container open and own the decode loop (the scrubbing frame service) but must
+        not re-implement HDR tone mapping, matrix selection or rotation.
+        """
+        self._prepare_color(frame, stream)
+        image = self._image(frame, rotation)
+        if image.nbytes > self.max_frame_bytes:
+            raise DomainError("FRAME_MEMORY_BUDGET", "Upright frame exceeds byte budget", 422)
+        return image
+
     def frames(self, *, seek: Timestamp | None = None, keyframes_only: bool = False,
                native: bool = False) -> Iterator[DecodedFrame]:
         """Indices count emitted frames in this iterator; seek results use PTS as identity.

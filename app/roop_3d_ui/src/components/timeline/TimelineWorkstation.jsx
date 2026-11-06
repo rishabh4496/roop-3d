@@ -4,6 +4,7 @@ import React, { useRef, useState, useEffect, useMemo, useCallback } from 'react'
 import { useFaceSelectionStore } from '../../useFaceSelectionStore';
 import { addChapter, adjacentChapter, chapterAt, loadChapters, removeChapter, renameChapter, saveChapters } from './chapters';
 import { getPlayhead, playheadStore, usePlayhead } from '../../stores/playheadStore';
+import { filmstripCount, useFilmstrip } from '../../frameScrub';
 
 /**
  * Stage 11 live-playhead leaves. `currentTime` (committed by seek / step / pause) drives the timeline's layout and
@@ -336,17 +337,23 @@ export default function TimelineWorkstation({
 
   const scaledTrackWidth = Math.max(trackWidth, Math.round(trackWidth * timelineZoom));
 
-  // Compute 120px-wide video thumbnail frames across the timeline
+  // The filmstrip: one request for every thumbnail (GET /media/filmstrip, at least 16, one per ~120 px when zoomed in). Each card
+  // carries the time of the frame it really shows. Until it arrives the cards are empty placeholders; if it fails the track
+  // falls back to one frame preview per thumbnail.
+  const stripCount = useMemo(() => filmstripCount(scaledTrackWidth), [scaledTrackWidth]);
+  const filmstrip = useFilmstrip(target || '', stripCount);
   const defaultThumbnails = useMemo(() => {
     if (!target || effectiveDuration <= 0) return [];
-    const thumbWidth = 120;
-    const count = Math.max(3, Math.min(128, Math.floor(Math.max(scaledTrackWidth, 360) / thumbWidth)));
-    return Array.from({ length: count }, (_, i) => ({
-      index: i,
-      timestamp: ((i + 0.5) / count) * effectiveDuration,
-      url: `/api/v1/media/preview-frame?${new URLSearchParams({ path: target, timestamp: String(((i + 0.5) / count) * effectiveDuration) })}`,
-    }));
-  }, [target, effectiveDuration, scaledTrackWidth]);
+    if (filmstrip.status === 'ready' && Array.isArray(filmstrip.data?.frames) && filmstrip.data.frames.length) {
+      return filmstrip.data.frames.map(frame => ({ index: frame.slot, timestamp: frame.timestamp_sec, url: frame.data_url }));
+    }
+    const count = filmstrip.status === 'error' ? Math.max(3, Math.min(32, Math.floor(Math.max(scaledTrackWidth, 360) / 120))) : stripCount;
+    return Array.from({ length: count }, (_, i) => {
+      const timestamp = ((i + 0.5) / count) * effectiveDuration;
+      return { index: i, timestamp, url: filmstrip.status === 'error'
+        ? `/api/v1/media/preview-frame?${new URLSearchParams({ path: target, timestamp: String(timestamp) })}` : '' };
+    });
+  }, [target, effectiveDuration, scaledTrackWidth, stripCount, filmstrip.status, filmstrip.data]);
 
   const thumbnails = customThumbnails || defaultThumbnails;
 
@@ -986,16 +993,18 @@ export default function TimelineWorkstation({
                   }}
                   title={`Seek to ${formatTimecode(thumb.timestamp, effectiveFps)}`}
                 >
-                  <img
-                    src={thumb.url}
-                    alt={`Frame at ${thumb.timestamp.toFixed(1)}s`}
-                    loading="lazy"
-                    className="filmstrip-thumb-img"
-                    onError={(e) => {
-                      // Fallback placeholder styling
-                      e.currentTarget.style.display = 'none';
-                    }}
-                  />
+                  {thumb.url ? (
+                    <img
+                      src={thumb.url}
+                      alt={`Frame at ${thumb.timestamp.toFixed(1)}s`}
+                      loading="lazy"
+                      className="filmstrip-thumb-img"
+                      onError={(e) => {
+                        // Fallback placeholder styling
+                        e.currentTarget.style.display = 'none';
+                      }}
+                    />
+                  ) : <span className="filmstrip-thumb-skeleton" aria-hidden="true" />}
                   <span className="frame-timestamp-pill">
                     {formatTimecode(thumb.timestamp, effectiveFps).slice(3)}
                   </span>
@@ -1003,7 +1012,7 @@ export default function TimelineWorkstation({
               ))
             ) : (
               <div className="filmstrip-empty">
-                <span>{target ? 'Generating 120px filmstrip frames…' : 'Load a target video to display filmstrip'}</span>
+                <span>{target ? 'Generating filmstrip frames…' : 'Load a target video to display filmstrip'}</span>
               </div>
             )}
           </div>

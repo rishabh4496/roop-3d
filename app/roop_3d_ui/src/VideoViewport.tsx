@@ -37,6 +37,9 @@ import HistoryDrawer from './components/workstation/HistoryDrawer';
 import SnapshotSlots, { SnapshotViewport } from './components/workstation/SnapshotSlots';
 import { panAnchoredAt } from './utils/zoomPan';
 import { buildLivePayload, downloadBlob, previewFilename, useLiveSwapPreview } from './livePreview';
+import { useMediaInfo, useScrubFrame } from './frameScrub';
+import { bestOverlap, useMatchedFrameFaces, type MatchedFrameFace } from './utils/frameFaces';
+import FrameFaceStrip from './components/tray/FrameFaceStrip';
 import LiveSwapStatus from './components/workstation/LiveSwapStatus';
 import { DEFAULT_VIEWPORT, type ViewportPreferences } from './previewPreferences';
 import type { Dispatch, SetStateAction } from 'react';
@@ -177,6 +180,7 @@ export function VideoViewport({
       setDetectingFaces(false);
     }
   }, [target, time, detectingFaces, onInspectionUpdate]);
+  const noticeLater = useCallback((message: string) => { setDetectionNotice(message); setTimeout(() => setDetectionNotice(''), 4000); }, []);
   const [sourceFaceNumber, setSourceFaceNumber] = useState(1);
   const original = useRef<HTMLVideoElement>(null), processed = useRef<HTMLVideoElement>(null);
   const viewportRef = useRef<HTMLDivElement>(null);
@@ -235,10 +239,58 @@ export function VideoViewport({
   const selectSolo = (node: string) => { if (PIPELINE_NODES.find(item => item.id === node)?.unavailable || !previewRequest) return; history.live(); setSolo(previous => previous === node ? null : node); setIsMaskEditing(false); };
   const bypassNode = (node: string) => { if (node !== 'restorer') return; setParameters({ ...parameters, bypass: parameters.bypass.includes(node) ? parameters.bypass.filter(item => item !== node) : [...parameters.bypass, node] }); setSolo('final'); setIsMaskEditing(false); };
 
-  const sourcePreview = usePreview(enabled && previewLive ? target : '', time, duration, fps, playing);
+  const [showFaceOverlays, setShowFaceOverlays] = preference('show_overlays');
+  // The target frame under the playhead: one persistent server-side decoder, one request in flight, newest frame wins
+  // (frameScrub.ts). Faces are detected for the frame once the playhead rests; the video element is only for playback.
+  const frameSource = enabled && previewLive ? target : '';
+  const mediaInfo = useMediaInfo(frameSource);
+  const totalFrames = mediaInfo.data?.total_frames ?? Math.max(1, Math.round(duration * fps));
+  const scrub = useScrubFrame({ path: frameSource, time, fps, maxIndex: totalFrames - 1, enabled: !playing, detect: showFaceOverlays });
+  const sourcePreview = { source: scrub.source, error: scrub.error };
+  const matchedFaces = useMatchedFrameFaces(scrub.current && !playing ? scrub.faces : null, scrub.meta, fps);
+  /** Faces of this exact frame, or null until detection has run for it (then the track boxes are drawn instead). */
+  const frameFaces = !playing && scrub.current && scrub.faces ? matchedFaces : null;
+  const [lockingId, setLockingId] = useState<string | null>(null);
   const outputPreview = usePreview(enabled && previewLive ? output : '', time, duration, fps, playing);
   // The real swapped frame (or, when a node is soloed, that stage's buffer) from POST /api/preview: debounced, 503-aware.
   const [liveSwap, setLiveSwap] = preference('live_swap');
+  /**
+   * Make a face of the frame on screen the target: from its box on the canvas or its card in the strip. A face that is already
+   * a target is just selected. A new one goes through `/media/detect-frame-faces`, which records its track in the inspection so
+   * it can be rendered; it is then selected (the 3D viewer's Live Pose follows it) and, when a source FaceSet is active, mapped to it.
+   */
+  const lockFrameFace = useCallback(async (match?: MatchedFrameFace) => {
+    const meta = scrub.meta;
+    if (!match || !meta || lockingId) return;
+    const store = useFaceSelectionStore.getState();
+    if (match.stored) { store.setActiveSelection(match.stored.id); return; }
+    setLockingId(match.id);
+    try {
+      // The frame's own presentation time (minus a hair, so rounding can never select the next frame).
+      const result = await post<FrameFaceDetectionResponse>('/media/detect-frame-faces', { path: target, timestamp: Math.max(0, meta.timestamp_sec - 0.0005) });
+      const server = bestOverlap(match.face, result?.faces ?? []);
+      if (!server) { noticeLater('That face could not be locked: it was not found again in this frame.'); return; }
+      store.addFrameDetectedFaces(result.faces, false);
+      store.setActiveSelection(server.id);
+      if (result.inspection) onInspectionUpdate?.(result.inspection);
+      const source = sources.find(item => item.faceset_id === activeSourceId);
+      if (source && server.track_id) { store.assignSource(server.track_id, source.faceset_id); onAssignSource?.(server.track_id, source.faceset_id); }
+      noticeLater(source ? `Face #${match.face.face_index + 1} locked and mapped to ${source.name}.` : `Face #${match.face.face_index + 1} locked as a target. Choose a source FaceSet to swap it.`);
+    } catch (error) { noticeLater((error as Error).message || 'Locking the face failed.'); }
+    finally { setLockingId(null); }
+  }, [scrub.meta, lockingId, target, sources, activeSourceId, onAssignSource, onInspectionUpdate, noticeLater]);
+  // The locked face's pose follows the frame under the playhead (the stored track keeps one pose for all its frames).
+  const activeFaceId = useFaceSelectionStore(state => state.activeSelection);
+  useEffect(() => {
+    const active = matchedFaces.find(match => match.stored && match.stored.id === activeFaceId);
+    if (active) useFaceSelectionStore.getState().updateFacePose(active.stored!.id, active.face.pose, active.face.pose3d);
+  }, [matchedFaces, activeFaceId]);
+  const toggleLiveFrameSwap = () => {
+    const on = viewMode === 'compare' && compMode === 'wipe' && liveSwap;
+    if (on) { setViewMode('side'); return; }
+    if (!previewRequest) { flash('Assign a source FaceSet to a locked target face first: the swap preview needs a face mapping.'); return; }
+    setLiveSwap(true); setCompMode('wipe'); setViewMode('compare'); setSolo(null); setIsMaskEditing(false);
+  };
   const live = useLiveSwapPreview(previewLive && enabled && liveSwap && !playing && !isMaskEditing
     ? buildLivePayload({ timestampSelection: true, request: previewRequest, time, fps, parameters, maskBase64, restorerAvailable, solo: nodeBuffer(solo) })
     : null);
@@ -325,7 +377,9 @@ export function VideoViewport({
   // The preview window toggles work from every screen, so they live outside the faceswap-only map above.
   useShortcutActions({ floating: floating.toggle, pip: () => void floating.openPip() }, !sweepPanel);
 
-  const mediaDims = probe ? { width: probe.width, height: probe.height } : { width: 1920, height: 1080 };
+  const mediaDims = scrub.meta ? { width: scrub.meta.width, height: scrub.meta.height }
+    : mediaInfo.data ? { width: mediaInfo.data.width, height: mediaInfo.data.height }
+    : probe ? { width: probe.width, height: probe.height } : { width: 1920, height: 1080 };
   const handleCompareContextMenu = useCallback((clientX: number, clientY: number) => {
     const rect = viewportRef.current?.getBoundingClientRect();
     if (!rect) return;
@@ -345,7 +399,6 @@ export function VideoViewport({
   const [panOrigin, setPanOrigin] = useState({ x: 0, y: 0 });
   const [gridMode, setGridMode] = preference('grid_mode');
   const [showSourcePeek, setShowSourcePeek] = useState(false);
-  const [showFaceOverlays, setShowFaceOverlays] = preference('show_overlays');
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [snapshotNotice, setSnapshotNotice] = useState('');
   const [isSpaceDown, setIsSpaceDown] = useState(false);
@@ -549,6 +602,10 @@ export function VideoViewport({
                 showLandmarks={showLandmarks}
                 showPose={showPose}
                 onFaceContextMenu={openFaceMenu}
+                frameFaces={frameFaces}
+                frameMeta={scrub.meta}
+                onLockFace={lockFrameFace}
+                lockingId={lockingId}
               />}</LiveTime>
             )}
             {isShowingSourcePeek && (
@@ -779,6 +836,10 @@ export function VideoViewport({
             onClick={() => setViewMode(mode => (mode === 'compare' ? 'side' : 'compare'))}
             title="Full-bleed comparison canvas: wipe, crossfade, alpha blend, diff map and 3.5x loupe"><span>◫</span> Compare</button>
 
+          <button type="button" className={`hud-btn live-frame-swap-btn ${viewMode === 'compare' && compMode === 'wipe' && liveSwap ? 'active' : ''}`}
+            aria-pressed={viewMode === 'compare' && compMode === 'wipe' && liveSwap} disabled={playing} onClick={toggleLiveFrameSwap}
+            title="Swap the face on this frame and compare it with the original on one canvas: drag the split-wipe slider"><span>⚡</span> Live Frame Swap Preview</button>
+
           {/* Live swapped preview: on/off + PNG download (click handler, blob URL) */}
           <button
             type="button"
@@ -857,7 +918,7 @@ export function VideoViewport({
                 mode={compMode} onModeChange={(next: string) => setCompMode(next as typeof compMode)} containerWidth={viewportSize.width} containerHeight={viewportSize.height}
                 mediaDimensions={mediaDims} onContextMenuPoint={handleCompareContextMenu} currentTime={time} fps={fps}/>
               {showFaceOverlays && <FaceOverlayCanvas videoRef={original} mediaDimensions={mediaDims} currentTime={time} sources={sources} fps={fps}
-                showOverlays showLandmarks={showLandmarks} showPose={showPose} interactive={false}/>}
+                showOverlays showLandmarks={showLandmarks} showPose={showPose} interactive={false} frameFaces={frameFaces} frameMeta={scrub.meta}/>}
             </div>
           ) : (
             <>
@@ -943,10 +1004,11 @@ export function VideoViewport({
         onUseFaceFromFrame={openMenuFromBar}
         canUseFaceFromFrame={!!target}
       />}</LiveTime>;
-      if (studio) return <>{studio.timeline && createPortal(timeline, studio.timeline)}{studio.tray && createPortal(tray, studio.tray)}</>;
+      const faceStrip = <FrameFaceStrip imageUrl={scrub.source} meta={scrub.meta} faces={frameFaces} detecting={scrub.detecting} lockingId={lockingId} onLock={match => void lockFrameFace(match)} disabled={playing || !target}/>;
+      if (studio) return <>{studio.timeline && createPortal(<>{faceStrip}{timeline}</>, studio.timeline)}{studio.tray && createPortal(tray, studio.tray)}</>;
       return <DockArea>
       {/* Video Editor-Grade Workstation Timeline */}
-      <DockPanel id="timeline" title="Timeline">{timeline}</DockPanel>
+      <DockPanel id="timeline" title="Timeline">{faceStrip}{timeline}</DockPanel>
       {/* Target Face Selection Tray */}
       <DockPanel id="tray" title="Face Tray">{tray}</DockPanel>
       <DockPanel id="inspector" title="Inspector">{inspector ?? <p className="muted">Processing inspector</p>}</DockPanel>

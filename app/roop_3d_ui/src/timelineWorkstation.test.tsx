@@ -146,7 +146,9 @@ describe('TimelineWorkstation Component', () => {
     expect(html).toContain('filmstrip-frame-card');
     expect(html).toContain('sprocket-holes top');
     expect(html).toContain('sprocket-holes bottom');
-    expect(html).toContain('preview-frame');
+    // One GET /media/filmstrip fills the track: until it lands the cards are placeholders, never a request per thumbnail.
+    expect(html).toContain('filmstrip-thumb-skeleton');
+    expect(html).not.toContain('preview-frame');
 
     // Playhead needle
     expect(html).toContain('timeline-playhead-needle');

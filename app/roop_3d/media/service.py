@@ -21,6 +21,7 @@ from roop_3d.core.pose import as_legacy_triplet, as_pose3d, pose_cell
 from roop_3d.core.settings import Settings, runtime_path
 from roop_3d.core.storage import atomic_json
 from roop_3d.media.detector import Detector
+from roop_3d.media.frame_service import VideoFrameService
 from roop_3d.engine.detection.face_tracker import FaceTracker
 from roop_3d.engine.detection.track_policy import TrackPolicy
 from roop_3d.identity.report import IdentityReportCollector, write_report
@@ -41,6 +42,8 @@ class MediaService:
         self.detector = Detector(catalog)
         self.settings = settings
         self._color_cache: dict = {}
+        # Persistent decoders + frame/detection caches for timeline scrubbing (see media/frame_service.py).
+        self.frames = VideoFrameService(self.path, self.detector)
 
     def path(self, value: str) -> Path:
         try:

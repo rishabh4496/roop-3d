@@ -1,4 +1,5 @@
 import { expect, test, type Page, type Route } from '@playwright/test';
+import { MEDIA_INFO, mockFilmstrip, mockFrame } from './helpers/mockApi';
 
 /**
  * Stage 7 studio workstation in a real browser (system Chrome, mocked API, real React / WebGL / HTML5 drag and drop):
@@ -60,6 +61,9 @@ async function boot(page: Page, options: { width?: number; jobs?: any[] } = {}) 
     if (path === '/media/probe') return json({ width: 960, height: 540, duration_seconds: 4, fps_rational: '25/1', declared_frame_count: 100, audio_tracks: [] });
     if (path === '/media/keyframes') return json({ timestamps: [0, 2] });
     if (path === '/media/preview-frame') return route.fulfill({ status: 200, contentType: 'image/jpeg', body: tinyJpeg });
+    if (path === '/media/frame') return route.fulfill(mockFrame(url));
+    if (path === '/media/info') return json(MEDIA_INFO);
+    if (path === '/media/filmstrip') return json(mockFilmstrip(url));
     if (path === '/media/content') return route.fulfill({ status: 204 });
     if (path === `/media/inspections/${ID}` || path === '/media/inspect-faces') return json(INSPECTION);
     if (path === `/identity/inspections/${ID}`) return json(SHEET);

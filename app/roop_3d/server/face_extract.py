@@ -124,6 +124,9 @@ class FaceExtractService:
             if image is None:
                 raise DomainError("MEDIA_UNREADABLE", "Image could not be decoded", 422)
             return image, path
+        if request.frame_index >= 10000:
+            # `media.frame` replays from frame 0 and refuses indices this large; the scrubbing service seeks.
+            return self.state.media.frames.read(request.target_media_path, frame_index=request.frame_index).image, path
         return self.state.media.frame(request.target_media_path, None, request.frame_index), path
 
     def _target_digest(self, path: Path) -> str:
