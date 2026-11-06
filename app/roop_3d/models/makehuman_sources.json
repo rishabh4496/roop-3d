@@ -1,0 +1,529 @@
+{
+ "commit": "a8bc2d54ff0ac92e78ff71431b1023eda42bf482",
+ "files": {
+  "3dobjs/base.obj": {
+   "bytes": 1749303,
+   "sha256": "8e761e6624b8f54536409135d1636da63b32486a90d4897f84e121d144f6fb4c"
+  },
+  "targets/cheek/l-cheek-bones-decr.target": {
+   "bytes": 2290,
+   "sha256": "0da776725aabc2cbc602d805e50d0dfbc98b0519a0d65f21b7e6f133562e56f9"
+  },
+  "targets/cheek/l-cheek-bones-incr.target": {
+   "bytes": 1519,
+   "sha256": "244ffa39d2d2db94ff15130719346b4cae2236bf2a309c5682eac352da06be50"
+  },
+  "targets/cheek/l-cheek-volume-decr.target": {
+   "bytes": 3619,
+   "sha256": "527d19395f33c02caf3b32254e78702156cdf63c17e4c0e3dd79cca004fa27be"
+  },
+  "targets/cheek/l-cheek-volume-incr.target": {
+   "bytes": 4754,
+   "sha256": "edb0bf9389aa7fd00f9d735603729b687b3899e9a6df0934ca14aa4d44574e27"
+  },
+  "targets/cheek/r-cheek-bones-decr.target": {
+   "bytes": 2123,
+   "sha256": "a336b46fe613d85763fb01ca79758039b15daef1930600e36dc420e799b683d4"
+  },
+  "targets/cheek/r-cheek-bones-incr.target": {
+   "bytes": 1514,
+   "sha256": "a393f67acce21568ab832091daadab267685d464492647cb0c4e8cb5af58c4c9"
+  },
+  "targets/cheek/r-cheek-volume-decr.target": {
+   "bytes": 3274,
+   "sha256": "3a356f2f6434ccefa633981dff1b7866ce1feb8427918f35f81b6adffa4599b5"
+  },
+  "targets/cheek/r-cheek-volume-incr.target": {
+   "bytes": 4690,
+   "sha256": "dfdde51eb34b3e2c70a4c0c9fe876339dd80ee6ec0fbb3f798e630af556f9695"
+  },
+  "targets/chin/chin-bones-decr.target": {
+   "bytes": 3902,
+   "sha256": "fc54c1572b2562b095e5a5e48882bab16c1b24e64b106b2d54e6be64ce20121c"
+  },
+  "targets/chin/chin-bones-incr.target": {
+   "bytes": 11831,
+   "sha256": "245b7a9506a10d5828531922ab2ec6da0e813f71bd995dae48c9a4dfad171a49"
+  },
+  "targets/chin/chin-height-decr.target": {
+   "bytes": 4603,
+   "sha256": "acf83b5b7f2d6665f19d0d91205472878c23ab78b3f43d48420f75afe8e82818"
+  },
+  "targets/chin/chin-height-incr.target": {
+   "bytes": 9131,
+   "sha256": "8b13d4a1e0f4b105cb51a346cd8a3618c9349e620d0197cc442905e83de8ae53"
+  },
+  "targets/chin/chin-prognathism-decr.target": {
+   "bytes": 7788,
+   "sha256": "4dd20d7912e9baf38d5b92e4e3a9f03a7bc0b59578db9d9a80288729ded88885"
+  },
+  "targets/chin/chin-prognathism-incr.target": {
+   "bytes": 5360,
+   "sha256": "81d086ad10c3e210d9a6ddb69ca0aaf2b3f91c2bcd5c7b49173f1303d017bf66"
+  },
+  "targets/chin/chin-prominent-decr.target": {
+   "bytes": 3522,
+   "sha256": "071afc623e6feb38afa5dde7abca83710c062bf1281e30a51fa42a6fbacfc00e"
+  },
+  "targets/chin/chin-prominent-incr.target": {
+   "bytes": 2338,
+   "sha256": "d2493ca5f69aabeb8557d77a56c49cfcf2062ff90c0cad03073d87990d11448b"
+  },
+  "targets/chin/chin-width-decr.target": {
+   "bytes": 2853,
+   "sha256": "ac081bd1652c203fc8973f20988a868a423a49f1fe6449cb974727fd46c26af1"
+  },
+  "targets/chin/chin-width-incr.target": {
+   "bytes": 3706,
+   "sha256": "deef506bfe1883d9d4c38667332c9970785226566efbae4724fd3d60c02efcf4"
+  },
+  "targets/ears/l-ear-scale-decr.target": {
+   "bytes": 11395,
+   "sha256": "dbe6da6a32a278887bd851c1ce8a3cc8be36e2c833d033afc043a865f171583c"
+  },
+  "targets/ears/l-ear-scale-incr.target": {
+   "bytes": 11526,
+   "sha256": "8112e638fb6ecc46569c527494f5b20acd0c5544d891dbf09c7876402eac384c"
+  },
+  "targets/ears/r-ear-scale-decr.target": {
+   "bytes": 11095,
+   "sha256": "aae4f2455ace56046d1e58fff9a83fea220cd722e24727af352fbaf376a2bb35"
+  },
+  "targets/ears/r-ear-scale-incr.target": {
+   "bytes": 10827,
+   "sha256": "4fa34a2a4d7254fdb5ac514b85b755b8ed0d73ed21450778b2dcb64275a3619d"
+  },
+  "targets/expression/units/caucasian/eye-left-closure.target": {
+   "bytes": 3946,
+   "sha256": "e38cb77fd888de3d0d944efe6f3511bf3ca4076b0397fa7c840d8368f08205c2"
+  },
+  "targets/expression/units/caucasian/eye-right-closure.target": {
+   "bytes": 3776,
+   "sha256": "58faf2c199272bfd87478ea122cdaa4b4b8669505be0d75f777c5471527b2b15"
+  },
+  "targets/expression/units/caucasian/eyebrows-left-down.target": {
+   "bytes": 1629,
+   "sha256": "89999e77f486dda420fde6d67ca7e32e885d80e816111e776ff292efe41b209d"
+  },
+  "targets/expression/units/caucasian/eyebrows-left-inner-up.target": {
+   "bytes": 1321,
+   "sha256": "2fa94d522d54bb33078c72ac111da75005b5b2bf495d647c6e9fd5b41245b287"
+  },
+  "targets/expression/units/caucasian/eyebrows-left-up.target": {
+   "bytes": 1381,
+   "sha256": "4f770b7281ed9502c2e164850e41265310a445d0534bbc9a8faa949c05677775"
+  },
+  "targets/expression/units/caucasian/eyebrows-right-down.target": {
+   "bytes": 1579,
+   "sha256": "86f0d1440944fa4754d24c128f7d105f6a93dbd6ce9204be972bcb2ad5be4cec"
+  },
+  "targets/expression/units/caucasian/eyebrows-right-inner-up.target": {
+   "bytes": 1256,
+   "sha256": "c97c24303a308d042f353e00038f35bc15b0d253cbdc9213dbe50fb01809893c"
+  },
+  "targets/expression/units/caucasian/eyebrows-right-up.target": {
+   "bytes": 1486,
+   "sha256": "496a446cb77aad463dfd952a8a648e758ee0954c64a96a4e4412f9a042391881"
+  },
+  "targets/expression/units/caucasian/mouth-compression.target": {
+   "bytes": 13039,
+   "sha256": "b7abd0826708d7e4344559583edd0fc80e098b08b91f3e6d67d83b1eed20ccbe"
+  },
+  "targets/expression/units/caucasian/mouth-corner-puller.target": {
+   "bytes": 15163,
+   "sha256": "75ec1f2356c381aa44065f2b812daafae85c5a918843b978d04cf6d8bc79dbe4"
+  },
+  "targets/expression/units/caucasian/mouth-elevation.target": {
+   "bytes": 11104,
+   "sha256": "0b306cea4b0bb372d408b69a55332b8ddb252b3f2d4bfdd6b9d5c34da0f90e32"
+  },
+  "targets/expression/units/caucasian/mouth-open.target": {
+   "bytes": 26815,
+   "sha256": "07377ba3a3eb1b92b00029908f896ea1f8cc50356789f54268d897f2e89c2843"
+  },
+  "targets/expression/units/caucasian/mouth-protusion.target": {
+   "bytes": 14207,
+   "sha256": "012c571c381c3dee06591132110d7d64fb2abd49d883afc619f6bc6c0000d2f4"
+  },
+  "targets/expression/units/caucasian/mouth-pursing.target": {
+   "bytes": 16023,
+   "sha256": "02b08ad99c2345e83cbd4c77819fadef2af8c7fc3111211fc169459eb7f37d10"
+  },
+  "targets/eyebrows/eyebrows-angle-down.target": {
+   "bytes": 8604,
+   "sha256": "ec30979a4b998f4054f0d72c8e7e3b204ca12417f07e02669f4f8c8566f8e4f6"
+  },
+  "targets/eyebrows/eyebrows-angle-up.target": {
+   "bytes": 5809,
+   "sha256": "a4b1ff8c5cd7df8d08bba55ccc5de773c120719c7f6c4791e78ade3651f1c2aa"
+  },
+  "targets/eyebrows/eyebrows-trans-down.target": {
+   "bytes": 6641,
+   "sha256": "38f7de378d535d51f2e50dc2568121a8769445f9a62423bd0a5e688c47ea3225"
+  },
+  "targets/eyebrows/eyebrows-trans-up.target": {
+   "bytes": 7877,
+   "sha256": "b685788eecc7629bda0b68a414b2277afbd8636fd7605b3acbd0dabc5d46abda"
+  },
+  "targets/eyes/l-eye-height1-decr.target": {
+   "bytes": 3153,
+   "sha256": "d1d9f77ff6efc9ccdfcc88beafc8a3be8170b3ea386b7a44b414df1f41e84daf"
+  },
+  "targets/eyes/l-eye-height1-incr.target": {
+   "bytes": 4053,
+   "sha256": "75ce5285db2e3721ae5434c8a9d27669eb632da7e588000a112d34264216de20"
+  },
+  "targets/eyes/l-eye-push1-in.target": {
+   "bytes": 7006,
+   "sha256": "8dc07616d8435a382b58fc2d29a5e9a1d6cd4e575cf937d49c57614e8c70f772"
+  },
+  "targets/eyes/l-eye-push1-out.target": {
+   "bytes": 7289,
+   "sha256": "0f0ba53b142015d94ecc1639ff1ac74b7d0d42eb88bedf6a51835300401c3fe3"
+  },
+  "targets/eyes/l-eye-scale-decr.target": {
+   "bytes": 12544,
+   "sha256": "a66719f1a42badd955fb0c725ac453969d7fda05cc6e4f4770d388b076703dc7"
+  },
+  "targets/eyes/l-eye-scale-incr.target": {
+   "bytes": 13397,
+   "sha256": "f35550dc3170ca1c0aacae0b598ca139e4f1f913f2ccea146ec6ea5b4e050dbb"
+  },
+  "targets/eyes/l-eye-trans-down.target": {
+   "bytes": 11654,
+   "sha256": "3ebdb3fc54e25cad690b74674db88712f314039660e5b06102763b8edfdb1156"
+  },
+  "targets/eyes/l-eye-trans-in.target": {
+   "bytes": 11686,
+   "sha256": "a92495e3f6cda144b3c37cc07734ee2735934d263e8c20e4b5763b21650ce26b"
+  },
+  "targets/eyes/l-eye-trans-out.target": {
+   "bytes": 12444,
+   "sha256": "ca961a4637517aeb689fa351e9d36abb3c04108a2870b26220f3c8cda027bdee"
+  },
+  "targets/eyes/l-eye-trans-up.target": {
+   "bytes": 11077,
+   "sha256": "2b84f1cdb80c962505809d8be92524221aeb34fdf0a5b51926fdf2f4e37846d3"
+  },
+  "targets/eyes/r-eye-height1-decr.target": {
+   "bytes": 2818,
+   "sha256": "0e561d96be0453c209ff7cbffdd86cdd73e790a11fc7c0cc8e2e36a1143c46ef"
+  },
+  "targets/eyes/r-eye-height1-incr.target": {
+   "bytes": 3586,
+   "sha256": "daab8f4115ade91e776f9bb4622926ddd20cff2ddcfe74e1ff3654132b727933"
+  },
+  "targets/eyes/r-eye-push1-in.target": {
+   "bytes": 5934,
+   "sha256": "19b6d4e8af8fbe6821b234c66f8bbf3e1ca043ec79a94750ed30735a250d4ddf"
+  },
+  "targets/eyes/r-eye-push1-out.target": {
+   "bytes": 6955,
+   "sha256": "317c89fe200d18707bd8a71c5f1900565cdcb38f5427d55dd137a05571fc7f30"
+  },
+  "targets/eyes/r-eye-scale-decr.target": {
+   "bytes": 12118,
+   "sha256": "f43ba41146723a192c755330aa8baa77b638bc28f3736c448e5ce72e8a588f32"
+  },
+  "targets/eyes/r-eye-scale-incr.target": {
+   "bytes": 12192,
+   "sha256": "e1f4cb48575b60a46589635b99a8b87587ba82d7524a8ac1445ace0ba002e918"
+  },
+  "targets/eyes/r-eye-trans-down.target": {
+   "bytes": 10766,
+   "sha256": "763c2044a7b0e1fe6dbe5373035c10dd4a7090bba6db7f1e747016f1a4a295b8"
+  },
+  "targets/eyes/r-eye-trans-in.target": {
+   "bytes": 10176,
+   "sha256": "4c494f3503b219b07782ebf78132da81f2b5711232825cf261dcd1ca57add3d6"
+  },
+  "targets/eyes/r-eye-trans-out.target": {
+   "bytes": 12783,
+   "sha256": "02143e686611f18d36915ee70082234e37db3d38a791cb8e1a46c0c56c4be43c"
+  },
+  "targets/eyes/r-eye-trans-up.target": {
+   "bytes": 10241,
+   "sha256": "f2b2d139f1ab65aabef8483d53636c825ca320b178b51a09644d6942a0b2cafd"
+  },
+  "targets/forehead/forehead-scale-vert-decr.target": {
+   "bytes": 5993,
+   "sha256": "d7b825f28c93766a0ee8e60002b8a0e9c2d8cd2c9b64e7bbd3a278e7103eae1c"
+  },
+  "targets/forehead/forehead-scale-vert-incr.target": {
+   "bytes": 5565,
+   "sha256": "cfe989de3a629665b7147891a9939da30844437f189e39a7d69476cdf7153fbe"
+  },
+  "targets/forehead/forehead-temple-decr.target": {
+   "bytes": 2078,
+   "sha256": "87e64d4445da6c36d19eb1543be6c1047184d2a830314e48d522a1789b921612"
+  },
+  "targets/forehead/forehead-temple-incr.target": {
+   "bytes": 5697,
+   "sha256": "5befc93f4a58ba09f51fcad625fd659b0dc99a86e1d1581373a4e8aecf2e3965"
+  },
+  "targets/forehead/forehead-trans-backward.target": {
+   "bytes": 5330,
+   "sha256": "f5f16d4c7837cbad69a3bd9dd6cfedd9b2b3232cd922ce37958988f8f952e015"
+  },
+  "targets/forehead/forehead-trans-forward.target": {
+   "bytes": 6969,
+   "sha256": "b58ddd3e8a22c9b933b9b6a560599719b4f567ac49eb90560e4a65740eb938c0"
+  },
+  "targets/head/head-age-decr.target": {
+   "bytes": 75981,
+   "sha256": "dce4ba0fcd18e7a4e5bc86d98785452ac5ca6d33b993d7c37ffdb339e50ff568"
+  },
+  "targets/head/head-age-incr.target": {
+   "bytes": 59255,
+   "sha256": "ff677345bd81e3f439bdf75496bbee620ca3c3f029955a546837afd283abf73a"
+  },
+  "targets/head/head-diamond.target": {
+   "bytes": 11876,
+   "sha256": "7072c718c8476ca38d6758fb7531fd945612d51acdca6555da8a8f770284c41d"
+  },
+  "targets/head/head-fat-decr.target": {
+   "bytes": 14347,
+   "sha256": "00473b6069f9cf6c05a2f1fd0c0bae20bb4ec45e9552bb5695f1d1533f3cc119"
+  },
+  "targets/head/head-fat-incr.target": {
+   "bytes": 14473,
+   "sha256": "075d18cdfea9e781ae0152132bfea97ea9b901ffdece8d5e6866cb1744f10056"
+  },
+  "targets/head/head-invertedtriangular.target": {
+   "bytes": 32815,
+   "sha256": "d236302afe23f2f2d6d753e4b73f91c1220d17dca24417931fe477a232f18116"
+  },
+  "targets/head/head-oval.target": {
+   "bytes": 36452,
+   "sha256": "a17cd3a600588a344babe520fbd4d4edcb096db3328051fe692dfb997a1a678d"
+  },
+  "targets/head/head-rectangular.target": {
+   "bytes": 10633,
+   "sha256": "bbfcbd4d6334df18515e73abb707b8a948adb74e0aba88a728c8e146dd5f4e4b"
+  },
+  "targets/head/head-round.target": {
+   "bytes": 32961,
+   "sha256": "bd96b745b19432ac838f15438aa87e9002f597e59353861721e12e6da0f2c625"
+  },
+  "targets/head/head-scale-depth-decr.target": {
+   "bytes": 73849,
+   "sha256": "3989a6a769fd4ee5b69179f3b8f3281deb882d943e071ef4b808e5faa4040663"
+  },
+  "targets/head/head-scale-depth-incr.target": {
+   "bytes": 69299,
+   "sha256": "b31ac0344498d2563d216b568a98eb941f6ebcfd07e034a2b8d1958ccb0b9dec"
+  },
+  "targets/head/head-scale-horiz-decr.target": {
+   "bytes": 81690,
+   "sha256": "cadb55b340cb94e96131860beb68b2e46204fccc7ee8f963f66cc9d22b03af0c"
+  },
+  "targets/head/head-scale-horiz-incr.target": {
+   "bytes": 83156,
+   "sha256": "31830f645c194c9451cb5f59cffb8e1d2a1c8fb215afb0c2ab36028b2c24570d"
+  },
+  "targets/head/head-scale-vert-decr.target": {
+   "bytes": 77948,
+   "sha256": "928f8900b8955ec72659156e3153c00cdd2e55ba23eaaab7f8eeee7a5e64f528"
+  },
+  "targets/head/head-scale-vert-incr.target": {
+   "bytes": 78317,
+   "sha256": "d9560ee80b9125da34cc95ece61192a295ab53c50a314c0084ddb3b0f38cc7d6"
+  },
+  "targets/head/head-square.target": {
+   "bytes": 12618,
+   "sha256": "001d0d135d964daf4ad99ba46a0f77c5bc2378f04e53c2b5a20242ab19cbf265"
+  },
+  "targets/head/head-triangular.target": {
+   "bytes": 12676,
+   "sha256": "09f898db574e636a35b6d39f455e04bfa0bc0248c89d32ad3c959cdb65b8fd1f"
+  },
+  "targets/macrodetails/african-female-young.target": {
+   "bytes": 411735,
+   "sha256": "92d61eeb3c164b421fd5a7c3537ee45e7e1a51de4d49bf312e19c3df2be1d8fc"
+  },
+  "targets/macrodetails/african-male-young.target": {
+   "bytes": 406170,
+   "sha256": "894abc1fbb3d28543a51fef16f89d5d4bdf9aa2e1534413339811a3d47818b7d"
+  },
+  "targets/macrodetails/asian-female-young.target": {
+   "bytes": 435553,
+   "sha256": "095fe79694fa19e1fe98d93009ec116199bd524e081c640351a10eccf2cca1eb"
+  },
+  "targets/macrodetails/asian-male-young.target": {
+   "bytes": 421040,
+   "sha256": "ed2e8c191cb6b87b4a2d97c80486acb2604fa549316c7aa2a738a5d5a14334dc"
+  },
+  "targets/macrodetails/caucasian-female-young.target": {
+   "bytes": 420559,
+   "sha256": "118379f6e8ba9266247fdb8788a20e1df40a239f97ced0b9905bcbcc74f6e820"
+  },
+  "targets/macrodetails/caucasian-male-young.target": {
+   "bytes": 396479,
+   "sha256": "70e228ba7164737dae664454394536fc5935fa48d333c1a97d77e2dc6eacc5f5"
+  },
+  "targets/macrodetails/universal-female-young-averagemuscle-averageweight.target": {
+   "bytes": 604,
+   "sha256": "4ba5396ddabda448ece15650a566fbebfbb10239256ccb201e8f883429e12249"
+  },
+  "targets/macrodetails/universal-male-young-averagemuscle-averageweight.target": {
+   "bytes": 604,
+   "sha256": "4ba5396ddabda448ece15650a566fbebfbb10239256ccb201e8f883429e12249"
+  },
+  "targets/mouth/mouth-angles-down.target": {
+   "bytes": 7962,
+   "sha256": "39181b6688e6f5ada15b47a82977c75379152434c61dafe8822afb3f551d4fa6"
+  },
+  "targets/mouth/mouth-angles-up.target": {
+   "bytes": 6450,
+   "sha256": "8ddc2f53f4264742f4e10ddafd128e059e09c6a4268a2722e9495bad0f274898"
+  },
+  "targets/mouth/mouth-lowerlip-volume-decr.target": {
+   "bytes": 1828,
+   "sha256": "45f1fe355546cdaa86581512810ee1cd2c6971ac67ffb46d3391ac438e539d15"
+  },
+  "targets/mouth/mouth-lowerlip-volume-incr.target": {
+   "bytes": 3585,
+   "sha256": "dbdaf045b00c67bf8672d53bc8cf94eb3e3dea316de6fe18a278f7080564c65d"
+  },
+  "targets/mouth/mouth-scale-depth-decr.target": {
+   "bytes": 7437,
+   "sha256": "15e5da9894901446e21ff4feda6aa757b67e889745995a1d1544002e615c8a30"
+  },
+  "targets/mouth/mouth-scale-depth-incr.target": {
+   "bytes": 7513,
+   "sha256": "ef1411bcef771a73718fd7b4dfb380290a19a06321babb69b19a26247dc0745d"
+  },
+  "targets/mouth/mouth-scale-horiz-decr.target": {
+   "bytes": 12644,
+   "sha256": "07a9ef160755467a470bd0a1df035143d83ebddbc12e4612e69e93a64644405c"
+  },
+  "targets/mouth/mouth-scale-horiz-incr.target": {
+   "bytes": 15657,
+   "sha256": "ccfc39cca249883ebc46af6f2c96c4130df13a67ebce30a2550af17a48637770"
+  },
+  "targets/mouth/mouth-scale-vert-decr.target": {
+   "bytes": 7495,
+   "sha256": "6087f1f8acd837aa1ad098965e907767b80238927c6b5c95f248d45a8aecd48b"
+  },
+  "targets/mouth/mouth-scale-vert-incr.target": {
+   "bytes": 13436,
+   "sha256": "acdbd062c3709211daf947c437b4962a944148c4255501fdd449625160e3d50a"
+  },
+  "targets/mouth/mouth-trans-backward.target": {
+   "bytes": 17919,
+   "sha256": "5d9479ef28a61228104891237f82c871dae1cee433067b3cdb8e4d265e3fe7bc"
+  },
+  "targets/mouth/mouth-trans-down.target": {
+   "bytes": 17308,
+   "sha256": "635eb596ad9ce51a7874fee601ec9abf6ef3d9a95816a06caf1b6d410797f055"
+  },
+  "targets/mouth/mouth-trans-forward.target": {
+   "bytes": 16083,
+   "sha256": "e2174201e312702cb1196c268813660f25df9ed32f0f3706bc1135e74ab14d85"
+  },
+  "targets/mouth/mouth-trans-up.target": {
+   "bytes": 16864,
+   "sha256": "fdbec49a44e9467464a241fef0c4df0f67bbab0c2133a45e45c35f33d1d4c1aa"
+  },
+  "targets/mouth/mouth-upperlip-volume-decr.target": {
+   "bytes": 2649,
+   "sha256": "20b285d94ecb62cf605907d65659ab11ff760dbb938ba9ae7fc13429b1e3ba16"
+  },
+  "targets/mouth/mouth-upperlip-volume-incr.target": {
+   "bytes": 3600,
+   "sha256": "b124cbd9b9be318264f61a143da603b42e0357ed92b4b6afd1b31a83daaf8568"
+  },
+  "targets/nose/nose-base-down.target": {
+   "bytes": 5246,
+   "sha256": "f0c22a439540d31e389857a42a415be3bb2262bedb1821b9ce66578068bfebb1"
+  },
+  "targets/nose/nose-base-up.target": {
+   "bytes": 4783,
+   "sha256": "b3f8625bfbbbe455fba4dadcd668a49e48dd8a746597b4c34f4ac46d1ac4ea1d"
+  },
+  "targets/nose/nose-flaring-decr.target": {
+   "bytes": 3350,
+   "sha256": "394229c051ec21a8d233341d7ff1b2dc94da7929ace1d0bb2de2bcbdd08d6c0f"
+  },
+  "targets/nose/nose-flaring-incr.target": {
+   "bytes": 3072,
+   "sha256": "697eccedc27b77abbbdc8de87af193e2a5818b9a535e7f0ec8016ce848892fad"
+  },
+  "targets/nose/nose-point-down.target": {
+   "bytes": 2313,
+   "sha256": "decda7e7827d53f0906663d10ff6ee0173d501b8f3bf30dda3540e4465fa6021"
+  },
+  "targets/nose/nose-point-up.target": {
+   "bytes": 1672,
+   "sha256": "c8d556af4cc6fe5fbf340b1950156fffad3835524a191b47074466f244a92047"
+  },
+  "targets/nose/nose-scale-depth-decr.target": {
+   "bytes": 5811,
+   "sha256": "b46c35046c9c451b7ffe77acc0573bd945d7c6acaefe43d8c21912d4ce1a6e4c"
+  },
+  "targets/nose/nose-scale-depth-incr.target": {
+   "bytes": 5762,
+   "sha256": "6bb03c3065e048d6e9abbcfa58961bfbe1753a307be0d3de477cac6aeaf5f750"
+  },
+  "targets/nose/nose-scale-horiz-decr.target": {
+   "bytes": 5074,
+   "sha256": "1227e6f513d202585e40045fe4234778597bb591ac492e7f9313347cd9a9f2ec"
+  },
+  "targets/nose/nose-scale-horiz-incr.target": {
+   "bytes": 7568,
+   "sha256": "cc319e3ddb0523fa2b563dcfc840cf2f915a890abe5612009a0becebecd3c5ae"
+  },
+  "targets/nose/nose-scale-vert-decr.target": {
+   "bytes": 5431,
+   "sha256": "a154747135740f63f60df812024fcde24df2a6713effa3c6f27797aeee7d3311"
+  },
+  "targets/nose/nose-scale-vert-incr.target": {
+   "bytes": 6648,
+   "sha256": "b87163e4272d77bcdb7b51328504167f71a7a47b630dc9b13da9c68e0f06c20f"
+  },
+  "targets/nose/nose-trans-down.target": {
+   "bytes": 6689,
+   "sha256": "6a4d970a97a1e1b3db113ca88cd1e75a6f950f296c7f456a4931f6b460c58dae"
+  },
+  "targets/nose/nose-trans-up.target": {
+   "bytes": 8106,
+   "sha256": "4c1ee5897c22dfb66aee081f65fd9fb77173e8af5bc5c9e8676073dd9eda1d4a"
+  },
+  "targets/nose/nose-volume-decr.target": {
+   "bytes": 1274,
+   "sha256": "97251aecca039f94ab6ea6f996eaf0b232aa4c44b39671a13ba0bc6c8f4bf6bb"
+  },
+  "targets/nose/nose-volume-incr.target": {
+   "bytes": 3076,
+   "sha256": "510730156376c91322f7391154a211c7222184c24c48f3345b7212dfbc583738"
+  },
+  "targets/nose/nose-width1-decr.target": {
+   "bytes": 1526,
+   "sha256": "91a63986af9115fe944f2a3f1177e1eed2ebe8cdd9037a4734d95bd36231d9f4"
+  },
+  "targets/nose/nose-width1-incr.target": {
+   "bytes": 1507,
+   "sha256": "d340bc76601f9061826849d2fc9146ba6fbf7ee0604799849a417c934f53bea0"
+  },
+  "targets/nose/nose-width2-decr.target": {
+   "bytes": 1272,
+   "sha256": "d3301686c7dfd94b0a39fd0693ff26ea66d24b08037488f814e7a8bb340109d9"
+  },
+  "targets/nose/nose-width2-incr.target": {
+   "bytes": 2000,
+   "sha256": "13a9ab9ab6429a5875b47fe90cb33a4d754258af63819ee8913a93d61f312d76"
+  },
+  "targets/nose/nose-width3-decr.target": {
+   "bytes": 4617,
+   "sha256": "eb3e782e1b335f10c68be43ccc75bea98193f330b4d0c7f98f9773f580ce12c3"
+  },
+  "targets/nose/nose-width3-incr.target": {
+   "bytes": 6595,
+   "sha256": "32a88f1b999ea83f57889dda7fbda05347b57b41e0118e7c4cd4466e6b0ba6ec"
+  }
+ },
+ "license": "CC0-1.0",
+ "license_note": "MakeHuman data assets are CC0-1.0 (LICENSE.ASSETS.md). The AGPL application code is not used.",
+ "repository": "https://github.com/makehumancommunity/makehuman",
+ "schema": "roop3d.makehuman_sources.v1"
+}

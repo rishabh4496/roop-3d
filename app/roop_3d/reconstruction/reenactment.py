@@ -172,6 +172,11 @@ class IdentityRig:
         manifest = asset.manifest
         if manifest.schema_id != "roop.identity_asset.v1":
             raise DomainError("RIG_ASSET_INVALID", "Unsupported identity asset schema", 422)
+        if manifest.settings.get("template", "canonical") != "canonical":
+            # The rig's eyelid / brow / mouth-ring / jaw kernels are defined on the canonical 68-point topology.
+            raise DomainError("IDENTITY_TEMPLATE_UNSUPPORTED",
+                              f"Expression reenactment needs a canonical-template identity asset, not "
+                              f"{manifest.settings.get('template')!r}. Build the asset with template='canonical'.", 422)
         self.asset = asset
         self.build_key = manifest.build_key
         subdiv = int(manifest.settings.get("subdivisions", 2))

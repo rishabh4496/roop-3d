@@ -93,6 +93,12 @@ def identity_template(subdivisions: int = 2) -> Mesh3D:
 def template_landmarks(layout: str, mesh: Mesh3D) -> np.ndarray:
     """Template positions of the landmarks of `layout` (L, 3), in mesh coordinates."""
     v = mesh.vertices.astype(np.float64)
+    explicit = getattr(mesh, "landmark_vertices", None)   # templates that are not the canonical 68-point mesh name their own
+    if explicit is not None:
+        if layout not in explicit:
+            raise DomainError("TEMPLATE_LAYOUT_UNSUPPORTED",
+                              f"This template defines landmark layouts {sorted(explicit)}, not {layout!r}", 422)
+        return v[np.asarray(explicit[layout], np.int64)].copy()
     if layout == LAYOUT_68:
         return v[:68].copy()
     if layout == LAYOUT_5:  # image-left eye, image-right eye, nose tip, image-left mouth corner, image-right mouth corner
@@ -103,6 +109,12 @@ def template_landmarks(layout: str, mesh: Mesh3D) -> np.ndarray:
 def landmark_normals(layout: str, mesh: Mesh3D) -> np.ndarray:
     """Outward template normals at the landmarks (used to down-weight self-occluded landmarks)."""
     n = mesh.normals.astype(np.float64)
+    explicit = getattr(mesh, "landmark_vertices", None)
+    if explicit is not None:
+        if layout not in explicit:
+            raise DomainError("TEMPLATE_LAYOUT_UNSUPPORTED",
+                              f"This template defines landmark layouts {sorted(explicit)}, not {layout!r}", 422)
+        return n[np.asarray(explicit[layout], np.int64)].copy()
     if layout == LAYOUT_68:
         return n[:68].copy()
     pts = template_landmarks(layout, mesh)

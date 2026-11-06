@@ -157,7 +157,11 @@ class PoseBlendProjector:
     def from_identity_asset(cls, asset) -> "PoseBlendProjector":
         """Same renderer, driven by the Stage 3 source identity's geometry (coarse proxy-resolution mesh)."""
         from roop_3d.reconstruction.multiview_fit import identity_template
-        coarse = identity_template(0)                       # same topology as the canonical proxy; indices 0..N-1 are shared
+        if asset.manifest.settings.get("template", "canonical") != "canonical":
+            raise DomainError("IDENTITY_TEMPLATE_UNSUPPORTED",
+                              f"Pose projection indexes the canonical 68-point topology; this asset uses the "
+                              f"{asset.manifest.settings.get('template')!r} template. Build it with template='canonical'.", 422)
+        coarse = identity_template(0)                      # same topology as the canonical proxy; indices 0..N-1 are shared
         count = len(coarse.vertices)
         vertices = asset.vertices[:count].astype(np.float64)
         anchors = np.vstack([vertices[36:42].mean(axis=0), vertices[42:48].mean(axis=0), vertices[30], vertices[48], vertices[54]])

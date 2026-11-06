@@ -10,13 +10,17 @@ Stage 4 render session uses (``engine/volumetric/session.py``), so an asset buil
                                                Never builds: reading the panel costs no reconstruction.
 * ``POST /facesets/{id}/identity-asset``       explicit user action: build (or reuse) the asset on the CPU.
 * ``GET  /facesets/{id}/identity-asset/mesh``  the cached asset as a viewer mesh (glTF frame, observed atlas).
+
+All three accept ``?template=canonical|makehuman`` (default ``canonical``, the template ``pose_3d`` / ``reenactment_3d`` render
+sessions reuse). ``makehuman`` is the open CC0 head+neck template (5-point landmarks; it must be built first, see
+``roop_3d.reconstruction.makehuman_build``); such assets are for inspection / export and are refused by the expression rig.
 """
 from __future__ import annotations
 
 import base64
 import re
 import threading
-from typing import Any
+from typing import Any, Literal
 
 import cv2
 import numpy as np
@@ -30,6 +34,7 @@ from roop_3d.faceset.faceset_reader import FaceSetReader
 
 router = APIRouter(prefix="/api/v1")
 _FACESET_ID = re.compile(r"[A-Za-z0-9_-]{1,64}")
+TemplateName = Literal["canonical", "makehuman"]
 _BUILD_LOCKS: dict[str, threading.Lock] = {}
 _BUILD_LOCKS_GUARD = threading.Lock()
 MESH_VERTEX_LIMIT = 100_000
@@ -54,6 +59,11 @@ def load_document(request: Request, faceset_id: str):
     archive = _archive(request, faceset_id)
     root = request.app.state.root
     return FaceSetReader(request.app.state.models, cache_root=root / "roop_3d/.runtime/cache").read(archive, faceset_id=faceset_id)
+
+
+def _settings(template: str = "canonical"):
+    from roop_3d.reconstruction.identity_asset import IdentityAssetSettings
+    return IdentityAssetSettings(template=template)
 
 
 def _store():
@@ -101,16 +111,17 @@ def _manifest_summary(asset) -> dict[str, Any]:
     }
 
 
-def _status(document, store) -> dict[str, Any]:
+def _status(document, store, template: str = "canonical") -> dict[str, Any]:
     from roop_3d.reconstruction.faceset_quality import analyze_faceset
-    from roop_3d.reconstruction.identity_asset import IdentityAssetSettings, compute_build_key, flame_status
+    from roop_3d.reconstruction.identity_asset import compute_build_key, flame_status
     report = analyze_faceset(document)
-    key = compute_build_key(document, IdentityAssetSettings())
+    key = compute_build_key(document, _settings(template))
     asset = store.load(document.faceset_id, key)
     return {
         "faceset_id": document.faceset_id,
         "name": document.name,
         "state": "built" if asset is not None else "not_built",
+        "template": template,
         "build_key": key,
         "coverage": _coverage_summary(report),
         "asset": _manifest_summary(asset) if asset is not None else None,
@@ -138,20 +149,20 @@ def faceset_view_image(faceset_id: str, index: int, request: Request, size: int 
 
 
 @router.get("/facesets/{faceset_id}/identity-asset")
-async def identity_asset_status(faceset_id: str, request: Request):
+async def identity_asset_status(faceset_id: str, request: Request, template: TemplateName = Query(default="canonical")):
     document = await run_in_threadpool(load_document, request, faceset_id)
-    return await run_in_threadpool(_status, document, _store())
+    return await run_in_threadpool(_status, document, _store(), template)
 
 
-def _build(document) -> dict[str, Any]:
+def _build(document, template: str = "canonical") -> dict[str, Any]:
     with _BUILD_LOCKS_GUARD:
         lock = _BUILD_LOCKS.setdefault(document.faceset_id, threading.Lock())
     if not lock.acquire(blocking=False):
         raise DomainError("IDENTITY_ASSET_BUILD_IN_PROGRESS", "This FaceSet's identity asset is already being built", 409)
     try:
         store = _store()
-        asset, reused = store.get_or_build(document)
-        value = _status(document, store)
+        asset, reused = store.get_or_build(document, _settings(template))
+        value = _status(document, store, template)
         value["reused"] = reused
         if value["asset"] is None:  # the store refused to persist or re-read it: report, never pretend
             raise DomainError("IDENTITY_ASSET_NOT_PERSISTED", "The identity asset was built but could not be re-read from the store", 500)
@@ -161,15 +172,15 @@ def _build(document) -> dict[str, Any]:
 
 
 @router.post("/facesets/{faceset_id}/identity-asset")
-async def build_identity_asset(faceset_id: str, request: Request):
+async def build_identity_asset(faceset_id: str, request: Request, template: TemplateName = Query(default="canonical")):
     document = await run_in_threadpool(load_document, request, faceset_id)
-    return await run_in_threadpool(_build, document)
+    return await run_in_threadpool(_build, document, template)
 
 
-def _mesh(document) -> dict[str, Any]:
-    from roop_3d.reconstruction.identity_asset import IdentityAssetSettings, compute_build_key, to_gltf_frame
+def _mesh(document, template: str = "canonical") -> dict[str, Any]:
+    from roop_3d.reconstruction.identity_asset import compute_build_key, to_gltf_frame
     from roop_3d.reconstruction.uv_synthesizer import ConfidenceState
-    key = compute_build_key(document, IdentityAssetSettings())
+    key = compute_build_key(document, _settings(template))
     asset = _store().load(document.faceset_id, key)
     if asset is None:
         raise DomainError("IDENTITY_ASSET_NOT_BUILT", "Build the identity asset first; it is never built implicitly", 404)
@@ -195,6 +206,6 @@ def _mesh(document) -> dict[str, Any]:
 
 
 @router.get("/facesets/{faceset_id}/identity-asset/mesh")
-async def identity_asset_mesh(faceset_id: str, request: Request):
+async def identity_asset_mesh(faceset_id: str, request: Request, template: TemplateName = Query(default="canonical")):
     document = await run_in_threadpool(load_document, request, faceset_id)
-    return await run_in_threadpool(_mesh, document)
+    return await run_in_threadpool(_mesh, document, template)

@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 import shutil
 import uuid
-from typing import Any, Mapping
+from typing import Any, Literal, Mapping
 
 import cv2
 import numpy as np
@@ -47,6 +47,7 @@ from roop_3d.reconstruction.uv_synthesizer import UVSynthesizer, ViewObservation
 SCHEMA = "roop.identity_asset.v1"
 ALGORITHM_VERSION = "identity-mv-2"          # v2: grazing-angle gate + dominant-view blending (real-photo ghosting)
 TEMPLATE_VERSION = "canonical68-delaunay+midpoint-subdiv"
+TEMPLATES = ("canonical", "makehuman")
 FRAME_DESCRIPTION = ("mesh frame (metres): +x image-right, +y down, +z toward the viewer; a frontal head has "
                      "yaw = pitch = roll = 0 (core.pose standard frame, pitch + = up)")
 OBSERVED_VERTEX_CONFIDENCE = 0.6
@@ -57,6 +58,10 @@ class IdentityAssetSettings(Contract):
     subdivisions: int = Field(default=2, ge=0, le=3)
     max_views: int = Field(default=12, ge=1, le=32)
     holdout_validation: bool = True
+    # Which head template the landmarks are carried onto. 'canonical' is the original 68-point facial mesh (the only one the
+    # expression rig / pose blend understand); 'makehuman' is the open CC0 head+neck (5-point landmarks only; `subdivisions`
+    # does not apply). It must be built first: python -m roop_3d.reconstruction.makehuman_build
+    template: Literal["canonical", "makehuman"] = "canonical"
     max_interpolation_fraction: float = Field(default=0.02, ge=0.0, le=0.1)
     # Hashes of external models whose output the inputs depend on (e.g. the detector that produced the stored
     # landmarks). Part of the cache key: change one and the asset is rebuilt.
@@ -169,6 +174,41 @@ def _template_hash(subdivisions: int) -> str:
     return hash_array(mesh.vertices) + hash_array(mesh.faces)
 
 
+def template_for(settings: IdentityAssetSettings) -> Mesh3D:
+    """The template mesh the settings select (a fresh copy)."""
+    if settings.template == "makehuman":
+        from roop_3d.reconstruction.makehuman_template import makehuman_template
+        return makehuman_template()
+    return identity_template(settings.subdivisions)
+
+
+def _settings_template_hash(settings: IdentityAssetSettings) -> str:
+    if settings.template == "makehuman":
+        from roop_3d.reconstruction.makehuman_template import template_hash
+        return template_hash()
+    return _template_hash(settings.subdivisions)
+
+
+def _template_supports_dense(template: Mesh3D) -> bool:
+    """Only the canonical template has the 68-point correspondence."""
+    return getattr(template, "landmark_vertices", None) is None
+
+
+def _key_settings(settings: IdentityAssetSettings) -> dict[str, Any]:
+    """Settings that enter the build key. The default template is omitted so canonical keys (and stored assets) are unchanged."""
+    dumped = settings.model_dump()
+    if dumped.get("template") == "canonical":
+        dumped.pop("template", None)
+    return dumped
+
+
+def _template_version(settings: IdentityAssetSettings) -> str:
+    if settings.template == "makehuman":
+        from roop_3d.reconstruction.makehuman_template import TEMPLATE_VERSION as MH_VERSION
+        return MH_VERSION
+    return TEMPLATE_VERSION
+
+
 def compute_build_key(document: FaceSetDocument, settings: IdentityAssetSettings,
                       occlusion_masks: Mapping[int, np.ndarray] | None = None) -> str:
     """Content address of everything that determines the asset. Unrelated FaceSet edits (rename) do not change it."""
@@ -184,8 +224,8 @@ def compute_build_key(document: FaceSetDocument, settings: IdentityAssetSettings
             "quality": [round(v.quality.score, 4), round(v.quality.sharpness, 4)],
         })
     masks = {str(i): hashlib.sha256(np.ascontiguousarray(m).tobytes()).hexdigest() for i, m in sorted((occlusion_masks or {}).items())}
-    payload = {"schema": SCHEMA, "algorithm": ALGORITHM_VERSION, "settings": settings.model_dump(), "views": views,
-               "masks": masks, "template": _template_hash(settings.subdivisions), "flame": flame_status()}
+    payload = {"schema": SCHEMA, "algorithm": ALGORITHM_VERSION, "settings": _key_settings(settings), "views": views,
+               "masks": masks, "template": _settings_template_hash(settings), "flame": flame_status()}
     return hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str).encode()).hexdigest()
 
 
@@ -244,7 +284,8 @@ def build_identity_asset(
     by_index = {v.index: v for v in document.views}
     q_by_index = {q.index: q for q in report.views}
     chosen = sorted(report.usable_indices, key=lambda i: -by_index[i].quality.score)[:settings.max_views]
-    use68 = all(by_index[i].landmarks_68 is not None for i in chosen)
+    template = template_for(settings)
+    use68 = all(by_index[i].landmarks_68 is not None for i in chosen) and _template_supports_dense(template)
 
     def observations(indices: list[int]) -> list[ViewLandmarks]:
         out = []
@@ -255,7 +296,7 @@ def build_identity_asset(
                                      float(np.clip(v.quality.score * max(q.landmark_score, 0.05), 0.05, 1.0))))
         return out
 
-    fit = fit_identity_landmarks(observations(chosen), holdout=settings.holdout_validation)
+    fit = fit_identity_landmarks(observations(chosen), template=template, holdout=settings.holdout_validation)
     # Iteratively drop the single worst inconsistent view and refit. (A corrupted view inflates every hold-out
     # refit, so several views may be flagged at first; only the worst is a genuine outlier until it is removed.)
     dropped: list[int] = []
@@ -266,11 +307,10 @@ def build_identity_asset(
         worst = max(flagged, key=lambda vf: vf.holdout_mm if vf.holdout_mm is not None else vf.rms_mm)
         dropped.append(worst.view_index)
         chosen = [i for i in chosen if i != worst.view_index]
-        fit = fit_identity_landmarks(observations(chosen), holdout=settings.holdout_validation)
+        fit = fit_identity_landmarks(observations(chosen), template=template, holdout=settings.holdout_validation)
     fit_by_view = {vf.view_index: vf for vf in fit.views}
 
     # ---- geometry: template carried onto the fitted landmarks, with per-vertex support
-    template = identity_template(settings.subdivisions)
     vertices, _, strength = deform_template(template, fit.template_landmarks, fit.landmarks_3d, fit.confidence_xy)
     geo = Mesh3D(vertices, template.faces, uvs=template.uvs)
     support_xy = kernel_support(template.vertices, fit.template_landmarks, fit.confidence_xy)
@@ -327,8 +367,15 @@ def build_identity_asset(
     if res["texel_unseen_ratio"] > 0.05:
         missing.append(f"{res['texel_unseen_ratio']:.0%} of the facial texture atlas was never observed and is left empty.")
     flame = flame_status()
+    if settings.template == "makehuman":
+        coverage_limit = ("Geometry is the MakeHuman (CC0) head+neck template carried onto the fitted landmarks. Ears, skull, "
+                          "neck and everything beyond the landmarks' influence are the template prior, never measured: they are "
+                          "marked UNSEEN / INTERPOLATED and carry low per-vertex confidence.")
+    else:
+        coverage_limit = ("Geometry covers the FACIAL REGION only (anthropometric mesh mask). Ears, skull and back of head are "
+                          "not reconstructed or generated.")
     limitations = [
-        "Geometry covers the FACIAL REGION only (anthropometric mesh mask). Ears, skull and back of head are not reconstructed or generated.",
+        coverage_limit,
         "Geometry is the template deformed to fitted landmarks; surface detail between landmarks is not measured (see per-vertex confidence).",
         "Metric head size is a prior: a scale cannot be recovered from images without a known reference length.",
         "Pose comes from a 5-point scaled-orthographic estimate refined during the fit; typical error a few degrees.",
@@ -337,6 +384,8 @@ def build_identity_asset(
     ]
     if not flame["used"]:
         limitations.append(f"FLAME not used: {flame['reason']}.")
+    if settings.template == "makehuman" and any(v.landmarks_68 is not None for v in document.views):
+        limitations.append("The MakeHuman template has no 68-point correspondence: dense landmarks were ignored and the 5-point layout was used.")
     if fit.layout == "5pt":
         limitations.append("Only 5 landmarks per view are available: lateral and vertical shape detail is far less constrained than with 68.")
 
@@ -376,10 +425,10 @@ def build_identity_asset(
                 "identity_specific_landmarks": bool(np.any(fit.confidence_xy >= 0.5)), "depth_triangulated": bool(depth_ok),
                 "texture_from_observations_only": True},
         missing_information=missing, limitations=limitations, sources=sources, settings=settings.model_dump(),
-        model_version={"asset_schema": SCHEMA, "algorithm": ALGORITHM_VERSION, "template": TEMPLATE_VERSION,
+        model_version={"asset_schema": SCHEMA, "algorithm": ALGORITHM_VERSION, "template": _template_version(settings),
                        "landmark_fit": "weak-perspective MAP bundle adjustment", "texture": "z-buffer visibility-weighted blend",
                        "mesh_frame": FRAME_DESCRIPTION},
-        model_hashes={"template_geometry_sha256": _template_hash(settings.subdivisions),
+        model_hashes={"template_geometry_sha256": _settings_template_hash(settings),
                       "flame_weights_sha256": None, **settings.model_hashes},
         flame=flame,
         canonical_head_pose={"yaw": 0.0, "pitch": 0.0, "roll": 0.0, "frame": FRAME_DESCRIPTION, "reference_view": frontal,
