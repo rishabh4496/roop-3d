@@ -12,6 +12,10 @@ from roop_3d.models.catalog import ModelCatalog
 from roop_3d.models.registry import authorize
 from roop_3d.engine.resources import guarded, register
 
+# Shared low-level session construction is also available to GPU graph callers.
+# This additive adapter keeps the verified catalog as the only model path source.
+from roop_3d.core.ort_session import SessionManager, SessionInfo
+
 
 @dataclass(frozen=True)
 class RuntimeConfig:
@@ -310,3 +314,33 @@ def adaptive_session_factory(catalog: ModelCatalog, config: RuntimeConfig):
     from roop_3d.engine.adaptive_runtime import AdaptiveModelPool
     pool = AdaptiveModelPool.get_instance()
     return lambda record: SessionFacade(pool.acquire(catalog, record["name"], config))
+
+
+def managed_session_factory(catalog: ModelCatalog, *, manager: SessionManager | None = None,
+                            providers: tuple[str, ...] = ("TensorrtExecutionProvider",
+                                                           "CUDAExecutionProvider",
+                                                           "CPUExecutionProvider")):
+    """Build TensorRT/CUDA/CPU sessions for hash-verified catalog entries.
+
+    Unlike the strict canary builder this is a provider fallback adapter; it still
+    resolves paths through ModelCatalog and checks the runtime graph against its
+    registered input/output contract before returning the session.
+    """
+    manager = manager or SessionManager()
+
+    def create(record: dict[str, Any]) -> SessionInfo:
+        path = catalog.resolve_for_inference(record["model_id"])
+        info = manager.create(path, model_name=record["name"], providers=providers)
+        for kind, actual in (("inputs", info.session.get_inputs()),
+                             ("outputs", info.session.get_outputs())):
+            expected = record["graph"][kind]
+            if len(actual) != len(expected) or any(
+                node.name != contract["name"] or len(node.shape) != len(contract["shape"])
+                or node.type != {"FLOAT": "tensor(float)", "FLOAT16": "tensor(float16)",
+                                 "DOUBLE": "tensor(double)"}.get(contract["dtype"])
+                for node, contract in zip(actual, expected)
+            ):
+                raise DomainError("MODEL_GRAPH_DRIFT", "Runtime graph differs from verified graph", 503)
+        return info
+
+    return create
