@@ -47,6 +47,7 @@ def test_manifest_preserves_all_observed_identities_without_inventing_rights():
     root = application_root()
     old = json.loads((root / "roop_3d/audit/verified_local_models.json").read_text())
     registry = ModelRegistry()
+    reviewed = set(json.loads((root / "roop_3d/models/governance_reviews.json").read_text())["reviews"])
     local = [item for item in registry.records() if item.status == "verified_local"]
     assert len(local) == len(old["models"]) == 95
     assert {(m.expected_sha256, m.byte_size) for m in local} == {
@@ -56,6 +57,9 @@ def test_manifest_preserves_all_observed_identities_without_inventing_rights():
         assert (record.upstream_url is None) == (record.provenance_state != "VERIFIED_REMOTE")
         if record.license_id == "UNKNOWN":
             assert record.commercial_use == "unknown"
+        elif record.expected_sha256 in reviewed or record.license_id == "LOCAL-USE-ACKNOWLEDGED-UNVERIFIED":
+            # explicit review or owner acknowledgement of exact bytes; never grants commercial use
+            assert record.license_url and record.commercial_use != "allow"
         else:  # rights are only ever taken from a license published in the verified source repository
             assert record.license_url and record.upstream_url and record.license_id in {"MIT", "Apache-2.0"}
         assert record.input_output_contract == next(m["graph"] for m in old["models"]

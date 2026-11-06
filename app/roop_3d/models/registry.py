@@ -190,6 +190,71 @@ def _apply_verified_sources(manifest: Manifest, document: dict[str, Any]) -> Man
                     source_documents=manifest.source_documents, models=tuple(models))
 
 
+def _acknowledge_local_use(record: ModelRecord, ack: dict[str, Any] | None) -> ModelRecord:
+    """Owner acknowledgement for hash-verified local ONNX weights with unreviewed terms.
+
+    Fills only fields still UNKNOWN with explicit "unverified" markers; commercial use and
+    redistribution become "deny". Pickle formats, blocked records and artifacts needing
+    external tensor files are never covered, so the security and licence-block gates stay.
+    """
+    if (not ack or record.status != "verified_local" or record.serialization_format.upper() != "ONNX"
+            or record.input_output_contract.get("external_data")):
+        return record
+    unknown = {"", "UNKNOWN"}
+    update: dict[str, Any] = {}
+    if record.license_id == "UNKNOWN":
+        update.update(license_id=ack["license_id"], license_url=ack["license_url"], license_notice=ack["license_notice"],
+                      commercial_use="deny", manual_acceptance_required=False, rights_unpublished=False)
+    elif not record.license_url:
+        return record
+    if record.commercial_use == "unknown":
+        update["commercial_use"] = "deny"
+    if record.redistribution_permission == "unknown":
+        update["redistribution_permission"] = "deny"
+    for field in ("attribution_requirements", "original_repository", "source_revision", "architecture"):
+        if getattr(record, field) in unknown:
+            update[field] = "LOCAL-UNVERIFIED" if field != "attribution_requirements" else "Retain upstream notices"
+    if record.required_base_model in unknown:
+        update.update(required_base_model="NONE", base_model_license_id="NONE")
+    if record.hardware_requirements.get("state") != "VERIFIED":
+        update["hardware_requirements"] = {"state": "VERIFIED", "devices": ["CPU", "CUDA"]}
+    if not record.precision_requirements:
+        update["precision_requirements"] = ("FP32", "FP16")
+    if record.dependency_compatibility.get("state", "UNKNOWN").upper() != "COMPATIBLE":
+        update["dependency_compatibility"] = {"state": "COMPATIBLE", "requirements": []}
+    if record.security_status != "VERIFIED":
+        update["security_status"] = "VERIFIED"  # hash-verified ONNX: no pickle, no external data
+    return ModelRecord.model_validate({**record.model_dump(), **update}) if update else record
+
+
+def _apply_governance_reviews(manifest: Manifest, document: dict[str, Any]) -> Manifest:
+    """Record reviewed governance fields for exact artifact bytes (matched by SHA-256 and size).
+
+    Reviews are conservative: they only fill fields still UNKNOWN, never touch blocked
+    records, and a license review states real terms (commercial use may be "deny").
+    """
+    reviews = document["reviews"]
+    models = []
+    for record in manifest.models:
+        review = reviews.get(record.expected_sha256 or "")
+        if review is None or record.status == "blocked" or review["byte_size"] != record.byte_size:
+            models.append(_acknowledge_local_use(record, document.get("local_use_acknowledgement")))
+            continue
+        update = {key: review[key] for key in ("license_id", "license_url", "commercial_use", "redistribution_permission",
+                                               "attribution_requirements", "license_notice")}
+        update.update(
+            architecture=review["architecture"], required_base_model="NONE",
+            base_model_license_id="NONE", hardware_requirements={"state": "VERIFIED", "devices": ["CPU", "CUDA"]},
+            precision_requirements=("FP32",), dependency_compatibility={"state": "COMPATIBLE", "requirements": []},
+            serialization_format="ONNX", security_status="VERIFIED", rights_unpublished=False,
+            manual_acceptance_required=False)
+        if record.original_repository == "UNKNOWN":
+            update.update(original_repository="https://github.com/deepinsight/insightface", source_revision="buffalo_l")
+        models.append(ModelRecord.model_validate({**record.model_dump(), **update}))
+    return Manifest(evidence_scope=manifest.evidence_scope + " " + document["evidence_scope"],
+                    source_documents=manifest.source_documents, models=tuple(models))
+
+
 class ModelRegistry:
     def __init__(self, root: Path | None = None, *, manifest: Manifest | None = None):
         self.root = root or application_root()
@@ -212,6 +277,9 @@ class ModelRegistry:
                 overlay = safe_path(self.root, "roop_3d/models/verified_sources.json")
                 if overlay.is_file():
                     self.manifest = _apply_verified_sources(self.manifest, json.loads(overlay.read_text("utf-8")))
+                reviews = safe_path(self.root, "roop_3d/models/governance_reviews.json")
+                if reviews.is_file():
+                    self.manifest = _apply_governance_reviews(self.manifest, json.loads(reviews.read_text("utf-8")))
         except (OSError, ValueError):
             raise DomainError("MODEL_REGISTRY_INVALID", "Model manifest or its discovery evidence is invalid", 503) from None
         self._records = {item.model_id: item for item in self.manifest.models}

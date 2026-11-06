@@ -1,0 +1,34 @@
+{
+  "evidence_scope": "Governance reviews recorded for exact artifact bytes (SHA-256 + size). A review only fills fields that the preserved discovery manifest left UNKNOWN; it never grants commercial use.",
+  "local_use_acknowledgement": {
+    "scope": "verified_local, ONNX, no external tensor data, not blocked, not pickle",
+    "recorded": "2026-11-06, at the owner's request that no usable local model stay blocked",
+    "license_id": "LOCAL-USE-ACKNOWLEDGED-UNVERIFIED",
+    "license_url": "urn:roop-3d:local-use-acknowledgement",
+    "license_notice": "Upstream licence terms for these weights were NOT reviewed. The owner acknowledged local, personal, non-commercial use only. Commercial use and redistribution remain denied; verify the original terms before any other use."
+  },
+  "reviews": {
+    "5838f7fe053675b1c7a08b633df49e7af5495cee0493c7dcf6697200b85b5b91": {
+      "name": "scrfd_10g_bnkps.onnx",
+      "byte_size": 16923827,
+      "architecture": "SCRFD-10GF-BNKPS (InsightFace buffalo_l det_10g)",
+      "license_id": "InsightFace-Non-Commercial-Research",
+      "license_url": "https://github.com/deepinsight/insightface/tree/master/model_zoo",
+      "commercial_use": "deny",
+      "redistribution_permission": "deny",
+      "attribution_requirements": "Credit InsightFace (deepinsight/insightface)",
+      "license_notice": "InsightFace pretrained models (buffalo_l) are published for non-commercial research use only. Local personal/research use is permitted; commercial use and redistribution are not."
+    },
+    "4c06341c33c2ca1f86781dab0e829f88ad5b64be9fba56e56bc9ebdefc619e43": {
+      "name": "w600k_r50.onnx",
+      "byte_size": 174383860,
+      "architecture": "ArcFace-ResNet50 (InsightFace buffalo_l w600k_r50)",
+      "license_id": "InsightFace-Non-Commercial-Research",
+      "license_url": "https://github.com/deepinsight/insightface/tree/master/model_zoo",
+      "commercial_use": "deny",
+      "redistribution_permission": "deny",
+      "attribution_requirements": "Credit InsightFace (deepinsight/insightface)",
+      "license_notice": "InsightFace pretrained models (buffalo_l) are published for non-commercial research use only. Local personal/research use is permitted; commercial use and redistribution are not."
+    }
+  }
+}
