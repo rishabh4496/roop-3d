@@ -140,3 +140,33 @@ class CodeFormerRestorer:
     def release(self):
         self.runner.close()
         self.inference_verified = False
+
+
+class UltraMaxPipelineRestorer(CodeFormerRestorer):
+    """UltraMax high-detail restoration: CodeFormer at 512 px training alignment, then a 3-level Laplacian pyramid
+    fusion that keeps the swap crop's colour and low/mid frequencies and takes only the restorer's finest detail.
+
+    It reuses the verified CodeFormer weights and alignment (no separate model is claimed). The ``UltraMaxRestorer``
+    ``<=320 px native bypass`` does not apply here: the crop handed to a restorer is the 128/256 px swap crop, which is
+    always upscaled to the 512 px training frame, so a bypass would silently turn UltraMax off.
+    """
+    def __init__(self, catalog, config):
+        super().__init__(catalog, config)
+        self.fidelity_weight = 0.7
+
+    def restore_aligned(self, image, landmarks5):
+        from roop_3d.enhancers.ultramax import laplacian_pyramid_fusion
+        restored = super().restore_aligned(image, landmarks5)
+        return laplacian_pyramid_fusion(np.ascontiguousarray(image), restored, levels=3)
+
+    def restore(self, image: np.ndarray, landmarks5: np.ndarray | None = None) -> np.ndarray:
+        from roop_3d.enhancers.ultramax import laplacian_pyramid_fusion
+        if landmarks5 is not None:
+            return self.restore_aligned(image, landmarks5)
+        restored = super().restore(image)
+        if restored.shape != image.shape:
+            restored = cv2.resize(restored, (image.shape[1], image.shape[0]), interpolation=cv2.INTER_AREA)
+        return laplacian_pyramid_fusion(np.ascontiguousarray(image), restored, levels=3)
+
+    def capability(self):
+        return {**super().capability(), 'architecture': 'ultramax'}

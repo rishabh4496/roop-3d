@@ -25,13 +25,11 @@ export default function TargetFaceCard({
   onSelect,
   onAssignSource,
   onSetMode,
-  onSeek,
 }) {
   const currentMode = cluster?.mode || 'swap';
   const [dropOver, setDropOver] = useState(false);
   // Stage 7: drop a FaceSet from the identity panel onto this card (swap targets only, like the select below).
   const dropProps = currentMode === 'swap' && onAssignSource ? facesetDropProps(id => onAssignSource(cluster.id, id), setDropOver) : {};
-  const assignedSource = sources.find(s => s.faceset_id === assignedSourceId);
 
   const yaw = cluster?.avgPose?.yaw ?? 0;
   const pitch = cluster?.avgPose?.pitch ?? 0;

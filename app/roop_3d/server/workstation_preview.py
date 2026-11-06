@@ -221,7 +221,10 @@ class PreviewService:
             if needs_restorer:
                 architecture = parameters.restorer_model if parameters.restorer_model != 'auto' else {
                     'ultramax': 'gpen', 'gfpgan': 'gpen'}.get(settings.face_restoration_policy, settings.face_restoration_policy)
-                if architecture == 'codeformer':
+                if architecture == 'ultramax':
+                    from roop_3d.compositor.restoration import UltraMaxPipelineRestorer
+                    session.compositor.restorer = UltraMaxPipelineRestorer(self.state.models, runtime)
+                elif architecture == 'codeformer':
                     from roop_3d.compositor.restoration import CodeFormerRestorer
                     session.compositor.restorer = CodeFormerRestorer(self.state.models, runtime)
                 elif architecture in ('off', 'auto', 'gpen'):

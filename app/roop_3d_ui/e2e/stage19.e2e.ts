@@ -117,6 +117,7 @@ test.describe('in-place guidance', () => {
 
   test('engine and hardware: a recommendation with its reason, why others are unavailable, what the profile means', async ({ page }) => {
     await boot(page, { openProject: true });
+    await page.getByTestId('advanced-diagnostics').locator(':scope > summary').click();   // engine + hardware guidance live in Advanced Diagnostics
     const engine = page.getByTestId('engine-explainer');
     await expect(engine).toContainText('Recommended');
     await expect(engine).toContainText('Roop 3D Reference ONNX');

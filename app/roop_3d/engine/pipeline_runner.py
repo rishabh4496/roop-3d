@@ -567,10 +567,13 @@ class MasterPipelineRunner:
             if architecture == "auto":
                 # The settings-level policy may name a streaming-only family; the reference path serves it with GPEN.
                 architecture = {"ultramax": "gpen", "gfpgan": "gpen"}.get(settings.face_restoration_policy, settings.face_restoration_policy)
-            if architecture not in {"off", "auto", "gpen", "codeformer"}:
+            if architecture not in {"off", "auto", "gpen", "codeformer", "ultramax"}:
                 raise DomainError("RESTORER_UNAVAILABLE", "The selected restoration architecture has no verified local adapter", 503)
             animated_restoration = bool(record.request.parameter_curves and any(key.value > 0 for key in record.request.parameter_curves.tracks.get('restorer_opacity', ())))
-            if architecture == 'codeformer':
+            if architecture == 'ultramax':
+                from roop_3d.compositor.restoration import UltraMaxPipelineRestorer
+                session.compositor.restorer = UltraMaxPipelineRestorer(self.catalog, runtime_config)
+            elif architecture == 'codeformer':
                 from roop_3d.compositor.restoration import CodeFormerRestorer
                 session.compositor.restorer = CodeFormerRestorer(self.catalog, runtime_config)
             elif architecture in ('auto', 'gpen') or animated_restoration or (record.request.workstation_parameters and record.request.workstation_parameters.composite_options().restoration_blend > 0):

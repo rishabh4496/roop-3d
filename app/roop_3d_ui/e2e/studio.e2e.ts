@@ -121,8 +121,11 @@ test('four panels, timeline lanes and a FaceSet dragged onto a target track driv
 
   // Drag onto the lane of Face 0 reassigns it too.
   // The lanes sit in the timeline below the panels: HTML5 drags need the drop target on screen.
-  await page.locator('[data-lane-track="track_0000"] .lane-body').scrollIntoViewIfNeeded();
-  await page.locator('.fs-row[data-faceset-id="bob"]').dragTo(page.locator('[data-lane-track="track_0000"] .lane-body'));
+  // The source list is at the top of the left column and the lanes are below the fold of a 1050 px window, so no scroll
+  // position shows both. Deliver the same drag events the browser would (a real DataTransfer carrying the FaceSet).
+  const dataTransfer = await page.evaluateHandle(() => { const transfer = new DataTransfer(); transfer.setData('application/x-roop3d-faceset', 'bob'); return transfer; });
+  const lane = page.locator('[data-lane-track="track_0000"] .lane-body');
+  for (const type of ['dragenter', 'dragover', 'drop']) await lane.dispatchEvent(type, { dataTransfer });
   await expect(page.getByLabel('Identity for track_0000')).toHaveValue('bob');
   expect(errors).toEqual([]);
   await page.screenshot({ path: 'test-results/studio-assigned.png' });
@@ -150,10 +153,11 @@ test('clicking a face in the video selects its track; right-click offers extract
 
 test('inspector: 3D render mode, relighting and engine reach the preview and the saved project', async ({ page }) => {
   const { seen, errors } = await boot(page);
+  await page.getByTestId('advanced-diagnostics').locator(':scope > summary').click();
   await expect(page.getByLabel('Swap engine')).toHaveValue('reference_onnx');
   await expect(page.getByLabel('Swap engine').locator('option[value="experimental_x"]')).toHaveAttribute('disabled', '');
 
-  await page.getByLabel('3D render mode').selectOption('reenactment_3d');
+  await page.getByRole('radio', { name: 'Full 3D Reconstructed Swap' }).click();
   await expect.poll(() => seen.previews.at(-1)?.render_mode).toBe('reenactment_3d');
   await page.getByLabel('Occlusion handling').selectOption('robust');
   await expect.poll(() => seen.previews.at(-1)?.occlusion_mode).toBe('robust');
@@ -169,7 +173,7 @@ test('inspector: 3D render mode, relighting and engine reach the preview and the
   expect(saved.relight).toBe(true);
 
   // Standard mode drops the key again, so the request matches pre-Stage-7 requests exactly.
-  await page.getByLabel('3D render mode').selectOption('standard');
+  await page.getByRole('radio', { name: 'Standard 2D Identity Swap' }).click();
   await expect.poll(() => seen.previews.at(-1)?.render_mode ?? 'absent').toBe('absent');
   expect(errors).toEqual([]);
 });
@@ -180,6 +184,7 @@ test('selecting queue jobs from the same video restores the correct project and 
     { job_id: 'c'.repeat(32), state: 'queued', request: { ...project.request, workstation_parameters: { pose_mode: 'mesh_blend', feather_px: 3 } }, progress: { frame: 0, total_frames: 100, fps: 0, stage: 'queued' }, output: null },
   ];
   const { errors } = await boot(page, { jobs });
+  await page.getByTestId('advanced-diagnostics').locator(':scope > summary').click();
   await page.locator('.queue-job-card').filter({ hasText: 'bbbbbbbb' }).locator('.job-info-block').click();
   await expect(page.getByLabel('Project name', { exact: true })).toHaveValue('Second project');
   await expect(page.getByRole('textbox', { name: 'Mask feather', exact: true })).toHaveValue('12');

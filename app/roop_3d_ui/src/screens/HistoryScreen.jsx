@@ -5,8 +5,6 @@ import VirtualList from '../components/common/VirtualList';
 export default function HistoryScreen({
   projects = [],
   jobs = [],
-  sources = [],
-  caps = null,
   openProject = async () => {},
   refreshProjects = async () => {},
   refreshJobs = async () => {},
@@ -14,7 +12,6 @@ export default function HistoryScreen({
 }) {
   const [searchQuery, setSearchQuery] = useState('');
   const [filterTab, setFilterTab] = useState('all'); // 'all' | 'interrupted' | 'verified' | 'missing'
-  const [selectedProject, setSelectedProject] = useState(null);
   const [inspectModalProject, setInspectModalProject] = useState(null);
   const [actionNotice, setActionNotice] = useState('');
   const [actionError, setActionError] = useState('');

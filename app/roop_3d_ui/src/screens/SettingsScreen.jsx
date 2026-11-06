@@ -145,6 +145,8 @@ export default function SettingsScreen({
       if (!preflightData) loadPreflight();
       if (!offlineData) loadOfflineHealth();
     }
+    // Load once when the tab opens; depending on the loaded data would refetch after every load.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTab]);
 
   const handlePurgeVram = async () => {
@@ -180,6 +182,8 @@ export default function SettingsScreen({
     if (activeTab === 'diagnostics' && !reportData && !reportLoading) {
       loadReport();
     }
+    // Load once when the tab opens; depending on the loading flags would re-trigger the request.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTab]);
 
   const loadReport = () => {

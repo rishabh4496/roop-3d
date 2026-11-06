@@ -58,14 +58,11 @@ export const BUILTIN_RECIPES = [
 export default function BatchMatrixScreen({
   sources = [],
   projects = [],
-  jobs = [],
   caps = null,
-  config = null,
   target = '',
   probe = null,
   inspection = null,
   refreshJobs = async () => {},
-  busy = false,
 }) {
   const [strategy, setStrategy] = useState('one-to-many'); // 'one-to-many' | 'grouped' | 'matrix' | 'recipe'
   const [batchBusy, setBatchBusy] = useState(false);
@@ -611,7 +608,7 @@ export default function BatchMatrixScreen({
           </div>
 
           <div className="groups-list">
-            {groups.map((group, index) => (
+            {groups.map(group => (
               <div key={group.id} className="group-builder-card">
                 <div className="group-header">
                   <input

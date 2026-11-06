@@ -175,9 +175,9 @@ class LivePreviewPayload(Contract):
         return tuple(dict.fromkeys(ids))
 
     def validate_restorer(self) -> None:
-        if self.restorer in ("gfpgan", "ultramax"):
+        if self.restorer == "gfpgan":
             raise DomainError("RESTORER_UNAVAILABLE",
-                              f"The {self.restorer} restorer has no verified adapter in the preview compositor; use gpen or off", 422)
+                              f"The {self.restorer} restorer has no verified adapter in the preview compositor; use gpen, codeformer, ultramax or off", 422)
 
     def unsupported(self) -> list[str]:
         """Accepted-but-inert fields: the engine has no corresponding control. Never silently dropped."""
@@ -463,7 +463,7 @@ class LivePreviewService:
         if any(item.track_id not in track_ids for item in mappings):
             raise DomainError("TRACK_NOT_FOUND", "Selected target face is absent from this inspection", 422)
 
-        restoring = payload.restorer in ("gpen", "codeformer")
+        restoring = payload.restorer in ("gpen", "codeformer", "ultramax")
         blend_amount = (payload.restoration_blend if payload.restoration_blend is not None else 0.7) if restoring else 0.0
         values: dict[str, Any] = {"restoration_blend": blend_amount, "feather_px": payload.occlusion.feather_px,
                                   "erosion_px": payload.occlusion.erosion_px, "color_strength": payload.color_strength,
@@ -480,6 +480,8 @@ class LivePreviewService:
             values["tps_expression_weight"] = payload.tps_expression_weight
         if payload.restorer == 'codeformer':
             values.update(restorer_model='codeformer', fidelity_weight=payload.fidelity_weight)
+        elif payload.restorer == 'ultramax':
+            values.update(restorer_model='ultramax')
         if payload.identity_blend_t is not None:
             values['identity_blend_t'] = payload.identity_blend_t
         if payload.relight is not None:
@@ -550,7 +552,7 @@ class LivePreviewService:
             applied.append("pose_frontalization")
         if payload.tps_expression_weight:
             applied.append("tps_expression_weight")
-        if payload.restorer in ("gpen", "codeformer"):
+        if payload.restorer in ("gpen", "codeformer", "ultramax"):
             applied.append("restorer:" + payload.restorer)
         if payload.restorer == "codeformer":
             applied.append("fidelity_weight")

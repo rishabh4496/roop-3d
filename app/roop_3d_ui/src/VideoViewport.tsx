@@ -36,7 +36,7 @@ import { CURVE_PARAMETERS, evaluateParameters, upsertKey } from './stores/parame
 import HistoryDrawer from './components/workstation/HistoryDrawer';
 import SnapshotSlots, { SnapshotViewport } from './components/workstation/SnapshotSlots';
 import { panAnchoredAt } from './utils/zoomPan';
-import { buildLivePayload, downloadBlob, previewFilename, useLiveSwapPreview } from './livePreview';
+import { RENDER_FRAME_EVENT, buildLivePayload, downloadBlob, previewFilename, useLiveSwapPreview } from './livePreview';
 import { useMediaInfo, useScrubFrame } from './frameScrub';
 import { bestOverlap, useMatchedFrameFaces, type MatchedFrameFace } from './utils/frameFaces';
 import FrameFaceStrip from './components/tray/FrameFaceStrip';
@@ -233,6 +233,8 @@ export function VideoViewport({
     if (previousEdit.current === editFingerprint) return;
     previousEdit.current = editFingerprint;
     if (active && previewRequest) history.live();   // an edit leaves any snapshot comparison; the live preview re-renders on its own
+    // `history` is a fresh object each render; only an actual edit (the fingerprint) should leave a snapshot comparison.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editFingerprint, active, previewRequest]);
   const latencyCallback = useRef(onPreviewLatency); latencyCallback.current = onPreviewLatency;
   useEffect(() => { if (!active) { setPlaying(false); setSweepPanel(null); original.current?.pause(); processed.current?.pause(); } }, [active]);
@@ -291,6 +293,13 @@ export function VideoViewport({
     if (!previewRequest) { flash('Assign a source FaceSet to a locked target face first: the swap preview needs a face mapping.'); return; }
     setLiveSwap(true); setCompMode('wipe'); setViewMode('compare'); setSolo(null); setIsMaskEditing(false);
   };
+  const renderFrameRef = useRef<() => void>(() => {});
+  renderFrameRef.current = () => {
+    // The footer button always *shows* the swap; it never toggles an already-visible comparison back off.
+    if (viewMode === 'compare' && compMode === 'wipe' && liveSwap) { setSolo(null); return; }
+    toggleLiveFrameSwap();
+  };
+  useEffect(() => { const handler = () => renderFrameRef.current(); window.addEventListener(RENDER_FRAME_EVENT, handler); return () => window.removeEventListener(RENDER_FRAME_EVENT, handler); }, []);
   const live = useLiveSwapPreview(previewLive && enabled && liveSwap && !playing && !isMaskEditing
     ? buildLivePayload({ timestampSelection: true, request: previewRequest, time, fps, parameters, maskBase64, restorerAvailable, solo: nodeBuffer(solo) })
     : null);

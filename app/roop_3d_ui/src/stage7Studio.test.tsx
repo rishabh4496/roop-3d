@@ -200,18 +200,49 @@ describe('StudioInspector', () => {
     await mount(); await flush();
     const engine = host.querySelector('select[aria-label="Swap engine"]') as HTMLSelectElement;
     expect((engine.querySelector('option[value="x"]') as HTMLOptionElement).disabled).toBe(true);
-    const mode = host.querySelector('select[aria-label="3D render mode"]') as HTMLSelectElement;
-    await act(async () => { mode.value = 'pose_3d'; mode.dispatchEvent(new Event('change', { bubbles: true })); });
+    const radio = (label: string) => Array.from(host.querySelectorAll('[role="radiogroup"][aria-label="3D render mode"] [role="radio"]')).find(item => item.textContent === label) as HTMLButtonElement;
+    await act(async () => radio('2.5D Pose-Aware Warp').click());
     expect(parameters.render_mode).toBe('pose_3d');
     await mount();
-    await act(async () => { mode.value = 'standard'; mode.dispatchEvent(new Event('change', { bubbles: true })); });
+    expect(radio('2.5D Pose-Aware Warp').getAttribute('aria-checked')).toBe('true');
+    await act(async () => radio('Standard 2D Identity Swap').click());
     expect('render_mode' in parameters).toBe(false);
     expect(host.querySelector('[data-testid="light-probe"]')).toBeNull();
-    await act(async () => (host.querySelector('.inspector-toggle input') as HTMLInputElement).click());
+    const relight = Array.from(host.querySelectorAll('.inspector-toggle')).find(item => item.textContent?.includes('3D relighting'))!.querySelector('input') as HTMLInputElement;
+    await act(async () => relight.click());
     expect(parameters.relight).toBe(true);
     await mount(); await flush();
     expect(host.querySelector('[data-testid="light-probe"]')).toBeTruthy();
     expect(host.textContent).toContain('-10° … 12°');
+  });
+
+  it('lays the pipeline out as 3 steps with the experimental controls inside a closed Advanced Diagnostics drawer', async () => {
+    api.mockResolvedValue({ engines: [] });
+    let parameters: WorkstationParameters = { ...DEFAULT_PARAMETERS };
+    const setParameters = vi.fn((value: WorkstationParameters) => { parameters = value; });
+    const mount = () => render(<StudioInspector {...base} track={null} parameters={parameters} setParameters={setParameters} footer={<div data-testid="footer-slot" />} />);
+    await mount(); await flush();
+    for (const id of ['step-swap', 'step-mask', 'step-enhance']) expect(host.querySelector('[data-testid="' + id + '"]')).toBeTruthy();
+    const drawer = host.querySelector('[data-testid="advanced-diagnostics"]') as HTMLDetailsElement;
+    expect(drawer.open).toBe(false);
+    expect(drawer.querySelector('select[aria-label="Swap engine"]')).toBeTruthy();
+    expect(host.querySelector('[data-testid="step-swap"] select[aria-label="Swap engine"]')).toBeNull();
+    expect(host.querySelector('[data-testid="footer-slot"]')).toBeTruthy();
+    // Step 2: XSeg + Smart Occluder is the compositor's robust mode; BiSeNet is the always-on base matte.
+    const toggle = host.querySelector('input[aria-label="XSeg mask and smart occluder"]') as HTMLInputElement;
+    await act(async () => toggle.click());
+    expect(parameters.occlusion_mode).toBe('robust');
+    // Step 3: choosing an enhancer turns restoration on at a sensible blend; None turns it off.
+    await mount();
+    const enhancer = host.querySelector('select[aria-label="Enhancer"]') as HTMLSelectElement;
+    await act(async () => { enhancer.value = 'ultramax'; enhancer.dispatchEvent(new Event('change', { bubbles: true })); });
+    expect(parameters.restorer_model).toBe('ultramax');
+    expect(parameters.restoration_blend).toBeCloseTo(0.7);
+    await mount();
+    expect((host.querySelector('select[aria-label="Enhancer"]') as HTMLSelectElement).value).toBe('ultramax');
+    const none = host.querySelector('select[aria-label="Enhancer"]') as HTMLSelectElement;
+    await act(async () => { none.value = 'none'; none.dispatchEvent(new Event('change', { bubbles: true })); });
+    expect(parameters.restoration_blend).toBe(0);
   });
 
   it('a failed model hub shows the reason and retries on request (no endless skeleton)', async () => {

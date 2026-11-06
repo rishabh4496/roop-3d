@@ -6,7 +6,7 @@ from roop_3d.core.settings import Contract
 
 class WorkstationParameters(Contract):
     color_method: Literal['lab', 'histogram'] = 'lab'
-    restorer_model: Literal['auto', 'gpen', 'codeformer'] = 'auto'
+    restorer_model: Literal['auto', 'gpen', 'codeformer', 'ultramax'] = 'auto'
     identity_blend_t: float | None = Field(default=None, ge=0, le=1)
     fidelity_weight: float = Field(default=.5, ge=0, le=1)
     restoration_blend: float = Field(default=0, ge=0, le=1)

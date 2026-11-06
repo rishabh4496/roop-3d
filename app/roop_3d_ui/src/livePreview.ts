@@ -8,6 +8,8 @@ import type { WorkstationParameters } from './components/workstation/pipeline';
 export const LIVE_DEBOUNCE_MS = 150;
 /** Dispatched on `window` when the Start button queues a render; in-flight previews are dropped so the server can yield. */
 export const JOB_START_EVENT = 'roop3d:job-start';
+/** Footer "Render Current Frame": asks the viewport to show the live swap of the frame under the playhead. */
+export const RENDER_FRAME_EVENT = 'roop3d:render-frame';
 
 export type LivePayload = Record<string, unknown>;
 
@@ -34,7 +36,7 @@ export function buildLivePayload({ request, time, fps, parameters, maskBase64, r
     solo_node: solo || undefined,
     occlusion: { erosion_px: parameters.erosion_px ?? 0, feather_px: parameters.feather_px },
     mask_base64: maskBase64 || request.mask_base64 || undefined,
-    restorer: restoring ? (parameters.restorer_model === 'codeformer' ? 'codeformer' : 'gpen') : 'off',
+    restorer: restoring ? (parameters.restorer_model === 'codeformer' || parameters.restorer_model === 'ultramax' ? parameters.restorer_model : 'gpen') : 'off',
     identity_blend: request.identity_blend ?? undefined,
     identity_blend_t: parameters.identity_blend_t,
     fidelity_weight: parameters.fidelity_weight,

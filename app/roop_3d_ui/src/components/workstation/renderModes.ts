@@ -19,13 +19,13 @@ export const PREVIEW_TAB_LABEL: Record<PreviewTab, string> = { estimated_2_5d: '
 
 /** `id` values are the saved `render_mode` parameter values; only the labels and hints are user-facing copy. */
 export const RENDER_MODES: readonly RenderModeInfo[] = [
-  { id: 'standard', label: 'Standard identity swap',
-    hint: 'The proven 2D identity swap path. It does not use 3D geometry, so the viewer is only a preview of what your FaceSet contains.',
+  { id: 'standard', label: 'Standard 2D Identity Swap',
+    hint: 'Fastest. The classic InSwapper 128 FP16 identity swap. It does not use 3D geometry, so the viewer is only a preview of what your FaceSet contains.',
     preview: 'estimated_2_5d', previewNote: 'preview only' },
-  { id: 'pose_3d', label: '2.5D Pose-Aware Swap',
+  { id: 'pose_3d', label: '2.5D Pose-Aware Warp',
     hint: "Turns the swap to match each target frame's head pose using the source FaceSet's own 3D geometry (the Estimated 2.5D tab). Falls back to standard per frame when geometry is unreliable.",
     preview: 'estimated_2_5d', previewNote: 'render geometry' },
-  { id: 'reenactment_3d', label: 'Full 3D Volumetric Re-enactment',
+  { id: 'reenactment_3d', label: 'Full 3D Reconstructed Swap',
     hint: "Drives the full multi-view head (the Full 3D Reconstructed tab) with the target's pose and expression. Falls back to standard per frame when geometry is unreliable.",
     preview: 'reconstruction', previewNote: 'render geometry' },
 ] as const;

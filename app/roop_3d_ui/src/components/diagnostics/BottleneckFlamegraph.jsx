@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useMemo } from 'react';
 import { FLAME_STAGES, resolveStageTimings } from './stageTimings';
 
 // Measured stages come from the backend (see stageTimings.js); nothing is defaulted.

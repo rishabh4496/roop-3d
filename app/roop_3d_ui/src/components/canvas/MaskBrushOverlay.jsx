@@ -42,7 +42,7 @@ export default function MaskBrushOverlay({
   // Occlusion guide state
   const [showOcclusionGuides, setShowOcclusionGuides] = useState(true);
   const [occlusionPrompt, setOcclusionPrompt] = useState('glasses, hair strands, fingers');
-  const [detectedOccluders, setDetectedOccluders] = useState([
+  const [detectedOccluders] = useState([
     { id: 'glasses', label: 'Glasses / Eyewear', region: 'eyes', confidence: 0.94, active: true },
     { id: 'hair', label: 'Hair Strands / Fringe', region: 'forehead', confidence: 0.88, active: true },
     { id: 'fingers', label: 'Fingers / Occluding Hand', region: 'chin', confidence: 0.76, active: false },
@@ -211,6 +211,8 @@ export default function MaskBrushOverlay({
         ctx.restore();
       }
     },
+    // applyBoxBlur is a pure function of its arguments (declared below); depending on it would rebuild this callback every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [brushMode, brushSize, hardness, opacity, nativeW, letterbox]
   );
 

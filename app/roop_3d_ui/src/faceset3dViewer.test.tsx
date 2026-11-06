@@ -114,7 +114,7 @@ describe('pose maths', () => {
 describe('render modes', () => {
   it('names the three modes plainly and maps each to the viewer tab it works from', () => {
     expect(RENDER_MODES.map(mode => [mode.id, mode.label])).toEqual([
-      ['standard', 'Standard identity swap'], ['pose_3d', '2.5D Pose-Aware Swap'], ['reenactment_3d', 'Full 3D Volumetric Re-enactment'],
+      ['standard', 'Standard 2D Identity Swap'], ['pose_3d', '2.5D Pose-Aware Warp'], ['reenactment_3d', 'Full 3D Reconstructed Swap'],
     ]);
     expect(RENDER_MODES.map(mode => mode.preview)).toEqual(['estimated_2_5d', 'estimated_2_5d', 'reconstruction']);
     expect(renderModeInfo('unknown').id).toBe('standard');

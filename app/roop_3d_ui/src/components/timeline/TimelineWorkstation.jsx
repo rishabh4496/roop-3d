@@ -266,7 +266,6 @@ export function RangeField({ label, frame, time, fps, onCommitFrame, disabled = 
 export default function TimelineWorkstation({
   parameters = {},
   target = '',
-  output = '',
   currentTime = 0,
   duration = 0,
   fps = 30,
@@ -303,11 +302,9 @@ export default function TimelineWorkstation({
 
   // Background thumbnail generation
   const [customThumbnails, setCustomThumbnails] = useState(null);
-  const [isGeneratingThumbs, setIsGeneratingThumbs] = useState(false);
 
   // Access detected faces and clusters from store
   const detectedFaces = useFaceSelectionStore(s => s.detectedFaces);
-  const targetClusters = useFaceSelectionStore(s => s.targetClusters);
   const activeSelection = useFaceSelectionStore(s => s.activeSelection);
 
   const effectiveFps = Math.max(1, fps || 30);

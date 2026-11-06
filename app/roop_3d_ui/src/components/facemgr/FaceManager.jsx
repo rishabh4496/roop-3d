@@ -421,7 +421,7 @@ export default function FaceManager({
             sources={sources}
             onRefreshSources={onRefreshSources}
             onSelectSource={onAssignSource ? (id) => onAssignSource('primary', id) : undefined}
-            notify={(msg, type) => setStatusNotice(msg)}
+            notify={msg => setStatusNotice(msg)}
           />
         </div>
       ) : (

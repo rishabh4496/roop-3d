@@ -11,7 +11,6 @@ export default function PreFlightLinterModal({
   faceMappings = [],
   workstationParameters = null,
   maskBase64 = null,
-  hardware = null,
   onApplySettings = null,
   onApplyParameter = null,
 }) {
