@@ -52,7 +52,7 @@ def _read_archive(request: Request, faceset_id: str | None = None, faceset_path:
         archive = next((path for path in choices if path.is_file()), None)
     elif faceset_path:
         relative = faceset_path.replace("\\", "/")
-        if not relative.startswith(("roop_3d/outputs/facesets/", "roop_3d/.runtime/facesets/")):
+        if not relative.startswith(("facesets/", "roop_3d/outputs/facesets/", "roop_3d/.runtime/facesets/")):
             raise DomainError("MEDIA_PATH_DENIED", "FaceSet path must be in the local FaceSets directory", 422)
         archive = safe_path(root, relative)
         if archive.suffix.casefold() != ".fsz" or not archive.is_file():

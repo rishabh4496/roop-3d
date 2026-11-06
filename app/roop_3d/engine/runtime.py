@@ -146,7 +146,7 @@ class OrtModel:
                 "w600k_r50.onnx": 16, "bisenet_resnet_34.onnx": 16, "face_parser.onnx": 16,
                 "liveportrait_warping_spade.onnx": 2,
                 "liveportrait_motion_extractor.onnx": 8, "liveportrait_motion_extractor.batch.onnx": 8,
-                "liveportrait_landmark.onnx": 16, "2d106det.onnx": 32, "landmark_203.onnx": 32,
+                "liveportrait_landmark.onnx": 16, "1k3d68.onnx": 16, "2d106det.onnx": 32, "landmark_203.onnx": 32,
                 "liveportrait_appearance_feature_extractor.onnx": 32,
                 "liveportrait_appearance_feature_extractor.batch.onnx": 32,
                 "liveportrait_stitching.onnx": 32, "liveportrait_stitching.batch.onnx": 32,

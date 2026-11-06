@@ -5,7 +5,7 @@ What is real and what is stubbed - stated plainly because it decides what a soak
 * **Real**: video decode (PyAV), per-frame PNG checkpoint with atomic fsync'd writes, checkpoint JSON/BIN/NPZ rewrites,
   job state machine and file locks, worker threads, scheduler/governor admission, mux/encode, manifest + atomic
   publish, cleanup, WebSocket-less progress reporting, crash recovery.
-* **Stubbed**: the neural inference step (detector / swapper / restorer). ``StubSession`` returns a deterministic
+* **Stubbed**: hardware snapshots are injected; dependency identities use small local hash-verified fixture files; the neural inference step (detector / swapper / restorer). ``StubSession`` returns a deterministic
   frame so thousands of frames can run in minutes. Model-session memory behaviour is therefore measured separately
   (``scenario_model_switch`` loads and evicts real ONNX Runtime sessions).
 
@@ -170,6 +170,38 @@ class Rig:
         return sorted(p for p in out.glob("roop3d_*") if not p.name.endswith((".lock",))) if out.is_dir() else []
 
 
+def fixture_catalog(root: Path):
+    """Small, hash-verified identities for stub inference; no installed weights are read.
+
+    These files are dependency identity fixtures, not executable neural models. They
+    exercise resume/drift verification through the real catalog and local provider.
+    Real ONNX session soak scenarios construct their own production catalog.
+    """
+    from roop_3d.models.catalog import ModelCatalog
+    from roop_3d.models.local_provider import LocalWeightProvider
+    from roop_3d.models.registry import Manifest, ModelRecord, ModelRegistry
+    directory = root / "roop_3d/.runtime/harness_models"
+    directory.mkdir(parents=True, exist_ok=True)
+    records = []
+    for role, name in (("detector", "scrfd_10g_bnkps.onnx"), ("recognizer", "w600k_r50.onnx"),
+                       ("identity_swapper", "inswapper_128.onnx")):
+        data = ("Roop 3D deterministic dependency fixture: " + role).encode()
+        path = directory / name
+        if not path.exists():
+            path.write_bytes(data)
+        records.append(ModelRecord(model_id="reliability_fixture_" + role, name=name, role=role,
+            role_evidence="Stub inference dependency identity; no neural execution", status="verified_local",
+            filenames=(name,), expected_sha256=hashlib.sha256(data).hexdigest(), byte_size=len(data),
+            locator={"scope": "fixture", "path": name},
+            input_output_contract={"outputs": [{"name": str(i)} for i in range(9)] if role == "detector" else []},
+            evidence="Deterministic local test bytes", license_id="CC0-1.0", license_notice="Generated test fixture",
+            license_url="https://creativecommons.org/publicdomain/zero/1.0/", commercial_use="allow"))
+    registry = ModelRegistry(manifest=Manifest(evidence_scope="Reliability stub dependency fixtures", models=tuple(records)))
+    catalog = ModelCatalog(root, registry=registry)
+    catalog.provider = LocalWeightProvider(registry, root=root, scopes={"fixture": directory})
+    return catalog
+
+
 def build_rig(root: Path, *, frames: int = 8, tracks: int = 1, session_factory=None, size=(96, 64), fps: int = 25,
               settings: Settings | None = None, checkpoint_every: int | None = None, poll_interval: float = 0.01,
               hardware_probe=None, video: Path | None = None, delay: float = 0.0, faceset_ids: list[str] | None = None,
@@ -178,6 +210,7 @@ def build_rig(root: Path, *, frames: int = 8, tracks: int = 1, session_factory=N
     from roop_3d.server.app import create_app
     settings = settings or Settings(hardware_profile="cpu", preferred_provider="CPUExecutionProvider", audio_policy="drop")
     app = create_app(settings, repo_root=root)
+    app.state.models = fixture_catalog(root)
     target = video or (root / "roop_3d/.runtime/media/target.mp4")
     target_relative = target.relative_to(root).as_posix()
     if not target.exists():
@@ -209,7 +242,10 @@ def build_rig(root: Path, *, frames: int = 8, tracks: int = 1, session_factory=N
         archive.parent.mkdir(parents=True, exist_ok=True)
         archive.write_bytes(b"read-only fixture archive")
     factory = session_factory or (lambda catalog, config: StubSession(config, tracks=tracks, delay=delay, on_frame=on_frame))
+    from roop_3d.core.hardware import Hardware
+    fixture_probe = hardware_probe or (lambda current: Hardware(timestamp="STUB_HARDWARE", os={}, logical_cpu_count=1))
     runner_kwargs = {"checkpoint_every": checkpoint_every} if checkpoint_every else {}
+    runner_kwargs["hardware_probe"] = fixture_probe
     runner = MasterPipelineRunner(root, app.state.models, app.state.media, lambda: app.state.settings,
                                   faceset_reader=StubReader(), pipeline_factory=factory, **runner_kwargs)
     scheduler = RuntimeScheduler(VRAMGovernor(hardware_probe)) if hardware_probe else RuntimeScheduler(VRAMGovernor())

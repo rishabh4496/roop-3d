@@ -538,6 +538,7 @@ def delete_faceset(faceset_id: str, request: Request):
                 fsz_path.unlink(missing_ok=True)
             except Exception:
                 pass
+    owned(root, f"facesets/{faceset_id}.fsz").unlink(missing_ok=True)
     return {"deleted": faceset_id}
 
 

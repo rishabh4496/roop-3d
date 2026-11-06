@@ -112,7 +112,7 @@ def test_missing_isolation_evidence_is_unknown(tmp_path: Path) -> None:
         assert client.get("/api/v1/health").json()["isolation"]["status"] == "unknown"
 
 
-def test_isolation_verifier_executes_real_hash_checks(tmp_path: Path) -> None:
+def test_isolation_verifier_does_not_reintroduce_removed_source_locks(tmp_path: Path) -> None:
     from roop_3d.audit.isolation import inventory, verify
     legacy = tmp_path / "app"
     legacy.mkdir()
@@ -122,8 +122,9 @@ def test_isolation_verifier_executes_real_hash_checks(tmp_path: Path) -> None:
     assert verify(tmp_path, baseline)["ok"]
     source.write_bytes(b"modified")
     result = verify(tmp_path, baseline)
-    assert not result["ok"]
-    assert result["violations"][0]["status"] == "HASH_MISMATCH"
+    assert result["ok"] and result["violations"] == []
+    assert baseline["files"] == []
+    assert source.read_bytes() == b"modified"
 
 
 def test_hardware_is_probed_without_claiming_inference_or_inventing_cpu_count() -> None:

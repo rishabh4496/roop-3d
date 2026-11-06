@@ -1,7 +1,7 @@
 {
   "release_version": "0.2.0",
-  "generated_at": "2026-11-04T18:53:04.232931+00:00",
-  "total_models": 121,
+  "generated_at": "2026-11-06T18:45:04.828037+00:00",
+  "total_models": 123,
   "profiles": {
     "12gb": "RTX 4070 Desktop Resident Profile (Full model catalog supported)",
     "6gb": "RTX 3060 Laptop Clamped Profile (Sequential swapping, batch <= 2)",
@@ -2593,6 +2593,50 @@
       "role": "diffusion_adapter",
       "expected_sha256": "98b42b2d4f994a07b68450ee6ed1542eb39941e6360bcd374b3a7f548759d9d4",
       "byte_size": 133629072,
+      "precision": "FP32",
+      "supported_execution_providers": [
+        "TensorrtExecutionProvider",
+        "CUDAExecutionProvider",
+        "CPUExecutionProvider"
+      ],
+      "supported_hardware_profiles": [
+        "12gb",
+        "6gb",
+        "cpu"
+      ],
+      "offline_support": true
+    },
+    {
+      "model_id": "public_nomos8k_sc_x4",
+      "name": "nomos8k_sc_x4.onnx",
+      "filenames": [
+        "nomos8k_sc_x4.onnx"
+      ],
+      "role": "frame_upscaler",
+      "expected_sha256": "7747a7dd0b115761cf9c34bbf67bb1e98218ff5b459492a13215c8deb046a9d0",
+      "byte_size": 67002465,
+      "precision": "FP32",
+      "supported_execution_providers": [
+        "TensorrtExecutionProvider",
+        "CUDAExecutionProvider",
+        "CPUExecutionProvider"
+      ],
+      "supported_hardware_profiles": [
+        "12gb",
+        "6gb",
+        "cpu"
+      ],
+      "offline_support": true
+    },
+    {
+      "model_id": "public_realesrgan_x4plus_anime_6b",
+      "name": "RealESRGAN_x4plus_anime_6B.onnx",
+      "filenames": [
+        "RealESRGAN_x4plus_anime_6B.onnx"
+      ],
+      "role": "frame_upscaler",
+      "expected_sha256": "82f458db35dd94f2200f9a32fd0232c581da861c1b2e5c956d5574b0e9c5aea2",
+      "byte_size": 18406820,
       "precision": "FP32",
       "supported_execution_providers": [
         "TensorrtExecutionProvider",

@@ -146,7 +146,7 @@ class MasterPipelineRunner:
 
     def __init__(self, root: Path, catalog: ModelCatalog, media, settings_provider: Callable[[], Settings], *,
                  faceset_reader: FaceSetReader | None = None, pipeline_factory=ReferencePipeline,
-                 writer=encode_video, checkpoint_every: int = CHECKPOINT_EVERY):
+                 writer=encode_video, checkpoint_every: int = CHECKPOINT_EVERY, hardware_probe=None):
         if checkpoint_every < 1:
             raise ValueError("checkpoint_every must be positive")
         self.root, self.catalog, self.media = root, catalog, media
@@ -154,6 +154,7 @@ class MasterPipelineRunner:
         self.faceset_reader = faceset_reader or FaceSetReader(catalog, cache_root=root / "roop_3d/.runtime/cache")
         self.pipeline_factory, self.writer = pipeline_factory, writer
         self.checkpoint_every = checkpoint_every
+        self.hardware_probe = hardware_probe
 
     @staticmethod
     def _request_digest(record: JobRecord) -> str:
@@ -447,11 +448,10 @@ class MasterPipelineRunner:
                                                  "populated": matrix.populated, "filled": matrix.filled}
         return {**{key: values[key] for key in keep if key in values}, "pose_matrices": matrices}
 
-    @staticmethod
-    def _hardware_state(settings: Settings) -> dict:
+    def _hardware_state(self, settings: Settings) -> dict:
         try:
             from roop_3d.core.hardware import probe_hardware
-            hardware = probe_hardware(settings)
+            hardware = self.hardware_probe(settings) if self.hardware_probe is not None else probe_hardware(settings)
         except Exception:
             return {"probe": "UNAVAILABLE"}
         return {"probe": hardware.gpu_probe_state, "gpus": [{"name": gpu.name, "total_vram_mib": gpu.total_vram_mib,

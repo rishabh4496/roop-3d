@@ -150,7 +150,10 @@ def encode_video(source: Path, filename: str, *, root: Path | None = None,
     needs an explicit ``sequence_rate``. ``hdr_policy`` governs PQ/HLG input; ``passthrough`` re-encodes
     unmodified media (no ``transform``) on a profile that can carry HDR.
     """
-    root = root or application_root()
+    root = Path(os.path.abspath(root or application_root()))
+    if not root.is_relative_to(application_root().absolute()):
+        from roop_3d.audit.isolation import AuditError
+        raise AuditError("OUTPUT_ROOT_DENIED", "Output root is outside the standalone application")
     finisher = Finisher(finishing or FinishingOptions())
     claim = None
     suffix = Path(filename).suffix.lower()

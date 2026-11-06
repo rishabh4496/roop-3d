@@ -1,0 +1,31 @@
+import { expect, test } from '@playwright/test';
+
+test('builder renders the 3D sphere, curates angles and saves on desktop and mobile', async ({ page }) => {
+  const errors: string[] = [];
+  page.on('pageerror', e => errors.push(e.message));
+  await page.route('**/builder-harness', route => route.fulfill({ contentType: 'text/html', body: '<html><body><div id="root"></div><div id="saved"></div><script type="module" src="/e2e/helpers/facesetBuilderHarness.tsx"></script></body></html>' }));
+  const samples = [-45,0,45].map((yaw,i) => ({sample_id:`s${i}`,bin_index:48+i*3,yaw,pitch:0,roll:0,score:.93,occlusion_tier:'full',thumbnail_base64:'R0lGODlhAQABAAAAACw='}));
+  let selection: string[] = [];
+  await page.route('**/api/v1/faceset/extract-from-media', route => route.fulfill({json:{job_id:'a'.repeat(32),status:'ready',progress:1,scanned:12,error:null,clusters:[{rank:0,detections:12,coverage:3,samples,selected_ids:['s0','s1','s2']}]} }));
+  await page.route('**/api/v1/faceset/save-fsz', route => { selection = route.request().postDataJSON().selected_ids; return route.fulfill({json:{faceset_id:'existing'}}); });
+  await page.setViewportSize({width:1280,height:1000});
+  await page.goto('/builder-harness');
+  await page.getByRole('button', {name:'Build / Edit .fsz Faceset', exact:true}).click();
+  await page.getByRole('button', {name:'Edit active faceset / add angles', exact:true}).click();
+  const dialog = page.getByRole('dialog');
+  await expect(dialog.getByRole('heading', {name:'Sphere Coverage: 3 / 96'})).toBeVisible();
+  await expect(dialog.locator('canvas')).toBeVisible();
+  await expect(dialog.locator('.fsb-grid button')).toHaveCount(96);
+  await page.waitForFunction(() => { const canvas = document.querySelector('.fsb-sphere canvas') as HTMLCanvasElement; const gl = canvas?.getContext('webgl2'); return gl && gl.getParameter(gl.CURRENT_PROGRAM) !== null; });
+  await page.screenshot({path:'test-results/stage7-builder-desktop.png'});
+  await page.setViewportSize({width:430,height:900});
+  await expect(dialog).toBeVisible();
+  expect(await dialog.evaluate(el => el.scrollWidth <= el.clientWidth + 1)).toBeTruthy();
+  await page.screenshot({path:'test-results/stage7-builder-mobile.png'});
+  await dialog.locator('.fsb-gallery button').first().click();
+  await expect(dialog.getByRole('heading', {name:'Sphere Coverage: 2 / 96'})).toBeVisible();
+  await dialog.getByRole('button', {name:'Save & Activate .fsz Faceset', exact:true}).click();
+  await expect(dialog).toHaveCount(0);
+  expect(selection).toHaveLength(2);
+  expect(errors).toEqual([]);
+});

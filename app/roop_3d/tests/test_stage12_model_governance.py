@@ -48,7 +48,13 @@ def test_all_canonical_and_supplemental_records_materialize_governance_fields():
         materialized = record.model_dump()
         assert required <= materialized.keys()
         assert materialized["weight_filenames"] == materialized["filenames"]
-        assert materialized["source_revision"] == "UNKNOWN" or len(materialized["source_revision"]) == 40
+        # A revision can be a pinned commit, an upstream release tag, or the explicit
+        # local acknowledgement marker; a local acknowledgement is not a commit SHA.
+        assert materialized["source_revision"] == record.source_revision
+        assert record.source_revision in {"UNKNOWN", "LOCAL-UNVERIFIED", "buffalo_l"} or (
+            len(record.source_revision) == 40 and all(c in "0123456789abcdefABCDEF" for c in record.source_revision))
+        if record.source_revision == "LOCAL-UNVERIFIED":
+            assert record.commercial_use == "deny" and record.redistribution_permission == "deny"
 
 
 def test_scanner_requires_integrity_compatibility_license_and_security_evidence():

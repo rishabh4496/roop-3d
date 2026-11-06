@@ -80,8 +80,9 @@ class ResourceMonitor:
             self._stop.wait(self.interval)
 
     # ---- sampling
-    def sample(self) -> probe.ResourceSample:
-        value = probe.take_sample(self.started, gauges=self.ledger.counts(), with_gpu=self.with_gpu)
+    def sample(self, *, with_gpu: bool | None = None) -> probe.ResourceSample:
+        value = probe.take_sample(self.started, gauges=self.ledger.counts(),
+                                  with_gpu=self.with_gpu if with_gpu is None else with_gpu)
         with self._lock:
             self.samples.append(value)
             metrics = value.metrics()
@@ -97,16 +98,16 @@ class ResourceMonitor:
                         peak[key] = max(peak.get(key, 0.0), metrics[key])
         return value
 
-    def job_started(self, job_id: str) -> None:
+    def job_started(self, job_id: str, *, with_gpu: bool | None = None) -> None:
         with self._lock:
             self._active_jobs.add(job_id)
             self.job_peaks.setdefault(job_id, {})
             while len(self.job_peaks) > MAX_JOBS:
                 self.job_peaks.pop(next(iter(self.job_peaks)))
-        self.sample()  # a job shorter than the interval still gets a start and an end reading
+        self.sample(with_gpu=with_gpu)  # a job shorter than the interval still gets a start and an end reading
 
-    def job_finished(self, job_id: str) -> None:
-        self.sample()
+    def job_finished(self, job_id: str, *, with_gpu: bool | None = None) -> None:
+        self.sample(with_gpu=with_gpu)
         with self._lock:
             self._active_jobs.discard(job_id)
 

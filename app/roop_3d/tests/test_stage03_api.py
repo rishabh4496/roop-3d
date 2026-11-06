@@ -22,10 +22,12 @@ def test_api_exposes_authoritative_registry_notices_and_blocked_license(tmp_path
     with TestClient(app, base_url="http://127.0.0.1:8030") as client:
         response = client.get("/api/v1/models/registry")
         assert response.status_code == 200
-        assert len(response.json()) == 101 + len(STAGE16_IDS) + len(STAGE6_IDS)
+        expected = app.state.models.registry.records()
+        assert {item["model_id"] for item in response.json()} == {record.model_id for record in expected}
+        assert len(response.json()) == len(expected)
         assert set(STAGE16_IDS) <= {item["model_id"] for item in response.json()}
         assert set(STAGE6_IDS) <= {item["model_id"] for item in response.json()}
-        assert sum(item["status"] == "verified_local" for item in response.json()) == 95
+        assert sum(item["status"] == "verified_local" for item in response.json()) == sum(record.status == "verified_local" for record in expected)
         flame = next(item for item in response.json() if item["model_id"] == "flame-2020")
         assert flame["expected_sha256"] is None and flame["upstream_url"] is None
         notice = client.get("/api/v1/models/flame-2020/license").json()

@@ -12,11 +12,11 @@ dependencies = [
   "av==17.1.0", "numpy==1.26.4", "opencv-python-headless==4.11.0.86",
   "onnxruntime-gpu==1.23.2; platform_system != 'Darwin'",
   "onnxruntime==1.23.2; platform_system == 'Darwin'",
-  "PyYAML==6.0.3", "httpx==0.28.1",
+  "PyYAML==6.0.3", "httpx==0.28.1", "onnx==1.16.0", "python-multipart==0.0.32",
 ]
 
 [project.optional-dependencies]
-test = ["pytest==9.1.1", "onnx==1.16.0"]
+test = ["pytest==9.1.1"]
 diffusion = ["diffusers==0.30.2"]
 gpu-compositor = ["torch==2.7.1"]
 nv-video = ["PyNvVideoCodec==2.2.3"]

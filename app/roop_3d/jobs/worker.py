@@ -246,11 +246,13 @@ class JobWorker:
             pass  # the job moved on (cancelled / paused) while the error propagated
 
     def _execute_job(self, job_id: str) -> None:
-        MONITOR.job_started(job_id)
+        settings = self.settings_provider()
+        with_gpu = settings.hardware_profile != "cpu" and settings.preferred_provider != "CPUExecutionProvider"
+        MONITOR.job_started(job_id, with_gpu=with_gpu)
         try:
             self._run_job(job_id)
         finally:
-            MONITOR.job_finished(job_id)
+            MONITOR.job_finished(job_id, with_gpu=with_gpu)
 
     def _run_job(self, job_id: str) -> None:
         admission: ScheduledJob | None = None

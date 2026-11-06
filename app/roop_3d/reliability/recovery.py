@@ -145,7 +145,9 @@ class ReliabilityAuditor:
 
     def _old_enough(self, path: Path, now: float, min_age_s: float) -> bool:
         try:
-            return now - path.stat().st_mtime >= min_age_s
+            modified = path.stat().st_mtime
+            # Zero disables the age filter, including future mtimes after clock drift.
+            return min_age_s <= 0 or now - modified >= min_age_s
         except OSError:
             return False
 

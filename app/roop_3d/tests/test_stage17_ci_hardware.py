@@ -182,6 +182,7 @@ def test_model_compatibility_register() -> None:
     models = mcr.get("models", [])
     registry = ModelRegistry()
     assert len(models) == len(registry.records()), "Model count in register does not match ModelRegistry"
+    assert {entry["model_id"] for entry in models} == {record.model_id for record in registry.records()}
 
     for entry in models:
         assert "model_id" in entry
