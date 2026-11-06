@@ -194,7 +194,8 @@ test('audit: solo buffer selection requests intermediate pipeline buffer', async
 
   await expect.poll(() => seenPreviews.length, { timeout: 5000 }).toBeGreaterThan(0);
 
-  // Click "Solo Raw Swap" button in the pipeline flow bar
+  // The pipeline flow bar lives in the collapsible "Pipeline & snapshots" section: open it, then solo the swapper.
+  await page.getByTestId('preview-tools').locator('summary').click();
   const swapperBtn = page.getByRole('button', { name: 'Solo Raw Swap' });
   await swapperBtn.click();
 

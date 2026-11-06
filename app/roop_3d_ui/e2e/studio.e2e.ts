@@ -116,6 +116,8 @@ test('four panels, timeline lanes and a FaceSet dragged onto a target track driv
   await expect(page.getByLabel('Identity for track_0001')).toHaveValue('bob');
 
   // Drag onto the lane of Face 0 reassigns it too.
+  // The lanes sit in the timeline below the panels: HTML5 drags need the drop target on screen.
+  await page.locator('[data-lane-track="track_0000"] .lane-body').scrollIntoViewIfNeeded();
   await page.locator('.fs-row[data-faceset-id="bob"]').dragTo(page.locator('[data-lane-track="track_0000"] .lane-body'));
   await expect(page.getByLabel('Identity for track_0000')).toHaveValue('bob');
   expect(errors).toEqual([]);

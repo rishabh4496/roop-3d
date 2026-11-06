@@ -14,7 +14,10 @@ import { JOB_START_EVENT } from './livePreview';
 import { useFaceSelectionStore, faceEditState, restoreFaceEdit, buildFaceSegments, hydrateFaceSegments } from './useFaceSelectionStore';
 import useHistoryStore, { executeCommand, replaceCurves } from './stores/useHistoryStore';
 import FaceManager from './components/facemgr/FaceManager';
-import AppRouter, { Navigation, SCREENS, useHashRoute } from './router/AppRouter';
+import AppRouter, { SCREENS, useHashRoute } from './router/AppRouter';
+import Rail from './shell/Rail';
+import TopBar from './shell/TopBar';
+import CommandPalette, { type Command } from './shell/CommandPalette';
 import { useShortcutActions } from './components/controls/Hotkeys';
 import NumericInput from './components/controls/NumericInput';
 import { DEFAULT_PARAMETERS, type WorkstationParameters } from './components/workstation/pipeline';
@@ -79,6 +82,12 @@ export default function App() {
   const [busy, setBusy] = useState(''), [error, setError] = useState(''), [notice, setNotice] = useState(''), [uploadProgress, setUploadProgress] = useState(0);
   const [themeName, setThemeName] = useState(() => localStorage.getItem('roop3d-theme-name') ?? 'Default');
   const [themeGalleryOpen, setThemeGalleryOpen] = useState(false);
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => { if ((event.ctrlKey || event.metaKey) && !event.shiftKey && event.key.toLowerCase() === 'k') { event.preventDefault(); setPaletteOpen(open => !open); } };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
   // Stage 7: 'studio' = four-panel workstation (target / identity / preview / inspector + bottom timeline); 'classic'
   // keeps the previous stacked workstation intact. Stored per browser only (a convenience, never project state).
   const [layoutMode, setLayoutMode] = useState<'studio' | 'classic'>(() => { try { return localStorage.getItem('roop3d-workstation-layout') === 'classic' ? 'classic' : 'studio'; } catch { return 'studio'; } });
@@ -476,62 +485,32 @@ export default function App() {
   };
   const focusProjectName = () => { const input = document.querySelector<HTMLInputElement>('input[aria-label="Project name"]'); input?.focus(); input?.select(); };
   const dismissWelcome = () => { markOnboardingSeen(); setWelcomeOpen(false); };
+  const commands: Command[] = [
+    ...SCREENS.map(([id, label]: string[]): Command => ({ id: `go-${id}`, label: `Go to ${label}`, group: 'Navigate', keywords: id, run: () => goto(`#/${id}`) })),
+    { id: 'save', label: 'Save project', group: 'Project', hint: 'Ctrl S', disabled: !!reason('projects') || !inspection || !!busy, run: saveProject },
+    { id: 'projects', label: 'Open project library', group: 'Project', disabled: !!reason('projects'), run: () => { setProjectsOpen(true); void refreshProjects(); } },
+    { id: 'undo', label: 'Undo', group: 'Edit', hint: 'Ctrl Z', run: () => useHistoryStore.getState().undo() },
+    { id: 'redo', label: 'Redo', group: 'Edit', hint: 'Ctrl Y', run: () => useHistoryStore.getState().redo() },
+    { id: 'theme-mode', label: `Switch to ${themeByName(themeName).mode === 'dark' ? 'light' : 'dark'} theme`, group: 'Appearance', keywords: 'mode dark light', run: () => setThemeName(themeByName(themeName).mode === 'dark' ? 'Glass Light' : 'Default') },
+    { id: 'themes', label: 'Browse themes', group: 'Appearance', keywords: 'swatches palette colour color', run: () => setThemeGalleryOpen(true) },
+    { id: 'layout', label: `Use ${layoutMode === 'studio' ? 'classic' : 'studio'} layout`, group: 'Appearance', run: () => setLayoutMode(mode => (mode === 'studio' ? 'classic' : 'studio')) },
+    { id: 'zoom-reset', label: 'Reset interface zoom', group: 'Appearance', hint: 'Ctrl 0', run: resetZoom },
+    { id: 'guide', label: 'Open the guide', group: 'Help', run: () => openGuide() },
+    { id: 'tour', label: 'Take the quick tour', group: 'Help', keywords: 'how to use', run: () => setTourOpen(true) },
+  ];
   const isHighPerf = Boolean(busy?.toLowerCase().includes('export') || busy?.toLowerCase().includes('render') || (config as any)?.performance_mode === 'high');
   return <div className={`workstation ${isHighPerf ? 'perf-high' : ''}`} data-perf-mode={isHighPerf ? 'high' : 'normal'}>
     <button type="button" className="skip-link" onClick={() => workspaceRef.current?.focus()}>Skip to main content</button>
-    <header className="app-header"><a className="brand" href="#/home" aria-label="Roop 3D home"><span className="brand-mark">R<span>3</span></span><strong>roop<span>3D</span></strong></a><span className="header-divider"/><span className="workspace-label">VIDEO WORKSTATION</span>
-      <button className={`button small tour-button ${tourSeen() ? '' : 'fresh'}`} data-testid="header-tour-button" aria-haspopup="dialog" title="Four-step guide to the workstation" onClick={() => setTourOpen(true)}>How to Use</button>
-      <button type="button" className="button small guide-button" data-testid="header-guide-button" aria-haspopup="dialog" title="Step-by-step guide, explanations and recovery help" onClick={() => openGuide()}>Guide</button>
-      <div className="project-name"><input aria-label="Project name" maxLength={128} value={projectName} onChange={event => setProjectName(event.target.value)} /><span>{projectDirty ? 'UNSAVED' : 'SAVED'}</span></div>
-      <span className="local-status"><i className={`dot ${connection === 'online' ? 'mint' : 'amber'}`}/>{connection === 'online' ? 'Local service' : connection}</span>
-      <PipelinePill activeJob={currentJob} />
-      <div role="group" aria-label="UI zoom" title="UI Zoom (Ctrl + / − / 0)" className="ui-zoom-group">
-        <button type="button" onClick={() => bumpZoom(-0.05)} title="Zoom out (Ctrl −)" aria-label="Zoom out" className="zoom-btn">−</button>
-        <button type="button" onClick={resetZoom} title="Reset zoom (Ctrl 0)" aria-label={`Reset zoom, ${Math.round(zoom * 100)}%`} className="zoom-reset-btn">{Math.round(zoom * 100)}%</button>
-        <button type="button" onClick={() => bumpZoom(0.05)} title="Zoom in (Ctrl +)" aria-label="Zoom in" className="zoom-btn">+</button>
-      </div>
-      <div className="header-theme-group" title="Active Interface Theme">
-        <span className="theme-badge-label">THEME:</span>
-        <select
-          aria-label="Select Theme"
-          value={themeName}
-          onChange={e => setThemeName(e.target.value)}
-          className="theme-dropdown-select"
-        >
-          <optgroup label="Dark Themes">
-            {THEMES.filter(t => t.mode === 'dark').map(t => (
-              <option key={t.name} value={t.name}>{t.name}</option>
-            ))}
-          </optgroup>
-          <optgroup label="Light Themes">
-            {THEMES.filter(t => t.mode === 'light').map(t => (
-              <option key={t.name} value={t.name}>{t.name}</option>
-            ))}
-          </optgroup>
-        </select>
-        <button
-          type="button"
-          className="button small theme-gallery-btn"
-          title="Open visual swatch cards for all 37 themes"
-          onClick={() => setThemeGalleryOpen(true)}
-        >
-          🎨 Swatches
-        </button>
-        <button
-          type="button"
-          className="icon-button"
-          aria-label={`Switch to ${themeByName(themeName).mode === 'dark' ? 'light' : 'dark'} theme`}
-          title={`Quick toggle: ${themeByName(themeName).mode === 'dark' ? 'Light mode' : 'Dark mode'}`}
-          onClick={() => setThemeName(themeByName(themeName).mode === 'dark' ? 'Glass Light' : 'Default')}
-        >
-          {themeByName(themeName).mode === 'dark' ? '☀' : '◐'}
-        </button>
-      </div>
-      <button type="button" className="button small layout-toggle" aria-pressed={layoutMode === 'studio'} title="Switch between the four-panel studio and the classic stacked workstation" onClick={() => setLayoutMode(mode => (mode === 'studio' ? 'classic' : 'studio'))}>{layoutMode === 'studio' ? 'Studio layout' : 'Classic layout'}</button>
-      <button className="button" disabled={!!reason('projects') || !!busy} title={reason('projects') ?? ''} onClick={() => { setProjectsOpen(true); void refreshProjects(); }}>Projects</button><button className="button" disabled={!!reason('projects') || !inspection || !!busy} onClick={saveProject}>Save project</button><button className="button" disabled={!inspection || !!busy} onClick={() => void run('Saving project copy', async () => { await persistProject(true); })}>Save copy</button>
-    </header>
+    <Rail route={route} />
+    <div className="app-main">
+    <TopBar title={SCREENS.find(([id]: string[]) => `#/${id}` === route)?.[1] ?? 'Workstation'} projectName={projectName} onProjectName={setProjectName} dirty={projectDirty} connection={connection}
+      pill={<PipelinePill activeJob={currentJob} />} zoom={zoom} onZoom={bumpZoom} onZoomReset={resetZoom}
+      themeMode={themeByName(themeName).mode} onToggleMode={() => setThemeName(themeByName(themeName).mode === 'dark' ? 'Glass Light' : 'Default')} onThemes={() => setThemeGalleryOpen(true)}
+      tourFresh={!tourSeen()} onTour={() => setTourOpen(true)} onGuide={() => openGuide()}
+      layoutMode={layoutMode} onLayout={() => setLayoutMode(mode => (mode === 'studio' ? 'classic' : 'studio'))}
+      projectsDisabled={!!reason('projects')} projectsReason={reason('projects')} busy={!!busy} canSave={!!inspection}
+      onPalette={() => setPaletteOpen(true)} onProjects={() => { setProjectsOpen(true); void refreshProjects(); }} onSave={saveProject} onSaveCopy={() => void run('Saving project copy', async () => { await persistProject(true); })} />
     <RunPill />
-    <Navigation route={route}/>
     {route === '#/faceswap' && <NextStepBar progress={workflow} onAction={guideAction} onGuide={() => openGuide()} blockedReason={workflow.next?.id === 'target' ? reason('uploads') : workflow.next?.id === 'inspect' && target ? reason('face_inspection') : null} busy={!!busy} />}
     {(error || notice || busy) && <div className={`notification ${error ? 'error' : ''}`} role={error ? 'alert' : 'status'}>{error ? <RecoveryNotice message={error} code={errorInfo?.message === error ? errorInfo.code : null} requestId={errorInfo?.message === error ? errorInfo.requestId : null} onGuide={() => openGuide('queue')} /> : <span>{busy || notice}</span>}{busy === 'Importing asset' && <><progress value={uploadProgress} max={1}/><button onClick={() => uploadAbort.current?.abort()}>Cancel import</button></>}{error && isOfflineError({ code: errorInfo?.message === error ? errorInfo.code : null, message: error }) && <button onClick={() => void connect()}>Reconnect</button>}{!busy && <button aria-label="Dismiss message" onClick={() => { setError(''); setNotice(''); }}>×</button>}</div>}
     <div id="workspace" ref={workspaceRef} tabIndex={-1} className="workspace-root">
@@ -642,6 +621,7 @@ export default function App() {
     <WorkstationScreens route={route} caps={caps} config={config} sources={sources} jobs={jobs} projects={projects} busy={!!busy} connection={connection} openProject={openProject} showJob={showJob} controlJob={controlJob} saveSettings={saveSettings} refreshJobs={refreshJobs} openLibrary={() => { setProjectsOpen(true); void refreshProjects(); }} latency={previewLatency} target={target} probe={probe} inspection={inspection} refreshProjects={refreshProjects} exportOptions={exportOptions} onExportChange={setExportOptions} meshBlend={parameters.pose_mode === 'mesh_blend'} onQueue={queue} canQueue={!reason('queue') && !!inspection && !!renderMappings().length && !busy} previewRequest={inspection && renderMappings().length ? previewRequest : null} timestamp={time} themeName={themeName} onThemeChange={setThemeName} onStartTour={() => setTourOpen(true)} workflow={workflow} onWorkflowAction={guideAction} onOpenGuide={() => openGuide()} projectsLoading={projectsLoading}/>
     </div>
     <footer className="app-footer"><span>ROOP 3D / LOCAL WORKSTATION</span><span>Observed identities. Explicit processing. Synthetic media.</span><span>API :{config?.port ?? '—'}</span></footer>
+    </div>
     {projectsOpen && <div className="modal-backdrop" onClick={() => setProjectsOpen(false)}><section ref={projectDialog} role="dialog" aria-modal="true" aria-labelledby="projects-title" className="project-modal" onClick={event => event.stopPropagation()}><div className="panel-heading"><div><span className="eyebrow">VERSIONED .R3DP MANIFESTS</span><h2 id="projects-title">Project library</h2></div><button aria-label="Close projects" className="icon-button" onClick={() => setProjectsOpen(false)}>×</button></div><p className="muted">Reopening verifies target, inspection, FaceSet, and model hashes. Project files contain references and settings, never raw media.</p><button className="button" disabled={!!busy} onClick={() => projectInput.current?.click()}>Import .r3dp</button><input ref={projectInput} hidden type="file" accept=".r3dp,application/json" onChange={event => { importProject(event.target.files?.[0]); event.target.value = ''; }}/>{!projects.length && <p className="empty-note muted" role="status">{projectsLoading ? 'Checking saved projects… each one is verified against its video and models, which can take a few seconds.' : 'No saved projects yet.'}</p>}{projects.map(item => <div key={item.project_id} className="saved-project"><div><strong>{item.name}</strong><small>{new Date(item.saved_at).toLocaleString()} · checkpoint {item.last_completed_frame >= 0 ? item.last_completed_frame : 'none'}</small></div><button className="button small" disabled={!!busy} onClick={() => openProject(item.project_id)}>Verify & open</button><a className="button small" href={`/api/v1/projects/${item.project_id}/download`} download>Export</a></div>)}{project?.checkpoint_job_id && <button className="button accent" disabled={!!busy || !!reason('queue')} onClick={() => void run('Verifying checkpoint continuation', async () => { const resumed = await post<Job>(`/projects/${project.project_id}/resume`, {}); setSelectedJob(resumed.job_id); await refreshJobs(); setProjectsOpen(false); })}>Verify & resume {project.name}</button>}</section></div>}
     {welcomeOpen && route === '#/home' && <WelcomeDialog caps={caps} onClose={dismissWelcome}
       onStart={() => { dismissWelcome(); goto('#/faceswap'); window.setTimeout(focusProjectName, 150); }}
@@ -661,6 +641,7 @@ export default function App() {
       onApplySettings={(values: Config) => { if (config) saveSettings({ ...config, ...values }); }}
       onApplyParameter={(name: string, value: number) => setParameters({ ...parameters, [name]: value })}
     />
+    <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} commands={commands} />
     {themeGalleryOpen && (
       <DialogFrame title={`Theme Gallery (${THEMES.length} Themes)`} eyebrow="WORKSTATION PALETTE & STYLES" onClose={() => setThemeGalleryOpen(false)} className="theme-gallery-modal" testId="theme-gallery">
         <p className="muted">Select from {THEMES.length} studio-calibrated dark, AMOLED pure-black, and high-contrast light themes.</p>

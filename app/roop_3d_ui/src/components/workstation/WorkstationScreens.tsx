@@ -7,7 +7,7 @@ import VirtualList from '../common/VirtualList';
 import { featureReason, jobActions } from '../../state';
 import { SettingsInspector } from '../../SettingsInspector';
 import { HotkeyEditor } from '../controls/Hotkeys';
-import WorkflowChecklist from '../guide/WorkflowChecklist';
+import HomeScreen from '../../screens/HomeScreen';
 import type { WorkflowProgress } from '../guide/workflowState';
 import type { WorkflowStepId } from '../guide/helpContent';
 import BatchMatrixScreen from '../../screens/BatchMatrixScreen';
@@ -178,35 +178,9 @@ export default function WorkstationScreens(props: Props) {
   return (
     <>
       <AppRouter route={route} screen="home">
-        <main className="screen-page">
-          <span className="eyebrow">LOCAL CREATIVE WORKSPACE</span>
-          <h1>Dashboard</h1>
-          <p className="muted">New here? Follow the checklist below, take the visual tour, or open the full guide. Everything runs on this computer.</p>
-          <div className="home-help-actions">
-            <button className="button accent tour-start" data-testid="home-tour-button" onClick={() => props.onStartTour?.()}>How to Use · Quick Tour</button>
-            <button className="button" data-testid="home-guide-button" onClick={() => props.onOpenGuide?.()}>Open the guide</button>
-          </div>
-          {props.workflow && <section className="home-workflow" aria-labelledby="home-workflow-title">
-            <h2 id="home-workflow-title">Your video workflow</h2>
-            <WorkflowChecklist progress={props.workflow} onAction={props.onWorkflowAction} compact />
-          </section>}
-          <div className="dashboard-cards">
-            <a href="#/faceswap" className="screen-card">
-              <h2>Start a scene →</h2>
-              <p>Import a target, inspect tracks, and assign a FaceSet.</p>
-            </a>
-            <a href="#/facemgr" className="screen-card">
-              <h2>{sources.length} source identities</h2>
-              <p>Build and inspect observed FaceSets.</p>
-            </a>
-            <a href="#/processing" className="screen-card">
-              <h2>{jobs.filter(job => ['queued', 'preparing', 'running'].includes(job.state)).length} active jobs</h2>
-              <p>Live local queue and execution progress.</p>
-            </a>
-          </div>
-          <h2>Recent projects</h2>
-          {projectList([...projects].sort((a, b) => b.saved_at.localeCompare(a.saved_at)).slice(0, 5))}
-        </main>
+        <HomeScreen sourceCount={sources.length} jobs={jobs} projectCount={projects.length} workflow={props.workflow} onWorkflowAction={props.onWorkflowAction}
+          onStartTour={props.onStartTour} onOpenGuide={props.onOpenGuide} onOpenLibrary={openLibrary}
+          recentProjects={projectList([...projects].sort((a, b) => b.saved_at.localeCompare(a.saved_at)).slice(0, 5))} />
       </AppRouter>
 
       <AppRouter route={route} screen="batch">

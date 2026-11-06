@@ -24,6 +24,10 @@ async function axeViolations(page: Page, scope = 'document') {
   }, scope);
 }
 
+/** Themes are chosen from the swatch gallery (it replaced the header dropdown). */
+async function openThemeGallery(page: Page) { await page.getByRole('button', { name: 'Open theme gallery' }).click(); await expect(page.getByTestId('theme-gallery')).toBeVisible(); }
+async function pickTheme(page: Page, name: string) { await page.getByTestId('theme-gallery').locator('.theme-card', { has: page.locator('.theme-name', { hasText: name }) }).first().click(); }
+
 /* ------------------------------------------------------------------------------------------------ onboarding */
 test.describe('first-run onboarding and guided project', () => {
   test('welcome dialog is accessible, traps focus, closes with Escape and is shown only once', async ({ page }) => {
@@ -258,7 +262,7 @@ test.describe('accessibility', () => {
       { opener: 'Guide', name: /^Guide$/, open: () => page.getByRole('button', { name: 'Guide', exact: true }).click() },
       { opener: 'How to Use', name: /./, open: () => page.getByTestId('header-tour-button').click() },
       { opener: 'Projects', name: /Project library/, open: () => page.getByRole('button', { name: 'Projects', exact: true }).click() },
-      { opener: 'Swatches', name: /Theme Gallery/, open: () => page.getByRole('button', { name: /Swatches/ }).click() },
+      { opener: 'Open theme gallery', name: /Theme Gallery/, open: () => page.getByRole('button', { name: 'Open theme gallery' }).click() },
     ];
     for (const item of cases) {
       await item.open();
@@ -365,11 +369,12 @@ test.describe('accessibility', () => {
 test.describe('contrast in every theme', () => {
   test('all themes keep muted, accent and danger text and button text at 4.5:1 or better', async ({ page }) => {
     await boot(page, { route: '/#/home' });
-    const names: string[] = await page.evaluate(() => [...document.querySelectorAll('select[aria-label="Select Theme"] option')].map(option => (option as HTMLOptionElement).value));
+    await openThemeGallery(page);
+    const names: string[] = await page.evaluate(() => [...document.querySelectorAll('[data-testid="theme-gallery"] .theme-name')].map(node => node.textContent ?? ''));
     expect(names.length).toBeGreaterThanOrEqual(37);
     const failures: string[] = [];
     for (const name of names) {
-      await page.getByLabel('Select Theme').selectOption(name);
+      await pickTheme(page, name);
       await page.waitForTimeout(60);
       const ratios = await page.evaluate(() => {
         const probe = document.createElement('i'); document.body.append(probe);
@@ -399,7 +404,9 @@ test.describe('contrast in every theme', () => {
   for (const theme of ['Glass Light', 'AMOLED Black', 'Arctic Light']) {
     test(`axe (WCAG 2.2 AA) finds no violations on the workstation in ${theme}`, async ({ page }) => {
       await boot(page, { openProject: true });
-      await page.getByLabel('Select Theme').selectOption(theme);
+      await openThemeGallery(page);
+      await pickTheme(page, theme);
+      await page.keyboard.press('Escape');
       await page.waitForTimeout(400);
       const violations = await axeViolations(page);
       expect(violations, JSON.stringify(violations, null, 1)).toEqual([]);

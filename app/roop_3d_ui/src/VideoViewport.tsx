@@ -574,9 +574,12 @@ export function VideoViewport({
   return (
     <section className={`viewport-section ${isFullscreen ? 'is-fullscreen' : ''}`}>
       {!studio && <LayoutToolbar onFloat={floating.openWindow}/>}
+      <details className="preview-tools" data-testid="preview-tools">
+      <summary><span>Pipeline &amp; snapshots</span><small>Solo or bypass a stage · compare A/B/C/D snapshots</small></summary>
       <SnapshotSlots onCapture={(slot: string) => void captureSlot(slot)} onRestore={restoreWorkspace} busy={captureBusy} captureAvailable={!!previewRequest}/>
       {captureError && <p role="alert" className="inline-warning">{captureError}</p>}
       <PipelineNodeFlowBar selected={selectedNode} solo={solo} bypass={parameters.bypass} onSelect={setSelectedNode} onSolo={selectSolo} onBypass={bypassNode} busy={false} available={!!previewRequest}/>
+      </details>
       <div className="viewport-toolbar">
         <span className="eyebrow">WORKSTATION MEDIA INSPECTOR</span>
         <button className="button small" disabled={!history.past.length} onClick={history.undo}>Undo</button><button className="button small" disabled={!history.future.length} onClick={history.redo}>Redo</button><button className="button small" onClick={() => setHistoryOpen(true)}>Edit history ({history.past.length})</button>
