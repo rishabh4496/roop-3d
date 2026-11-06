@@ -38,8 +38,8 @@ CORE_OFFLINE_MODELS = [
 
 def check_offline_dependency_cache(root: Path) -> dict[str, Any]:
     """Inspects the local uv wheel cache to verify offline pip sync capability."""
-    uv_cache = root / "cache/uv"
-    req_lock = root / "app/roop_3d/requirements.lock"
+    uv_cache = root / "cache/uv" if (root / "cache/uv").is_dir() else root.parent / "cache/uv"
+    req_lock = root / "roop_3d/requirements.lock" if (root / "roop_3d/requirements.lock").is_file() else root / "app/roop_3d/requirements.lock"
 
     has_lock = req_lock.is_file()
     has_cache = uv_cache.is_dir()
@@ -50,7 +50,7 @@ def check_offline_dependency_cache(root: Path) -> dict[str, Any]:
         wheel_count = len(list(uv_cache.rglob("*.whl"))) + len(list(uv_cache.rglob("*.tar.gz")))
 
     # Also check if the virtual environment exists and is populated
-    venv_dir = root / "app/roop_3d/.venv"
+    venv_dir = root / "roop_3d/.venv" if (root / "roop_3d/.venv").is_dir() else root / "app/roop_3d/.venv"
     has_venv = venv_dir.is_dir() and (venv_dir / "pyvenv.cfg").is_file()
 
     status = "READY" if (has_venv or wheel_count > 0) else "WARN"
@@ -97,7 +97,18 @@ def check_offline_readiness(root: Path, registry: ModelRegistry | None = None) -
             continue
 
         target = manager._target_path(rec)
-        if not target.exists():
+        resolved_path = None
+        if target.exists():
+            resolved_path = target
+        else:
+            try:
+                from roop_3d.models.local_provider import LocalWeightProvider
+                provider = LocalWeightProvider(registry, root=root)
+                resolved_path = provider.resolve(rec)
+            except DomainError:
+                pass
+
+        if resolved_path is None:
             core_status.append({
                 "role": item["role"],
                 "name": name,
@@ -109,13 +120,13 @@ def check_offline_readiness(root: Path, registry: ModelRegistry | None = None) -
             continue
 
         try:
-            verify_file(target, rec.expected_sha256, rec.byte_size)
+            verify_file(resolved_path, rec.expected_sha256, rec.byte_size)
             core_status.append({
                 "role": item["role"],
                 "name": name,
                 "model_id": rec.model_id,
                 "status": "VERIFIED_LOCAL",
-                "message": f"Verified locally at {target.name}",
+                "message": f"Verified locally at {resolved_path.name}",
             })
         except DomainError as err:
             core_status.append({

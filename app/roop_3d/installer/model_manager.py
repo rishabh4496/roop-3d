@@ -207,15 +207,26 @@ class ModelManager:
         }
 
     def verify_all_models(self) -> dict[str, Any]:
-        """Runs full SHA-256 verification on all models in the local cache."""
+        """Runs full SHA-256 verification on all models in the local cache or configured local roots."""
         results = []
         for rec in self.registry.records():
             target = self._target_path(rec)
-            if not target.exists():
+            resolved = None
+            if target.exists():
+                resolved = target
+            else:
+                try:
+                    from roop_3d.models.local_provider import LocalWeightProvider
+                    provider = LocalWeightProvider(self.registry, root=self.root)
+                    resolved = provider.resolve(rec)
+                except DomainError:
+                    pass
+
+            if resolved is None:
                 results.append({"name": rec.name, "model_id": rec.model_id, "state": "NOT_INSTALLED", "sha256_verified": False})
                 continue
             try:
-                verify_file(target, rec.expected_sha256, rec.byte_size)
+                verify_file(resolved, rec.expected_sha256, rec.byte_size)
                 results.append({"name": rec.name, "model_id": rec.model_id, "state": "VERIFIED_LOCAL", "sha256_verified": True})
             except DomainError as err:
                 results.append({"name": rec.name, "model_id": rec.model_id, "state": "MODEL_DRIFT", "sha256_verified": False, "error": str(err)})
