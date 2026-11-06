@@ -171,7 +171,7 @@
 .mode-btn.exclude.active{background:rgba(255,173,154,0.18);color:var(--danger)}
 
 /* 3D Pose & Geometry Viewer */
-.pose-geometry-container{width:100%;height:270px;position:relative;display:flex;flex-direction:column;border:1px solid var(--line);border-radius:6px;overflow:hidden;background:#080d0e;margin:10px 0}
+.pose-geometry-container{width:100%;height:360px;position:relative;display:flex;flex-direction:column;border:1px solid var(--line);border-radius:6px;overflow:hidden;background:#080d0e;margin:10px 0}
 .pose-viewer-toolbar{display:flex;justify-content:space-between;align-items:center;padding:6px 8px;background:rgba(17,23,25,0.85);border-bottom:1px solid var(--line);z-index:10;backdrop-filter:blur(8px)}
 .pose-mode-toggle{display:flex;gap:2px;background:var(--bg);border:1px solid var(--line);border-radius:4px;padding:2px}
 .viewer-mode-btn{background:transparent;border:0;font-size:9px;color:var(--muted);padding:3px 8px;border-radius:3px;cursor:pointer;transition:all .15s}
@@ -180,9 +180,33 @@
 .camera-reset-btn:hover{color:var(--text);border-color:var(--accent)}
 .pose-canvas-wrapper{flex:1;position:relative;width:100%;min-height:180px}
 .pose-canvas-wrapper canvas{display:block;width:100%!important;height:100%!important}
-.pose-status-readout{display:flex;align-items:center;justify-content:space-between;padding:6px 10px;background:rgba(17,23,25,0.92);border-top:1px solid var(--line);font-size:8px;color:var(--muted);letter-spacing:0.3px}
-.status-metric{display:flex;align-items:center;gap:4px}
+.pose-status-readout{display:grid;grid-template-columns:auto auto;justify-content:space-between;gap:4px 10px;align-items:start;padding:6px 10px;background:rgba(17,23,25,0.92);border-top:1px solid var(--line);font-size:8px;color:var(--muted);letter-spacing:0.3px}
+.status-metric{display:flex;flex-direction:column;align-items:flex-start;gap:1px;min-width:0}
+.pose-status-readout .status-divider{display:none}
+.pose-status-readout .status-metric:last-child{grid-column:1/-1}
+.pose-status-readout .status-label{font-size:8px;text-transform:uppercase;letter-spacing:.5px}
+.pose-status-readout .status-metric strong{font-size:10px;white-space:nowrap}
 .status-metric strong{color:var(--accent);font-family:monospace}
+.pose-viewer-toolbar{flex-wrap:wrap;gap:6px}
+.pose-viewer-toolbar .pose-mode-toggle{flex:1 1 auto}
+.pose-viewer-toolbar .viewer-mode-btn{flex:1 1 0;justify-content:center}
+.viewer-mode-btn{display:inline-flex;align-items:center;gap:5px}
+.viewer-mode-btn[data-pipeline="true"]{box-shadow:inset 0 0 0 1px var(--accent)}
+.viewer-mode-btn:disabled{opacity:.5;cursor:not-allowed}
+.viewer-pipeline-tag{font-size:7px;line-height:1.6;text-transform:uppercase;letter-spacing:.2px;border:1px solid var(--accent);color:var(--accent);border-radius:8px;padding:0 4px}
+.pose-viewer-toolbar .viewer-mode-btn{white-space:nowrap;padding:3px 5px;gap:4px}
+.pose-viewer-options{display:flex;flex-wrap:wrap;align-items:center;gap:4px;padding:4px 8px;background:rgba(17,23,25,0.7);border-bottom:1px solid var(--line);font-size:9px;color:var(--muted);z-index:10}
+.viewer-toggle{background:transparent;border:1px solid var(--line);color:var(--muted);font-size:9px;min-height:22px;padding:1px 7px;border-radius:11px}
+.viewer-toggle[aria-pressed="true"]{color:var(--accent);border-color:var(--accent)}
+.viewer-toggle:disabled{opacity:.45}
+.pose-viewer-options .camera-reset-btn{margin-left:auto}
+.pose-viewer-overlay{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;padding:14px 24px;pointer-events:none;text-align:center;font-size:11px;line-height:1.4;color:var(--text);z-index:5}
+.pose-viewer-overlay.idle,.pose-viewer-overlay.loading{justify-content:flex-end;align-items:flex-start;text-align:left;padding:14px 96px 14px 14px;background:linear-gradient(transparent 55%,rgba(8,13,14,0.82))}
+.pose-viewer-overlay.error{background:rgba(8,13,14,0.7);color:var(--danger)}
+.pose-viewer-overlay button{pointer-events:auto}
+.pose-viewer-caption{padding:3px 10px;font-size:9px;color:var(--muted);background:rgba(17,23,25,0.7);border-top:1px solid var(--line);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.render-mode-preview{display:block;margin-top:4px;color:var(--muted)}
+.render-mode-preview b{color:var(--text);font-weight:600}
 .status-divider{width:1px;height:10px;background:var(--line)}
 
 /* Workstation Comparison Canvas */

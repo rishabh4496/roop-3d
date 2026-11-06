@@ -83,7 +83,7 @@ full explanation.
 * **Target identity**: facts about the selected track and its source/role.
 * **Models & engine**: the swap engine (with a recommendation and the reason, and why unavailable engines cannot be chosen), the hardware profile in
   words, and the restoration model (GPEN or CodeFormer). See [Engine comparison](ENGINE_COMPARISON.md).
-* **3D settings**: *Render mode* (Standard identity swap · 3D pose · 3D reenactment) and the 3D viewer.
+* **3D settings**: *Render mode* (Standard identity swap · 2.5D Pose-Aware Swap · Full 3D Volumetric Re-enactment) and the 3D viewer, which shows your FaceSet as a textured 3D head you can orbit (see [3D viewport](STAGE04_3D_VIEWPORT.md)).
 * **Pose, expression, masking and restoration parameters**: sliders with the recommended range for each, such as *2.5D → 3D pose blend*, *Pose
   frontalization*, *TPS expression weight*, *Swap weight*, *Mask erosion*, *Mask feather*, *Colour match*, *Restorer blend*, *CodeFormer fidelity*.
 * **Colour & lighting**: colour transfer (LAB statistics or stabilised histograms) and 3D relighting with a light-probe sphere.

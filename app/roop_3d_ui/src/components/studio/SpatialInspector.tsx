@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import type { Coverage, Reconstruction, Track } from '../../contracts';
+import type { Coverage, Reconstruction, ReconstructionStatus, Track } from '../../contracts';
 import type { WorkstationParameters } from '../workstation/pipeline';
 import PoseGeometryViewer from '../three/PoseGeometryViewer';
 import LightProbeSphere from '../three/LightProbeSphere';
@@ -11,6 +11,7 @@ export interface SpatialInspectorProps {
   coverage: Coverage | null;
   track: Track | null;
   mesh: Reconstruction | null;
+  reconstruction?: ReconstructionStatus | null;
   parameters?: WorkstationParameters;
   setParameters?: (params: WorkstationParameters) => void;
   defaultTab?: SpatialTab;
@@ -20,6 +21,7 @@ export function SpatialInspector({
   coverage,
   track,
   mesh,
+  reconstruction,
   parameters,
   setParameters,
   defaultTab = 'pose',
@@ -83,7 +85,8 @@ export function SpatialInspector({
         hidden={activeTab !== 'pose'}
         style={{ display: activeTab === 'pose' ? 'block' : 'none' }}
       >
-        <PoseGeometryViewer coverage={coverage} track={track} mesh={mesh} />
+        <PoseGeometryViewer coverage={coverage} track={track} mesh={mesh} reconstruction={reconstruction}
+          renderMode={parameters ? parameters.render_mode ?? 'standard' : undefined} />
       </div>
 
       <div

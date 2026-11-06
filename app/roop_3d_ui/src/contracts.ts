@@ -126,7 +126,11 @@ export interface Coverage {
   mesh_2_5d?: ReconstructedMesh; mesh_full_3d?: ReconstructedMesh; uv_texture_data_url?: string;
 }
 /** `identity_asset` is the Stage 3 per-FaceSet asset served by `GET /facesets/{id}/identity-asset/mesh` (glTF frame). */
-export interface Reconstruction { method: 'flame' | 'tps_2_5d' | 'identity_asset';coordinate_system: 'opencv' | 'opengl'; vertices: number[][]; faces: number[][]; uvs: number[][] | null; face_uvs?: number[][] | null; texture: string | null; provenance: string }
+/** State of the `POST /faceset/reconstruct-3d` request that feeds the 3D viewer. */
+export interface ReconstructionStatus { state: 'idle' | 'loading' | 'ready' | 'error'; message?: string; retry?: () => void }
+/** `mesh` is the backend mesh frame of the `mesh_2_5d` / `mesh_full_3d` payloads (+x image-right, +y down, +z toward the viewer). */
+export type ReconstructionFrame = 'opencv' | 'opengl' | 'mesh';
+export interface Reconstruction { method: 'flame' | 'tps_2_5d' | 'identity_asset';coordinate_system: ReconstructionFrame; vertices: number[][]; faces: number[][]; uvs: number[][] | null; face_uvs?: number[][] | null; texture: string | null; provenance: string }
 export interface Project {
   project_id: string;
   name: string;

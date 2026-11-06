@@ -178,6 +178,7 @@ input[type=range]{min-height:24px}
 
 /* Timeline strips and readouts keep their dark NLE look in every theme, so inside them the whole dark palette applies
    (text AND surfaces): a light theme would otherwise print light text on light buttons inside a dark strip. */
+:root[data-theme-mode="light"] :is(.pose-viewer-toolbar,.pose-viewer-options,.pose-viewer-caption,.pose-viewer-overlay){--text:#dce4e4;--muted:#a7b6b9;--accent:#91e6c9;--line:#3a4649;--bg:#111719;--raised:#1d2628;--danger:#F87171;color:#dce4e4}
 :root[data-theme-mode="light"] :is(.timeline-engine-bar,.pose-status-readout,.timeline-workstation-foot,.range-field){--text:#dce4e4;--muted:#a7b6b9;--accent:#91e6c9;--line:#3a4649;--bg:#111719;--surface:#171e20;--raised:#1d2628;--soft:#1e3831;--ink:#132b25;color:#dce4e4}
 
 /* Light themes: text colours that were picked for dark panels (neon green, amber) are darkened to read on light

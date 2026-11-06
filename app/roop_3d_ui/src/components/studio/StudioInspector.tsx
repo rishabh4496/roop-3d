@@ -1,6 +1,7 @@
 import { lazy, Suspense, useEffect, useState, type ReactNode, type Ref } from 'react';
 import { api } from '../../api';
-import type { Capabilities, Coverage, FaceSet, IdentitySheet, Reconstruction, Track } from '../../contracts';
+import type { Capabilities, Coverage, FaceSet, IdentitySheet, Reconstruction, ReconstructionStatus, Track } from '../../contracts';
+import { PREVIEW_TAB_LABEL, RENDER_MODES, renderModeInfo } from '../workstation/renderModes';
 import { useFaceSelectionStore } from '../../useFaceSelectionStore';
 import { selectEngine, useSelectedEngine } from '../../stores/engineSelection';
 import type { WorkstationParameters } from '../workstation/pipeline';
@@ -11,12 +12,6 @@ import HardwareExplainer from '../guide/HardwareExplainer';
 
 const PoseGeometryViewer = lazy(() => import('../../ThreeViewport').then(module => ({ default: module.PoseGeometryViewer })));
 const LightProbeSphere = lazy(() => import('../../ThreeViewport').then(module => ({ default: module.LightProbeSphere })));
-
-export const RENDER_MODES = [
-  { id: 'standard', label: 'Standard identity swap', hint: 'The proven 2D identity swap path.' },
-  { id: 'pose_3d', label: '3D pose (source geometry)', hint: "Projects the swap through the source identity's own 3D asset. Falls back to standard per frame when geometry is unreliable." },
-  { id: 'reenactment_3d', label: '3D reenactment', hint: 'Source identity geometry driven by the target expression. Falls back to standard per frame when geometry is unreliable.' },
-] as const;
 
 type Engine = { engine_id: string; name: string; status: string; selectable: boolean; actual_inference_available: boolean; evidence: string; purpose?: string };
 
@@ -48,13 +43,15 @@ export interface StudioInspectorProps {
   sources: FaceSet[]; assignedId: string; onAssign: (trackId: string, facesetId: string | null) => void;
   parameters: WorkstationParameters; setParameters: (value: WorkstationParameters) => void;
   coverage: Coverage | null; mesh: Reconstruction | null;
+  /** State of the FaceSet 3D reconstruction request (idle until a source is chosen). */
+  reconstruction?: ReconstructionStatus | null;
   reconstructionPicker: ReactNode;
   /** VideoViewport portals its Geometry / Masking / Restorer parameter panels into this element. */
   panelsRef: Ref<HTMLDivElement>;
   processing: ReactNode;
 }
 
-export default function StudioInspector({ caps, track, sheet, sources, assignedId, onAssign, parameters, setParameters, coverage, mesh, reconstructionPicker, panelsRef, processing }: StudioInspectorProps) {
+export default function StudioInspector({ caps, track, sheet, sources, assignedId, onAssign, parameters, setParameters, coverage, mesh, reconstruction, reconstructionPicker, panelsRef, processing }: StudioInspectorProps) {
   const engine = useSelectedEngine();
   const engines = useEngines();
   const cluster = useFaceSelectionStore(state => (track ? state.targetClusters.find(item => item.id === track.track_id) ?? null : null));
@@ -120,10 +117,11 @@ export default function StudioInspector({ caps, track, sheet, sources, assignedI
           <select aria-label="3D render mode" value={renderMode} onChange={event => { const value = event.target.value as NonNullable<WorkstationParameters['render_mode']>; const { render_mode: _old, ...rest } = parameters; setParameters(value === 'standard' ? rest : { ...rest, render_mode: value }); }}>
             {RENDER_MODES.map(mode => <option key={mode.id} value={mode.id}>{mode.label}</option>)}
           </select>
-          <small className="muted">{RENDER_MODES.find(mode => mode.id === renderMode)?.hint}</small>
+          <small className="muted" data-testid="render-mode-hint">{renderModeInfo(renderMode).hint}</small>
+          <small className="render-mode-preview">Viewer tab for this mode: <b>{PREVIEW_TAB_LABEL[renderModeInfo(renderMode).preview]}</b></small>
         </label>
         <div className="inspector-viewer">
-          <Suspense fallback={<div className="skeleton-tile wide" aria-label="Loading 3D viewer" />}><PoseGeometryViewer coverage={coverage} track={track} mesh={mesh} /></Suspense>
+          <Suspense fallback={<div className="skeleton-tile wide" aria-label="Loading 3D viewer" />}><PoseGeometryViewer coverage={coverage} track={track} mesh={mesh} renderMode={renderMode} reconstruction={reconstruction} /></Suspense>
         </div>
         {reconstructionPicker}
       </Section>

@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useRef, useState, type ComponentType } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ComponentType } from 'react';
 import { api, post, upload, type ApiError } from './api';
 import { renderProbe } from './utils/renderProbe';
 import type { Capabilities, Config, Coverage, FaceSet, IdentityLock, Inspection, Job, JobRequest, Probe, Project, Reconstruction, Track } from './contracts';
@@ -94,6 +94,9 @@ export default function App() {
   useEffect(() => { try { localStorage.setItem('roop3d-workstation-layout', layoutMode); } catch { /* per-session only */ } }, [layoutMode]);
   const [panelsSlot, setPanelsSlot] = useState<HTMLDivElement | null>(null), [timelineSlot, setTimelineSlot] = useState<HTMLDivElement | null>(null), [traySlot, setTraySlot] = useState<HTMLDivElement | null>(null);
   const [identityMesh, setIdentityMesh] = useState<Reconstruction | null>(null);
+  const [reconstructionState, setReconstruction] = useState<{ state: 'idle' | 'loading' | 'ready' | 'error'; message?: string }>({ state: 'idle' });
+  const [reconstructAttempt, setReconstructAttempt] = useState(0);
+  const reconstruction = useMemo(() => ({ ...reconstructionState, retry: () => setReconstructAttempt(value => value + 1) }), [reconstructionState]);
   const [zoom, setZoom] = useState(() => {
     const v = parseFloat(localStorage.getItem('roop3d_zoom') || '1');
     return Number.isFinite(v) && v >= 0.5 && v <= 1.6 ? v : 1;
@@ -132,8 +135,6 @@ export default function App() {
   const [parameters, setParametersRaw] = useState<WorkstationParameters>({ ...DEFAULT_PARAMETERS });
   const assigned = useFaceSelectionStore(state => state.assignments);
   const clusters = useFaceSelectionStore(state => state.targetClusters);
-  const selectedTargetFace = useFaceSelectionStore(state => state.activeSelection
-    ? state.detectedFaces.find(face => face.id === state.activeSelection) ?? null : null);
   const curves = useHistoryStore(state => state.curves);
   const setAssigned = (value: Record<string, string> | ((previous: Record<string, string>) => Record<string, string>)) => useFaceSelectionStore.getState().replaceAssignments(typeof value === 'function' ? value(useFaceSelectionStore.getState().assignments) : value);
   const setParameters = (value: WorkstationParameters) => { if (JSON.stringify(value) === JSON.stringify(parameters)) return; const before = parameters; const changed = Object.keys(value).filter(key => JSON.stringify(value[key as keyof WorkstationParameters]) !== JSON.stringify(before[key as keyof WorkstationParameters])); executeCommand({ label: `Change ${changed.join(', ')}`, mergeKey: changed.length === 1 && changed[0] !== 'bypass' ? `parameter-${changed[0]}` : undefined, undo: () => setParametersRaw(before), redo: () => setParametersRaw(value) }); };
@@ -246,29 +247,17 @@ export default function App() {
   useEffect(() => () => uploadAbort.current?.abort(), []);
   useDialogA11y(projectDialog, () => setProjectsOpen(false), projectsOpen);
   useEffect(() => { setIdentityMesh(null); }, [sourceId]);
+  // One reconstruction per source FaceSet: the payload (both meshes, the UV texture, the observed pose points and the
+  // coverage telemetry) goes straight to the 3D viewer. The target's pose is read by the viewer itself, so selecting a
+  // different face or track never re-requests or re-parses it. The server caches by archive hash.
   useEffect(() => {
-    if (!sourceId) { setCoverage(null); setMesh(null); return; }
-    const controller = new AbortController(); setCoverage(null); setMesh(null);
-    const pose = selectedTargetFace?.pose;
-    const trackPose = currentTrack?.pose_range;
-    const live_pose = pose ? {
-      yaw: pose.yaw ?? 0, pitch: pose.pitch ?? 0, roll: pose.roll ?? 0,
-    } : trackPose ? {
-      yaw: trackPose.yaw_degrees ? (trackPose.yaw_degrees[0] + trackPose.yaw_degrees[1]) / 2 : 0,
-      pitch: trackPose.pitch_degrees ? (trackPose.pitch_degrees[0] + trackPose.pitch_degrees[1]) / 2 : 0,
-      roll: trackPose.roll_degrees ? (trackPose.roll_degrees[0] + trackPose.roll_degrees[1]) / 2 : 0,
-    } : undefined;
-    void post<Coverage>('/faceset/reconstruct-3d', { faceset_id: sourceId, live_pose }, { signal: controller.signal })
-      .then(() => api<Coverage>(`/faceset/3d-state?faceset_id=${encodeURIComponent(sourceId)}`, { signal: controller.signal }))
-      .then(value => {
-        setCoverage(value);
-        const full = value.mesh_full_3d;
-        if (full) setMesh({ method: 'identity_asset', coordinate_system: 'opencv', vertices: full.vertices,
-          faces: full.indices, uvs: full.uvs, texture: `data:image/png;base64,${full.texture_base64}`, provenance: full.reconstruction_level });
-      })
-      .catch(error => { if (error.name !== 'AbortError') setError(error.message); });
+    if (!sourceId) { setCoverage(null); setMesh(null); setReconstruction({ state: 'idle' }); return; }
+    const controller = new AbortController(); setCoverage(null); setMesh(null); setReconstruction({ state: 'loading' });
+    void post<Coverage>('/faceset/reconstruct-3d', { faceset_id: sourceId }, { signal: controller.signal })
+      .then(value => { setCoverage(value); setReconstruction({ state: 'ready' }); })
+      .catch(error => { if (error.name !== 'AbortError') setReconstruction({ state: 'error', message: error.message }); });
     return () => controller.abort();
-  }, [sourceId, currentTrack, selectedTargetFace]);
+  }, [sourceId, reconstructAttempt]);
   const loadTarget = async (path: string) => {
     const [info, frames, reconstructionList] = await Promise.all([post<Probe>('/media/probe', { path }), api<{ timestamps: number[] }>(`/media/keyframes?${new URLSearchParams({ path })}`), api<typeof reconstructions>('/reconstructions')]);
     setTarget(path); setProbe(info); setTime(0); setKeys(frames.timestamps); setInspection(null); setIdentityLock(null); setAssigned({}); setSelectedTrack(''); setMesh(null); setTrimStart(0); setTrimEnd(null); setReconstructions(reconstructionList); setSelectedJob(''); setProject(null); setIdentityMesh(null);
@@ -420,7 +409,7 @@ export default function App() {
     await refreshSources();
   };
   const reconstructionPicker = <><label className="reconstruction-choice">Reconstructed artifact<select value="" disabled={!target || !reconstructions.length || !!reason('reconstruction_viewer')} onChange={event => { const id = event.target.value; if (!id) { setMesh(null); return; } void run('Verifying reconstruction', async () => { setIdentityMesh(null); setMesh(await api<Reconstruction>(`/reconstructions/${id}?${new URLSearchParams({ target_path: target })}`)); }); }}><option value="">{mesh ? 'Choose another artifact' : reconstructions.length ? 'No reconstruction loaded' : 'No reconstruction artifacts'}</option>{reconstructions.map(item => <option key={item.reconstruction_id} value={item.reconstruction_id}>{item.reconstruction_id.slice(0, 12)}</option>)}</select></label>{(mesh || identityMesh) && <button className="button small" onClick={() => { setMesh(null); setIdentityMesh(null); }}>Show pose coverage</button>}</>;
-  const viewport = <VideoViewport previewView={previewView} onPreviewViewChange={setPreviewView} studio={layoutMode === 'studio' ? { panels: panelsSlot, timeline: timelineSlot, tray: traySlot } : null} activeSourceId={sourceId} onSourceExtracted={faceset => { setSources(previous => previous.some(item => item.faceset_id === faceset.faceset_id) ? previous : [...previous, faceset]); setSourceId(faceset.faceset_id); void refreshSources(); }} maskBase64={maskBase64} captureWorkspace={captureWorkspace} restoreWorkspace={restoreWorkspace} active={route === "#/faceswap"} parameters={parameters} setParameters={setParameters} previewRequest={previewRequest} restorerAvailable={!!caps?.models.some(model => model.name === (parameters.restorer_model === "codeformer" ? "CodeFormerv0.1.onnx" : "gpen_bfr_512.onnx") && model.state === "VERIFIED_LOCAL")} onPreviewLatency={setPreviewLatency} inspector={<SettingsInspector namespace="workstation-setting" caps={caps} config={config} save={saveSettings} busy={!!busy}/>} posePanel={<><Suspense fallback={<p className="muted empty-note">Loading pose inspection…</p>}><PoseCoverageInspector coverage={coverage} track={currentTrack} mesh={mesh} parameters={parameters} setParameters={setParameters}/></Suspense><label className="reconstruction-choice">Reconstructed artifact<select value="" disabled={!target || !reconstructions.length || !!reason('reconstruction_viewer')} onChange={event => { const id = event.target.value; if (!id) { setMesh(null); return; } void run('Verifying reconstruction', async () => setMesh(await api<Reconstruction>(`/reconstructions/${id}?${new URLSearchParams({ target_path: target })}`))); }}><option value="">{mesh ? 'Choose another artifact' : 'No reconstruction loaded'}</option>{reconstructions.map(item => <option key={item.reconstruction_id} value={item.reconstruction_id}>{item.reconstruction_id.slice(0, 12)}</option>)}</select></label>{mesh && <button className="button small" onClick={() => setMesh(null)}>Show pose coverage</button>}</>} target={target} output={output} time={time} setTime={setTime} duration={probe?.duration_seconds ?? 0} enabled={!reason('frame_preview')} keys={keys} probe={probe} sources={sources} onInspectionUpdate={setInspection} onMaskChange={setMaskBase64} trimStart={trimStart} trimEnd={trimEnd} onTrimChange={(start, end) => { setTrimStart(start); setTrimEnd(end); }} onAssignSource={(clusterId, facesetId) => assignTrack(clusterId, facesetId)}/>;
+  const viewport = <VideoViewport previewView={previewView} onPreviewViewChange={setPreviewView} studio={layoutMode === 'studio' ? { panels: panelsSlot, timeline: timelineSlot, tray: traySlot } : null} activeSourceId={sourceId} onSourceExtracted={faceset => { setSources(previous => previous.some(item => item.faceset_id === faceset.faceset_id) ? previous : [...previous, faceset]); setSourceId(faceset.faceset_id); void refreshSources(); }} maskBase64={maskBase64} captureWorkspace={captureWorkspace} restoreWorkspace={restoreWorkspace} active={route === "#/faceswap"} parameters={parameters} setParameters={setParameters} previewRequest={previewRequest} restorerAvailable={!!caps?.models.some(model => model.name === (parameters.restorer_model === "codeformer" ? "CodeFormerv0.1.onnx" : "gpen_bfr_512.onnx") && model.state === "VERIFIED_LOCAL")} onPreviewLatency={setPreviewLatency} inspector={<SettingsInspector namespace="workstation-setting" caps={caps} config={config} save={saveSettings} busy={!!busy}/>} posePanel={<><Suspense fallback={<p className="muted empty-note">Loading pose inspection…</p>}><PoseCoverageInspector coverage={coverage} track={currentTrack} mesh={mesh} reconstruction={reconstruction} parameters={parameters} setParameters={setParameters}/></Suspense><label className="reconstruction-choice">Reconstructed artifact<select value="" disabled={!target || !reconstructions.length || !!reason('reconstruction_viewer')} onChange={event => { const id = event.target.value; if (!id) { setMesh(null); return; } void run('Verifying reconstruction', async () => setMesh(await api<Reconstruction>(`/reconstructions/${id}?${new URLSearchParams({ target_path: target })}`))); }}><option value="">{mesh ? 'Choose another artifact' : 'No reconstruction loaded'}</option>{reconstructions.map(item => <option key={item.reconstruction_id} value={item.reconstruction_id}>{item.reconstruction_id.slice(0, 12)}</option>)}</select></label>{mesh && <button className="button small" onClick={() => setMesh(null)}>Show pose coverage</button>}</>} target={target} output={output} time={time} setTime={setTime} duration={probe?.duration_seconds ?? 0} enabled={!reason('frame_preview')} keys={keys} probe={probe} sources={sources} onInspectionUpdate={setInspection} onMaskChange={setMaskBase64} trimStart={trimStart} trimEnd={trimEnd} onTrimChange={(start, end) => { setTrimStart(start); setTrimEnd(end); }} onAssignSource={(clusterId, facesetId) => assignTrack(clusterId, facesetId)}/>;
   const trimBar = <><div className="trim-bar">
         <span className="eyebrow">EXPORT RANGE</span>
         <button
@@ -592,7 +581,7 @@ export default function App() {
           <aside className="studio-panel studio-right" aria-label="Inspector">
             <div className="studio-panel-head"><span className="eyebrow">04 · INSPECTOR</span></div>
             <PanelBoundary name="Inspector"><StudioInspector caps={caps} track={currentTrack} sheet={sheet} sources={sources} assignedId={currentTrack ? assigned[currentTrack.track_id] ?? '' : ''} onAssign={assignTrack}
-              parameters={parameters} setParameters={setParameters} coverage={coverage} mesh={identityMesh ?? mesh} panelsRef={setPanelsSlot}
+              parameters={parameters} setParameters={setParameters} coverage={coverage} reconstruction={reconstruction} mesh={identityMesh ?? mesh} panelsRef={setPanelsSlot}
               reconstructionPicker={reconstructionPicker} processing={<SettingsInspector namespace="workstation-setting" caps={caps} config={config} save={saveSettings} busy={!!busy}/>} /></PanelBoundary>
           </aside>
         </div>

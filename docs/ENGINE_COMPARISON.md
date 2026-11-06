@@ -20,10 +20,10 @@ frame by frame and keeps your audio and timing. The selection is saved with each
 | Mode | What it does | Use it when | Needs |
 |---|---|---|---|
 | **Standard identity swap** | The proven 2D swap path | Faces mostly face the camera; fastest | A FaceSet |
-| **3D pose (source geometry)** | Projects the swap through the source identity's own 3D asset. Falls back to *standard* **per frame** when the geometry is unreliable | People turn their heads; you have three-quarter views | A FaceSet with good coverage ([FaceSet guide](FACESET_GUIDE.md)); the 3D asset is built on first use |
-| **3D reenactment** | Source identity geometry driven by the target's expression. Falls back to *standard* per frame when geometry is unreliable | Strong expressions or speech | As above |
+| **2.5D Pose-Aware Swap** (`pose_3d`) | Projects the swap through the source identity's own 3D asset. Falls back to *standard* **per frame** when the geometry is unreliable | People turn their heads; you have three-quarter views | A FaceSet with good coverage ([FaceSet guide](FACESET_GUIDE.md)); the 3D asset is built on first use |
+| **Full 3D Volumetric Re-enactment** (`reenactment_3d`) | Source identity geometry driven by the target's expression. Falls back to *standard* per frame when geometry is unreliable | Strong expressions or speech | As above |
 
-Fallbacks are per frame and reported, so a 3D mode never leaves a gap. Estimated geometry is an estimate: it is not a scan.
+The 3D viewer under the selector previews the geometry each mode works from: *Standard* and *2.5D Pose-Aware* open the **Estimated 2.5D** tab, *Full 3D Volumetric Re-enactment* opens **Full 3D Reconstructed**. Fallbacks are per frame and reported, so a 3D mode never leaves a gap. Estimated geometry is an estimate: it is not a scan.
 
 ## 3. Restoration model
 

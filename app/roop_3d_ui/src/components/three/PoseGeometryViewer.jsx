@@ -4,6 +4,7 @@ import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import { OrbitControls, GizmoHelper, GizmoViewport } from '@react-three/drei';
 import { useFaceSelectionStore } from '../../useFaceSelectionStore';
 import { reducedMotion } from '../../utils/motionPrefs';
+import { renderModeInfo } from '../workstation/renderModes';
 
 /**
  * @typedef {{
@@ -188,6 +189,7 @@ export function createCanonicalHeadGeometry() {
   return geom;
 }
 
+
 /**
  * 3D Landmark positions (projecting from surface of canonical head).
  */
@@ -200,170 +202,302 @@ const CANONICAL_LANDMARKS = [
   { name: 'Chin', pos: [0.0, -0.62, 0.50] },
 ];
 
+const SPHERE_RADIUS = 1.35;
+const CAMERA_DISTANCE = 3.8;
+const FRONTAL_CAMERA = new THREE.Vector3(0, 0, CAMERA_DISTANCE);
+const WORLD_UP = new THREE.Vector3(0, 1, 0);
+const CYAN = '#22d3ee';
+/** Landmark vertices of the canonical template: indices 0..67 of every `mesh_2_5d` (see multiview_fit.identity_template). */
+export const TEMPLATE_LANDMARK_COUNT = 68;
+
 /**
- * Canonical 3D Head Mesh Component with Slerp Interpolation and Landmark Dots.
+ * Per coordinate frame: the sign applied to (x, y, z) to reach three.js (+x right, +y up, +z toward the viewer).
+ *  - `mesh`   : the backend mesh frame of `mesh_2_5d` / `mesh_full_3d` (+x image-right, +y DOWN, +z toward the viewer);
+ *  - `opencv` : a camera frame (+y down, +z away from the viewer);
+ *  - `opengl` : glTF / three.js, used as is.
  */
-function CanonicalHeadMesh({ pose, mode, mesh }) {
-  const groupRef = useRef(null);
-  const currentQuat = useRef(new THREE.Quaternion());
-  const targetQuat = useMemo(() => new THREE.Quaternion(), []);
+const FRAME_SIGNS = { mesh: [1, -1, 1], opencv: [1, -1, -1], opengl: [1, 1, 1] };
 
-  const headGeom = useMemo(() => createCanonicalHeadGeometry(), []);
+/**
+ * Turns a reconstruction into a three.js geometry fitted to the viewer (centred, bounding radius 0.95).
+ * A frame with an odd number of mirrored axes reverses triangle winding, so the winding is swapped to keep outward faces
+ * counter-clockwise. Returns null when the mesh has no usable triangles.
+ * @param {import('../../contracts').Reconstruction | null | undefined} mesh
+ * @param {{ landmarkCount?: number }} [options] `landmarkCount` leading vertices are returned as lifted landmark points.
+ * @returns {{ geometry: THREE.BufferGeometry, landmarks: Float32Array | null } | null}
+ */
+export function buildMeshAssets(mesh, { landmarkCount = 0 } = {}) {
+  if (!mesh?.vertices?.length || !mesh?.faces?.length) return null;
+  const signs = FRAME_SIGNS[mesh.coordinate_system] ?? FRAME_SIGNS.opengl;
+  const mirrored = signs[0] * signs[1] * signs[2] < 0;
+  const vertexCount = mesh.vertices.length;
+  const faces = mesh.faces.filter(face => face.length === 3 && face.every(index => Number.isInteger(index) && index >= 0 && index < vertexCount));
+  if (!faces.length) return null;
+  const geometry = new THREE.BufferGeometry();
+  const corner = (face, slot) => (mirrored && slot > 0 ? face[3 - slot] : face[slot]);
+  let landmarkSource = null;
 
-  // Update target quaternion whenever pose angles change
-  useEffect(() => {
-    const yaw = pose?.yaw ?? 0;
-    const pitch = pose?.pitch ?? 0;
-    const roll = pose?.roll ?? 0;
-
-    const yawRad = (yaw * Math.PI) / 180;
-    const pitchRad = (pitch * Math.PI) / 180;
-    const rollRad = (roll * Math.PI) / 180;
-
-    const euler = new THREE.Euler(pitchRad, yawRad, -rollRad, 'YXZ');
-    targetQuat.setFromEuler(euler);
-  }, [pose, targetQuat]);
-
-  // Smooth slerp interpolation on every render frame
-  useFrame((_, delta) => {
-    if (groupRef.current) {
-      // Reduce-motion: jump to the pose instead of easing toward it.
-      currentQuat.current.slerp(targetQuat, reducedMotion() ? 1 : Math.min(1, delta * 12));
-      groupRef.current.quaternion.copy(currentQuat.current);
-    }
-  });
-
-  // If a reconstructed mesh exists and mode is 'reconstruction'
-  const customMeshGeom = useMemo(() => {
-    if (!mesh || mode !== 'reconstruction') return null;
+  if (Array.isArray(mesh.face_uvs)) {
+    // Per-corner UVs (imported meshes with seams): vertices are duplicated per triangle corner.
     const positions = [];
     const uvs = [];
-    for (let faceIndex = 0; faceIndex < mesh.faces.length; faceIndex++) {
-      const face = mesh.faces[faceIndex];
-      face.forEach((vertexIndex, index) => {
+    faces.forEach((face, faceIndex) => {
+      for (let slot = 0; slot < 3; slot++) {
+        const vertexIndex = corner(face, slot);
         const vertex = mesh.vertices[vertexIndex];
-        positions.push(
-          vertex[0],
-          mesh.coordinate_system === 'opencv' ? -vertex[1] : vertex[1],
-          mesh.coordinate_system === 'opencv' ? -vertex[2] : vertex[2]
-        );
-        const uv = mesh.uvs?.[mesh.face_uvs?.[faceIndex]?.[index] ?? vertexIndex];
+        positions.push(vertex[0] * signs[0], vertex[1] * signs[1], vertex[2] * signs[2]);
+        const originalSlot = mirrored && slot > 0 ? 3 - slot : slot;
+        const uv = mesh.uvs?.[mesh.face_uvs?.[faceIndex]?.[originalSlot] ?? vertexIndex];
         if (uv) uvs.push(uv[0], uv[1]);
-      });
+      }
+    });
+    geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+    if (uvs.length === (positions.length / 3) * 2) geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+  } else {
+    // One vertex per mesh vertex: smooth normals and shared UVs.
+    const positions = new Float32Array(vertexCount * 3);
+    for (let i = 0; i < vertexCount; i++) {
+      const vertex = mesh.vertices[i];
+      positions[i * 3] = vertex[0] * signs[0];
+      positions[i * 3 + 1] = vertex[1] * signs[1];
+      positions[i * 3 + 2] = vertex[2] * signs[2];
     }
-    const g = new THREE.BufferGeometry();
-    g.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-    if (uvs.length === (positions.length / 3) * 2) {
-      g.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    if (mesh.uvs?.length === vertexCount) {
+      const uvs = new Float32Array(vertexCount * 2);
+      for (let i = 0; i < vertexCount; i++) { uvs[i * 2] = mesh.uvs[i][0]; uvs[i * 2 + 1] = mesh.uvs[i][1]; }
+      geometry.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
     }
-    g.computeVertexNormals();
-    g.center();
-    // Receipts are in metres (identity assets) or arbitrary units (imported meshes): fit every mesh to the viewer.
-    g.computeBoundingSphere();
-    const radius = g.boundingSphere?.radius ?? 0;
-    if (radius > 0) g.scale(0.95 / radius, 0.95 / radius, 0.95 / radius);
-    return g;
-  }, [mesh, mode]);
-  // The observed atlas (identity assets: unseen texels are grey). Only data: URLs from the local API are loaded.
-  const customTexture = useMemo(() => {
-    if (!customMeshGeom || typeof mesh?.texture !== 'string' || !mesh.texture.startsWith('data:image/') || !customMeshGeom.getAttribute('uv')) return null;
-    const texture = new THREE.TextureLoader().load(mesh.texture);
-    texture.colorSpace = THREE.SRGBColorSpace;
-    return texture;
-  }, [customMeshGeom, mesh]);
-  // GPU resources created here are not owned by R3F: release them when replaced or unmounted.
-  useEffect(() => () => customMeshGeom?.dispose(), [customMeshGeom]);
-  useEffect(() => () => customTexture?.dispose(), [customTexture]);
-  useEffect(() => () => headGeom.dispose(), [headGeom]);
+    const index = new Uint32Array(faces.length * 3);
+    faces.forEach((face, faceIndex) => { for (let slot = 0; slot < 3; slot++) index[faceIndex * 3 + slot] = corner(face, slot); });
+    geometry.setIndex(new THREE.BufferAttribute(index, 1));
+    if (landmarkCount > 0) landmarkSource = Math.min(landmarkCount, vertexCount);
+  }
 
+  geometry.computeVertexNormals();
+  geometry.computeBoundingBox();
+  const center = geometry.boundingBox.getCenter(new THREE.Vector3());
+  geometry.translate(-center.x, -center.y, -center.z);
+  geometry.computeBoundingSphere();
+  const radius = geometry.boundingSphere?.radius ?? 0;
+  const scale = radius > 0 ? 0.95 / radius : 1;
+  geometry.scale(scale, scale, scale);
+
+  let landmarks = null;
+  if (landmarkSource) {
+    // Lift the points a hair along the surface normal so they are not buried in (or z-fighting with) the skin.
+    const position = geometry.getAttribute('position');
+    const normal = geometry.getAttribute('normal');
+    landmarks = new Float32Array(landmarkSource * 3);
+    for (let i = 0; i < landmarkSource; i++) {
+      landmarks[i * 3] = position.getX(i) + normal.getX(i) * 0.012;
+      landmarks[i * 3 + 1] = position.getY(i) + normal.getY(i) * 0.012;
+      landmarks[i * 3 + 2] = position.getZ(i) + normal.getZ(i) * 0.012;
+    }
+  }
+  geometry.computeBoundingSphere();
+  return { geometry, landmarks };
+}
+
+/**
+ * A `mesh_2_5d` / `mesh_full_3d` payload as a viewer reconstruction (backend mesh frame).
+ * @param {import('../../contracts').ReconstructedMesh | null | undefined} value
+ * @param {'tps_2_5d' | 'identity_asset'} method
+ * @param {string} [fallbackTexture] a `data:image/png` URL used when the mesh carries no texture of its own
+ * @returns {import('../../contracts').Reconstruction | null}
+ */
+export function payloadToReconstruction(value, method, fallbackTexture) {
+  if (!value?.vertices?.length || !value?.indices?.length) return null;
+  return {
+    method, coordinate_system: 'mesh', vertices: value.vertices, faces: value.indices,
+    uvs: value.uvs?.length === value.vertices.length ? value.uvs : null,
+    texture: value.texture_base64 ? `data:image/png;base64,${value.texture_base64}` : fallbackTexture ?? null,
+    provenance: value.reconstruction_level,
+  };
+}
+
+/**
+ * Track and detected-face poses are stored in the legacy frame (pitch + = down); coverage points, the sphere and the
+ * 3D head use the standard frame (pitch + = up). Convert exactly once, here.
+ * @param {{ yaw?: number; pitch?: number; roll?: number } | null | undefined} pose
+ */
+export function legacyPoseToStandard(pose) {
+  return pose ? { yaw: pose.yaw ?? 0, pitch: -(pose.pitch ?? 0), roll: pose.roll ?? 0 } : null;
+}
+
+/** `+12.3° Y · -4.0° P`, never `-0.0`. */
+export function formatPose(pose) {
+  const part = value => {
+    const rounded = Math.abs(value) < 0.05 ? 0 : value;
+    return `${rounded >= 0 ? '+' : ''}${rounded.toFixed(1)}`;
+  };
+  return `${part(pose.yaw)}° Y · ${part(pose.pitch)}° P`;
+}
+
+/** Direction (unit vector, three.js frame) a head faces at the given standard-frame yaw/pitch. */
+export function poseDirection(yawDeg, pitchDeg) {
+  const yaw = (yawDeg * Math.PI) / 180;
+  const pitch = (pitchDeg * Math.PI) / 180;
+  return [Math.sin(yaw) * Math.cos(pitch), Math.sin(pitch), Math.cos(yaw) * Math.cos(pitch)];
+}
+
+/**
+ * Rotation that turns a head facing +z to the given standard-frame pose: its nose then points exactly along
+ * `poseDirection(yaw, pitch)`, i.e. at the matching dot on the orientation sphere.
+ */
+export function poseQuaternion(pose, out = new THREE.Quaternion()) {
+  const euler = new THREE.Euler((-(pose?.pitch ?? 0) * Math.PI) / 180, ((pose?.yaw ?? 0) * Math.PI) / 180, (-(pose?.roll ?? 0) * Math.PI) / 180, 'YXZ');
+  return out.setFromEuler(euler);
+}
+
+/** Releases GPU resources R3F does not own. */
+function useDisposable(resource) {
+  useEffect(() => () => { resource?.dispose?.(); }, [resource]);
+}
+
+/** A texture from a local `data:image/` URL (the only kind the local API produces). */
+function useDataTexture(url) {
+  const texture = useMemo(() => {
+    if (typeof url !== 'string' || !url.startsWith('data:image/')) return null;
+    const value = new THREE.TextureLoader().load(url);
+    value.colorSpace = THREE.SRGBColorSpace;
+    value.anisotropy = 4;
+    return value;
+  }, [url]);
+  useDisposable(texture);
+  return texture;
+}
+
+/** Shared geometry for the small landmark spheres. */
+const LANDMARK_GEOMETRY = new THREE.SphereGeometry(0.016, 8, 8);
+
+/** Idle reference: the canonical head as a faint wireframe that turns slowly (held still under reduced motion). */
+function ReferenceHead() {
+  const group = useRef(null);
+  const geometry = useMemo(() => createCanonicalHeadGeometry(), []);
+  useDisposable(geometry);
+  useFrame((_, delta) => {
+    if (group.current && !reducedMotion()) group.current.rotation.y += delta * 0.35;
+  });
   return (
-    <group ref={groupRef} position={[0, 0, 0]}>
-      {customMeshGeom ? (
-        <mesh geometry={customMeshGeom}>
-          <meshStandardMaterial
-            key={customTexture ? 'textured' : 'flat'}
-            map={customTexture}
-            color={customTexture ? '#ffffff' : '#91e6c9'}
-            roughness={0.65}
-            metalness={0.2}
-            side={THREE.DoubleSide}
-          />
+    <group ref={group}>
+      <mesh geometry={geometry}>
+        <meshBasicMaterial color={CYAN} wireframe transparent opacity={0.28} />
+      </mesh>
+      {CANONICAL_LANDMARKS.map(landmark => (
+        <mesh key={landmark.name} position={landmark.pos} geometry={LANDMARK_GEOMETRY} scale={1.4}>
+          <meshBasicMaterial color={CYAN} transparent opacity={0.7} />
         </mesh>
-      ) : (
-        <>
-          {/* Solid canonical low-poly head */}
-          <mesh geometry={headGeom}>
-            <meshStandardMaterial
-              color="#1e293b"
-              roughness={0.5}
-              metalness={0.3}
-              flatShading={true}
-            />
-          </mesh>
-
-          {/* Elegant contour wireframe */}
-          <mesh geometry={headGeom}>
-            <meshBasicMaterial
-              color="#38bdf8"
-              wireframe={true}
-              transparent={true}
-              opacity={0.35}
-            />
-          </mesh>
-
-          {/* 3D ArcFace landmark points projecting from mesh surface */}
-          {CANONICAL_LANDMARKS.map((lm, idx) => (
-            <group key={idx} position={lm.pos}>
-              {/* Glowing Landmark Dot */}
-              <mesh>
-                <sphereGeometry args={[0.028, 12, 12]} />
-                <meshBasicMaterial color="#00f5d4" />
-              </mesh>
-              {/* Outer halo */}
-              <mesh>
-                <sphereGeometry args={[0.048, 12, 12]} />
-                <meshBasicMaterial color="#00f5d4" transparent opacity={0.3} />
-              </mesh>
-            </group>
-          ))}
-        </>
-      )}
-
-      {/* Origin axes indicator */}
-      <axesHelper args={[0.6]} />
+      ))}
     </group>
   );
 }
 
 /**
- * Interactive FaceSet Orientation Sphere (Heatmap of observed angles).
+ * The reconstructed head. It follows the target's pose (slerped) so the swap geometry is shown exactly as the pipeline
+ * will pose it; the orbit camera moves independently around it.
  */
-export function FaceSetOrientationSphere({ lattice, observations = [] }) {
-  // Wireframe guide circles
-  const circleGeom = useMemo(() => {
-    const pts = [];
-    const segs = 64;
-    for (let i = 0; i <= segs; i++) {
-      const a = (i / segs) * Math.PI * 2;
-      pts.push(new THREE.Vector3(Math.cos(a) * 1.35, 0, Math.sin(a) * 1.35));
-    }
-    const g = new THREE.BufferGeometry();
-    g.setFromPoints(pts);
-    return g;
-  }, []);
+function ReconstructedHead({ pose, assets, texture, volumetric, wireframe, landmarks }) {
+  const group = useRef(null);
+  const current = useRef(new THREE.Quaternion());
+  const target = useMemo(() => new THREE.Quaternion(), []);
+
+  useEffect(() => { poseQuaternion(pose, target); }, [pose, target]);
+
+  useFrame((_, delta) => {
+    if (!group.current) return;
+    // Reduce-motion: jump to the pose instead of easing toward it.
+    current.current.slerp(target, reducedMotion() ? 1 : Math.min(1, delta * 12));
+    group.current.quaternion.copy(current.current);
+  });
+
+  const landmarkPoints = useMemo(() => {
+    if (!assets?.landmarks) return [];
+    const points = [];
+    for (let i = 0; i < assets.landmarks.length; i += 3) points.push([assets.landmarks[i], assets.landmarks[i + 1], assets.landmarks[i + 2]]);
+    return points;
+  }, [assets]);
 
   return (
+    <group ref={group}>
+      <mesh geometry={assets.geometry}>
+        <meshStandardMaterial
+          key={texture ? 'textured' : 'flat'}
+          map={texture}
+          color={texture ? '#ffffff' : '#9fd8c8'}
+          roughness={volumetric ? 0.62 : 0.7}
+          metalness={0}
+          side={THREE.DoubleSide}
+        />
+      </mesh>
+      {wireframe && (
+        <mesh geometry={assets.geometry}>
+          <meshBasicMaterial color={CYAN} wireframe transparent opacity={0.22} depthWrite={false}
+            polygonOffset polygonOffsetFactor={-1} polygonOffsetUnits={-1} />
+        </mesh>
+      )}
+      {landmarks && landmarkPoints.map((point, index) => (
+        <mesh key={index} position={point} geometry={LANDMARK_GEOMETRY}>
+          <meshBasicMaterial color={CYAN} />
+        </mesh>
+      ))}
+    </group>
+  );
+}
+
+const ringPoints = (radius, y, segments = 96) => {
+  const points = [];
+  for (let i = 0; i < segments; i++) {
+    const angle = (i / segments) * Math.PI * 2;
+    points.push(new THREE.Vector3(Math.cos(angle) * radius, y, Math.sin(angle) * radius));
+  }
+  return points;
+};
+
+/** Geodesic guide rings: the three great circles plus latitude rings every 30 degrees of pitch. */
+function OrbitalRings({ radius }) {
+  const rings = useMemo(() => {
+    const great = new THREE.BufferGeometry().setFromPoints(ringPoints(radius, 0));
+    const latitudes = [-60, -30, 30, 60].map(degrees => {
+      const rad = (degrees * Math.PI) / 180;
+      return new THREE.BufferGeometry().setFromPoints(ringPoints(radius * Math.cos(rad), radius * Math.sin(rad)));
+    });
+    return { great, latitudes };
+  }, [radius]);
+  useEffect(() => () => { rings.great.dispose(); rings.latitudes.forEach(geometry => geometry.dispose()); }, [rings]);
+  return (
     <group>
-      {/* Great circle equatorial and meridian guides */}
-      <line geometry={circleGeom}>
-        <lineBasicMaterial color="#334155" transparent opacity={0.4} />
-      </line>
-      <line geometry={circleGeom} rotation={[Math.PI / 2, 0, 0]}>
-        <lineBasicMaterial color="#334155" transparent opacity={0.4} />
-      </line>
-      <line geometry={circleGeom} rotation={[0, 0, Math.PI / 2]}>
-        <lineBasicMaterial color="#334155" transparent opacity={0.4} />
-      </line>
+      <lineLoop geometry={rings.great}><lineBasicMaterial color="#38bdf8" transparent opacity={0.5} /></lineLoop>
+      <lineLoop geometry={rings.great} rotation={[Math.PI / 2, 0, 0]}><lineBasicMaterial color="#38bdf8" transparent opacity={0.32} /></lineLoop>
+      <lineLoop geometry={rings.great} rotation={[0, 0, Math.PI / 2]}><lineBasicMaterial color="#38bdf8" transparent opacity={0.32} /></lineLoop>
+      {rings.latitudes.map((geometry, index) => (
+        <lineLoop key={index} geometry={geometry}><lineBasicMaterial color="#38bdf8" transparent opacity={0.16} /></lineLoop>
+      ))}
+    </group>
+  );
+}
+
+/** A glowing dot on the orientation sphere. */
+function GlowDot({ position, color = CYAN, size = 0.035 }) {
+  return (
+    <group position={position}>
+      <mesh><sphereGeometry args={[size, 14, 14]} /><meshBasicMaterial color={color} /></mesh>
+      <mesh><sphereGeometry args={[size * 2.1, 14, 14]} />
+        <meshBasicMaterial color={color} transparent opacity={0.3} blending={THREE.AdditiveBlending} depthWrite={false} /></mesh>
+      <mesh><sphereGeometry args={[size * 3.4, 14, 14]} />
+        <meshBasicMaterial color={color} transparent opacity={0.1} blending={THREE.AdditiveBlending} depthWrite={false} /></mesh>
+    </group>
+  );
+}
+
+/**
+ * Interactive FaceSet Orientation Sphere (heatmap of observed angles).
+ * `observations` are the backend `observed_pose_points`: each glowing dot sits at that view's exact `position_xyz`.
+ */
+export function FaceSetOrientationSphere({ lattice, observations = [], showRings = true, radius = SPHERE_RADIUS, targetPose = null }) {
+  return (
+    <group>
+      {showRings && <OrbitalRings radius={radius} />}
 
       {/* Exact 96-cell hemisphere lattice */}
       {lattice.map(node => {
@@ -390,179 +524,216 @@ export function FaceSetOrientationSphere({ lattice, observations = [] }) {
       })}
       {/* Measured view directions, separate from their containing coverage cells. */}
       {observations.map((point, index) => (
-        <mesh key={`observed-${point.view_index ?? index}`} position={point.position_xyz.map(value => value * 1.35)}>
-          <sphereGeometry args={[0.035, 12, 12]} />
-          <meshBasicMaterial color="#22d3ee" transparent opacity={0.95} />
-        </mesh>
+        <GlowDot key={`observed-${point.view_index ?? index}`} position={point.position_xyz.map(value => value * radius)} />
       ))}
+      {/* Where the target frame points the head. */}
+      {targetPose && <GlowDot position={poseDirection(targetPose.yaw, targetPose.pitch).map(value => value * radius)} color="#f472b6" size={0.04} />}
     </group>
   );
 }
 
 /**
- * Main WebGL Pose & Geometry Viewer Component.
- * @param {{
- *   coverage?: import('../../contracts').Coverage | null;
- *   track?: import('../../contracts').Track | null;
- *   mesh?: import('../../contracts').Reconstruction | null;
- * }} props
+ * Reads the orbit camera: reports the head pose it currently shows (a trackball: dragging right turns the head right) and
+ * moves a marker on the sphere to that pose. The marker is mutated in place, so orbiting never re-renders React.
  */
-function FaceCameraFocus({ controlsRef }) {
+function ViewTracker({ onPose, radius, showMarker }) {
   const { camera } = useThree();
-  const focus = useFaceSelectionStore(state => state.poseFocus);
+  const marker = useRef(null);
+  const last = useRef('');
+  useFrame(() => {
+    const p = camera.position;
+    const length = p.length() || 1;
+    const yaw = (-Math.atan2(p.x, p.z) * 180) / Math.PI;
+    const pitch = (-Math.asin(Math.max(-1, Math.min(1, p.y / length))) * 180) / Math.PI;
+    if (marker.current) {
+      marker.current.position.set(-p.x / length, -p.y / length, p.z / length).multiplyScalar(radius);
+      marker.current.visible = showMarker;
+    }
+    const key = `${yaw.toFixed(1)}|${pitch.toFixed(1)}`;
+    if (key !== last.current) { last.current = key; onPose({ yaw, pitch, roll: 0 }); }
+  });
+  return (
+    <mesh ref={marker}>
+      <ringGeometry args={[0.04, 0.055, 24]} />
+      <meshBasicMaterial color="#ffffff" transparent opacity={0.75} side={THREE.DoubleSide} depthTest={false} />
+    </mesh>
+  );
+}
+
+/** Camera snaps to the frontal view (+0.0° Y · +0.0° P) whenever `signal` changes, and on the Reset Camera button. */
+function CameraRig({ controlsRef, resetSignal }) {
+  const { camera } = useThree();
   useEffect(() => {
-    if (!focus) return;
-    const face = useFaceSelectionStore.getState().detectedFaces.find(face => face.id === focus.faceId);
-    if (!face) return;
-    const pose = face.pose, quaternion = new THREE.Quaternion().setFromEuler(new THREE.Euler(pose.pitch * Math.PI / 180, pose.yaw * Math.PI / 180, -pose.roll * Math.PI / 180, 'YXZ'));
-    camera.position.copy(new THREE.Vector3(0, 0, 3).applyQuaternion(quaternion));
-    camera.up.copy(new THREE.Vector3(0, 1, 0).applyQuaternion(quaternion)); camera.lookAt(0, 0, 0);
-    controlsRef.current?.target.set(0, 0, 0); controlsRef.current?.update();
-  }, [focus, camera, controlsRef]);
+    camera.position.copy(FRONTAL_CAMERA);
+    camera.up.copy(WORLD_UP);
+    camera.lookAt(0, 0, 0);
+    const controls = controlsRef.current;
+    if (controls) { controls.target.set(0, 0, 0); controls.update(); }
+  }, [resetSignal, camera, controlsRef]);
   return null;
 }
 
-/** @param {any} props */
+/** Imperative live-pose readout: orbiting updates this one node, not the whole viewer. */
+function LivePoseReadout({ targetPose, registerView }) {
+  const [view, setView] = useState({ yaw: 0, pitch: 0, roll: 0 });
+  useEffect(() => { registerView(setView); return () => registerView(null); }, [registerView]);
+  const shown = targetPose ?? view;
+  return (
+    <strong data-testid="live-pose" data-source={targetPose ? 'target' : 'view'}
+      title={targetPose ? 'Pose of the selected target face' : 'Pose of the head as currently viewed (drag to rotate)'}>
+      {formatPose(shown)}
+    </strong>
+  );
+}
+
+const IDLE_MESSAGE = 'Load a source face or .fsz faceset to preview 3D reconstruction';
+
+function FaceCameraFocus({ resetCamera }) {
+  const focus = useFaceSelectionStore(state => state.poseFocus);
+  // The head already follows the selected face's pose, so syncing to it means looking at the head from the front.
+  useEffect(() => { if (focus) resetCamera(); }, [focus, resetCamera]);
+  return null;
+}
+
+/**
+ * Main WebGL Pose & Geometry Viewer Component.
+ *
+ * `coverage` is the `POST /faceset/reconstruct-3d` payload (`mesh_2_5d`, `mesh_full_3d`, `observed_pose_points`, the
+ * telemetry counts). `mesh` is an explicitly chosen reconstruction (a built identity asset, an imported artifact) and
+ * overrides `coverage.mesh_full_3d`. `renderMode` is the workstation render mode: it selects the tab showing the
+ * geometry that mode works from. `reconstruction` is the request state (idle | loading | ready | error).
+ * @param {any} props
+ */
 export default function PoseGeometryViewer({
   coverage = null,
   track = null,
   mesh = null,
+  renderMode,
+  reconstruction = null,
 }) {
   const hostRef = useRef(null);
   const controlsRef = useRef(null);
+  const [viewMode, setViewMode] = useState('estimated_2_5d'); // 'estimated_2_5d' | 'reconstruction'
+  const viewSetter = useRef(null);
+  const registerView = useCallback(setter => { viewSetter.current = setter; }, []);
+  const reportView = useCallback(pose => viewSetter.current?.(pose), []);
 
-  const [dimensions, setDimensions] = useState({ width: 0, height: 0 });
-  const [viewMode, setViewMode] = useState(mesh ? 'reconstruction' : 'estimated_2_5d'); // 'estimated_2_5d' | 'reconstruction'
-  // A newly supplied mesh is shown at once; removing it returns to the estimate (there is nothing else to show).
-  useEffect(() => { setViewMode(mesh ? 'reconstruction' : 'estimated_2_5d'); }, [mesh]);
-  const [webglError, setWebglError] = useState('');
+  const [resetSignal, setResetSignal] = useState(0);
+  // A subtle topology overlay on the single-view estimate; off by default on the textured head so the albedo reads clearly.
+  const [wireframeByTab, setWireframeByTab] = useState({ estimated_2_5d: true, reconstruction: false });
+  const wireframe = wireframeByTab[viewMode];
+  const toggleWireframe = () => setWireframeByTab(value => ({ ...value, [viewMode]: !value[viewMode] }));
+  const [showLandmarks, setShowLandmarks] = useState(true);
+  const [showRings, setShowRings] = useState(true);
 
-  // Active pose from useFaceSelectionStore
+  // Target pose: the selected face, else the selected track, else the first target cluster. Standard frame.
   const activeSelection = useFaceSelectionStore(s => s.activeSelection);
   const detectedFaces = useFaceSelectionStore(s => s.detectedFaces);
   const targetClusters = useFaceSelectionStore(s => s.targetClusters);
+  const targetPose = useMemo(() => {
+    const face = activeSelection ? detectedFaces.find(f => f.id === activeSelection) : null;
+    if (face?.pose) return legacyPoseToStandard(face.pose);
+    const range = track?.pose_range;
+    if (range) {
+      const mid = pair => (pair ? (pair[0] + pair[1]) / 2 : 0);
+      return legacyPoseToStandard({ yaw: mid(range.yaw_degrees), pitch: mid(range.pitch_degrees), roll: mid(range.roll_degrees) });
+    }
+    return targetClusters.length > 0 ? legacyPoseToStandard(targetClusters[0].avgPose) : null;
+  }, [activeSelection, detectedFaces, track, targetClusters]);
 
-  // Derive pose: selected face -> track pose range -> cluster avgPose -> default [0, 0, 0]
-  const currentPose = useMemo(() => {
-    if (activeSelection) {
-      const face = detectedFaces.find(f => f.id === activeSelection);
-      if (face?.pose) return face.pose;
-    }
-    if (track?.pose_range) {
-      const yawAvg = track.pose_range.yaw_degrees ? (track.pose_range.yaw_degrees[0] + track.pose_range.yaw_degrees[1]) / 2 : 0;
-      const pitchAvg = track.pose_range.pitch_degrees ? (track.pose_range.pitch_degrees[0] + track.pose_range.pitch_degrees[1]) / 2 : 0;
-      const rollAvg = track.pose_range.roll_degrees ? (track.pose_range.roll_degrees[0] + track.pose_range.roll_degrees[1]) / 2 : 0;
-      return { yaw: yawAvg, pitch: pitchAvg, roll: rollAvg };
-    }
-    if (coverage?.live_pose) return coverage.live_pose;
-    if (targetClusters.length > 0) {
-      return targetClusters[0].avgPose;
-    }
-    return { yaw: 0, pitch: 0, roll: 0 };
-  }, [activeSelection, detectedFaces, track, targetClusters, coverage]);
+  // The two reconstructions of the payload, in the backend mesh frame.
+  const estimatedMesh = useMemo(() => payloadToReconstruction(coverage?.mesh_2_5d, 'tps_2_5d'), [coverage]);
+  const payloadFullMesh = useMemo(() => payloadToReconstruction(coverage?.mesh_full_3d, 'identity_asset', coverage?.uv_texture_data_url), [coverage]);
+  const fullMesh = mesh ?? payloadFullMesh;
+  const displayedMesh = viewMode === 'estimated_2_5d' ? (estimatedMesh ?? fullMesh) : fullMesh;
+  const volumetric = viewMode === 'reconstruction' && !!fullMesh;
 
-  // Aggregate observed sample views: coverage views OR video track faces
-  const rawViews = useMemo(() => {
-    if (coverage?.views && coverage.views.length > 0) {
-      return coverage.views;
-    }
-    // Fallback: extract from video track detections
-    if (detectedFaces && detectedFaces.length > 0) {
-      return detectedFaces.map(f => ({
-        yaw: f.pose?.yaw ?? 0,
-        pitch: f.pose?.pitch ?? 0,
-        roll: f.pose?.roll ?? 0,
-        pose_bin: 'track_view',
-      }));
-    }
-    return [];
-  }, [coverage, detectedFaces]);
+  const assets = useMemo(() => buildMeshAssets(displayedMesh, { landmarkCount: viewMode === 'estimated_2_5d' && displayedMesh === estimatedMesh ? TEMPLATE_LANDMARK_COUNT : 0 }),
+    [displayedMesh, viewMode, estimatedMesh]);
+  useDisposable(assets?.geometry);
+  const texture = useDataTexture(assets && typeof displayedMesh?.texture === 'string' && assets.geometry.getAttribute('uv') ? displayedMesh.texture : null);
 
-  // Populate the exact backend 12x8 bins; fallback views use the same quantizer.
-  const baseLattice = useMemo(() => generatePoseGrid(1.35), []);
+  // Render mode picks the tab (and so does a newly supplied explicit mesh, or a new source arriving).
+  const modeInfo = useMemo(() => renderModeInfo(renderMode), [renderMode]);
+  const intent = renderMode === undefined ? (mesh ? 'reconstruction' : 'estimated_2_5d') : (mesh ? 'reconstruction' : modeInfo.preview);
+  const hasFullMesh = !!fullMesh;
+  const sourceKey = coverage?.faceset_id;
+  useEffect(() => {
+    setViewMode(intent === 'reconstruction' && hasFullMesh ? 'reconstruction' : 'estimated_2_5d');
+  }, [intent, hasFullMesh, sourceKey, mesh]);
+
+  // Observed pose points -> counts per cell of the exact backend 12x8 grid.
+  const baseLattice = useMemo(() => generatePoseGrid(SPHERE_RADIUS), []);
+  const observations = useMemo(() => (Array.isArray(coverage?.observed_pose_points) ? coverage.observed_pose_points.filter(point => Array.isArray(point?.position_xyz)) : []), [coverage]);
   const lattice = useMemo(() => {
     const counts = new Array(96).fill(0);
-    if (coverage?.observed_pose_points) {
-      for (const point of coverage.observed_pose_points) counts[point.bin_index] += 1;
+    if (observations.length) {
+      for (const point of observations) if (point.bin_index >= 0 && point.bin_index < 96) counts[point.bin_index] += 1;
     } else {
-      for (const view of rawViews) {
+      for (const view of coverage?.views ?? []) {
         const yawBin = Math.min(11, Math.max(0, Math.floor((Math.min(90, Math.max(-90, view.yaw)) + 90) / 15)));
         const pitchBin = Math.min(7, Math.max(0, Math.floor((Math.min(60, Math.max(-60, view.pitch)) + 60) / 15)));
         counts[pitchBin * 12 + yawBin] += 1;
       }
     }
     return baseLattice.map(node => ({ ...node, sampleCount: counts[node.index] }));
-  }, [baseLattice, rawViews, coverage]);
+  }, [baseLattice, observations, coverage]);
 
-  // Coverage statistics
+  // Telemetry comes straight from the payload; the source FaceSet is the only thing it describes.
   const stats = useMemo(() => {
     const totalNodes = coverage?.sphere_coverage_total ?? 96;
     const observedNodes = coverage?.sphere_coverage_count ?? lattice.filter(n => n.sampleCount > 0).length;
     const coveragePct = coverage?.sphere_coverage_pct ?? Math.round((observedNodes / totalNodes) * 100);
-    const totalSamples = coverage?.observed_views ?? rawViews.length;
+    const totalSamples = coverage?.observed_views ?? coverage?.views?.length ?? 0;
     return { totalNodes, observedNodes, coveragePct, totalSamples };
-  }, [lattice, rawViews, coverage]);
+  }, [lattice, coverage]);
 
-  const estimatedMesh = useMemo(() => {
-    const value = coverage?.mesh_2_5d;
-    return value ? { method: 'tps_2_5d', coordinate_system: 'opencv', vertices: value.vertices,
-      faces: value.indices, uvs: value.uvs, texture: `data:image/png;base64,${value.texture_base64}`, provenance: value.reconstruction_level } : null;
-  }, [coverage]);
-  const displayedMesh = viewMode === 'estimated_2_5d' ? (estimatedMesh ?? mesh) : mesh;
+  const state = reconstruction?.state ?? (estimatedMesh || fullMesh ? 'ready' : 'idle');
+  const hasGeometry = !!assets;
+  const overlay = state === 'loading' ? { kind: 'loading', text: 'Reconstructing 3D face from the FaceSet…' }
+    : state === 'error' ? { kind: 'error', text: reconstruction?.message || '3D reconstruction failed.' }
+    : !hasGeometry ? { kind: 'idle', text: IDLE_MESSAGE } : null;
 
-  // ResizeObserver for robust layout adaptation
-  const updateSize = useCallback(() => {
-    if (hostRef.current) {
-      const { clientWidth, clientHeight } = hostRef.current;
-      setDimensions({ width: clientWidth, height: clientHeight });
-    }
-  }, []);
+  const resetCamera = useCallback(() => setResetSignal(value => value + 1), []);
+  const info = displayedMesh?.provenance ? `${volumetric ? 'Full 3D' : 'Estimated 2.5D'} · ${String(displayedMesh.provenance).replaceAll('_', ' ')}` : '';
+  const limitation = (viewMode === 'reconstruction' ? coverage?.mesh_full_3d : coverage?.mesh_2_5d)?.limitations?.[0] ?? '';
 
-  useEffect(() => {
-    updateSize();
-    if (typeof ResizeObserver === 'undefined') return;
-    const ro = new ResizeObserver(updateSize);
-    if (hostRef.current) ro.observe(hostRef.current);
-    return () => ro.disconnect();
-  }, [updateSize]);
-
-  // Auto-reset camera view
-  const handleResetCamera = () => {
-    if (controlsRef.current) {
-      controlsRef.current.reset();
-      controlsRef.current.target.set(0, 0, 0);
-    }
-  };
+  const tab = (id, label, disabled, title) => (
+    <button
+      type="button"
+      className={`viewer-mode-btn ${viewMode === id ? 'active' : ''}`}
+      onClick={() => setViewMode(id)}
+      disabled={disabled}
+      title={title}
+      aria-pressed={viewMode === id}
+      data-pipeline={renderMode !== undefined && modeInfo.preview === id ? 'true' : undefined}
+    >
+      {label}
+      {renderMode !== undefined && modeInfo.preview === id && <span className="viewer-pipeline-tag" aria-label={`Render mode ${modeInfo.label}: ${modeInfo.previewNote}`}>{modeInfo.previewNote === 'preview only' ? 'preview' : 'render'}</span>}
+    </button>
+  );
 
   return (
     <div className="pose-geometry-container" ref={hostRef}>
       {/* Top Controls Overlay */}
       <div className="pose-viewer-toolbar">
         <div className="pose-mode-toggle">
-          <button
-            type="button"
-            className={`viewer-mode-btn ${viewMode === 'estimated_2_5d' ? 'active' : ''}`}
-            onClick={() => setViewMode('estimated_2_5d')}
-            title="Estimated 2.5D Canonical Head & Orientation Sphere"
-          >
-            Estimated 2.5D
-          </button>
-          <button
-            type="button"
-            className={`viewer-mode-btn ${viewMode === 'reconstruction' ? 'active' : ''}`}
-            onClick={() => setViewMode('reconstruction')}
-            disabled={!mesh}
-            title={mesh ? `Reconstructed mesh: ${mesh.provenance ?? mesh.method}` : 'No reconstruction loaded: build a 3D identity asset or choose a reconstruction artifact'}
-          >
-            Full 3D Reconstructed
-          </button>
+          {tab('estimated_2_5d', 'Estimated 2.5D', false, 'Single-view estimate: the FaceSet\'s best frontal photo draped over a depth-prior face mesh')}
+          {tab('reconstruction', 'Full 3D Reconstructed', !fullMesh,
+            fullMesh ? `Stitched multi-view head: ${fullMesh.provenance ?? fullMesh.method}` : 'No full 3D head yet: load a FaceSet or build a 3D identity asset')}
         </div>
-
+      </div>
+      <div className="pose-viewer-options" role="group" aria-label="3D viewer overlays">
+        <button type="button" className="viewer-toggle" aria-pressed={wireframe} onClick={toggleWireframe} disabled={!hasGeometry}>Wireframe</button>
+        <button type="button" className="viewer-toggle" aria-pressed={showLandmarks} onClick={() => setShowLandmarks(value => !value)} disabled={!hasGeometry || viewMode !== 'estimated_2_5d'}
+          title="68 landmark points of the estimated face mesh">Landmarks</button>
+        <button type="button" className="viewer-toggle" aria-pressed={showRings} onClick={() => setShowRings(value => !value)}
+          title="Orbital rings and the pose coverage sphere">Coverage rings</button>
         <button
           type="button"
           className="camera-reset-btn"
-          onClick={handleResetCamera}
-          title="Reset 3D camera to default viewpoint"
+          onClick={resetCamera}
+          title="Reset 3D camera to the frontal view (+0.0° Y · +0.0° P)"
         >
           ⟲ Reset Camera
         </button>
@@ -570,56 +741,65 @@ export default function PoseGeometryViewer({
 
       {/* R3F Canvas */}
       <div className="pose-canvas-wrapper">
-        {webglError ? (
-          <div className="empty-caption">{webglError}</div>
-        ) : (
-          <Canvas
-            camera={{ position: [2.0, 1.2, 2.6], fov: 42, near: 0.05, far: 50 }}
-            dpr={[1, 2]}
-            gl={{ antialias: true, alpha: true }}
-            onCreated={({ gl }) => {
-              gl.setClearColor(0x000000, 0);
-            }}
-          >
-            {/* Lighting */}
-            <ambientLight intensity={0.7} />
-            <directionalLight position={[4, 5, 5]} intensity={1.8} />
-            <directionalLight position={[-4, -2, -3]} intensity={0.5} color="#38bdf8" />
-            <pointLight position={[0, 3, 2]} intensity={0.8} />
+        <Canvas
+          camera={{ position: [0, 0, CAMERA_DISTANCE], fov: 42, near: 0.05, far: 50 }}
+          dpr={[1, 2]}
+          gl={{ antialias: true, alpha: true }}
+          onCreated={({ gl }) => {
+            gl.setClearColor(0x000000, 0);
+          }}
+        >
+          {/* Lighting */}
+          <ambientLight intensity={0.7} />
+          <directionalLight position={[4, 5, 5]} intensity={1.8} />
+          <directionalLight position={[-4, -2, -3]} intensity={0.5} color="#38bdf8" />
+          <pointLight position={[0, 3, 2]} intensity={0.8} />
 
-            {/* Canonical Head & Landmarks */}
-            <CanonicalHeadMesh
-              pose={currentPose}
-              mode={displayedMesh ? 'reconstruction' : viewMode}
-              mesh={displayedMesh}
+          {assets ? (
+            <ReconstructedHead pose={targetPose} assets={assets} texture={texture} volumetric={volumetric}
+              wireframe={wireframe} landmarks={showLandmarks && viewMode === 'estimated_2_5d'} />
+          ) : (
+            <ReferenceHead />
+          )}
+
+          {/* FaceSet orientation heatmap, orbital rings and the glowing observed-pose dots */}
+          {(observations.length > 0 || coverage) && (
+            <FaceSetOrientationSphere lattice={lattice} observations={observations} showRings={showRings} targetPose={targetPose} />
+          )}
+          {!coverage && showRings && <OrbitalRings radius={SPHERE_RADIUS} />}
+
+          {/* OrbitControls: drag to rotate, scroll to zoom */}
+          <OrbitControls
+            ref={controlsRef}
+            makeDefault
+            enablePan={false}
+            rotateSpeed={0.6}
+            enableDamping
+            dampingFactor={0.08}
+            minDistance={1.8}
+            maxDistance={8}
+          />
+          <CameraRig controlsRef={controlsRef} resetSignal={resetSignal} />
+          <ViewTracker onPose={reportView} radius={SPHERE_RADIUS} showMarker={showRings && !targetPose && (observations.length > 0 || !!coverage)} />
+
+          {/* Camera Orientation Gizmo: follows the camera */}
+          <GizmoHelper alignment="bottom-right" margin={[40, 40]}>
+            <GizmoViewport
+              axisColors={['#f43f5e', '#10b981', '#3b82f6']}
+              labelColor="#ffffff"
+              hideNegativeAxes
             />
-
-            {/* FaceSet Orientation Heatmap Sphere */}
-            {viewMode === 'estimated_2_5d' && (
-              <FaceSetOrientationSphere lattice={lattice} observations={coverage?.observed_pose_points ?? []} />
-            )}
-
-            {/* OrbitControls */}
-            <OrbitControls
-              ref={controlsRef}
-              makeDefault
-              enableDamping
-              dampingFactor={0.08}
-              minDistance={1.2}
-              maxDistance={7}
-            />
-            <FaceCameraFocus controlsRef={controlsRef}/>
-
-            {/* Camera Orientation Gizmo */}
-            <GizmoHelper alignment="bottom-right" margin={[40, 40]}>
-              <GizmoViewport
-                axisColors={['#f43f5e', '#10b981', '#3b82f6']}
-                labelColor="#ffffff"
-              />
-            </GizmoHelper>
-          </Canvas>
+          </GizmoHelper>
+        </Canvas>
+        {overlay && (
+          <div className={`pose-viewer-overlay ${overlay.kind}`} role={overlay.kind === 'error' ? 'alert' : 'status'}>
+            <span>{overlay.text}</span>
+            {overlay.kind === 'error' && reconstruction?.retry && <button type="button" className="camera-reset-btn" onClick={reconstruction.retry}>Retry</button>}
+          </div>
         )}
+        <FaceCameraFocus resetCamera={resetCamera} />
       </div>
+      {info && <div className="pose-viewer-caption" title={limitation}>{info}{limitation ? ' · template prior beyond the observed landmarks' : ''}</div>}
 
       {/* Status Readout Bar */}
       <div className="pose-status-readout">
@@ -635,10 +815,7 @@ export default function PoseGeometryViewer({
         <div className="status-divider" />
         <div className="status-metric">
           <span className="status-label">Live Pose</span>
-          <strong>
-            {currentPose.yaw >= 0 ? '+' : ''}{currentPose.yaw.toFixed(1)}° Y ·{' '}
-            {currentPose.pitch >= 0 ? '+' : ''}{currentPose.pitch.toFixed(1)}° P
-          </strong>
+          <LivePoseReadout targetPose={targetPose} registerView={registerView} />
         </div>
       </div>
     </div>
