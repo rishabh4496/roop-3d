@@ -10,7 +10,7 @@ export interface FacesetLibraryProps {
   selectedSourceId?: string;
   onSelectSource?: (facesetId: string) => void;
   onRefreshSources?: () => Promise<void>;
-  onImportFaceset?: (file: File) => void;
+  onImportFaceset?: (files: File[]) => void;
   canSave?: boolean;
   onSaveFace?: (name: string) => Promise<void>;
   notify?: (msg: string, type?: 'info' | 'error') => void;
@@ -151,9 +151,7 @@ export default function FacesetLibrary({
     const files = Array.from(e.target.files || []);
     e.target.value = '';
     if (!files.length) return;
-    for (const f of files) {
-      onImportFaceset?.(f);
-    }
+    onImportFaceset?.(files);
   };
 
   const openFolder = async () => {
@@ -217,12 +215,12 @@ export default function FacesetLibrary({
     return (
       <div className="fs-library" aria-busy={busy}>
         <div className="fs-library-actions">
-          <button type="button" className="button small primary-soft" disabled={busy || importDisabled} onClick={() => importRef.current?.click()} title="Import .fsz archives into the local library">＋ Import .fsz</button>
+          <button type="button" className="button small primary-soft" disabled={busy || importDisabled} onClick={() => importRef.current?.click()} title="Import a .fsz FaceSet or source face image">＋ Import FaceSet / Photo</button>
           {canSave && <button type="button" className="button small" disabled={busy} onClick={() => setSaveModalOpen(true)} title="Save the selected target track's face as a FaceSet">Save track face</button>}
           <button type="button" className="button small" onClick={openFolder} title="Open the FaceSets folder on disk">Folder</button>
           <button type="button" className="button small" disabled={busy || !sources.length} onClick={rebuildThumbs} title="Rebuild previews from each set's most frontal view">Fix thumbs</button>
           <button type="button" className="button small icon-only" aria-label="Refresh FaceSets" onClick={refresh} title="Refresh the FaceSet catalog">↻</button>
-          <input ref={importRef} type="file" accept=".fsz" multiple hidden onChange={handleImport} />
+          <input ref={importRef} type="file" accept=".fsz,.png,.jpg,.jpeg,.webp,.bmp" multiple hidden onChange={handleImport} />
         </div>
         {sources.length > 4 && <input className="fs-search" aria-label="Search facesets" value={filter} onChange={(ev) => setFilter(ev.target.value)} placeholder={`Search ${sources.length} FaceSets…`} />}
         {!sources.length ? (
@@ -325,7 +323,7 @@ export default function FacesetLibrary({
             <input
               ref={importRef}
               type="file"
-              accept=".fsz"
+              accept=".fsz,.png,.jpg,.jpeg,.webp,.bmp"
               multiple
               className="hidden"
               style={{ display: 'none' }}

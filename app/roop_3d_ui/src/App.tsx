@@ -132,6 +132,8 @@ export default function App() {
   const [parameters, setParametersRaw] = useState<WorkstationParameters>({ ...DEFAULT_PARAMETERS });
   const assigned = useFaceSelectionStore(state => state.assignments);
   const clusters = useFaceSelectionStore(state => state.targetClusters);
+  const selectedTargetFace = useFaceSelectionStore(state => state.activeSelection
+    ? state.detectedFaces.find(face => face.id === state.activeSelection) ?? null : null);
   const curves = useHistoryStore(state => state.curves);
   const setAssigned = (value: Record<string, string> | ((previous: Record<string, string>) => Record<string, string>)) => useFaceSelectionStore.getState().replaceAssignments(typeof value === 'function' ? value(useFaceSelectionStore.getState().assignments) : value);
   const setParameters = (value: WorkstationParameters) => { if (JSON.stringify(value) === JSON.stringify(parameters)) return; const before = parameters; const changed = Object.keys(value).filter(key => JSON.stringify(value[key as keyof WorkstationParameters]) !== JSON.stringify(before[key as keyof WorkstationParameters])); executeCommand({ label: `Change ${changed.join(', ')}`, mergeKey: changed.length === 1 && changed[0] !== 'bypass' ? `parameter-${changed[0]}` : undefined, undo: () => setParametersRaw(before), redo: () => setParametersRaw(value) }); };
@@ -245,28 +247,57 @@ export default function App() {
   useDialogA11y(projectDialog, () => setProjectsOpen(false), projectsOpen);
   useEffect(() => { setIdentityMesh(null); }, [sourceId]);
   useEffect(() => {
-    if (!sourceId) { setCoverage(null); return; }
-    const controller = new AbortController(); setCoverage(null);
-    void api<Coverage>(`/facesets/${sourceId}/coverage`, { signal: controller.signal }).then(setCoverage).catch(error => { if (error.name !== 'AbortError') setError(error.message); });
+    if (!sourceId) { setCoverage(null); setMesh(null); return; }
+    const controller = new AbortController(); setCoverage(null); setMesh(null);
+    const pose = selectedTargetFace?.pose;
+    const trackPose = currentTrack?.pose_range;
+    const live_pose = pose ? {
+      yaw: pose.yaw ?? 0, pitch: pose.pitch ?? 0, roll: pose.roll ?? 0,
+    } : trackPose ? {
+      yaw: trackPose.yaw_degrees ? (trackPose.yaw_degrees[0] + trackPose.yaw_degrees[1]) / 2 : 0,
+      pitch: trackPose.pitch_degrees ? (trackPose.pitch_degrees[0] + trackPose.pitch_degrees[1]) / 2 : 0,
+      roll: trackPose.roll_degrees ? (trackPose.roll_degrees[0] + trackPose.roll_degrees[1]) / 2 : 0,
+    } : undefined;
+    void post<Coverage>('/faceset/reconstruct-3d', { faceset_id: sourceId, live_pose }, { signal: controller.signal })
+      .then(() => api<Coverage>(`/faceset/3d-state?faceset_id=${encodeURIComponent(sourceId)}`, { signal: controller.signal }))
+      .then(value => {
+        setCoverage(value);
+        const full = value.mesh_full_3d;
+        if (full) setMesh({ method: 'identity_asset', coordinate_system: 'opencv', vertices: full.vertices,
+          faces: full.indices, uvs: full.uvs, texture: `data:image/png;base64,${full.texture_base64}`, provenance: full.reconstruction_level });
+      })
+      .catch(error => { if (error.name !== 'AbortError') setError(error.message); });
     return () => controller.abort();
-  }, [sourceId]);
+  }, [sourceId, currentTrack, selectedTargetFace]);
   const loadTarget = async (path: string) => {
     const [info, frames, reconstructionList] = await Promise.all([post<Probe>('/media/probe', { path }), api<{ timestamps: number[] }>(`/media/keyframes?${new URLSearchParams({ path })}`), api<typeof reconstructions>('/reconstructions')]);
     setTarget(path); setProbe(info); setTime(0); setKeys(frames.timestamps); setInspection(null); setIdentityLock(null); setAssigned({}); setSelectedTrack(''); setMesh(null); setTrimStart(0); setTrimEnd(null); setReconstructions(reconstructionList); setSelectedJob(''); setProject(null); setIdentityMesh(null);
     useFaceSelectionStore.getState().reset(); useHistoryStore.getState().reset(); setMaskRaw(null);
     return info;
   };
-  const importAsset = (file: File | undefined) => {
-    if (!file) return;
+  const importAssets = (files: File[]) => {
+    if (!files.length) return;
+    if (files.length > 32) { setError('Import at most 32 images or FaceSets at a time.'); return; }
     if (!caps) { setNotice('Still connecting to the local service. Try again in a moment.'); return; }
     void run('Importing asset', async () => {
       const controller = new AbortController(); uploadAbort.current = controller; setUploadProgress(0);
-      const result = await upload(file, caps, setUploadProgress, controller.signal);
-      if (result.kind === 'video' && result.path) await loadTarget(result.path);
-      else { await refreshSources(); setSourceId(result.faceset_id ?? ''); }
+      const imagePaths: string[] = [];
+      let facesetId = '';
+      for (const [index, file] of files.entries()) {
+        const result = await upload(file, caps, progress => setUploadProgress((index + progress) / files.length), controller.signal);
+        if (result.kind === 'video' && result.path) await loadTarget(result.path);
+        else if (result.kind === 'image' && result.path) imagePaths.push(result.path);
+        else if (result.kind === 'faceset') facesetId = result.faceset_id ?? '';
+      }
+      if (imagePaths.length) {
+        const result = await post<{ faceset_id: string }>('/faceset/reconstruct-3d', { source_image_paths: imagePaths }, { signal: controller.signal });
+        facesetId = result.faceset_id;
+      }
+      if (facesetId) { await refreshSources(); setSourceId(facesetId); }
       setNotice('Local asset imported and validated.');
     });
   };
+  const importAsset = (file: File | undefined) => { if (file) importAssets([file]); };
   const inspect = () => void run('Inspecting target faces', async () => {
     const result = await post<Inspection>('/media/inspect-faces', { path: target, identity_lock: true,
       full_video: true, time_budget_seconds: 900 });
@@ -533,7 +564,7 @@ export default function App() {
       />
     </AppRouter>
     <AppRouter route={route} screen="faceswap">
-      <input ref={fileInput} hidden type="file" accept=".mp4,.mov,.mkv,.avi,.webm,.m4v,.ts" onChange={event => { importAsset(event.target.files?.[0]); event.target.value = ''; }} />
+      <input ref={fileInput} hidden type="file" accept=".mp4,.mov,.mkv,.avi,.webm,.m4v,.ts,.fsz,.png,.jpg,.jpeg,.webp,.bmp" onChange={event => { importAsset(event.target.files?.[0]); event.target.value = ''; }} />
       {layoutMode === 'studio' ? <div className="studio" data-testid="studio-layout">
         <div className="studio-grid">
           <aside className="studio-panel studio-left" aria-label="Target media" data-tour="tracks">
@@ -546,7 +577,7 @@ export default function App() {
           </aside>
           <aside className="studio-panel studio-identity" aria-label="Source identities" data-tour="source">
             <div className="studio-panel-head"><span className="eyebrow">02 · IDENTITY</span><span className="muted">{sources.length.toString().padStart(2, '0')}</span></div>
-            <PanelBoundary name="Identity panel"><FacesetLibrary variant="list" importDisabled={!!reason('uploads') || !!busy} sources={sources} selectedSourceId={sourceId} onSelectSource={id => setSourceId(id)} onRefreshSources={refreshSources} onImportFaceset={file => importAsset(file)}
+            <PanelBoundary name="Identity panel"><FacesetLibrary variant="list" importDisabled={!!reason('uploads') || !!busy} sources={sources} selectedSourceId={sourceId} onSelectSource={id => setSourceId(id)} onRefreshSources={refreshSources} onImportFaceset={files => importAssets(files)}
               canSave={!!currentTrack?.thumbnail_base64} onSaveFace={saveTrackFace} notify={(message, type) => { if (type === 'error') setError(message); else setNotice(message); }} />
             {selectedFaceset ? <FaceSetDetail faceset={selectedFaceset} sources={sources} selectedTrackLabel={selectedTrack ? trackLabel(selectedTrack) : null}
               assignedHere={!!selectedTrack && assigned[selectedTrack] === selectedFaceset.faceset_id} onAssign={() => selectedTrack && assignTrack(selectedTrack, selectedFaceset.faceset_id)}
@@ -582,7 +613,7 @@ export default function App() {
         selectedSourceId={sourceId}
         onSelectSource={id => setSourceId(id)}
         onRefreshSources={refreshSources}
-        onImportFaceset={file => importAsset(file)}
+        onImportFaceset={files => importAssets(files)}
         canSave={Boolean(inspection?.tracks?.length)}
         onSaveFace={async (name) => {
           const track = inspection?.tracks.find(t => t.track_id === selectedTrack) || inspection?.tracks[0];

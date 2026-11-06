@@ -27,6 +27,8 @@ from roop_3d.security.artifact_cleaner import SafeArtifactCleaner
 router = APIRouter(prefix="/api/v1")
 CHUNK_BYTES = 1024 * 1024
 MAX_ASSET_BYTES = 8 * 1024**3
+IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
+MAX_IMAGE_BYTES = 64 * 1024**2
 
 
 class UploadRequest(Contract):
@@ -47,8 +49,10 @@ def create_upload(value: UploadRequest, request: Request):
     except ValueError:
         raise DomainError("UPLOAD_NAME_INVALID", "Use a portable media or FaceSet filename", 422) from None
     suffix = Path(value.filename).suffix.lower()
-    if suffix not in VIDEO_SUFFIXES | {".fsz"} or suffix == ".fsz" and value.size_bytes > 256 * 1024**2:
-        raise DomainError("UPLOAD_FORMAT_INVALID", "Unsupported format or oversized FaceSet archive", 422)
+    if (suffix not in VIDEO_SUFFIXES | {".fsz"} | IMAGE_SUFFIXES
+            or suffix == ".fsz" and value.size_bytes > 256 * 1024**2
+            or suffix in IMAGE_SUFFIXES and value.size_bytes > MAX_IMAGE_BYTES):
+        raise DomainError("UPLOAD_FORMAT_INVALID", "Unsupported format or oversized image/FaceSet archive", 422)
     root = request.app.state.root
     upload_id = uuid.uuid4().hex
     relative = upload_path(root, upload_id, ".json").relative_to(root).as_posix()
@@ -109,6 +113,12 @@ def finish_upload(request: Request, upload_id: str):
                 "name": Path(info.filename).stem[:128], "item_count": len(document.views), "schema_version": 1})
             atomic_json(root, f"roop_3d/.runtime/coverage/{upload_id}.json", coverage(document))
             result = {"kind": "faceset", "faceset_id": upload_id, "sha256": digest}
+        elif suffix in {".png", ".jpg", ".jpeg", ".webp", ".bmp"}:
+            relative = f"roop_3d/.runtime/media/{upload_id}{suffix}"
+            destination = owned(root, relative)
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            os.replace(path, destination)
+            result = {"kind": "image", "path": relative, "sha256": digest}
         else:
             validate_video_container(header_sample, info.filename)
             from roop_3d.media.probe import probe

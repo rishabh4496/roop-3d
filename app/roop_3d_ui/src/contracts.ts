@@ -117,7 +117,14 @@ export interface IdentityAssetStatus {
   flame: Record<string, unknown>;
 }
 export interface Probe { width: number; height: number; duration_seconds: number | null; fps_rational: string | null; declared_frame_count: number | null; audio_tracks: unknown[] }
-export interface Coverage { faceset_id: string; views: { yaw: number; pitch: number; roll: number; pose_bin: string }[]; bins: Record<string, number> }
+export interface ReconstructedMesh { vertices: number[][]; uvs: number[][]; indices: number[][]; normals: number[][]; texture_base64: string; reconstruction_level: string; limitations: string[] }
+export interface ObservedPosePoint { view_index: number; yaw: number; pitch: number; roll: number; bin_index: number; position_xyz: [number, number, number]; reprojection_error_px: number }
+export interface Coverage {
+  faceset_id: string; views: { yaw: number; pitch: number; roll: number; pose_bin: string }[]; bins: Record<string, number>;
+  status?: string; observed_views?: number; sphere_coverage_count?: number; sphere_coverage_total?: number; sphere_coverage_pct?: number;
+  live_pose?: { yaw: number; pitch: number; roll: number }; observed_pose_points?: ObservedPosePoint[];
+  mesh_2_5d?: ReconstructedMesh; mesh_full_3d?: ReconstructedMesh; uv_texture_data_url?: string;
+}
 /** `identity_asset` is the Stage 3 per-FaceSet asset served by `GET /facesets/{id}/identity-asset/mesh` (glTF frame). */
 export interface Reconstruction { method: 'flame' | 'tps_2_5d' | 'identity_asset';coordinate_system: 'opencv' | 'opengl'; vertices: number[][]; faces: number[][]; uvs: number[][] | null; face_uvs?: number[][] | null; texture: string | null; provenance: string }
 export interface Project {

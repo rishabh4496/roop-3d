@@ -92,6 +92,22 @@ export function projectViewsToLattice(lattice, views = []) {
   return updated;
 }
 
+/** Exact 12 yaw x 8 pitch hemisphere grid used by the backend bin contract. */
+export function generatePoseGrid(radius = 1.35) {
+  const nodes = [];
+  for (let pitchBin = 0; pitchBin < 8; pitchBin++) {
+    const pitchDeg = -60 + (pitchBin + 0.5) * 15;
+    for (let yawBin = 0; yawBin < 12; yawBin++) {
+      const yawDeg = -90 + (yawBin + 0.5) * 15;
+      const yaw = yawDeg * Math.PI / 180, pitch = pitchDeg * Math.PI / 180;
+      const normal = new THREE.Vector3(Math.sin(yaw) * Math.cos(pitch), Math.sin(pitch), Math.cos(yaw) * Math.cos(pitch)).normalize();
+      nodes.push({ index: pitchBin * 12 + yawBin, yawDeg, pitchDeg, normal,
+        position: normal.clone().multiplyScalar(radius).toArray(), sampleCount: 0 });
+    }
+  }
+  return nodes;
+}
+
 /**
  * Procedural low-poly canonical 3D head geometry centered at [0, 0, 0].
  */
@@ -322,7 +338,7 @@ function CanonicalHeadMesh({ pose, mode, mesh }) {
 /**
  * Interactive FaceSet Orientation Sphere (Heatmap of observed angles).
  */
-export function FaceSetOrientationSphere({ lattice }) {
+export function FaceSetOrientationSphere({ lattice, observations = [] }) {
   // Wireframe guide circles
   const circleGeom = useMemo(() => {
     const pts = [];
@@ -349,7 +365,7 @@ export function FaceSetOrientationSphere({ lattice }) {
         <lineBasicMaterial color="#334155" transparent opacity={0.4} />
       </line>
 
-      {/* Discrete sampling nodes from Fibonacci lattice */}
+      {/* Exact 96-cell hemisphere lattice */}
       {lattice.map(node => {
         let color = '#334155'; // Slate: Unobserved blind spot
         let opacity = 0.35;
@@ -372,6 +388,13 @@ export function FaceSetOrientationSphere({ lattice }) {
           </mesh>
         );
       })}
+      {/* Measured view directions, separate from their containing coverage cells. */}
+      {observations.map((point, index) => (
+        <mesh key={`observed-${point.view_index ?? index}`} position={point.position_xyz.map(value => value * 1.35)}>
+          <sphereGeometry args={[0.035, 12, 12]} />
+          <meshBasicMaterial color="#22d3ee" transparent opacity={0.95} />
+        </mesh>
+      ))}
     </group>
   );
 }
@@ -431,11 +454,12 @@ export default function PoseGeometryViewer({
       const rollAvg = track.pose_range.roll_degrees ? (track.pose_range.roll_degrees[0] + track.pose_range.roll_degrees[1]) / 2 : 0;
       return { yaw: yawAvg, pitch: pitchAvg, roll: rollAvg };
     }
+    if (coverage?.live_pose) return coverage.live_pose;
     if (targetClusters.length > 0) {
       return targetClusters[0].avgPose;
     }
     return { yaw: 0, pitch: 0, roll: 0 };
-  }, [activeSelection, detectedFaces, track, targetClusters]);
+  }, [activeSelection, detectedFaces, track, targetClusters, coverage]);
 
   // Aggregate observed sample views: coverage views OR video track faces
   const rawViews = useMemo(() => {
@@ -454,18 +478,37 @@ export default function PoseGeometryViewer({
     return [];
   }, [coverage, detectedFaces]);
 
-  // Fibonacci lattice nodes populated with view coverage
-  const baseLattice = useMemo(() => generateFibonacciSphere(96, 1.35), []);
-  const lattice = useMemo(() => projectViewsToLattice(baseLattice, rawViews), [baseLattice, rawViews]);
+  // Populate the exact backend 12x8 bins; fallback views use the same quantizer.
+  const baseLattice = useMemo(() => generatePoseGrid(1.35), []);
+  const lattice = useMemo(() => {
+    const counts = new Array(96).fill(0);
+    if (coverage?.observed_pose_points) {
+      for (const point of coverage.observed_pose_points) counts[point.bin_index] += 1;
+    } else {
+      for (const view of rawViews) {
+        const yawBin = Math.min(11, Math.max(0, Math.floor((Math.min(90, Math.max(-90, view.yaw)) + 90) / 15)));
+        const pitchBin = Math.min(7, Math.max(0, Math.floor((Math.min(60, Math.max(-60, view.pitch)) + 60) / 15)));
+        counts[pitchBin * 12 + yawBin] += 1;
+      }
+    }
+    return baseLattice.map(node => ({ ...node, sampleCount: counts[node.index] }));
+  }, [baseLattice, rawViews, coverage]);
 
   // Coverage statistics
   const stats = useMemo(() => {
-    const totalNodes = lattice.length;
-    const observedNodes = lattice.filter(n => n.sampleCount > 0).length;
-    const coveragePct = Math.round((observedNodes / totalNodes) * 100);
-    const totalSamples = rawViews.length;
+    const totalNodes = coverage?.sphere_coverage_total ?? 96;
+    const observedNodes = coverage?.sphere_coverage_count ?? lattice.filter(n => n.sampleCount > 0).length;
+    const coveragePct = coverage?.sphere_coverage_pct ?? Math.round((observedNodes / totalNodes) * 100);
+    const totalSamples = coverage?.observed_views ?? rawViews.length;
     return { totalNodes, observedNodes, coveragePct, totalSamples };
-  }, [lattice, rawViews]);
+  }, [lattice, rawViews, coverage]);
+
+  const estimatedMesh = useMemo(() => {
+    const value = coverage?.mesh_2_5d;
+    return value ? { method: 'tps_2_5d', coordinate_system: 'opencv', vertices: value.vertices,
+      faces: value.indices, uvs: value.uvs, texture: `data:image/png;base64,${value.texture_base64}`, provenance: value.reconstruction_level } : null;
+  }, [coverage]);
+  const displayedMesh = viewMode === 'estimated_2_5d' ? (estimatedMesh ?? mesh) : mesh;
 
   // ResizeObserver for robust layout adaptation
   const updateSize = useCallback(() => {
@@ -547,13 +590,13 @@ export default function PoseGeometryViewer({
             {/* Canonical Head & Landmarks */}
             <CanonicalHeadMesh
               pose={currentPose}
-              mode={viewMode}
-              mesh={mesh}
+              mode={displayedMesh ? 'reconstruction' : viewMode}
+              mesh={displayedMesh}
             />
 
             {/* FaceSet Orientation Heatmap Sphere */}
             {viewMode === 'estimated_2_5d' && (
-              <FaceSetOrientationSphere lattice={lattice} />
+              <FaceSetOrientationSphere lattice={lattice} observations={coverage?.observed_pose_points ?? []} />
             )}
 
             {/* OrbitControls */}
