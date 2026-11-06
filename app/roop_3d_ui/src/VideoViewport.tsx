@@ -8,7 +8,6 @@ import { useFaceSelectionStore } from './useFaceSelectionStore';
 import FaceOverlayCanvas from './components/canvas/FaceOverlayCanvas';
 import FaceSelectionTray from './components/tray/FaceSelectionTray';
 import WorkstationCanvas from './components/canvas/WorkstationCanvas';
-import MaskBrushOverlay from './components/canvas/MaskBrushOverlay';
 import CompositionGridOverlay from './components/canvas/CompositionGridOverlay';
 import TimelineWorkstation, { parseFps } from './components/timeline/TimelineWorkstation';
 import type { ReactNode } from 'react';
@@ -300,12 +299,13 @@ export function VideoViewport({
     toggleLiveFrameSwap();
   };
   useEffect(() => { const handler = () => renderFrameRef.current(); window.addEventListener(RENDER_FRAME_EVENT, handler); return () => window.removeEventListener(RENDER_FRAME_EVENT, handler); }, []);
+  const requestedBuffer = solo ? nodeBuffer(solo) : compMode === 'matte' ? 'matte' : 'final';
   const live = useLiveSwapPreview(previewLive && enabled && liveSwap && !playing && !isMaskEditing
-    ? buildLivePayload({ timestampSelection: true, request: previewRequest, time, fps, parameters, maskBase64, restorerAvailable, solo: nodeBuffer(solo) })
+    ? buildLivePayload({ timestampSelection: true, request: previewRequest, time, fps, parameters, maskBase64, restorerAvailable, solo: requestedBuffer })
     : null);
   useEffect(() => { if (live.meta?.latency) latencyCallback.current?.(live.meta.latency); }, [live.meta]);
   // Only show a live image that is the buffer currently asked for: never the previous node's output while a new one loads.
-  const liveFresh = !!live.url && (live.meta?.solo_node ?? 'final') === (nodeBuffer(solo) ?? 'final');
+  const liveFresh = !!live.url && (live.meta?.solo_node ?? 'final') === requestedBuffer;
   const liveUrl = liveFresh ? live.url : null, liveBlob = liveFresh ? live.blob : null;
   const [viewMode, setViewMode] = preference('view_mode');
   const [showLandmarks, setShowLandmarks] = preference('show_landmarks'), [showPose, setShowPose] = preference('show_pose');
@@ -921,10 +921,12 @@ export function VideoViewport({
             transition: isPanning ? 'none' : 'transform 0.12s cubic-bezier(0.2, 0, 0, 1)',
           }}
         >
-          {viewMode === 'compare' && !playing && !isMaskEditing && !solo ? (
+          {viewMode === 'compare' && !playing && !solo ? (
             <div className="compare-host">
               <WorkstationCanvas fullBleed output={output} originalUrl={sourcePreview.source} swappedUrl={liveUrl || outputPreview.source}
-                mode={compMode} onModeChange={(next: string) => setCompMode(next as typeof compMode)} containerWidth={viewportSize.width} containerHeight={viewportSize.height}
+                mode={compMode} maskEditing={isMaskEditing} maskBase64={maskBase64} onMaskChange={onMaskChange}
+                onMaskEditToggle={setIsMaskEditing}
+                onModeChange={(next: string) => { setCompMode(next as typeof compMode); if (next === 'matte') setLiveSwap(true); }} containerWidth={viewportSize.width} containerHeight={viewportSize.height}
                 mediaDimensions={mediaDims} onContextMenuPoint={handleCompareContextMenu} currentTime={time} fps={fps}/>
               {showFaceOverlays && <FaceOverlayCanvas videoRef={original} mediaDimensions={mediaDims} currentTime={time} sources={sources} fps={fps}
                 showOverlays showLandmarks={showLandmarks} showPose={showPose} interactive={false} frameFaces={frameFaces} frameMeta={scrub.meta}/>}
@@ -936,17 +938,6 @@ export function VideoViewport({
             </>
           )}
 
-          {/* Manual & Occlusion Mask Editor Overlay */}
-          {isMaskEditing && (
-            <MaskBrushOverlay
-              containerWidth={viewportSize.width}
-              containerHeight={viewportSize.height}
-              mediaDimensions={mediaDims}
-              onMaskChange={onMaskChange}
-              initialMask={maskBase64}
-              onClose={() => setIsMaskEditing(false)}
-            />
-          )}
         </div>
       </div>
 
@@ -960,6 +951,16 @@ export function VideoViewport({
             <p className="muted panel-hint">{PANELS[panel].hint}</p>
             {panel === 'geometry' && <label className="numeric-control">Pose correction method<select aria-label="Pose correction method" value={parameters.pose_mode ?? 'retarget'} onChange={event => setParameters({ ...parameters, pose_mode: event.target.value as 'retarget' | 'mesh_blend' })}><option value="mesh_blend">2.5D / 3D mesh blend (canonical proxy)</option><option value="retarget">Reference LivePortrait retarget</option></select></label>}
             {panel === 'masking' && <label className="numeric-control">Occlusion handling<select aria-label="Occlusion handling" value={parameters.occlusion_mode ?? 'standard'} onChange={event => setParameters({ ...parameters, occlusion_mode: event.target.value as 'standard' | 'robust' })}><option value="standard">Standard (parser + landmark hull)</option><option value="robust">Robust (hands, hair, glasses, props, face depth order)</option></select></label>}
+            {panel === 'restorer' && <>
+              <label className="numeric-control">Color transfer<select aria-label="Color transfer" value={parameters.color_method ?? 'lab'} onChange={event => setParameters({ ...parameters, color_method: event.target.value as 'lab' | 'reinhard_lab' | 'histogram' })}>
+                <option value="lab">LAB mean/std</option><option value="reinhard_lab">Reinhard LAB</option><option value="histogram">Masked histogram</option>
+              </select></label>
+              <label className="numeric-control"><input aria-label="3D SH relighting" type="checkbox" checked={parameters.relight ?? false}
+                onChange={event => setParameters({ ...parameters, relight: event.target.checked })}/> 3D SH relighting</label>
+              {parameters.restorer_model === 'ultramax' && <label className="numeric-control">Small-face UltraMax<select aria-label="Small-face UltraMax" value={parameters.ultramax_small_face_mode ?? 'bypass'} onChange={event => setParameters({ ...parameters, ultramax_small_face_mode: event.target.value as 'bypass' | 'adaptive' | 'off' })}>
+                <option value="bypass">Bypass at or below 320 px</option><option value="adaptive">Scale detail by native face size</option><option value="off">Always restore</option>
+              </select></label>}
+            </>}
             {settingsOf(panel).map(spec => (
               <SettingControl key={spec.id} spec={spec} label={spec.id === 'pose_strength' && parameters.pose_mode !== 'mesh_blend' ? 'Reference retarget strength' : undefined}
                 value={settingValue(spec, effectiveParameters)} onChange={value => editParameter(spec.id, value)}

@@ -246,6 +246,9 @@
 /* Mask Brush Overlay & Editor */
 .mask-brush-overlay{position:absolute;inset:0;z-index:25;pointer-events:auto;user-select:none;touch-action:none}
 .mask-visible-canvas{display:block}
+.canvas-mask-toggle{position:absolute;right:14px;bottom:14px;z-index:26;border:1px solid var(--border-strong,#53606d);border-radius:8px;padding:8px 12px;background:var(--panel,#182027);color:var(--text,#f3f4f6);font:600 12px/1.2 inherit;cursor:pointer}
+.canvas-mask-toggle[aria-pressed="true"]{border-color:#2dcc8a;color:#7ee3b6}
+.matte-image{filter:grayscale(1);image-rendering:auto}
 .brush-cursor{position:absolute;border:1.5px solid #f43f5e;border-radius:50%;pointer-events:none;transform:translate3d(0,0,0);box-shadow:0 0 8px rgba(244,63,94,0.3)}
 .brush-cursor.mode-erase{border-color:#38bdf8;border-style:dashed}
 .brush-cursor.mode-blur{border-color:#f59e0b}

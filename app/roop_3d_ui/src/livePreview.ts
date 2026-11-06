@@ -43,6 +43,8 @@ export function buildLivePayload({ request, time, fps, parameters, maskBase64, r
     restoration_blend: restoring ? parameters.restoration_blend : undefined,
     color_strength: parameters.color_strength,
     color_method: parameters.color_method ?? 'lab',
+    ultramax_small_face_mode: parameters.ultramax_small_face_mode,
+    ultramax_min_native_pixels: parameters.ultramax_min_native_pixels,
     swap_weight: parameters.swap_weight ?? 1,
     bypass: parameters.bypass,
     // Stage 7: preview what Start would render. Omitted at their defaults so earlier preview cache keys are unchanged.

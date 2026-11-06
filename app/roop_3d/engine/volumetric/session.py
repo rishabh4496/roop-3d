@@ -200,10 +200,11 @@ class ReferencePipeline:
             self.identity_guard = guard
 
     def configure_temporal(self, settings) -> None:
-        from roop_3d.temporal_stabilizer import TemporalStabilizer
-        config = dict(min_cutoff=settings.temporal_min_cutoff, beta=settings.temporal_beta, d_cutoff=settings.temporal_d_cutoff)
+        from roop_3d.temporal import TrackTemporalStabilizer
+        config = dict(min_cutoff=settings.temporal_min_cutoff, beta=settings.temporal_beta,
+                      derivative_cutoff=settings.temporal_d_cutoff)
         if self.tracker is not None:
-            self.tracker.stabilizer = TemporalStabilizer(**config)
+            self.tracker.stabilizer = TrackTemporalStabilizer(**config)
         self.compositor.histogram_stabilizer = TemporalStabilizer(**config)
         self.swapper.pose_deadband = settings.pose_hysteresis_degrees
         self.swapper._hysteresis = {}

@@ -15,6 +15,7 @@ class FrameEditPlan:
         self.current = {}
         self.documents = {}
         self.mask = None
+        self.mask_channels = None
         if request.mask_base64:
             try:
                 value = request.mask_base64.removeprefix('data:image/png;base64,')
@@ -24,8 +25,20 @@ class FrameEditPlan:
                 width, height = int.from_bytes(data[16:20], 'big'), int.from_bytes(data[20:24], 'big')
                 if not 0 < width <= 3840 or not 0 < height <= 3840 or width * height > 3840 * 2160:
                     raise ValueError()
-                self.mask = cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_GRAYSCALE)
-                if self.mask is None:
+                decoded = cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_UNCHANGED)
+                if decoded is None:
+                    raise ValueError()
+                if decoded.ndim == 2:
+                    # Existing workstation masks are grayscale keep-target masks.
+                    self.mask = decoded
+                elif decoded.ndim == 3 and decoded.shape[2] in (3, 4):
+                    alpha = decoded[..., 3].astype(np.float32) / 255 if decoded.shape[2] == 4 else 1.0
+                    blue, green, red = (decoded[..., i].astype(np.float32) / 255 for i in range(3))
+                    if np.any(blue > 0):  # Legacy white PNG with alpha; retain exclude-only meaning.
+                        self.mask = np.clip(blue * alpha * 255, 0, 255).astype(np.uint8)
+                    else:
+                        self.mask_channels = (np.clip(red * alpha, 0, 1), np.clip(green * alpha, 0, 1))
+                else:
                     raise ValueError()
             except (ValueError, cv2.error):
                 raise DomainError('MASK_INVALID', 'Manual mask must be a bounded local PNG', 422) from None
@@ -73,10 +86,20 @@ class FrameEditPlan:
         self.current = active
 
     def occluders(self, image, result):
-        if self.mask is None:
+        if self.mask is None and self.mask_channels is None:
             return None
+        if self.mask_channels is not None:
+            include, exclude = self.mask_channels
+            if include.shape != image.shape[:2]:
+                include = cv2.resize(include, (image.shape[1], image.shape[0]), interpolation=cv2.INTER_LINEAR)
+                exclude = cv2.resize(exclude, (image.shape[1], image.shape[0]), interpolation=cv2.INTER_LINEAR)
+            return {item.track_id: tuple(cv2.warpAffine(mask.astype(np.float32),
+                cv2.invertAffineTransform(item.inverse), (item.image.shape[1], item.image.shape[0]),
+                flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT) for mask in (include, exclude))
+                for item in result.replacements}
         mask = self.mask
         if mask.shape != image.shape[:2]:
-            mask = cv2.resize(mask, (image.shape[1], image.shape[0]), interpolation=cv2.INTER_NEAREST)
+            mask = cv2.resize(mask, (image.shape[1], image.shape[0]), interpolation=cv2.INTER_LINEAR)
         return {item.track_id: cv2.warpAffine(mask.astype(np.float32) / 255,
-            cv2.invertAffineTransform(item.inverse), (item.image.shape[1], item.image.shape[0])) for item in result.replacements}
+            cv2.invertAffineTransform(item.inverse), (item.image.shape[1], item.image.shape[0]),
+            flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT) for item in result.replacements}

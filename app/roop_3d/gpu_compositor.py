@@ -245,6 +245,7 @@ class TorchIOBinding:
 @dataclass(frozen=True)
 class CompositorOptions:
     color_strength: float = 0.
+    color_method: str = 'reinhard_lab'
     regional_color: bool = False
     laplacian_blend_weight: float = 0.
     erosion: int = 0
@@ -252,7 +253,8 @@ class CompositorOptions:
     jaw_falloff: float = 0.
 
     def __post_init__(self):
-        if (not 0 <= self.color_strength <= 1 or not 0 <= self.laplacian_blend_weight <= 1
+        if (self.color_method not in ('reinhard_lab', 'regional_reinhard')
+                or not 0 <= self.color_strength <= 1 or not 0 <= self.laplacian_blend_weight <= 1
                 or type(self.erosion) is not int or abs(self.erosion) > 64
                 or not 0 <= self.feather_sigma <= 64 or not 0 <= self.jaw_falloff <= 1):
             raise ValueError("Invalid GPU compositor options")
@@ -302,7 +304,7 @@ class GpuCompositor:
                 inner = morphology(skin * visibility, max(1, self.options.erosion)) * visibility
                 if self.options.color_strength:
                     enhanced = color_transfer(enhanced, local_target, inner, strength=self.options.color_strength,
-                                              regional=self.options.regional_color)
+                                              regional=self.options.regional_color or self.options.color_method == 'regional_reinhard')
             else:
                 alpha = soft_matte(alpha, torch.ones_like(alpha), erosion=self.options.erosion,
                                    sigma=self.options.feather_sigma, jaw_falloff=self.options.jaw_falloff)

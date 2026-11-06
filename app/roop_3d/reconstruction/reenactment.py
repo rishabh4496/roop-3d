@@ -46,7 +46,7 @@ from roop_3d.reconstruction.multiview_fit import (
     solve_view_pose,
 )
 from roop_3d.reconstruction.pose_blend import rasterize
-from roop_3d.temporal_stabilizer import OneEuroFilter
+from roop_3d.temporal import TrackTemporalStabilizer
 
 RenderMode = Literal["standard", "pose_3d", "reenactment_3d"]
 RENDER_MODES: tuple[str, ...] = ("standard", "pose_3d", "reenactment_3d")
@@ -418,9 +418,12 @@ class ReenactmentEngine:
         s = self.s
         self.frame_index = 0
         self.calibrator = NeutralCalibrator(s.calibration_window, s.calibration_frames)
-        self.pose_filters = [OneEuroFilter(s.pose_min_cutoff, s.pose_beta, s.pose_d_cutoff) for _ in range(6)]
-        self.expression_filter = OneEuroFilter(s.expression_min_cutoff, s.expression_beta, s.expression_d_cutoff)
-        self.anchor_filter = OneEuroFilter(s.anchor_min_cutoff, s.anchor_beta, s.anchor_d_cutoff)
+        def temporal(min_cutoff, beta, derivative_cutoff):
+            return TrackTemporalStabilizer(min_cutoff=min_cutoff, beta=beta, derivative_cutoff=derivative_cutoff,
+                                           process_noise=8.0, measurement_noise=1.0)
+        self.pose_temporal = temporal(s.pose_min_cutoff, s.pose_beta, s.pose_d_cutoff)
+        self.expression_temporal = temporal(s.expression_min_cutoff, s.expression_beta, s.expression_d_cutoff)
+        self.anchor_temporal = temporal(s.anchor_min_cutoff, s.anchor_beta, s.anchor_d_cutoff)
         self.last_time: float | None = None
         self.last_pose_deg: np.ndarray | None = None
         self.last_params = ExpressionParams()
@@ -519,11 +522,12 @@ class ReenactmentEngine:
 
         # ---- 4. temporal stabilisation (state only advances on accepted frames)
         t = obs.timestamp
-        smoothed = np.array([f(v, t) for f, v in zip(self.pose_filters, [raw_pose[0], raw_pose[1], raw_pose[2],
-                                                                          math.log(pose.scale), pose.tx, pose.ty])])
-        vec_s = self.expression_filter(vec, t)
+        pose_measurement = [raw_pose[0], raw_pose[1], raw_pose[2], math.log(pose.scale), pose.tx, pose.ty]
+        smoothed = self.pose_temporal.filter(0, "head_pose", pose_measurement, t)
+        # Expression coefficients and facial anchors use the same track-local One-Euro + Kalman predictor.
+        vec_s = self.expression_temporal.filter(0, "expression_coefficients", vec, t)
         anchors_raw = np.concatenate([lm5.ravel(), group(lm106, "mouth").mean(axis=0)])
-        anchors_s = self.anchor_filter(anchors_raw, t)
+        anchors_s = self.anchor_temporal.filter(0, "expression_anchors", anchors_raw, t)
         self.last_time, self.last_pose_deg, self.last_expression_vec = t, raw_pose.copy(), vec.copy()
         params = ExpressionParams.from_vector(vec_s).clamped()
         self.last_params = params

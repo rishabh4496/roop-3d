@@ -115,7 +115,7 @@ class LivePreviewPayload(Contract):
     restoration_blend: float | None = Field(default=None, ge=0, le=1)
     identity_blend_t: float | None = Field(default=None, ge=0, le=1)
     fidelity_weight: float = Field(default=0.5, ge=0, le=1)
-    color_method: Literal['lab', 'histogram'] = 'lab'
+    color_method: Literal['lab', 'reinhard_lab', 'histogram'] = 'lab'
     color_strength: float = Field(default=0.65, ge=0, le=1)
     swap_weight: float = Field(default=1, ge=0, le=1)
     bypass: tuple[Literal["restorer", "color"], ...] = Field(default=(), max_length=2)
@@ -128,6 +128,8 @@ class LivePreviewPayload(Contract):
     relight_strength: float | None = Field(default=None, ge=0, le=1)
     specular_sheen: float | None = Field(default=None, ge=0, le=1)
     shadow_preservation: float | None = Field(default=None, ge=0, le=1)
+    ultramax_small_face_mode: Literal['bypass', 'adaptive', 'off'] | None = None
+    ultramax_min_native_pixels: int | None = Field(default=None, ge=64, le=1024)
     lighting_mode: Literal['auto', 'manual'] | None = None
     manual_light_yaw: float | None = Field(default=None, ge=-180, le=180)
     manual_light_pitch: float | None = Field(default=None, ge=-90, le=90)
@@ -482,6 +484,10 @@ class LivePreviewService:
             values.update(restorer_model='codeformer', fidelity_weight=payload.fidelity_weight)
         elif payload.restorer == 'ultramax':
             values.update(restorer_model='ultramax')
+        if payload.ultramax_small_face_mode is not None:
+            values['ultramax_small_face_mode'] = payload.ultramax_small_face_mode
+        if payload.ultramax_min_native_pixels is not None:
+            values['ultramax_min_native_pixels'] = payload.ultramax_min_native_pixels
         if payload.identity_blend_t is not None:
             values['identity_blend_t'] = payload.identity_blend_t
         if payload.relight is not None:

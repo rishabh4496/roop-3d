@@ -146,18 +146,27 @@ class UltraMaxPipelineRestorer(CodeFormerRestorer):
     """UltraMax high-detail restoration: CodeFormer at 512 px training alignment, then a 3-level Laplacian pyramid
     fusion that keeps the swap crop's colour and low/mid frequencies and takes only the restorer's finest detail.
 
-    It reuses the verified CodeFormer weights and alignment (no separate model is claimed). The ``UltraMaxRestorer``
-    ``<=320 px native bypass`` does not apply here: the crop handed to a restorer is the 128/256 px swap crop, which is
-    always upscaled to the 512 px training frame, so a bypass would silently turn UltraMax off.
+    It reuses the verified CodeFormer weights and alignment (no separate model is claimed). Native face size controls
+    whether small background faces bypass inference or receive an adaptively reduced detail pass.
     """
     def __init__(self, catalog, config):
         super().__init__(catalog, config)
         self.fidelity_weight = 0.7
+        self.small_face_mode = "bypass"
+        self.min_native_pixels = 320
 
-    def restore_aligned(self, image, landmarks5):
+    def restore_aligned(self, image, landmarks5, *, native_face_size_px=None):
         from roop_3d.enhancers.ultramax import laplacian_pyramid_fusion
+        small = native_face_size_px is not None and native_face_size_px <= self.min_native_pixels
+        if small and self.small_face_mode == "bypass":
+            return image.copy()
         restored = super().restore_aligned(image, landmarks5)
-        return laplacian_pyramid_fusion(np.ascontiguousarray(image), restored, levels=3)
+        fused = laplacian_pyramid_fusion(np.ascontiguousarray(image), restored, levels=3)
+        if small and self.small_face_mode == "adaptive":
+            strength = float(np.clip(native_face_size_px / max(self.min_native_pixels, 1), 0, 1))
+            fused = np.clip(image.astype(np.float32) + (fused.astype(np.float32) - image) * strength,
+                            0, 255).round().astype(np.uint8)
+        return fused
 
     def restore(self, image: np.ndarray, landmarks5: np.ndarray | None = None) -> np.ndarray:
         from roop_3d.enhancers.ultramax import laplacian_pyramid_fusion

@@ -67,10 +67,11 @@ class MaskSeamWatchdog:
     def __init__(self, maximum=256):
         self.maximum = maximum
         self._baselines = {}
+        self._edge_levels = {}
         self._lock = threading.Lock()
 
     def observe(self, face_id: int, mask: np.ndarray, *, kind: str):
-        if kind not in ("geometric", "occluder", "restoration"):
+        if kind not in ("geometric", "occluder", "restoration", "composite"):
             raise ValueError("Mask baseline type must be explicit")
         mask = np.asarray(mask, np.float32)
         if mask.ndim != 2 or not np.isfinite(mask).all() or np.any((mask < 0) | (mask > 1)):
@@ -80,13 +81,42 @@ class MaskSeamWatchdog:
             old = self._baselines.get(key)
             drift = float(np.abs(mask - old).mean()) if old is not None and old.shape == mask.shape else 0.0
             if key not in self._baselines and len(self._baselines) >= self.maximum:
-                self._baselines.pop(next(iter(self._baselines)))
+                oldest = next(iter(self._baselines))
+                self._baselines.pop(oldest)
+                self._edge_levels.pop(oldest, None)
             self._baselines[key] = mask.copy()
         return drift
+
+    def feather(self, face_id: int, mask: np.ndarray, *, kind: str = "composite",
+                minimum_sigma: float = .35, maximum_sigma: float = 2.5) -> np.ndarray:
+        """Reduce sharp boundary spikes using a baseline from the same mask class only."""
+        if kind not in ("geometric", "occluder", "restoration", "composite"):
+            raise ValueError("Mask baseline type must be explicit")
+        value = np.asarray(mask, np.float32)
+        if value.ndim != 2 or not np.isfinite(value).all() or np.any((value < 0) | (value > 1)):
+            raise ValueError("Invalid seam watchdog mask")
+        drift = self.observe(face_id, value, kind=kind)
+        gx = cv2.Sobel(value, cv2.CV_32F, 1, 0, ksize=3)
+        gy = cv2.Sobel(value, cv2.CV_32F, 0, 1, ksize=3)
+        edge = np.sqrt(gx * gx + gy * gy)
+        boundary = edge > .01
+        level = float(np.percentile(edge[boundary], 95)) if np.any(boundary) else 0.0
+        key = (threading.get_ident(), face_id, kind)
+        with self._lock:
+            previous = self._edge_levels.get(key)
+            self._edge_levels[key] = level
+        spike = max(0.0, level - previous * 1.15) if previous is not None else 0.0
+        sigma = float(np.clip(minimum_sigma + drift * 8.0 + spike * 1.5,
+                              minimum_sigma, maximum_sigma))
+        if sigma <= .5:
+            return np.clip(value, 0, 1).astype(np.float32)
+        softened = cv2.GaussianBlur(value, (0, 0), sigmaX=sigma, sigmaY=sigma, borderType=cv2.BORDER_REPLICATE)
+        return np.clip(softened, 0, 1).astype(np.float32)
 
     def clear(self):
         with self._lock:
             self._baselines.clear()
+            self._edge_levels.clear()
 
 
 class OnnxFaceRestorer:

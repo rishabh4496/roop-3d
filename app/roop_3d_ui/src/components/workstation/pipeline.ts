@@ -2,7 +2,7 @@ export type RestorerModel = 'gpen' | 'codeformer' | 'ultramax';
 /** Weight file each enhancer needs. UltraMax is CodeFormer weights + Laplacian detail fusion, so it shares CodeFormer's file. */
 export const restorerWeights = (model: RestorerModel | undefined): string => (model === 'codeformer' || model === 'ultramax' ? 'CodeFormerv0.1.onnx' : 'gpen_bfr_512.onnx');
 export type WorkstationParameters = {
-  color_method?: 'lab' | 'histogram';
+  color_method?: 'lab' | 'reinhard_lab' | 'histogram';
   restorer_model?: RestorerModel; fidelity_weight?: number; identity_blend_t?: number;
   restoration_blend: number; feather_px: number; color_strength: number; pose_strength: number; pose_mode?: 'retarget' | 'mesh_blend';
   swap_weight?: number; erosion_px?: number; bypass: ('restorer' | 'color')[];
@@ -19,6 +19,8 @@ export type WorkstationParameters = {
   relight_strength?: number;
   specular_sheen?: number;
   shadow_preservation?: number;
+  ultramax_small_face_mode?: 'bypass' | 'adaptive' | 'off';
+  ultramax_min_native_pixels?: number;
   lighting_mode?: 'auto' | 'manual';
   manual_light_yaw?: number;
   manual_light_pitch?: number;

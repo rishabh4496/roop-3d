@@ -1,4 +1,4 @@
-import NumericInput from '../controls/NumericInput';
+﻿import NumericInput from '../controls/NumericInput';
 import React, { useRef, useState, useEffect, useCallback, useMemo } from 'react';
 import { calculateLetterbox } from './FaceOverlayCanvas';
 import { useFaceSelectionStore } from '../../useFaceSelectionStore';
@@ -30,11 +30,14 @@ export default function MaskBrushOverlay({
 }) {
   const visibleCanvasRef = useRef(null);
   const exportCanvasRef = useRef(null);
+  const includeCanvasRef = useRef(null);
+  const excludeCanvasRef = useRef(null);
   const isPainting = useRef(false);
   const lastPoint = useRef(null);
+  const eraseLayer = useRef('include');
 
   // Brush settings
-  const [brushMode, setBrushMode] = useState('paint'); // 'paint' | 'erase' | 'blur'
+  const [brushMode, setBrushMode] = useState('include'); // 'include' | 'exclude' | 'erase'
   const [brushSize, setBrushSize] = useState(28); // 1..100
   const [hardness, setHardness] = useState(0.7); // 0..1 (feathering)
   const [opacity, setOpacity] = useState(0.85); // 0.1..1.0
@@ -73,6 +76,30 @@ export default function MaskBrushOverlay({
   const nativeW = mediaDimensions.width || 1920;
   const nativeH = mediaDimensions.height || 1080;
 
+  const renderVisible = useCallback((bounds = null) => {
+    const visible = visibleCanvasRef.current;
+    const includeCanvas = includeCanvasRef.current, excludeCanvas = excludeCanvasRef.current;
+    if (!visible || !includeCanvas || !excludeCanvas) return;
+    const out = visible.getContext('2d'), inc = includeCanvas.getContext('2d'), exc = excludeCanvas.getContext('2d');
+    if (!out || !inc || !exc) return;
+    const left = bounds ? Math.max(0, Math.floor(bounds.left)) : 0;
+    const top = bounds ? Math.max(0, Math.floor(bounds.top)) : 0;
+    const width = Math.min(nativeW - left, bounds ? Math.max(1, Math.ceil(bounds.right) - left) : nativeW);
+    const height = Math.min(nativeH - top, bounds ? Math.max(1, Math.ceil(bounds.bottom) - top) : nativeH);
+    const a = inc.getImageData(left, top, width, height).data;
+    const b = exc.getImageData(left, top, width, height).data;
+    const pixels = out.createImageData(width, height);
+    for (let i = 0; i < a.length; i += 4) {
+      const include = a[i + 3], exclude = b[i + 3];
+      if (include >= exclude) {
+        pixels.data[i] = 45; pixels.data[i + 1] = 205; pixels.data[i + 2] = 125; pixels.data[i + 3] = Math.round(include * .62);
+      } else {
+        pixels.data[i] = 244; pixels.data[i + 1] = 63; pixels.data[i + 2] = 94; pixels.data[i + 3] = Math.round(exclude * .62);
+      }
+    }
+    out.putImageData(pixels, left, top);
+  }, [nativeW, nativeH]);
+
   // Screen -> Native canvas coordinate mapping
   const screenToCanvasCoords = useCallback(
     (clientX, clientY) => {
@@ -81,12 +108,8 @@ export default function MaskBrushOverlay({
       const rect = canvas.getBoundingClientRect();
       const screenX = clientX - rect.left;
       const screenY = clientY - rect.top;
-
-      const scaleX = nativeW / (letterbox.displayW || 1);
-      const scaleY = nativeH / (letterbox.displayH || 1);
-
-      const x = (screenX - letterbox.offsetX) * scaleX;
-      const y = (screenY - letterbox.offsetY) * scaleY;
+      const x = screenX * nativeW / (rect.width || 1);
+      const y = screenY * nativeH / (rect.height || 1);
 
       return {
         x,
@@ -94,13 +117,10 @@ export default function MaskBrushOverlay({
         screenX,
         screenY,
         onImage:
-          screenX >= letterbox.offsetX &&
-          screenX <= letterbox.offsetX + letterbox.displayW &&
-          screenY >= letterbox.offsetY &&
-          screenY <= letterbox.offsetY + letterbox.displayH,
+          screenX >= 0 && screenX <= rect.width && screenY >= 0 && screenY <= rect.height,
       };
     },
-    [nativeW, nativeH, letterbox]
+    [nativeW, nativeH]
   );
 
   // Initialize canvases
@@ -113,6 +133,10 @@ export default function MaskBrushOverlay({
     vCanvas.height = nativeH;
     eCanvas.width = nativeW;
     eCanvas.height = nativeH;
+    includeCanvasRef.current.width = nativeW;
+    includeCanvasRef.current.height = nativeH;
+    excludeCanvasRef.current.width = nativeW;
+    excludeCanvasRef.current.height = nativeH;
 
     const eCtx = eCanvas.getContext('2d');
     if (eCtx) {
@@ -128,118 +152,74 @@ export default function MaskBrushOverlay({
     if (!visible || !exported) return;
     const vCtx = visible.getContext('2d'), eCtx = exported.getContext('2d');
     if (!vCtx || !eCtx) return;
-    vCtx.clearRect(0, 0, nativeW, nativeH); eCtx.fillStyle = '#000'; eCtx.fillRect(0, 0, nativeW, nativeH);
+    vCtx.clearRect(0, 0, nativeW, nativeH); eCtx.clearRect(0, 0, nativeW, nativeH);
+    for (const canvas of [includeCanvasRef.current, excludeCanvasRef.current]) canvas?.getContext('2d')?.clearRect(0, 0, nativeW, nativeH);
     if (!initialMask) return;
     let live = true; const image = new Image();
-    image.onload = () => { if (!live) return; eCtx.drawImage(image, 0, 0, nativeW, nativeH); const pixels = eCtx.getImageData(0, 0, nativeW, nativeH); for (let i = 0; i < pixels.data.length; i += 4) { const alpha = pixels.data[i] * .6; pixels.data[i] = 244; pixels.data[i + 1] = 63; pixels.data[i + 2] = 94; pixels.data[i + 3] = alpha; } vCtx.putImageData(pixels, 0, 0); };
+    image.onload = () => {
+      if (!live) return;
+      const temp = document.createElement('canvas'); temp.width = nativeW; temp.height = nativeH;
+      const ctx = temp.getContext('2d'); if (!ctx) return; ctx.drawImage(image, 0, 0, nativeW, nativeH);
+      const data = ctx.getImageData(0, 0, nativeW, nativeH).data;
+      const inc = includeCanvasRef.current.getContext('2d'), exc = excludeCanvasRef.current.getContext('2d');
+      if (!inc || !exc) return;
+      const incPixels = inc.createImageData(nativeW, nativeH), excPixels = exc.createImageData(nativeW, nativeH);
+      for (let i = 0; i < data.length; i += 4) {
+        const alpha = data[i + 3] / 255;
+        if (data[i + 2] > 0) excPixels.data[i + 3] = Math.round(data[i + 2] * alpha); // legacy white / gray keep-target mask
+        else { incPixels.data[i + 3] = Math.round(data[i] * alpha); excPixels.data[i + 3] = Math.round(data[i + 1] * alpha); }
+        incPixels.data[i] = incPixels.data[i + 1] = incPixels.data[i + 2] = 255;
+        excPixels.data[i] = excPixels.data[i + 1] = excPixels.data[i + 2] = 255;
+      }
+      inc.putImageData(incPixels, 0, 0); exc.putImageData(excPixels, 0, 0); renderVisible();
+    };
     image.src = initialMask;
     return () => { live = false; };
-  }, [initialMask, nativeW, nativeH]);
+  }, [initialMask, nativeW, nativeH, renderVisible]);
 
   // Apply brush dab / stroke
   const drawDab = useCallback(
     (pt, prevPt) => {
       const vCanvas = visibleCanvasRef.current;
-      const eCanvas = exportCanvasRef.current;
-      if (!vCanvas || !eCanvas) return;
+      const layerCanvas = (brushMode === 'erase' ? eraseLayer.current : brushMode) === 'include' ? includeCanvasRef.current : excludeCanvasRef.current;
+      if (!vCanvas || !layerCanvas) return;
 
-      const vCtx = vCanvas.getContext('2d');
-      const eCtx = eCanvas.getContext('2d');
-      if (!vCtx || !eCtx) return;
+      const ctx = layerCanvas.getContext('2d');
+      if (!ctx) return;
 
       const scale = nativeW / (letterbox.displayW || 1);
       const r = Math.max(1, (brushSize / 2) * scale);
       const innerR = Math.max(0, r * hardness);
 
-      if (brushMode === 'blur') {
-        // Box blur operation on region
-        applyBoxBlur(vCtx, pt.x, pt.y, r);
-        applyBoxBlur(eCtx, pt.x, pt.y, r);
-        return;
-      }
-
       const isErase = brushMode === 'erase';
-
-      for (const [ctx, isExport] of [
-        [vCtx, false],
-        [eCtx, true],
-      ]) {
-        ctx.save();
-        ctx.globalCompositeOperation = isErase
-          ? isExport
-            ? 'source-over'
-            : 'destination-out'
-          : 'source-over';
-
-        let color, endColor;
-        if (isExport) {
-          color = isErase ? '#000000' : `rgba(255, 255, 255, ${opacity})`;
-          endColor = isErase ? '#000000' : 'rgba(255, 255, 255, 0)';
-        } else {
-          color = isErase ? '#000000' : `rgba(244, 63, 94, ${opacity * 0.6})`;
-          endColor = 'rgba(244, 63, 94, 0)';
+      ctx.save(); ctx.globalCompositeOperation = isErase ? 'destination-out' : 'source-over';
+      const color = `rgba(255,255,255,${opacity})`, clear = 'rgba(255,255,255,0)';
+      const drawPoint = (x, y) => {
+        const grad = ctx.createRadialGradient(x, y, innerR, x, y, r);
+        grad.addColorStop(0, color); grad.addColorStop(1, hardness < .95 ? clear : color);
+        ctx.fillStyle = grad;
+        ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill();
+      };
+      if (prevPt) {
+        const distance = Math.hypot(pt.x - prevPt.x, pt.y - prevPt.y);
+        const steps = Math.max(1, Math.ceil(distance / Math.max(1, r * .3)));
+        for (let index = 1; index <= steps; index++) {
+          const t = index / steps;
+          drawPoint(prevPt.x + (pt.x - prevPt.x) * t, prevPt.y + (pt.y - prevPt.y) * t);
         }
-
-        if (hardness < 0.95 && !isErase) {
-          const grad = ctx.createRadialGradient(pt.x, pt.y, innerR, pt.x, pt.y, r);
-          grad.addColorStop(0, color);
-          grad.addColorStop(1, endColor);
-          ctx.fillStyle = grad;
-          ctx.strokeStyle = grad;
-        } else {
-          ctx.fillStyle = color;
-          ctx.strokeStyle = color;
-        }
-
-        ctx.lineWidth = r * 2;
-        ctx.lineCap = 'round';
-        ctx.lineJoin = 'round';
-
-        // Draw dab circle
-        ctx.beginPath();
-        ctx.arc(pt.x, pt.y, r, 0, Math.PI * 2);
-        ctx.fill();
-
-        // Connect with previous point for unbroken stroke
-        if (prevPt) {
-          ctx.beginPath();
-          ctx.moveTo(prevPt.x, prevPt.y);
-          ctx.lineTo(pt.x, pt.y);
-          ctx.stroke();
-        }
-
-        ctx.restore();
-      }
+      } else drawPoint(pt.x, pt.y);
+      ctx.restore();
+      const pad = r + 2;
+      renderVisible({ left: Math.min(pt.x, prevPt?.x ?? pt.x) - pad, top: Math.min(pt.y, prevPt?.y ?? pt.y) - pad,
+        right: Math.max(pt.x, prevPt?.x ?? pt.x) + pad, bottom: Math.max(pt.y, prevPt?.y ?? pt.y) + pad });
     },
-    // applyBoxBlur is a pure function of its arguments (declared below); depending on it would rebuild this callback every render.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [brushMode, brushSize, hardness, opacity, nativeW, letterbox]
+    [brushMode, brushSize, hardness, opacity, nativeW, letterbox, renderVisible]
   );
-
-  // Box blur filter helper
-  function applyBoxBlur(ctx, cx, cy, radius) {
-    const d = Math.round(radius * 1.5);
-    const x = Math.max(0, Math.round(cx - d));
-    const y = Math.max(0, Math.round(cy - d));
-    const w = Math.min(nativeW - x, d * 2);
-    const h = Math.min(nativeH - y, d * 2);
-    if (w <= 0 || h <= 0) return;
-
-    try {
-      const imgData = ctx.getImageData(x, y, w, h);
-      const data = imgData.data;
-      // Fast horizontal & vertical 3-box blur
-      for (let i = 4; i < data.length - 4; i += 4) {
-        data[i + 3] = (data[i - 4 + 3] + data[i + 3] + data[i + 4 + 3]) / 3;
-      }
-      ctx.putImageData(imgData, x, y);
-    } catch {
-      // Fallback
-    }
-  }
 
   // Pointer event handlers
   const handlePointerDown = e => {
+    e.stopPropagation();
+    if (e.target.closest?.('.mask-editor-toolbar')) return;
     const pt = screenToCanvasCoords(e.clientX, e.clientY);
     if (!pt || !pt.onImage) return;
 
@@ -250,6 +230,7 @@ export default function MaskBrushOverlay({
   };
 
   const handlePointerMove = e => {
+    e.stopPropagation();
     const pt = screenToCanvasCoords(e.clientX, e.clientY);
     if (pt) {
       setCursorPos({ x: pt.screenX, y: pt.screenY, visible: pt.onImage });
@@ -260,7 +241,8 @@ export default function MaskBrushOverlay({
     }
   };
 
-  const handlePointerUp = () => {
+  const handlePointerUp = e => {
+    e?.stopPropagation?.();
     if (isPainting.current) {
       isPainting.current = false;
       lastPoint.current = null;
@@ -282,6 +264,15 @@ export default function MaskBrushOverlay({
     const eCanvas = exportCanvasRef.current;
     if (!eCanvas) return;
     try {
+      const inc = includeCanvasRef.current?.getContext('2d'), exc = excludeCanvasRef.current?.getContext('2d');
+      const out = eCanvas.getContext('2d');
+      if (!inc || !exc || !out) return;
+      const a = inc.getImageData(0, 0, nativeW, nativeH).data, b = exc.getImageData(0, 0, nativeW, nativeH).data;
+      const packed = out.createImageData(nativeW, nativeH);
+      for (let i = 0; i < a.length; i += 4) {
+        packed.data[i] = a[i + 3]; packed.data[i + 1] = b[i + 3]; packed.data[i + 2] = 0; packed.data[i + 3] = 255;
+      }
+      out.putImageData(packed, 0, 0);
       const dataUrl = eCanvas.toDataURL('image/png');
       if (onMaskChange) {
         onMaskChange(dataUrl);
@@ -289,7 +280,7 @@ export default function MaskBrushOverlay({
     } catch {
       // Cross-origin fallback
     }
-  }, [onMaskChange]);
+  }, [nativeW, nativeH, onMaskChange]);
 
   // Clear mask
   const handleClearMask = () => {
@@ -298,12 +289,10 @@ export default function MaskBrushOverlay({
     if (!vCanvas || !eCanvas) return;
 
     const vCtx = vCanvas.getContext('2d');
-    const eCtx = eCanvas.getContext('2d');
     if (vCtx) vCtx.clearRect(0, 0, nativeW, nativeH);
-    if (eCtx) {
-      eCtx.fillStyle = '#000000';
-      eCtx.fillRect(0, 0, nativeW, nativeH);
-    }
+    includeCanvasRef.current?.getContext('2d')?.clearRect(0, 0, nativeW, nativeH);
+    excludeCanvasRef.current?.getContext('2d')?.clearRect(0, 0, nativeW, nativeH);
+    eCanvas.getContext('2d')?.clearRect(0, 0, nativeW, nativeH);
 
     if (onMaskChange) onMaskChange(null);
   };
@@ -336,21 +325,9 @@ export default function MaskBrushOverlay({
       ry2 = (by2 + bh * 0.05) * nativeH;
     }
 
-    const vCtx = visibleCanvasRef.current?.getContext('2d');
-    const eCtx = exportCanvasRef.current?.getContext('2d');
-
-    for (const [ctx, isExport] of [
-      [vCtx, false],
-      [eCtx, true],
-    ]) {
-      if (!ctx) continue;
-      ctx.save();
-      ctx.fillStyle = isExport ? '#ffffff' : 'rgba(244, 63, 94, 0.55)';
-      ctx.beginPath();
-      ctx.roundRect(rx1, ry1, rx2 - rx1, ry2 - ry1, 12);
-      ctx.fill();
-      ctx.restore();
-    }
+    const eCtx = excludeCanvasRef.current?.getContext('2d');
+    if (eCtx) { eCtx.save(); eCtx.fillStyle = 'rgba(255,255,255,0.75)'; eCtx.beginPath(); eCtx.roundRect(rx1, ry1, rx2 - rx1, ry2 - ry1, 12); eCtx.fill(); eCtx.restore(); }
+    renderVisible();
 
     exportMask();
   };
@@ -380,6 +357,8 @@ export default function MaskBrushOverlay({
 
       {/* Hidden export canvas (pure 8-bit black/white alpha mask) */}
       <canvas ref={exportCanvasRef} style={{ display: 'none' }} />
+      <canvas ref={includeCanvasRef} style={{ display: 'none' }} />
+      <canvas ref={excludeCanvasRef} style={{ display: 'none' }} />
 
       {/* Floating Brush Cursor */}
       {cursorPos.visible && (
@@ -443,7 +422,7 @@ export default function MaskBrushOverlay({
                 }}
               >
                 <span className="occlusion-guide-label">
-                  ✦ Auto-Occluder: {occ.label} ({Math.round(occ.confidence * 100)}%)
+                  âœ¦ Auto-Occluder: {occ.label} ({Math.round(occ.confidence * 100)}%)
                 </span>
               </div>
             );
@@ -458,27 +437,27 @@ export default function MaskBrushOverlay({
           <div className="brush-mode-buttons">
             <button
               type="button"
-              className={`brush-mode-btn ${brushMode === 'paint' ? 'active paint' : ''}`}
-              onClick={() => setBrushMode('paint')}
-              title="Paint Occlusion Mask (Keep Target original area)"
+              className={`brush-mode-btn ${brushMode === 'include' ? 'active include' : ''}`}
+              onClick={() => { eraseLayer.current = 'include'; setBrushMode('include'); }}
+              title="Include this area in the face swap (â— Paint)"
             >
-              ● Paint
+              Include
+            </button>
+            <button
+              type="button"
+              className={`brush-mode-btn ${brushMode === 'exclude' ? 'active exclude' : ''}`}
+              onClick={() => { eraseLayer.current = 'exclude'; setBrushMode('exclude'); }}
+              title="Exclude this area and keep the target pixels (âŠ˜ Erase)"
+            >
+              Exclude
             </button>
             <button
               type="button"
               className={`brush-mode-btn ${brushMode === 'erase' ? 'active erase' : ''}`}
               onClick={() => setBrushMode('erase')}
-              title="Erase Mask"
+              title="Erase the selected Include or Exclude override (â‰‹ Blur)"
             >
-              ⊘ Erase
-            </button>
-            <button
-              type="button"
-              className={`brush-mode-btn ${brushMode === 'blur' ? 'active blur' : ''}`}
-              onClick={() => setBrushMode('blur')}
-              title="Box Blur / Soften Edge"
-            >
-              ≋ Blur
+              Erase
             </button>
           </div>
         </div>
@@ -504,7 +483,7 @@ export default function MaskBrushOverlay({
               checked={showOcclusionGuides}
               onChange={e => setShowOcclusionGuides(e.target.checked)}
             />
-            <span>Auto Occlusion Guides</span>
+              <span>Occlusion Guides</span>
           </label>
 
           {showOcclusionGuides && (
@@ -547,7 +526,7 @@ export default function MaskBrushOverlay({
             onClick={onClose}
             title="Done editing mask"
           >
-            Done ✓
+            Done âœ“
           </button>
         </div>
       </div>

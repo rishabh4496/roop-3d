@@ -5,7 +5,7 @@ from roop_3d.core.settings import Contract
 
 
 class WorkstationParameters(Contract):
-    color_method: Literal['lab', 'histogram'] = 'lab'
+    color_method: Literal['lab', 'reinhard_lab', 'histogram'] = 'lab'
     restorer_model: Literal['auto', 'gpen', 'codeformer', 'ultramax'] = 'auto'
     identity_blend_t: float | None = Field(default=None, ge=0, le=1)
     fidelity_weight: float = Field(default=.5, ge=0, le=1)
@@ -36,6 +36,8 @@ class WorkstationParameters(Contract):
     relight_strength: float = Field(default=0.8, ge=0, le=1)
     specular_sheen: float = Field(default=0.25, ge=0, le=1)
     shadow_preservation: float = Field(default=0.85, ge=0, le=1)
+    ultramax_small_face_mode: Literal['bypass', 'adaptive', 'off'] = 'bypass'
+    ultramax_min_native_pixels: int = Field(default=320, ge=64, le=1024)
     lighting_mode: Literal['auto', 'manual'] = 'auto'
     manual_light_yaw: float = Field(default=35.0, ge=-180.0, le=180.0)
     manual_light_pitch: float = Field(default=25.0, ge=-90.0, le=90.0)
@@ -43,7 +45,7 @@ class WorkstationParameters(Contract):
     @model_serializer(mode='wrap')
     def compatible_serialization(self, handler):
         value = handler(self)
-        for field in ('color_method', 'restorer_model', 'identity_blend_t', 'fidelity_weight', 'swap_weight', 'erosion_px', 'pose_mode', 'pose_frontalization', 'tps_expression_weight', 'render_mode', 'occlusion_mode', 'linear_light', 'blend_transfer'):
+        for field in ('color_method', 'restorer_model', 'identity_blend_t', 'fidelity_weight', 'swap_weight', 'erosion_px', 'pose_mode', 'pose_frontalization', 'tps_expression_weight', 'render_mode', 'occlusion_mode', 'linear_light', 'blend_transfer', 'ultramax_small_face_mode', 'ultramax_min_native_pixels'):
             if field not in self.model_fields_set:
                 value.pop(field, None)
         return value
@@ -92,4 +94,6 @@ class WorkstationParameters(Contract):
                                 lighting_mode=self.lighting_mode,
                                 manual_light_yaw=self.manual_light_yaw,
                                 manual_light_pitch=self.manual_light_pitch,
+                                ultramax_small_face_mode=self.ultramax_small_face_mode,
+                                ultramax_min_native_pixels=self.ultramax_min_native_pixels,
                                 linear_light=self.linear_light, blend_transfer=blend)

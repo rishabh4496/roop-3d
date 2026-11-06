@@ -1,7 +1,8 @@
-import NumericInput from '../controls/NumericInput';
+﻿import NumericInput from '../controls/NumericInput';
 import React, { useRef, useState, useEffect, useCallback, useMemo } from 'react';
 import { calculateLetterbox } from '../../utils/letterbox';
 import WebGLViewport from './WebGLViewport';
+import MaskBrushOverlay from './MaskBrushOverlay';
 import { COLORMAPS, DIFF_NOISE_FLOOR, LOUPE_ZOOM, crossfadeValue, webgl2Available } from './webglModel';
 import { useFaceSelectionStore } from '../../useFaceSelectionStore';
 
@@ -11,15 +12,21 @@ export { DIFF_NOISE_FLOOR, LOUPE_ZOOM, crossfadeValue };
 export const MODES = [
   { id: 'wipe', label: 'Wipe (A/B)', icon: '◫' },
   { id: 'crossfade', label: 'Crossfade', icon: '◑' },
-  { id: 'blend', label: 'Alpha Blend', icon: '◩' },
+  { id: 'blend', label: 'Alpha Blend', icon: '◉' },
   { id: 'diff', label: 'Diff Map', icon: '◐' },
   { id: 'loupe', label: 'Loupe (3.5x)', icon: '⊕' },
+];
+const CANVAS_MODES = [
+  { id: 'result', label: 'Result', icon: '◉' },
+  { id: 'wipe', label: 'Split Wipe', legacyTitle: 'Split Wipe · Wipe (A/B)', icon: '↔' },
+  ...MODES.filter(mode => mode.id !== 'wipe'),
+  { id: 'matte', label: 'Mask Matte Solo', icon: '▧' },
 ];
 
 const LOUPE_RADIUS = 90;
 
 /**
- * Pointer → media pixel coordinates with sub-pixel precision.
+ * Pointer â†’ media pixel coordinates with sub-pixel precision.
  * `stage` is the on-screen rectangle (client px) the media is drawn into; the result may be fractional.
  */
 export function clientToMedia(stage, media, clientX, clientY) {
@@ -61,21 +68,23 @@ function useLoadedImage(url) {
 /**
  * Workstation comparison canvas. Modes:
  *  - Wipe: draggable split (horizontal / vertical) between original and swapped.
- *  - Crossfade: persistent A↔B fade that keeps running while you scrub frames or edit settings.
+ *  - Crossfade: persistent Aâ†”B fade that keeps running while you scrub frames or edit settings.
  *  - Alpha Blend: fixed mix between the two.
  *  - Diff Map: heat-map of exactly which pixels changed (noise floor excluded), boostable.
- *  - Loupe: 3.5× lens that shows individual pixels under the cursor.
+ *  - Loupe: 3.5Ã— lens that shows individual pixels under the cursor.
  * With `originalUrl` / `swappedUrl` it composites the real frames aligned to the letterboxed media rectangle; a live
  * sub-pixel media coordinate readout follows the pointer.
  *
  * @param {{
  *   target?: string; output?: string; originalUrl?: string; swappedUrl?: string;
  *   sourcePreviewUrl?: string; outputPreviewUrl?: string; targetMediaRef?: any; outputMediaRef?: any;
- *   mode?: 'wipe' | 'crossfade' | 'diff' | 'blend' | 'loupe'; onModeChange?: (mode: string) => void;
+ *   mode?: 'result' | 'wipe' | 'crossfade' | 'diff' | 'blend' | 'matte' | 'loupe'; onModeChange?: (mode: string) => void;
  *   containerWidth?: number; containerHeight?: number; mediaDimensions?: { width: number; height: number };
  *   fullBleed?: boolean; now?: () => number;
  *   onContextMenuPoint?: (clientX: number, clientY: number) => void;
  *   currentTime?: number; fps?: number; webgl?: boolean;
+ *   maskEditing?: boolean; maskBase64?: string | null; onMaskChange?: (mask: string | null) => void;
+ *   onMaskEditToggle?: (enabled: boolean) => void;
  * }} props
  */
 export default function WorkstationCanvas({
@@ -95,6 +104,10 @@ export default function WorkstationCanvas({
   currentTime = 0,
   fps = 30,
   webgl = true,
+  maskEditing = false,
+  maskBase64 = null,
+  onMaskChange,
+  onMaskEditToggle,
 }) {
   const containerRef = useRef(null);
   const diffCanvasRef = useRef(null);
@@ -119,6 +132,8 @@ export default function WorkstationCanvas({
   const [colormap, setColormap] = useState('inferno');
   const [bicubic, setBicubic] = useState(false);
   const [showGizmo, setShowGizmo] = useState(true);
+  const [loupeHeld, setLoupeHeld] = useState(false);
+  const activeMode = loupeHeld ? 'loupe' : mode;
   const getFacesAtTimestamp = useFaceSelectionStore(state => state.getFacesAtTimestamp);
   const detectedFaces = useFaceSelectionStore(state => state.detectedFaces);
   const faces = useMemo(() => (detectedFaces?.length ? getFacesAtTimestamp(currentTime, fps) : []), [detectedFaces, currentTime, fps, getFacesAtTimestamp]);
@@ -132,17 +147,29 @@ export default function WorkstationCanvas({
     ? { left: letterbox.offsetX, top: letterbox.offsetY, width: letterbox.displayW, height: letterbox.displayH }
     : { left: 0, top: 0, width: containerWidth, height: containerHeight };
 
-  const useGl = webgl && gl2 && !glFailed && fullBleed && Boolean(imageA) && stage.width > 0 && stage.height > 0;
+  const useGl = webgl && gl2 && !glFailed && fullBleed && !maskEditing && Boolean(imageA) && stage.width > 0 && stage.height > 0;
+
+  useEffect(() => {
+    const down = event => {
+      if ((event.code === 'KeyZ' || event.key?.toLowerCase() === 'z')
+          && !['INPUT', 'TEXTAREA', 'SELECT'].includes(event.target?.tagName)) {
+        event.preventDefault(); setLoupeHeld(true);
+      }
+    };
+    const up = event => { if (event.code === 'KeyZ' || event.key?.toLowerCase() === 'z') setLoupeHeld(false); };
+    window.addEventListener('keydown', down); window.addEventListener('keyup', up);
+    return () => { window.removeEventListener('keydown', down); window.removeEventListener('keyup', up); };
+  }, []);
 
   // Persistent crossfade: keeps cycling until paused, independent of which frame is showing. (The shader path animates its own uniform.)
   useEffect(() => {
-    if (useGl || mode !== 'crossfade' || !fadePlaying || typeof requestAnimationFrame !== 'function') return undefined;
+    if (useGl || activeMode !== 'crossfade' || !fadePlaying || typeof requestAnimationFrame !== 'function') return undefined;
     let frame = 0;
     const started = now();
     const tick = () => { setFade(crossfadeValue(now() - started, fadeSeconds)); frame = requestAnimationFrame(tick); };
     frame = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(frame);
-  }, [useGl, mode, fadePlaying, fadeSeconds, now]);
+  }, [useGl, activeMode, fadePlaying, fadeSeconds, now]);
 
   const handlePointerMove = useCallback(event => {
     const container = containerRef.current;
@@ -158,7 +185,7 @@ export default function WorkstationCanvas({
   }, [wipeOrientation, stage.left, stage.top, stage.width, stage.height, mediaDimensions]);
 
   const handlePointerDown = useCallback(event => {
-    if (mode !== 'wipe') return;
+    if (activeMode !== 'wipe') return;
     const container = containerRef.current;
     if (!container) return;
     const rect = container.getBoundingClientRect();
@@ -169,7 +196,7 @@ export default function WorkstationCanvas({
       isDraggingWipe.current = true;
       event.preventDefault();
     }
-  }, [mode, split, wipeOrientation, stage.left, stage.top, stage.width, stage.height]);
+  }, [activeMode, split, wipeOrientation, stage.left, stage.top, stage.width, stage.height]);
 
   const handlePointerUp = useCallback(() => { isDraggingWipe.current = false; }, []);
   const handlePointerLeave = useCallback(() => {
@@ -180,7 +207,7 @@ export default function WorkstationCanvas({
 
   // Diff map: both frames resampled to the same grid, compared per pixel.
   useEffect(() => {
-    if (useGl || mode !== 'diff' || !hasOutput) return;
+    if (useGl || activeMode !== 'diff' || !hasOutput) return;
     const canvas = diffCanvasRef.current;
     if (!canvas || !imageA || !imageB) return;
     const width = Math.min(960, mediaDimensions.width), height = Math.max(1, Math.round(width * mediaDimensions.height / mediaDimensions.width));
@@ -202,11 +229,11 @@ export default function WorkstationCanvas({
       canvas.width = width; canvas.height = height;
       target.putImageData(out, 0, 0);
     } catch { /* tainted canvas (cross-origin media): leave the previous heat-map in place */ }
-  }, [useGl, mode, hasOutput, imageA, imageB, diffBoost, mediaDimensions.width, mediaDimensions.height]);
+  }, [useGl, activeMode, hasOutput, imageA, imageB, diffBoost, mediaDimensions.width, mediaDimensions.height]);
 
   // Loupe: 3.5x of the swapped frame (or the original when no swap exists), nearest-neighbour so pixels stay visible.
   useEffect(() => {
-    if (useGl || mode !== 'loupe' || !mousePos.active) return;
+    if (useGl || activeMode !== 'loupe' || !mousePos.active) return;
     const canvas = loupeCanvasRef.current, image = imageB ?? imageA;
     if (!canvas || !image || !stage.width || !stage.height) return;
     const context = canvas.getContext('2d');
@@ -227,55 +254,55 @@ export default function WorkstationCanvas({
     context.strokeStyle = '#00f5d4';
     context.lineWidth = 2.5;
     context.stroke();
-  }, [useGl, mode, mousePos, imageA, imageB, stage.left, stage.top, stage.width, stage.height]);
+  }, [useGl, activeMode, mousePos, imageA, imageB, stage.left, stage.top, stage.width, stage.height]);
 
   const overlayStyle = useMemo(() => {
-    if (mode === 'wipe') {
+    if (activeMode === 'wipe') {
       const p = (split * 100).toFixed(2);
       return { clipPath: wipeOrientation === 'horizontal' ? `inset(0 0 0 ${p}%)` : `inset(${p}% 0 0 0)` };
     }
-    if (mode === 'crossfade') return { opacity: fade };
-    if (mode === 'blend') return { opacity: blendOpacity };
+    if (activeMode === 'crossfade') return { opacity: fade };
+    if (activeMode === 'blend') return { opacity: blendOpacity };
     return undefined;
-  }, [mode, split, wipeOrientation, fade, blendOpacity]);
+  }, [activeMode, split, wipeOrientation, fade, blendOpacity]);
 
   const stageStyle = fullBleed ? { left: stage.left, top: stage.top, width: stage.width, height: stage.height } : undefined;
 
   return (
-    <div ref={containerRef} className={`workstation-canvas-container mode-${mode} ${fullBleed ? 'full-bleed' : ''}`}
+    <div ref={containerRef} className={`workstation-canvas-container mode-${activeMode} ${maskEditing ? 'mask-editing' : ''} ${fullBleed ? 'full-bleed' : ''}`}
       onPointerMove={handlePointerMove} onPointerDown={handlePointerDown} onPointerUp={handlePointerUp} onPointerLeave={handlePointerLeave}
       onContextMenu={event => { if (onContextMenuPoint) { event.preventDefault(); onContextMenuPoint(event.clientX, event.clientY); } }}>
       <div className="workstation-preview-bar">
         <div className="preview-mode-segmented" role="group" aria-label="Comparison mode">
-          {MODES.map(m => (
-            <button key={m.id} type="button" className={`preview-mode-btn ${mode === m.id ? 'active' : ''}`} aria-pressed={mode === m.id}
+          {CANVAS_MODES.map(m => (
+            <button key={m.id} type="button" className={`preview-mode-btn ${activeMode === m.id ? 'active' : ''}`} aria-pressed={activeMode === m.id}
               onClick={() => onModeChange && onModeChange(m.id)} disabled={m.id !== 'wipe' && !hasOutput}
-              title={m.id !== 'wipe' && !hasOutput ? 'Available once a swapped frame exists' : m.label}>
+              title={m.id !== 'wipe' && !hasOutput ? 'Available once a swapped frame exists' : (m.legacyTitle ?? m.label)}>
               <span className="mode-icon">{m.icon}</span><span>{m.label}</span>
             </button>
           ))}
         </div>
 
-        {mode === 'wipe' && (
+        {activeMode === 'wipe' && (
           <div className="wipe-aux-controls">
             <button type="button" className="wipe-orient-btn" onClick={() => setWipeOrientation(o => (o === 'horizontal' ? 'vertical' : 'horizontal'))}
               title={`Switch to ${wipeOrientation === 'horizontal' ? 'Vertical (Top/Bottom)' : 'Horizontal (Left/Right)'} Split`}>
-              {wipeOrientation === 'horizontal' ? '↔ Horizontal' : '↕ Vertical'}
+              {wipeOrientation === 'horizontal' ? 'â†” Horizontal' : 'â†• Vertical'}
             </button>
             <span className="wipe-percent-label">{Math.round(split * 100)}%</span>
           </div>
         )}
 
-        {mode === 'crossfade' && (
+        {activeMode === 'crossfade' && (
           <div className="crossfade-controls">
             <button type="button" className="crossfade-toggle" aria-pressed={fadePlaying} onClick={() => setFadePlaying(playing => !playing)}
-              title="The crossfade keeps cycling while you scrub frames or change settings">{fadePlaying ? '⏸ Pause' : '▶ Play'}</button>
+              title="The crossfade keeps cycling while you scrub frames or change settings">{fadePlaying ? 'â¸ Pause' : 'â–¶ Play'}</button>
             <NumericInput label="Fade period (s)" value={fadeSeconds} min={0.5} max={10} step={0.1} onChange={value => setFadeSeconds(value ?? 2)} />
             <span className="control-val">{Math.round(fade * 100)}% swapped</span>
           </div>
         )}
 
-        {mode === 'diff' && (
+        {activeMode === 'diff' && (
           <div className="diff-controls">
             <NumericInput label="Difference boost" value={diffBoost} min={1} max={8} step={.1} onChange={setDiffBoost} />
             {useGl && <select aria-label="Diff colormap" className="diff-colormap" value={colormap} onChange={event => setColormap(event.target.value)}>{COLORMAPS.map(name => <option key={name} value={name}>{name[0].toUpperCase() + name.slice(1)}</option>)}</select>}
@@ -285,7 +312,7 @@ export default function WorkstationCanvas({
           </div>
         )}
 
-        {mode === 'blend' && (
+        {activeMode === 'blend' && (
           <div className="blend-controls">
             <NumericInput label="Comparison mix" value={blendOpacity} min={0} max={1} step={.01} onChange={setBlendOpacity} />
             <input type="range" min="0" max="1" step="0.01" value={blendOpacity} onChange={e => setBlendOpacity(parseFloat(e.target.value))}
@@ -294,13 +321,13 @@ export default function WorkstationCanvas({
           </div>
         )}
 
-        {mode === 'loupe' && <div className="loupe-controls"><span className="tiny-badge">3.5x SUB-PIXEL LENS</span>
+        {activeMode === 'loupe' && <div className="loupe-controls"><span className="tiny-badge">3.5x SUB-PIXEL LENS Â· Hold Z</span>
           {useGl && <span className="loupe-sampling" role="group" aria-label="Loupe sampling">
             <button type="button" className={`preview-mode-btn ${bicubic ? '' : 'active'}`} aria-pressed={!bicubic} onClick={() => setBicubic(false)} title="Hardware bilinear sampling">Bilinear</button>
             <button type="button" className={`preview-mode-btn ${bicubic ? 'active' : ''}`} aria-pressed={bicubic} onClick={() => setBicubic(true)} title="Catmull-Rom bicubic sampling (sharper at 3.5x)">Bicubic</button>
           </span>}</div>}
         {useGl && <div className="gizmo-controls">
-          <button type="button" className={`preview-mode-btn ${showGizmo ? 'active' : ''}`} aria-pressed={showGizmo} onClick={() => setShowGizmo(value => !value)} title="3D pose axes over each face's nose bridge">⌖ Pose gizmo</button>
+          <button type="button" className={`preview-mode-btn ${showGizmo ? 'active' : ''}`} aria-pressed={showGizmo} onClick={() => setShowGizmo(value => !value)} title="3D pose axes over each face's nose bridge">âŒ– Pose gizmo</button>
           {showGizmo && <span className="gizmo-legend" aria-label="Gizmo axes"><i style={{ background: '#ef4444' }}/>Pitch <i style={{ background: '#22c55e' }}/>Yaw <i style={{ background: '#3b82f6' }}/>Roll</span>}
         </div>}
       </div>
@@ -308,7 +335,7 @@ export default function WorkstationCanvas({
       {/* The two real frames, aligned to the letterboxed media rectangle. */}
       {useGl && (
         <div className="compare-stage webgl-stage" style={stageStyle}>
-          <WebGLViewport imageA={imageA} imageB={bUrl ? imageB : null} mode={mode} split={split} vertical={wipeOrientation === 'vertical'} mix={mode === 'blend' ? blendOpacity : fade}
+          <WebGLViewport imageA={imageA} imageB={bUrl ? imageB : null} mode={activeMode} split={split} vertical={wipeOrientation === 'vertical'} mix={activeMode === 'blend' ? blendOpacity : fade}
             gain={diffBoost} colormap={colormap} bicubic={bicubic} faces={faces} showGizmo={showGizmo} width={stage.width} height={stage.height}
             pointer={{ x: mousePos.x - stage.left, y: mousePos.y - stage.top, active: mousePos.active }}
             fadePlaying={fadePlaying} fadeSeconds={fadeSeconds} now={now} onFade={setFade} onUnsupported={() => setGlFailed(true)} />
@@ -317,22 +344,24 @@ export default function WorkstationCanvas({
       {!useGl && (aUrl || bUrl) && (
         <div className="compare-stage" style={stageStyle}>
           {aUrl && <img className="compare-a" src={aUrl} alt="Original frame" draggable={false} />}
-          {bUrl && mode !== 'diff' && <img className="compare-b" src={bUrl} alt="Swapped frame" draggable={false} style={overlayStyle} />}
+          {bUrl && activeMode !== 'diff' && activeMode !== 'matte' && !maskEditing && <img className="compare-b" src={bUrl} alt="Swapped frame" draggable={false} style={overlayStyle} />}
+          {bUrl && activeMode === 'matte' && !maskEditing && <img className="compare-b matte-image" src={bUrl} alt="Composite mask matte" draggable={false} />}
+          {bUrl && activeMode === 'result' && !maskEditing && <img className="compare-b" src={bUrl} alt="Swapped result" draggable={false} />}
         </div>
       )}
 
-      {mode === 'wipe' && hasOutput && (
+      {activeMode === 'wipe' && hasOutput && (
         <div className={`wipe-divider ${wipeOrientation}`}
           style={wipeOrientation === 'horizontal'
             ? { left: fullBleed ? stage.left + split * stage.width : `${split * 100}%` }
             : { top: fullBleed ? stage.top + split * stage.height : `${split * 100}%` }}>
-          <div className="wipe-handle"><span>{wipeOrientation === 'horizontal' ? '◀ ▶' : '▲ ▼'}</span></div>
+          <div className="wipe-handle"><span>{wipeOrientation === 'horizontal' ? 'â—€ â–¶' : 'â–² â–¼'}</span></div>
           <span className="wipe-tag left">{wipeOrientation === 'horizontal' ? 'ORIGINAL' : 'TOP'}</span>
           <span className="wipe-tag right">{wipeOrientation === 'horizontal' ? 'SWAPPED' : 'BOTTOM'}</span>
         </div>
       )}
 
-      {mode === 'diff' && hasOutput && (
+      {activeMode === 'diff' && hasOutput && (
         <div className="diff-canvas-layer" style={stageStyle}>
           {!useGl && <canvas ref={diffCanvasRef} className="diff-canvas" />}
           <div className="diff-legend">
@@ -342,17 +371,22 @@ export default function WorkstationCanvas({
         </div>
       )}
 
-      {mode === 'blend' && hasOutput && !useGl && <div className="alpha-blend-layer" style={{ opacity: blendOpacity }} />}
+      {activeMode === 'blend' && hasOutput && !useGl && <div className="alpha-blend-layer" style={{ opacity: blendOpacity }} />}
 
-      {mode === 'loupe' && mousePos.active && useGl && <span className="loupe-badge gl-loupe-badge" style={{ left: mousePos.x + LOUPE_RADIUS - 24, top: mousePos.y + LOUPE_RADIUS - 6 }}>3.5x · {bicubic ? 'bicubic' : 'bilinear'}</span>}
-      {mode === 'loupe' && mousePos.active && !useGl && (
+      {activeMode === 'loupe' && mousePos.active && useGl && <span className="loupe-badge gl-loupe-badge" style={{ left: mousePos.x + LOUPE_RADIUS - 24, top: mousePos.y + LOUPE_RADIUS - 6 }}>3.5x Â· {bicubic ? 'bicubic' : 'bilinear'}</span>}
+      {activeMode === 'loupe' && mousePos.active && !useGl && (
         <div className="magnifier-loupe" style={{ left: `${mousePos.x - LOUPE_RADIUS}px`, top: `${mousePos.y - LOUPE_RADIUS}px`, width: `${LOUPE_RADIUS * 2}px`, height: `${LOUPE_RADIUS * 2}px` }}>
           <canvas ref={loupeCanvasRef} className="loupe-canvas" />
           <span className="loupe-badge">3.5x</span>
         </div>
       )}
 
-      {coords && <div className="coord-readout" aria-live="off">x {coords.x.toFixed(2)} · y {coords.y.toFixed(2)} px</div>}
+      {coords && <div className="coord-readout" aria-live="off">x {coords.x.toFixed(2)} Â· y {coords.y.toFixed(2)} px</div>}
+      {onMaskEditToggle && <button type="button" className="canvas-mask-toggle" aria-pressed={maskEditing}
+        onClick={() => onMaskEditToggle(!maskEditing)} title="Paint include and exclude overrides on this frame">{maskEditing ? 'Done Mask' : 'Mask Brush'}</button>}
+      {maskEditing && <MaskBrushOverlay containerWidth={containerWidth} containerHeight={containerHeight}
+        mediaDimensions={mediaDimensions} onMaskChange={onMaskChange} initialMask={maskBase64}
+        onClose={() => onMaskEditToggle?.(false)} />}
     </div>
   );
 }

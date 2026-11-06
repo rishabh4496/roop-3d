@@ -23,6 +23,9 @@ class FaceObservation:
     embedding: np.ndarray
     pose: tuple[float, float, float]
     landmarks203: np.ndarray | None = None
+    landmarks68: np.ndarray | None = None
+    shape_coefficients: np.ndarray | None = None
+    expression_coefficients: np.ndarray | None = None
 
 
 @dataclass(frozen=True)
@@ -98,8 +101,8 @@ class FaceTracker:
         self.dense = DenseLandmarks(self.catalog, config)
         self.max_tracks, self.max_missed, self.threshold = max_tracks, max_missed, threshold
         self._tracks: dict[int, tuple[FaceObservation, int, int]] = {}
-        from roop_3d.temporal_stabilizer import TemporalStabilizer
-        self.stabilizer = TemporalStabilizer()
+        from roop_3d.temporal import TrackTemporalStabilizer
+        self.stabilizer = TrackTemporalStabilizer()
         self.stabilize = stabilize
         self.frame_index = 0
         self.next_id = self.scene_id = 0
@@ -222,14 +225,26 @@ class FaceTracker:
         filtered = []
         for item in output:
             face = item.observation
-            points = self.stabilizer.filter(item.track_id, 'landmarks5', face.landmarks5, timestamp)
+            def channel(name, value):
+                return None if value is None else self.stabilizer.filter(item.track_id, name, value, timestamp).astype(np.float32)
+
             # Unwrap Euler angles against the last raw sample before filtering.
-            state = self.stabilizer.tracks.get((item.track_id, 'pose'))
+            state = self.stabilizer.channels.get((item.track_id, 'pose'))
             angles = np.asarray(face.pose)
             if state is not None:
-                angles = state.raw + (angles - state.raw + 180) % 360 - 180
+                raw = state.euro.raw
+                if raw is not None:
+                    angles = raw + (angles - raw + 180) % 360 - 180
             pose = self.stabilizer.filter(item.track_id, 'pose', angles, timestamp)
-            filtered.append(replace(item, observation=replace(face, landmarks5=points.astype(np.float32), pose=tuple(pose))))
+            observation = replace(face, box=channel('bbox', face.box),
+                landmarks5=channel('landmarks5', face.landmarks5),
+                landmarks106=channel('landmarks106', face.landmarks106),
+                landmarks203=channel('landmarks203', face.landmarks203),
+                landmarks68=channel('landmarks68', face.landmarks68),
+                shape_coefficients=channel('shape_coefficients', face.shape_coefficients),
+                expression_coefficients=channel('expression_coefficients', face.expression_coefficients),
+                pose=tuple(pose))
+            filtered.append(replace(item, observation=observation))
         return tuple(filtered)
 
     # ------------------------------------------------------------------ identity-lock policy
@@ -401,7 +416,7 @@ class FaceTracker:
                 memory.hold, memory.uncertain_run, memory.parked_by_cut = policy.reacquire_frames - 1, 0, False
                 memory.velocity, memory.lost_at, memory.age = np.zeros(4, np.float32), None, memory.age + 1
                 self._lost.pop(identity, None)
-                self.stabilizer.tracks = {key: value for key, value in self.stabilizer.tracks.items() if key[0] != identity}
+                self.stabilizer.forget_track(identity)
             else:
                 identity = self.next_id
                 self.next_id += 1

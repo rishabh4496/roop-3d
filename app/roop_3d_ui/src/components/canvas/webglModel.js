@@ -5,7 +5,7 @@
  */
 import { facePose } from './poseHud';
 
-export const MODE_IDS = { wipe: 0, crossfade: 1, blend: 2, diff: 3, loupe: 4 };
+export const MODE_IDS = { wipe: 0, crossfade: 1, blend: 2, diff: 3, loupe: 4, result: 5, matte: 6 };
 export const LOUPE_ZOOM = 3.5;
 export const LOUPE_RADIUS_PX = 90;
 /** Per-channel difference (0-255) below which a pixel counts as unchanged (JPEG preview noise); matches the 2D diff map. */

@@ -11,7 +11,7 @@ state, boundary fusion):
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 import functools
 import time
 from typing import Mapping
@@ -29,6 +29,7 @@ from roop_3d.compositor.mouth import composite_mouth_region, lower_face_soft_mas
 from roop_3d.compositor.occlusion import combine_occluders, semantic_occluder_mask, subtract_occluders
 from roop_3d.compositor.restoration import GpenRestorer, blend_restored_roi
 from roop_3d.compositor.temporal import TemporalSmoother
+from roop_3d.temporal import TemporalMaskEMA
 from roop_3d.core.errors import DomainError
 from roop_3d.engine.runtime import RuntimeConfig, image_bgr
 
@@ -72,6 +73,8 @@ class CompositeOptions:
     relight_strength: float = 0.8
     specular_sheen: float = 0.25
     shadow_preservation: float = 0.85
+    ultramax_small_face_mode: str = "bypass"
+    ultramax_min_native_pixels: int = 320
     lighting_mode: str = "auto"
     manual_light_yaw: float = 35.0
     manual_light_pitch: float = 25.0
@@ -93,8 +96,10 @@ class CompositeOptions:
             raise ValueError("Blend ratios must be within 0..1")
         if not np.isfinite(self.swap_weight) or not 0 <= self.swap_weight <= 1 or not np.isfinite(self.erosion_px) or not -32 <= self.erosion_px <= 32:
             raise ValueError('Swap weight or erosion is outside its bounds')
-        if self.color_method not in {"lab", "histogram"}:
-            raise ValueError("color_method must be 'lab' or 'histogram'")
+        if self.color_method not in {"lab", "reinhard_lab", "histogram"}:
+            raise ValueError("color_method must be 'lab', 'reinhard_lab', or 'histogram'")
+        if self.ultramax_small_face_mode not in {"bypass", "adaptive", "off"} or not 64 <= self.ultramax_min_native_pixels <= 1024:
+            raise ValueError("Invalid UltraMax small-face policy")
         if not 0 <= self.semantic_confidence_threshold <= 1 or self.feather_px < 0 or self.pyramid_levels < 1:
             raise ValueError("Invalid mask or pyramid configuration")
         if self.occlusion_mode not in OCCLUSION_MODES:
@@ -137,6 +142,7 @@ class FrameCompositor:
         self.parser = parser if parser is not None else BisenetFaceParser(catalog, config)
         self.restorer = restorer
         self.temporal = temporal or TemporalSmoother()
+        self.mask_ema = TemporalMaskEMA(alpha=.65, max_tracks=32)
         from roop_3d.temporal_stabilizer import TemporalStabilizer
         self.histogram_stabilizer = TemporalStabilizer(min_cutoff=.15, beta=.04)
         self._analyzer = analyzer
@@ -194,6 +200,22 @@ class FrameCompositor:
             return matched, stats
         return apply_lab_stats(swapped, stats, alpha, strength=strength), stats
 
+    @staticmethod
+    def _manual_mask(value, shape: tuple[int, int]) -> tuple[np.ndarray, np.ndarray]:
+        """Return (include, exclude); legacy grayscale masks remain exclude-only."""
+        zeros = np.zeros(shape, np.float32)
+        if value is None:
+            return zeros, zeros.copy()
+        if isinstance(value, (tuple, list)) and len(value) == 2:
+            include, exclude = (np.asarray(item, np.float32) for item in value)
+        else:
+            include, exclude = zeros, np.asarray(value, np.float32)
+        if (include.shape != shape or exclude.shape != shape or not np.isfinite(include).all()
+                or not np.isfinite(exclude).all() or np.any((include < 0) | (include > 1))
+                or np.any((exclude < 0) | (exclude > 1))):
+            raise DomainError("MANUAL_MASK_INVALID", "Manual include/exclude maps must match the face crop and stay within 0..1", 422)
+        return include, exclude
+
     # -- shared enhancement: restoration, mouth, colour, relighting -----------------------------------
     def _enhance(self, replacement, crop, target_crop, alpha, *, probabilities, skin, options, observer,
                  lip_result, frame_index, protect=None, mouth_mask=None, local_illumination: float = 0.0):
@@ -208,7 +230,16 @@ class FrameCompositor:
             elif options.fidelity_weight != .5:
                 raise DomainError('FIDELITY_UNAVAILABLE', 'The selected restorer has no CodeFormer fidelity input', 422)
             if hasattr(self.restorer, 'restore_aligned'):
-                restored = self.restorer.restore_aligned(crop, getattr(replacement, 'landmarks5', None))
+                if hasattr(self.restorer, 'small_face_mode'):
+                    self.restorer.small_face_mode = options.ultramax_small_face_mode
+                    self.restorer.min_native_pixels = options.ultramax_min_native_pixels
+                    linear = np.asarray(replacement.inverse, np.float32)[:, :2]
+                    native_side = int(round(min(crop.shape[1] * np.linalg.norm(linear[:, 0]),
+                                                crop.shape[0] * np.linalg.norm(linear[:, 1]))))
+                    restored = self.restorer.restore_aligned(crop, getattr(replacement, 'landmarks5', None),
+                                                              native_face_size_px=native_side)
+                else:
+                    restored = self.restorer.restore_aligned(crop, getattr(replacement, 'landmarks5', None))
             else:
                 restored = self.restorer.restore(crop)
             enhanced = blend_restored_roi(crop, restored, alpha, options.restoration_blend, protect=protect)
@@ -261,6 +292,9 @@ class FrameCompositor:
         lip_sync_results = lip_sync_results or {}
         active_tracks = set(landmarks_by_track) | {item.track_id for item in replacements}
         self.temporal.begin_frame(frame_index, active_track_ids=active_tracks, scene_cut=scene_cut)
+        self.mask_ema.retain(active_tracks)
+        if scene_cut:
+            self.mask_ema.clear()
         if scene_cut: self.histogram_stabilizer.reset()
         self.histogram_stabilizer.retain(active_tracks)
         if options.occlusion_mode == "robust":
@@ -287,14 +321,23 @@ class FrameCompositor:
                                         feather_px=options.feather_px)
             semantic_front = (semantic_occluder_mask(probabilities)
                               if probabilities is not None and face_mask.source.startswith("bisenet") else None)
-            explicit_front = occluder_masks.get(replacement.track_id)
+            manual_include, manual_exclude = self._manual_mask(occluder_masks.get(replacement.track_id), crop.shape[:2])
+            explicit_front = manual_exclude if manual_exclude.any() else None
             front = combine_occluders(semantic_front, explicit_front)
             self.watchdog.observe(replacement.track_id, face_mask.alpha, kind="geometric")
             if front is not None:
                 self.watchdog.observe(replacement.track_id, np.clip(front, 0, 1), kind="occluder")
             if observer is not None:
                 observer('occluder', front if front is not None else np.zeros(crop.shape[:2], np.float32), replacement.inverse, face_mask.alpha)
-            alpha = subtract_occluders(face_mask.alpha, front)
+            geometric = self.mask_ema.update(replacement.track_id, face_mask.alpha, frame=frame_index, kind="geometric")
+            manual_include = self.mask_ema.update(replacement.track_id, manual_include, frame=frame_index, kind="manual_include")
+            if front is not None:
+                front = self.mask_ema.update(replacement.track_id, front, frame=frame_index, kind="occluder")
+            alpha = subtract_occluders(np.maximum(geometric, manual_include), front)
+            alpha = self.watchdog.feather(replacement.track_id, alpha, kind="composite")
+            # Feathering may cross an occlusion boundary; restore the foreground veto exactly.
+            if front is not None:
+                alpha *= (1.0 - front)
             if options.erosion_px:
                 radius = max(1, round(abs(options.erosion_px)))
                 kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (radius * 2 + 1, radius * 2 + 1))
@@ -363,9 +406,11 @@ class FrameCompositor:
         target_crop = self._crop_to_frame(frame, replacement.inverse, crop.shape[:2])
         work_crop = self._crop_to_frame(frame, work_inverse, (work, work))
         points = self._landmarks_to_crop(landmarks, work_inverse)
-        explicit = occluder_masks.get(replacement.track_id)
-        if explicit is not None:
-            explicit = cv2.resize(np.asarray(explicit, np.float32), (work, work), interpolation=cv2.INTER_LINEAR)
+        manual_include, explicit = self._manual_mask(occluder_masks.get(replacement.track_id), (side, side))
+        if work != side:
+            manual_include = cv2.resize(manual_include, (work, work), interpolation=cv2.INTER_LINEAR)
+            explicit = cv2.resize(explicit, (work, work), interpolation=cv2.INTER_LINEAR)
+        explicit = explicit if explicit.any() else None
         analysis = self.analyzer.analyze(work_crop, points, feather_px=options.feather_px * scale,
                                          confidence_threshold=options.semantic_confidence_threshold,
                                          explicit_front=explicit, border_trust=options.robust.network_border_trust,
@@ -380,6 +425,12 @@ class FrameCompositor:
         state = self.occlusion_tracker.update(replacement.track_id, front, work_crop, frame_index=frame_index,
                                               scene_cut=scene_cut, release=min(options.robust.occlusion_release, 0.99))
         front = state.occluder
+        stable_face = self.mask_ema.update(replacement.track_id, analysis.face_alpha, frame=frame_index, kind="geometric")
+        stable_include = self.mask_ema.update(replacement.track_id, manual_include, frame=frame_index, kind="manual_include")
+        stable_face = np.maximum(stable_face, stable_include)
+        if front is not None:
+            front = self.mask_ema.update(replacement.track_id, front, frame=frame_index, kind="occluder")
+        analysis = replace(analysis, face_alpha=stable_face)
         outside = float(1.0 - validity.mean())
         head = landmark_hull_mask((work, work), points, feather_px=options.feather_px * scale)
         head = cv2.dilate(head, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * max(1, int(work * 0.06)) + 1,) * 2))
@@ -477,6 +528,9 @@ class FrameCompositor:
                     raise DomainError('PROJECTION_COVERAGE_INVALID', 'Projected coverage must be finite crop-space values in 0..1', 422)
                 coverage = cv2.resize(coverage, (work, work), interpolation=cv2.INTER_LINEAR)
             visible_alpha = face_alpha * (1.0 - (front if front is not None else 0.0)) * options.swap_weight
+            visible_alpha = self.watchdog.feather(replacement.track_id, visible_alpha, kind="composite")
+            if front is not None:
+                visible_alpha *= (1.0 - front)
             if coverage is not None:
                 visible_alpha = visible_alpha * coverage
             alpha_native = cv2.resize(visible_alpha, (side, side), interpolation=cv2.INTER_AREA) if work != side else visible_alpha
@@ -555,5 +609,6 @@ class FrameCompositor:
         if self._occlusion_tracker is not None:
             self._occlusion_tracker.clear()
         self.temporal.clear()
+        self.mask_ema.clear()
         self.histogram_stabilizer.reset()
         self.watchdog.clear()

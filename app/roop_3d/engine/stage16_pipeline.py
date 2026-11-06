@@ -1,14 +1,15 @@
 """Explicit optional Stage 16 crop pipeline; default reference inference is intact."""
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Literal, Protocol
 
 import numpy as np
 from pydantic import Field
 
 from roop_3d.core.settings import Contract
-from roop_3d.flame_3d_engine import Flame3DEngine, FlameParameters, blend_shape
+from roop_3d.flame_3d_engine import EyeGaze, Flame3DEngine, FlameParameters, blend_shape
+from roop_3d.temporal import TrackTemporalStabilizer
 
 
 class Stage16Options(Contract):
@@ -37,9 +38,16 @@ class Stage16Pipeline:
                  age=None, recognizer=None):
         self.flame, self.swapper, self.portrait = flame, swapper, portrait
         self.shape, self.age, self.recognizer = shape, age, recognizer
+        self.temporal = TrackTemporalStabilizer(min_cutoff=.2, beta=.04, derivative_cutoff=1.,
+                                                process_noise=5., measurement_noise=1.5)
+        self.frames_processed = 0
+
+    def reset_track(self, track_id: int) -> None:
+        self.temporal.forget_track(track_id)
 
     def process(self, source_rgb256, target_rgb256, source_embedding, *, options=Stage16Options(),
-                source_context384=None, target_context384=None) -> Stage16Result:
+                source_context384=None, target_context384=None, track_id: int = 0,
+                timestamp_seconds: float | None = None, scene_cut: bool = False) -> Stage16Result:
         if options.shape_retention_weight and self.shape is None:
             raise RuntimeError("3D skull preservation requires an activated FLAME geometry conditioner")
         if options.age_offset and self.age is None:
@@ -53,6 +61,22 @@ class Stage16Pipeline:
             source_rgb256 = cv2.resize(aged, (256, 256))
         source = self.flame.extract(source_rgb256, require_gaze=options.require_independent_gaze)
         target = self.flame.extract(target_rgb256, require_gaze=options.require_independent_gaze)
+        timestamp = float(timestamp_seconds if timestamp_seconds is not None else self.frames_processed / 30.0)
+        self.frames_processed += 1
+        if scene_cut:
+            self.reset_track(track_id)
+        from roop_3d.reconstruction.geometry_types import rotation_matrix_to_rodrigues, rodrigues_to_rotation_matrix
+        target_flame = target.flame
+        filtered = replace(target_flame,
+            beta=self.temporal.filter(track_id, '3dmm_shape', target_flame.beta, timestamp),
+            psi=self.temporal.filter(track_id, '3dmm_expression', target_flame.psi, timestamp),
+            jaw_rotation=self.temporal.filter(track_id, '3dmm_jaw', target_flame.jaw_rotation, timestamp),
+            rotation=rodrigues_to_rotation_matrix(self.temporal.filter(
+                track_id, '3dmm_head_pose', rotation_matrix_to_rodrigues(target_flame.rotation), timestamp)))
+        if target_flame.gaze is not None:
+            gaze_angles = self.temporal.filter(track_id, '3dmm_eye_gaze', target_flame.gaze.angles(), timestamp)
+            filtered = replace(filtered, gaze=EyeGaze(*map(float, gaze_angles)))
+        target = replace(target, flame=filtered)
         blended = blend_shape(source.flame, target.flame, options.shape_retention_weight)
         swapped = self.swapper.swap(target_rgb256, source_embedding)
         image = swapped.rgb
