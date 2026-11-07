@@ -190,4 +190,5 @@ def test_near_profile_views_are_down_weighted_but_still_count_where_nothing_else
     observed = asset.texel_state == OBS
     share = float((asset.texel_source_view[observed] == 3).mean())
     assert share < 0.05, f"a poorly registered 86 deg view dominates {share:.0%} of the atlas"
-    assert asset.manifest.algorithm_version == "identity-mv-2"
+    from roop_3d.reconstruction.identity_asset import ALGORITHM_VERSION
+    assert asset.manifest.algorithm_version == ALGORITHM_VERSION

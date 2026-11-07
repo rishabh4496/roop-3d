@@ -182,15 +182,52 @@ def test_store_roundtrip_reuse_and_glb(tmp_path, doc, subject):
 
 
 # ----------------------------------------------------------------------------- downstream consumers
-def test_expression_rig_and_pose_blend_refuse_a_non_canonical_asset(asset):
+def test_expression_rig_accepts_full_head_while_legacy_crop_projector_refuses_it(asset):
     from roop_3d.reconstruction.pose_blend import PoseBlendProjector
     from roop_3d.reconstruction.reenactment import IdentityRig
-    with pytest.raises(DomainError) as err:
-        IdentityRig(asset)
-    assert err.value.code == "IDENTITY_TEMPLATE_UNSUPPORTED"
+    rig = IdentityRig(asset)
+    assert rig.V0.shape == asset.vertices.shape
+    assert rig.landmark_indices.shape == (68,)
     with pytest.raises(DomainError) as err:
         PoseBlendProjector.from_identity_asset(asset)
     assert err.value.code == "IDENTITY_TEMPLATE_UNSUPPORTED"
+
+
+def test_fsz_identity_asset_full_head_gpu_silhouette(doc, tmp_path):
+    """Archive -> fitted CC0 head -> GPU, with head extremes outside ArcFace ROI."""
+    from roop_3d.faceset.faceset_reader import FaceSetReader, export_v2
+    from roop_3d.reconstruction.full_head import GPUHeadRasterizer, HeadPose, head_roi
+    from roop_3d.reconstruction.reenactment import IdentityRig
+    from roop_3d.core.pose import rotation_from_euler
+    import cv2
+    path = tmp_path / "roop_3d/outputs/facesets/subject.fsz"
+    export_v2(doc, path, app_root=tmp_path)
+    loaded = FaceSetReader(cache_root=tmp_path / "cache").read(path)
+    asset = build_identity_asset(loaded, MH)
+    assert len(asset.view_poses) >= 3
+    assert len(asset.manifest.shape["makehuman_shape_coefficients"]) > 0
+    rig = IdentityRig(asset)
+    renderer = GPUHeadRasterizer()
+    try:
+        for yaw in range(-60, 61, 15):
+            pose = HeadPose(rotation_from_euler(yaw, 0, 0), np.array([0., 0., .9]),
+                            np.array([[800., 0, 320], [0, 800., 320], [0, 0, 1]]))
+            pixels = pose.project(rig.V0)
+            inverse = head_roi(pixels)
+            # Isolate geometry from observation holes: an unobserved skull stays
+            # transparent in production and cannot prove silhouette coverage.
+            _, alpha = renderer.render(rig.V0, rig.faces, asset.uvs, asset.texture,
+                np.ones(asset.texture.shape[:2], np.float32), pose, inverse)
+            local = cv2.transform(pixels[None].astype(np.float32), cv2.invertAffineTransform(inverse))[0]
+            yy, xx = np.where(alpha > .5)
+            np.testing.assert_allclose([xx.min(), yy.min(), xx.max(), yy.max()],
+                [*local.min(0), *local.max(0)], atol=3)
+            # The fitted identity jaw and forehead landmarks are comfortably
+            # inside the canvas at every yaw, never clipped back to an inner box.
+            jaw = local[rig.landmark_indices[:17]]
+            assert jaw.min() > 10 and jaw.max() < 502
+    finally:
+        renderer.release()
 
 
 # ----------------------------------------------------------------------------- API

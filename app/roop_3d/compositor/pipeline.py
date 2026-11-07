@@ -287,6 +287,8 @@ class FrameCompositor:
                 options: CompositeOptions = CompositeOptions(),
                 observer: Callable | None = None) -> np.ndarray:
         image_bgr(frame)
+        if any(getattr(item, "full_head", False) for item in replacements) and options.occlusion_mode == "standard":
+            options = replace(options, occlusion_mode="robust")
         landmarks_by_track = landmarks_by_track or {}
         occluder_masks = occluder_masks or {}
         lip_sync_results = lip_sync_results or {}
@@ -319,6 +321,10 @@ class FrameCompositor:
             face_mask = build_face_mask(crop.shape, points, probabilities=probabilities,
                                         confidence_threshold=options.semantic_confidence_threshold,
                                         feather_px=options.feather_px)
+            if getattr(replacement, "full_head", False):
+                # Mesh coverage defines source anatomy. Target parsing can veto
+                # foreground occlusions but cannot shrink it to the target hull.
+                face_mask = replace(face_mask, alpha=np.ones(crop.shape[:2], np.float32))
             semantic_front = (semantic_occluder_mask(probabilities)
                               if probabilities is not None and face_mask.source.startswith("bisenet") else None)
             manual_include, manual_exclude = self._manual_mask(occluder_masks.get(replacement.track_id), crop.shape[:2])
@@ -414,7 +420,11 @@ class FrameCompositor:
         analysis = self.analyzer.analyze(work_crop, points, feather_px=options.feather_px * scale,
                                          confidence_threshold=options.semantic_confidence_threshold,
                                          explicit_front=explicit, border_trust=options.robust.network_border_trust,
-                                         track_id=replacement.track_id)
+                                         track_id=replacement.track_id,
+                                         **({"mesh_support": cv2.resize(replacement.coverage, (work, work))}
+                                            if getattr(replacement, "full_head", False) else {}))
+        if getattr(replacement, "full_head", False):
+            analysis = replace(analysis, face_alpha=np.ones((work, work), np.float32))
         # Pixels outside the frame are reflected copies for the models; they must never count as foreground.
         validity = cv2.warpAffine(np.ones(frame.shape[:2], np.float32), cv2.invertAffineTransform(work_inverse),
                                   (work, work), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=0)

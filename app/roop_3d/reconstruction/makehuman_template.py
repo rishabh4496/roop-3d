@@ -108,7 +108,14 @@ def _arrays(path: str) -> dict[str, np.ndarray]:
 
     first_copy = {int(orig): i for i, orig in reversed(list(enumerate(unique[:, 0])))}   # lowest new index per original vertex
     landmarks = np.array([first_copy[int(i)] for i in model.landmark_indices], dtype=np.int64)
-    return {"vertices": new_verts, "faces": new_faces, "uvs": uvs, "landmarks": landmarks}
+    return {"vertices": new_verts, "faces": new_faces, "uvs": uvs, "landmarks": landmarks,
+            "shape_basis": model.shape_basis[unique[:, 0]] * np.array([1., 1., -1.])[None, :, None]}
+
+
+def shape_basis() -> np.ndarray:
+    """CC0 identity morphs in exactly the seam-split template vertex ordering."""
+    target = DEFAULT_ASSET_DIR / ASSET_NAME
+    return _cached(str(target.resolve()), target.stat().st_mtime_ns)["shape_basis"].copy()
 
 
 @lru_cache(maxsize=2)
@@ -137,6 +144,6 @@ def template_hash(path: Path | str | None = None) -> str:
     """Content hash of the template geometry, topology and UVs (part of the identity-asset build key)."""
     mesh = makehuman_template(path)
     h = hashlib.sha256(TEMPLATE_VERSION.encode())
-    for arr in (mesh.vertices, mesh.faces, mesh.uvs, mesh.landmark_vertices["5pt"], mesh.landmark_vertices["68pt"]):
+    for arr in (mesh.vertices, mesh.faces, mesh.uvs, mesh.landmark_vertices["5pt"], mesh.landmark_vertices["68pt"], shape_basis()):
         h.update(str(arr.dtype).encode() + str(arr.shape).encode() + np.ascontiguousarray(arr).tobytes())
     return h.hexdigest()

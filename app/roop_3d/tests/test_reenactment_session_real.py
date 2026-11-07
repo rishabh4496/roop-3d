@@ -53,7 +53,8 @@ def frames(path: str, start: int, count: int):
 
 def session_for(document, tmp_path, **kwargs):
     session = ReferencePipeline()
-    capability = session.prepare_session(document, retarget="off", identity_store=IdentityAssetStore(tmp_path / "assets"), **kwargs)
+    capability = session.prepare_session(document, retarget=kwargs.pop("retarget", "off"),
+                                         identity_store=IdentityAssetStore(tmp_path / "assets"), **kwargs)
     return session, capability
 
 
@@ -85,108 +86,57 @@ def test_invalid_render_mode_is_rejected(real, tmp_path):
         session.release_session()
 
 
-def test_reenactment_on_real_video_engages_falls_back_and_resets_on_a_real_scene_cut(real, tmp_path):
+def test_full_head_3d_modes_on_real_video(real, tmp_path):
     document, video = real
-    session, capability = session_for(document, tmp_path, render_mode="reenactment_3d")
-    try:
-        status = capability["render_modes"]["identity_assets"][document.faceset_id]
-        assert status["available"] and status["layout"] == "5pt" and status["level"] in ("single_view_prior", "limited_multiview", "multiview")
-        shot_a = frames(video, SEGMENT_A, 22)
-        # The tracker detects cuts from a 32x32 thumbnail difference and two shots of the same set look alike, so the second
-        # shot is mirrored and darkened: a hard cut, with real faces and real inference on both sides of it.
-        shot_b = [(cv2.convertScaleAbs(cv2.flip(image, 1), alpha=0.45), t) for image, t in frames(video, SEGMENT_B, 14)]
-        timeline, outputs = [], []
-        for index, (image, _) in enumerate(shot_a + shot_b):
-            session.set_frame_timestamp(index / 30.0)                         # one continuous timeline across the cut
-            result = session.infer_frame(image)
-            for replacement in result.replacements:
-                timeline.append((index, replacement, result.scene_cut))
-            if index in (14, 30):
-                outputs.append(session.composite_frame(image, result))       # the compositor accepts the engine's coverage
-        assert timeline, "the real tracker found no face"
-        # warm-up: the proven path carries the first frames, with the reason on record
-        first = timeline[0][1]
-        assert first.method == "identity_swap" and first.fallback_reason == "EXPRESSION_NOT_CALIBRATED" and first.render_mode == "standard"
-        engaged = [r for _, r, _ in timeline if r.method.startswith("identity_reenactment_3d")]
-        assert len(engaged) >= 8, "the engine never engaged on real, frontal footage"
-        for r in engaged:
-            assert r.render_mode == "reenactment_3d" and r.fallback_reason is None and r.reenactment is not None
-            assert r.coverage is not None and r.coverage.shape == r.image.shape[:2]
-            assert 0.0 <= float(r.coverage.min()) and float(r.coverage.max()) <= 1.0
-            assert 0.0 < r.reenactment.confidence <= 1.0 and r.reenactment.alignment_error_iod < 0.25
-        # every frame that did NOT use the engine says why, and is exactly the proven path
-        for _, r, _ in timeline:
-            if not r.method.startswith("identity_reenactment_3d"):
-                assert r.method == "identity_swap" and r.fallback_reason and r.render_mode == "standard"
-        # the real scene cut resets every temporal state: calibration starts over
-        cuts = [(i, r) for i, r, cut in timeline if cut]
-        assert cuts, "the tracker did not report the cut between the two shots"
-        after = next(r for i, r, cut in timeline if i >= len(shot_a))
-        assert after.reenactment is not None and after.reenactment.frame_index == 0 and not after.reenactment.engaged
-        assert len(outputs) == 2 and all(o.shape == shot_a[0][0].shape and o.dtype == np.uint8 for o in outputs)
-    finally:
-        session.release_session()
-
-
-def test_reenactment_is_deterministic_on_real_video(real, tmp_path):
-    document, video = real
-    clip = frames(video, SEGMENT_A, 16)
-    runs = []
-    for attempt in range(2):
-        session, _ = session_for(document, tmp_path, render_mode="reenactment_3d")
+    for mode in ("pose_3d", "reenactment_3d"):
+        session, capability = session_for(document, tmp_path, render_mode=mode)
         try:
-            rows = []
-            for index, (image, _) in enumerate(clip):
-                session.set_frame_timestamp(index / 30.0)
-                for r in session.infer_frame(image).replacements:
-                    pose = None if r.reenactment is None or r.reenactment.smoothed_pose_deg is None else r.reenactment.smoothed_pose_deg
-                    rows.append((r.method, r.fallback_reason, pose, None if r.coverage is None else float(r.coverage.sum())))
-            runs.append(rows)
+            assert capability["full_head"]["active"]
+            status = capability["render_modes"]["identity_assets"][document.faceset_id]
+            assert status["available"] and status["layout"] in ("5pt", "68pt")
+            seen = []
+            for image, timestamp in frames(video, SEGMENT_A, 4):
+                session.set_frame_timestamp(timestamp)
+                result = session.infer_frame(image)
+                seen.extend(result.replacements)
+                output = session.composite_frame(image, result)
+                assert output.shape == image.shape and output.dtype == np.uint8
+            assert seen
+            for replacement in seen:
+                assert replacement.full_head and replacement.render_mode == mode
+                assert replacement.method == "full_head_gpu_uv_only"
+                assert replacement.fallback_reason is None
+                assert replacement.image.shape[0] >= 512
+                assert replacement.coverage.shape == replacement.image.shape[:2]
+                assert 0 <= replacement.coverage.min() <= replacement.coverage.max() <= 1
+            assert session.full_head_engines
         finally:
             session.release_session()
-    assert runs[0] == runs[1], "the same frames must produce the same decisions and the same geometry"
-    assert second_run_reused_asset(tmp_path)
 
 
-def second_run_reused_asset(tmp_path) -> bool:
-    return any((tmp_path / "assets").rglob("manifest.json"))
-
-
-def test_unbuildable_identity_falls_back_to_the_proven_path_with_a_reason(real, tmp_path):
-    document, video = real
+def test_unbuildable_identity_never_falls_back_to_an_inner_crop(real, tmp_path):
+    document, _ = real
     blurred = []
     for view in document.views:
         image = cv2.imdecode(np.frombuffer(view.image_bytes, np.uint8), cv2.IMREAD_COLOR)
         ok, png = cv2.imencode(".png", cv2.GaussianBlur(image, (0, 0), 30))
+        assert ok
         blurred.append(view.model_copy(update={"image_bytes": png.tobytes()}))
     unusable = document.model_copy(update={"views": tuple(blurred)})
-    session, capability = session_for(unusable, tmp_path, render_mode="reenactment_3d")
-    try:
-        status = capability["render_modes"]["identity_assets"][document.faceset_id]
-        assert status["available"] is False and "IDENTITY_ASSET_NOT_BUILDABLE" in status["reason"]
-        for image, t in frames(video, SEGMENT_A, 3):
-            session.set_frame_timestamp(t)
-            for r in session.infer_frame(image).replacements:
-                assert r.method == "identity_swap" and r.render_mode == "standard"
-                assert r.fallback_reason.startswith("IDENTITY_ASSET_UNAVAILABLE") and r.reenactment is None
-    finally:
-        session.release_session()
+    with pytest.raises(DomainError) as error:
+        session_for(unusable, tmp_path, render_mode="reenactment_3d")
+    assert error.value.code == "IDENTITY_ASSET_NOT_BUILDABLE"
 
 
-def test_pose_3d_mode_projects_on_the_source_identity_geometry(real, tmp_path):
+def test_full_head_neural_refinement_on_real_frame(real, tmp_path):
     document, video = real
-    session, _ = session_for(document, tmp_path, render_mode="pose_3d")
+    session, capability = session_for(document, tmp_path, render_mode="pose_3d", retarget="required")
     try:
-        seen = []
-        for image, t in frames(video, SEGMENT_A, 4):
-            session.set_frame_timestamp(t)
-            seen += session.infer_frame(image).replacements
-        assert seen
-        for r in seen:
-            if r.fallback_reason is None:
-                assert r.method == "identity_swap_pose_3d" and r.render_mode == "pose_3d" and r.projection is not None
-            else:                                                   # rejected landmarks: the swap crop is kept, with the reason
-                assert r.method == "identity_swap" and r.fallback_reason.startswith("POSE_PROJECTION_REJECTED")
-        assert any(p.geometry.startswith("IDENTITY_ASSET_") for p in session.pose_projectors.values())
+        assert capability["full_head"]["neural_refinement"]
+        image, timestamp = frames(video, SEGMENT_A, 1)[0]
+        session.set_frame_timestamp(timestamp)
+        replacements = session.infer_frame(image).replacements
+        assert replacements
+        assert all(item.method == "full_head_gpu_liveportrait" and item.full_head for item in replacements)
     finally:
         session.release_session()

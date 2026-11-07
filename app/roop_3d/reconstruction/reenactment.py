@@ -172,15 +172,16 @@ class IdentityRig:
         manifest = asset.manifest
         if manifest.schema_id != "roop.identity_asset.v1":
             raise DomainError("RIG_ASSET_INVALID", "Unsupported identity asset schema", 422)
-        if manifest.settings.get("template", "canonical") != "canonical":
-            # The rig's eyelid / brow / mouth-ring / jaw kernels are defined on the canonical 68-point topology.
-            raise DomainError("IDENTITY_TEMPLATE_UNSUPPORTED",
-                              f"Expression reenactment needs a canonical-template identity asset, not "
-                              f"{manifest.settings.get('template')!r}. Build the asset with template='canonical'.", 422)
         self.asset = asset
         self.build_key = manifest.build_key
         subdiv = int(manifest.settings.get("subdivisions", 2))
-        template = identity_template(subdiv)
+        if manifest.settings.get("template", "canonical") == "makehuman":
+            from roop_3d.reconstruction.makehuman_template import makehuman_template
+            template = makehuman_template()
+            self.landmark_indices = template.landmark_vertices["68pt"]
+        else:
+            template = identity_template(subdiv)
+            self.landmark_indices = np.arange(68)
         if len(template.vertices) != len(asset.vertices):
             raise DomainError("RIG_ASSET_INVALID", "Identity asset does not match its template topology", 422)
         self.T = template.vertices.astype(np.float64)
@@ -199,13 +200,13 @@ class IdentityRig:
                        np.where(asset.texel_state == int(ConfidenceState.INTERPOLATED), 0.4 * confidence, 0.0)).astype(np.float32)
         self.texture_coverage = cv2.GaussianBlur(cov, (0, 0), 1.2)
         self.observed_share = float(np.mean(asset.texel_state == int(ConfidenceState.OBSERVED)))
-        v0 = self.V0
+        v0 = self.V0[self.landmark_indices]
         self.eye_a, self.eye_b = v0[list(EYE_A)].mean(axis=0), v0[list(EYE_B)].mean(axis=0)
         self.iod = float(np.linalg.norm(self.eye_a - self.eye_b))
         self.center = np.vstack([self.eye_a, self.eye_b, v0[NOSE_TIP], v0[MOUTH_A], v0[MOUTH_B]]).mean(axis=0)
         # the five anchors the target camera is solved against (layout independent: asset mesh vertices)
         self.anchors5 = np.vstack([self.eye_a, self.eye_b, v0[NOSE_TIP], v0[MOUTH_A], v0[MOUTH_B]])
-        near = [int(np.argmin(np.linalg.norm(v0 - p, axis=1))) for p in self.anchors5]
+        near = [int(np.argmin(np.linalg.norm(self.V0 - p, axis=1))) for p in self.anchors5]
         self.anchor_normals = self.normals0[near]
         self.pose_weights = np.array([1.0, 1.0, 1.5, 0.35, 0.35])           # mouth corners move with expression
         # Pose range the identity was actually OBSERVED over (refined yaw/pitch of the views that built the asset).
@@ -224,8 +225,8 @@ class IdentityRig:
         return self._face_normals_of(vertices, self.faces)
 
     def _build_weights(self) -> None:
-        T, v0 = self.T, self.V0
-        x, y = T[:, 0], T[:, 1]
+        T, v0 = self.T[self.landmark_indices], self.V0[self.landmark_indices]
+        x, y = self.T[:, 0], self.T[:, 1]
         # jaw: lower lip + chin follow the jaw, the upper lip and mouth corners (nearly) do not; fixed near the ears
         self.w_jaw = _smoothstep(y, 0.044, 0.056) * (1.0 - _smoothstep(np.abs(x), 0.050, 0.078))
         # Triangles that span the lip line (jaw weight 0 -> 1) ARE the mouth gap: they shear by design and are released to the
@@ -239,7 +240,7 @@ class IdentityRig:
         # component perpendicular to the lever arm - so that depth, not the arm length, converts an opening to an angle.
         self.lip_rel = (v0[57] - self.hinge)[1:3]                 # (dy, dz) of the lower lip relative to the hinge
         self.lever = float(max(self.lip_rel[1], 1e-3))
-        xy = T[:, :2]
+        xy = self.T[:, :2]
         d2 = lambda p: ((xy - np.asarray(p)[:2]) ** 2).sum(axis=1)
         self.k_corner_a, self.k_corner_b = _gauss(d2(T[MOUTH_A]), 0.014), _gauss(d2(T[MOUTH_B]), 0.014)
         self.k_cheek_a = _gauss(d2((-0.048, 0.015)), 0.024)
@@ -545,7 +546,7 @@ class ReenactmentEngine:
 
         # ---- 7. anchor correspondence: eyes / nose / mouth corners / mouth centre onto the (filtered) target
         anchor_idx = (list(EYE_A), list(EYE_B), [NOSE_TIP], [MOUTH_A], [MOUTH_B], list(range(48, 60)))
-        rendered_anchor = np.vstack([projected[idx].mean(axis=0) for idx in anchor_idx])
+        rendered_anchor = np.vstack([projected[rig.landmark_indices[idx]].mean(axis=0) for idx in anchor_idx])
         target_anchor = np.vstack([anchors_s[:10].reshape(5, 2), anchors_s[10:12]])
         error = target_anchor - rendered_anchor
         iod_px = float(np.linalg.norm(target_anchor[1] - target_anchor[0]))
@@ -558,7 +559,7 @@ class ReenactmentEngine:
             rho = 0.45 * iod_px
             k = np.exp(-(np.linalg.norm(projected[:, None] - rendered_anchor[None], axis=2) ** 2) / (2 * rho * rho))
             shown = projected + (k @ capped) / (k.sum(axis=1, keepdims=True) + 0.05)
-        post = np.vstack([shown[idx].mean(axis=0) for idx in anchor_idx])
+        post = np.vstack([shown[rig.landmark_indices[idx]].mean(axis=0) for idx in anchor_idx])
         alignment_after = float(np.max(np.linalg.norm(target_anchor - post, axis=1)) / max(iod_px, 1e-6))
 
         h, w = canvas
@@ -662,6 +663,7 @@ class ReenactmentEngine:
         """The atlas has no mouth interior and no eyelid skin: release those regions to the target instead of stretching texture."""
         s = self.s
         out = coverage.copy()
+        pixels = pixels[self.rig.landmark_indices]
         shape = coverage.shape
         if p.mouth_open >= s.mouth_hole_open_iod:
             hole = np.zeros(shape, np.float32)

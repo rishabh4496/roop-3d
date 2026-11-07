@@ -243,12 +243,16 @@ def sample_view(view: FaceView, engine: LandmarkEngine | None, image: np.ndarray
         candidate = engine.landmarks68(image, bbox)
         if candidate is not None and np.isfinite(candidate).all() and _consistent_with_5pt(candidate, five):
             dense68 = candidate
-    if engine is not None and view.landmarks_trusted:
+    if view.landmarks_106 is not None:
+        dense106 = np.asarray(view.landmarks_106, np.float64)
+    elif engine is not None and view.landmarks_trusted:
         dense106 = engine.landmarks106(image, bbox)
         if dense106 is not None and not np.isfinite(dense106).all():
             dense106 = None
     updated = view.model_copy(update={"landmarks_68": tuple((float(x), float(y)) for x, y in dense68[:, :2])}) \
         if dense68 is not None and view.landmarks_68 is None else view
+    if dense106 is not None and view.landmarks_106 is None:
+        updated = updated.model_copy(update={"landmarks_106": tuple(map(tuple, dense106[:, :2]))})
     yaw, pitch, roll, reproj = _pose(updated)
     embedding = np.asarray(view.embedding, np.float32)
     embedding = embedding / max(float(np.linalg.norm(embedding)), 1e-12)
@@ -296,7 +300,13 @@ _CACHE_LOCK = threading.Lock()
 
 def enrich_document(document: FaceSetDocument, engine: LandmarkEngine | None, *, cache: bool = True) -> LoadedFaceSet:
     """Samples + dense landmarks for an already-read document (cached per archive hash and landmark-model signature)."""
-    key = (document.source_sha256, engine.signature() if engine else "none")
+    # In-memory edits can retain an archive checksum while changing images,
+    # landmarks or trust/quality. Never let enrichment resurrect stale views.
+    content = hashlib.sha256(document.model_dump_json(exclude={"views"}).encode())
+    for view in document.views:
+        content.update(hashlib.sha256(view.image_bytes).digest())
+        content.update(view.model_dump_json(exclude={"image_bytes"}).encode())
+    key = (content.hexdigest(), engine.signature() if engine else "none")
     if cache:
         with _CACHE_LOCK:
             hit = _CACHE.get(key)

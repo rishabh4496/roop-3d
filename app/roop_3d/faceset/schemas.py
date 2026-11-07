@@ -34,6 +34,8 @@ class FaceView(Contract):
     # contract every existing consumer uses; `landmarks_trusted=False` marks fabricated stand-in landmarks
     # (no detector result / archive without geometry) that a 3D reconstruction must never treat as observations.
     landmarks_68: tuple[tuple[float, float], ...] | None = Field(default=None, min_length=68, max_length=68)
+    landmarks_106: tuple[tuple[float, float], ...] | None = Field(default=None, min_length=106, max_length=106)
+    landmarks_468: tuple[tuple[float, float], ...] | None = Field(default=None, min_length=468, max_length=468)
     landmarks_trusted: bool = True
 
 

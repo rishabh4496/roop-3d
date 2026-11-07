@@ -219,6 +219,8 @@ class FaceSetReader:
                 is_synthetic=False,
                 uv_map_path=src.get("uv_map_path"),
                 landmarks_68=landmarks_68,
+                landmarks_106=geom.get("landmarks_106"),
+                landmarks_468=geom.get("landmarks_468"),
                 landmarks_trusted=landmarks_trusted,
             )
             views.append(view)
@@ -637,6 +639,8 @@ def export_v2(
                     "bbox": list(v.bbox),
                     "landmarks_2d": [list(pt) for pt in v.landmarks],
                     **({"landmarks_68": [list(pt) for pt in v.landmarks_68]} if v.landmarks_68 is not None else {}),
+                    **({"landmarks_106": [list(pt) for pt in v.landmarks_106]} if v.landmarks_106 is not None else {}),
+                    **({"landmarks_468": [list(pt) for pt in v.landmarks_468]} if v.landmarks_468 is not None else {}),
                     "landmarks_trusted": v.landmarks_trusted,
                     "yaw": v.yaw,
                     "pitch": v.pitch,

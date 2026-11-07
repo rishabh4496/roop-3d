@@ -54,6 +54,7 @@ class Replacement:
     render_mode: str = "standard"
     fallback_reason: str | None = None
     reenactment: ReenactmentFrame | None = None
+    full_head: bool = False
 
 
 @dataclass(frozen=True)
@@ -143,6 +144,8 @@ class ReferencePipeline:
         self.rig_status: dict[str, dict] = {}
         self.reenactors: dict[int, ReenactmentEngine] = {}
         self.pose_projectors: dict[str, PoseBlendProjector] = {}
+        self.full_head_engines = {}
+        self.head_landmarks = None
         self.angle_trajectories: dict[int, tuple[Any, ...]] = {}
         self.angle_frame_index: int | None = None
         self.reenactment_settings = ReenactmentSettings()
@@ -176,7 +179,8 @@ class ReferencePipeline:
                 raise ValueError("Mapped FaceSets must use selected nonnegative track IDs")
             self.release_session()
             try:
-                self.swapper.prepare_session(source, sources_by_track=mapped_sources)
+                if render_mode == "standard":
+                    self.swapper.prepare_session(source, sources_by_track=mapped_sources)
                 self.tracker = FaceTracker(self.catalog, config=self.config, threshold=detection_threshold,
                                            policy=track_policy)
                 self.selected_ids = frozenset(track_ids) if track_ids is not None else None
@@ -196,19 +200,34 @@ class ReferencePipeline:
                 raise
 
     def _prepare_identity_rigs(self, source: FaceSetDocument, mapped: Mapping[int, FaceSetDocument], store=None) -> None:
-        """Build / reuse the Stage 3 identity asset of every FaceSet in this session. A FaceSet that cannot support one
-        is recorded with its reason and keeps the proven path: the session still prepares."""
-        from roop_3d.reconstruction.identity_asset import IdentityAssetStore
+        """Build each full-head identity asset; reject unavailable prerequisites explicitly."""
+        from roop_3d.reconstruction.identity_asset import IdentityAssetStore, IdentityAssetSettings
+        from roop_3d.faceset_loader import LandmarkEngine
+        from roop_3d.audit.project_paths import application_root
+        from roop_3d.reconstruction.full_head import GPUHeadRasterizer
+        self.head_landmarks = LandmarkEngine(application_root())
+        if not self.head_landmarks.has_68:
+            raise DomainError("DENSE_HEAD_LANDMARKS_REQUIRED", "Install local 1k3d68.onnx for full-head 3D modes", 503)
+        probe = GPUHeadRasterizer()
+        try:
+            probe._context()
+        finally:
+            probe.release()
         store = store or IdentityAssetStore()
         for document in {d.faceset_id: d for d in (source, *mapped.values())}.values():
             try:
-                asset, reused = store.get_or_build(document)
+                from roop_3d.faceset_loader import enrich_document
+                document = enrich_document(document, self.head_landmarks).document
+                asset, reused = store.get_or_build(document, IdentityAssetSettings(
+                    template="makehuman", uv_size=2048 if self.config.hardware_profile == "12gb" else 1024,
+                    max_views=32))
                 self.rigs[document.faceset_id] = IdentityRig(asset)
                 self.rig_status[document.faceset_id] = {"available": True, "reused": reused, "build_key": asset.build_key,
                                                         "level": asset.manifest.reconstruction_level,
                                                         "layout": asset.manifest.landmark_layout}
             except DomainError as error:
                 self.rig_status[document.faceset_id] = {"available": False, "reason": f"{error.code}: {error.message}"[:300]}
+                raise
 
     def _document_for(self, track_id: int) -> FaceSetDocument | None:
         return self.sources_by_track.get(track_id, self.default_source)
@@ -507,6 +526,32 @@ class ReferencePipeline:
                         continue
                 face = tracked.observation
                 at = time.perf_counter()
+                if mode != "standard":
+                    from roop_3d.reconstruction.full_head import FullHeadEngine
+                    rig = self._rig_for(tracked.track_id)
+                    if rig is None or self.head_landmarks is None:
+                        raise DomainError("FULL_HEAD_NOT_PREPARED", "Prepare the session in a 3D mode before rendering", 409)
+                    engine = self.full_head_engines.get(tracked.track_id)
+                    if engine is None:
+                        engine = self.full_head_engines[tracked.track_id] = FullHeadEngine(
+                            rig, side=1024 if self.config.hardware_profile == "12gb" else 512)
+                    dense = face.landmarks68
+                    if dense is None:
+                        dense = self.head_landmarks.landmarks68(image, face.box)
+                    if dense is None:
+                        raise DomainError("DENSE_HEAD_LANDMARKS_REQUIRED", "Target has no measured dense head landmarks", 422)
+                    generated, coverage, inverse = engine.process(image, face, dense, self._frame_time(),
+                        scene_cut=self.tracker.scene_cut, animate=mode == "reenactment_3d")
+                    head_method = "full_head_gpu_uv_only"
+                    if self.portrait.available:
+                        generated = self._refine_full_head(tracked, image, generated, coverage, inverse, strength)
+                        head_method = "full_head_gpu_liveportrait"
+                    projection_seconds += time.perf_counter() - at
+                    replacements.append(Replacement(tracked.track_id, generated, inverse, -1,
+                        head_method, coverage=coverage,
+                        landmarks5=transform_points(face.landmarks5, cv2.invertAffineTransform(inverse)),
+                        render_mode=mode, full_head=True))
+                    continue
                 swap = self.swapper.infer_frame(image, face.landmarks5, pose=face.pose,
                                                 track_id=tracked.track_id, frontalization=frontalization,
                                                 **({"identity_blend_t": identity_blend_t} if identity_blend_t is not None else {}))
@@ -572,6 +617,28 @@ class ReferencePipeline:
                                              retarget_seconds * 1000, (ended - began) * 1000, projection_seconds * 1000)
             return FrameResult(faces, tuple(replacements), self.last_latency, self.tracker.scene_cut, tuple(withheld))
 
+    def _refine_full_head(self, tracked, image, rendered, coverage, inverse, strength):
+        """Condition the portrait appearance encoder on the entire UV render.
+
+        SPADE produces a full 512px portrait. Transfer its fine-scale residual,
+        retaining the UV render's low-frequency identity shape and silhouette.
+        This uses existing portrait weights; it is not a newly trained head model.
+        """
+        from roop_3d.reconstruction.full_head import bridge_neural_detail
+        side = rendered.shape[0]
+        to_crop = cv2.invertAffineTransform(inverse)
+        points106 = transform_points(tracked.observation.landmarks106, to_crop) * (512 / side)
+        source = cv2.resize(rendered, (512, 512))
+        target = self.compositor._crop_to_frame(image, inverse, rendered.shape[:2])
+        target = cv2.resize(target, (512, 512))
+        target203 = self.tracker.dense.infer203(target, points106.astype(np.float32))
+        # Re-encode the current pose-dependent UV render: cached features from a
+        # different pose would reintroduce wrong silhouettes at extreme turns.
+        source203 = self.tracker.dense.infer203(source, points106.astype(np.float32))
+        self.portrait.prepare_track(tracked.track_id, source, target, source203, target203)
+        neural = self.portrait.infer_frame(tracked.track_id, target, target203, strength=strength)
+        return bridge_neural_detail(rendered, cv2.resize(neural, (side, side)), coverage)
+
     def _pose_3d_projector(self, track_id: int):
         """(projector, fallback_reason): the source identity's own geometry when an asset exists, else the proven proxy."""
         document = self._document_for(track_id)
@@ -634,13 +701,16 @@ class ReferencePipeline:
                 "identity_swapper": self.swapper.model.capability() if self.swapper.model else None,
                 "portrait": self.portrait.capability(), "profile": self.config.hardware_profile,
                 "selected_track_ids": sorted(self.selected_ids) if self.selected_ids is not None else None,
-                "pose_method": "five_point_geometric_estimate", "dense_landmarks": (106, 203),
-                "pose_projection": {"state": "AVAILABLE", "geometry": "ESTIMATED_CANONICAL_PROXY_68",
+                "pose_method": "dense_68_pnp" if self.render_mode != "standard" else "five_point_geometric_estimate", "dense_landmarks": (68, 106, 203),
+                "full_head": {"active": self.render_mode != "standard", "renderer": "hardware_opengl",
+                              "neural_refinement": self.portrait.available,
+                              "unobserved_texture": "transparent", "metric_scale": "source_template_prior"},
+                "pose_projection": {"state": "AVAILABLE", "geometry": "MAKEHUMAN_FULL_HEAD" if self.render_mode != "standard" else "ESTIMATED_CANONICAL_PROXY_68",
                                     "camera": "ESTIMATED_CROP_PINHOLE", "active": self.pose_projector is not None},
                 "full_frame_compositor": self.compositor.capability(),
                 "lip_sync": self.lip_sync.capability(),
                 "render_modes": {"available": list(RENDER_MODES), "default": self.render_mode,
-                                 "fallback": "deterministic: the proven identity-swap path whenever the 3D geometry is not reliable",
+                                 "fallback": "3D modes require full-head assets and hardware rasterization; unavailable inputs raise explicit errors",
                                  "identity_assets": dict(self.rig_status),
                                  "active_reenactors": len(self.reenactors)}}
 
@@ -693,6 +763,10 @@ class ReferencePipeline:
             self.rig_status.clear()
             self.reenactors.clear()
             self.pose_projectors.clear()
+            for engine in self.full_head_engines.values():
+                engine.rasterizer.release()
+            self.full_head_engines.clear()
+            self.head_landmarks = None
             self.angle_trajectories.clear()
             self.angle_frame_index = None
 

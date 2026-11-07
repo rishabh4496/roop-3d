@@ -6,7 +6,8 @@ OBSERVED / INTERPOLATED / UNSEEN states -> content-addressed storage independent
 
 Honesty contract (enforced by tests): a vertex or texel is OBSERVED only if the views actually constrain it;
 a front-only FaceSet yields a template-prior mesh whose depth confidence is zero and whose manifest lists what
-is missing; nothing outside the facial region (ears, skull, back of head) is ever generated.
+is missing. MakeHuman assets include the full head/neck as template priors;
+unobserved texture is never represented as recovered source appearance.
 """
 from __future__ import annotations
 
@@ -15,7 +16,7 @@ import hashlib
 import json
 import math
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 import shutil
 import uuid
@@ -48,7 +49,7 @@ from roop_3d.reconstruction.multiview_fit import (
 from roop_3d.reconstruction.uv_synthesizer import UVSynthesizer, ViewObservation
 
 SCHEMA = "roop.identity_asset.v1"
-ALGORITHM_VERSION = "identity-mv-2"          # v2: grazing-angle gate + dominant-view blending (real-photo ghosting)
+ALGORITHM_VERSION = "identity-mv-3"          # v3: full-head runtime pose texture/identity bank
 TEMPLATE_VERSION = "canonical68-delaunay+midpoint-subdiv"
 TEMPLATES = ("canonical", "makehuman")
 FRAME_DESCRIPTION = ("mesh frame (metres): +x image-right, +y down, +z toward the viewer; a frontal head has "
@@ -131,6 +132,10 @@ class IdentityAsset:
     template_landmarks: np.ndarray  # (L, 3)
     shape_params: np.ndarray        # (L, 3) landmark displacement from the template, metres
     expression_params: np.ndarray   # (n_views, n_measurements)
+    view_poses: np.ndarray = field(default_factory=lambda: np.empty((0, 3), np.float32))
+    view_embeddings: np.ndarray = field(default_factory=lambda: np.empty((0, 512), np.float32))
+    view_textures: np.ndarray = field(default_factory=lambda: np.empty((0, 256, 256, 3), np.uint8))
+    view_support: np.ndarray = field(default_factory=lambda: np.empty((0, 256, 256), np.float32))
 
     @property
     def build_key(self) -> str:
@@ -146,7 +151,8 @@ class IdentityAsset:
 
 _ARRAY_FIELDS = ("vertices", "faces", "normals", "uvs", "vertex_confidence", "vertex_state", "texture", "texel_state",
                  "texel_confidence", "texel_view_count", "texel_source_view", "landmarks_3d", "landmark_confidence",
-                 "landmark_sigma", "template_landmarks", "shape_params", "expression_params")
+                 "landmark_sigma", "template_landmarks", "shape_params", "expression_params",
+                 "view_poses", "view_embeddings", "view_textures", "view_support")
 
 
 # --------------------------------------------------------------------------- hashing / keys
@@ -317,6 +323,18 @@ def build_identity_asset(
     q_by_index = {q.index: q for q in report.views}
     chosen = sorted(report.usable_indices, key=lambda i: -by_index[i].quality.score)[:settings.max_views]
     template = template_for(settings)
+    basis_fit = None
+    if settings.template == "makehuman":
+        from roop_3d.reconstruction.makehuman_head import MakeHumanHeadModel, ViewObservation as MHView, fit_multiview
+        from roop_3d.reconstruction.makehuman_template import shape_basis
+        model = MakeHumanHeadModel.load()
+        basis_views = []
+        for i in chosen:
+            image = _decode(by_index[i])
+            basis_views.append(MHView(np.asarray(by_index[i].landmarks), image.shape[1], image.shape[0],
+                                     name=str(i), weight=by_index[i].quality.score))
+        basis_fit = fit_multiview(model, basis_views, holdout=settings.holdout_validation)
+        template.vertices += np.einsum("vck,k->vc", shape_basis(), basis_fit.shape_params).astype(template.vertices.dtype)
     supports_dense = _template_supports_dense(template)
     dense_ids = [i for i in chosen if by_index[i].landmarks_68 is not None]
     # MakeHuman only: when some views (typically profiles, where the dense model is unreliable) lack 68 landmarks, the
@@ -461,7 +479,23 @@ def build_identity_asset(
         "landmark_confidence": fit.landmark_confidence.astype(np.float32), "landmark_sigma": fit.sigma_post.astype(np.float32),
         "template_landmarks": fit.template_landmarks.astype(np.float32), "shape_params": fit.displacement.astype(np.float32),
         "expression_params": matrix,
+        "view_poses": np.empty((0, 3), np.float32),
+        "view_embeddings": np.empty((0, 512), np.float32),
+        "view_textures": np.empty((0, 256, 256, 3), np.uint8),
+        "view_support": np.empty((0, 256, 256), np.float32),
     }
+    if settings.template == "makehuman":
+        # A bounded bank alongside the high-resolution canonical atlas. Embeddings
+        # are neural identity features; these RGB layers are observations, not a
+        # claimed learned spatial feature encoder. No unobserved texture is invented.
+        bank_synth = UVSynthesizer(Mesh3D(vertices, template.faces, uvs=uv_for_atlas), uv_size=256,
+                                   max_interpolation_fraction=0)
+        layers = [bank_synth.synthesize([observation]) for observation in views_obs]
+        arrays.update(view_poses=np.array([[fit_by_view[i].yaw, fit_by_view[i].pitch, fit_by_view[i].roll]
+                                          for i in chosen], np.float32),
+                      view_embeddings=np.array([by_index[i].embedding for i in chosen], np.float32),
+                      view_textures=np.stack([layer.texture_map for layer in layers]),
+                      view_support=np.stack([layer.confidence_score for layer in layers]).astype(np.float32))
 
     frontal = min(chosen, key=lambda i: abs(fit_by_view[i].yaw) + abs(fit_by_view[i].pitch))
     sources = []
@@ -497,6 +531,8 @@ def build_identity_asset(
         canonical_head_pose={"yaw": 0.0, "pitch": 0.0, "roll": 0.0, "frame": FRAME_DESCRIPTION, "reference_view": frontal,
                              "reference_view_refined_pose": [fit_by_view[frontal].yaw, fit_by_view[frontal].pitch, fit_by_view[frontal].roll]},
         shape={"parameterization": "landmark_displacement_m", "shape": list(fit.displacement.shape),
+               "makehuman_shape_coefficients": basis_fit.shape_params.tolist() if basis_fit is not None else None,
+               "makehuman_shape_names": model.shape_names if basis_fit is not None else None,
                "flame_shape_coefficients": None, "posterior_sigma_m_mean": [float(x) for x in fit.sigma_post.mean(axis=0)]},
         expression={"representation": "image-space measurements", "fields": names, "per_view": per_view_expr,
                     "flame_expression_coefficients": None},
