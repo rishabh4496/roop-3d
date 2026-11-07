@@ -55,6 +55,8 @@ class Replacement:
     fallback_reason: str | None = None
     reenactment: ReenactmentFrame | None = None
     full_head: bool = False
+    target_silhouette: np.ndarray | None = None
+    source_silhouette: np.ndarray | None = None
 
 
 @dataclass(frozen=True)
@@ -506,6 +508,8 @@ class ReferencePipeline:
             detection_end = time.perf_counter()
             self.portrait.retain_tracks(self.tracker.active_ids)
             self.reenactors = {key: engine for key, engine in self.reenactors.items() if key in self.tracker.active_ids}
+            for track_id in set(self.full_head_engines) - set(self.tracker.active_ids):
+                self.full_head_engines.pop(track_id).rasterizer.release()
             if self.tracker.scene_cut:
                 self.swapper._hysteresis = {}
             elif hasattr(self.swapper, '_hysteresis'):
@@ -526,9 +530,20 @@ class ReferencePipeline:
                         continue
                 face = tracked.observation
                 at = time.perf_counter()
-                if mode != "standard":
+                extreme = abs(face.pose[0]) > 30 or abs(face.pose[1]) > 25
+                face_mode = "pose_3d" if mode == "standard" and extreme else mode
+                if face_mode != "standard":
                     from roop_3d.reconstruction.full_head import FullHeadEngine
                     rig = self._rig_for(tracked.track_id)
+                    if mode == "standard" and (rig is None or self.head_landmarks is None):
+                        # A standard session may first encounter a profile midway
+                        # through a shot. Prepare its real 3D prerequisites rather
+                        # than driving that frame through a frontal affine crop.
+                        document = self._document_for(tracked.track_id)
+                        if document is None:
+                            raise DomainError("FULL_HEAD_NOT_PREPARED", "Extreme poses require a full-head source identity", 409)
+                        self._prepare_identity_rigs(document, {})
+                        rig = self._rig_for(tracked.track_id)
                     if rig is None or self.head_landmarks is None:
                         raise DomainError("FULL_HEAD_NOT_PREPARED", "Prepare the session in a 3D mode before rendering", 409)
                     engine = self.full_head_engines.get(tracked.track_id)
@@ -541,8 +556,15 @@ class ReferencePipeline:
                     if dense is None:
                         raise DomainError("DENSE_HEAD_LANDMARKS_REQUIRED", "Target has no measured dense head landmarks", 422)
                     generated, coverage, inverse = engine.process(image, face, dense, self._frame_time(),
-                        scene_cut=self.tracker.scene_cut, animate=mode == "reenactment_3d")
+                        scene_cut=self.tracker.scene_cut, animate=face_mode == "reenactment_3d")
                     head_method = "full_head_gpu_uv_only"
+                    if callable(getattr(getattr(self.swapper, "model", None), "infer", None)):
+                        from roop_3d.core.pose import Pose3D
+                        generated = self.swapper.refine_head_texture(generated,
+                            engine.rasterizer.last_buffers.coverage,
+                            pose=Pose3D(yaw=engine.last_angles[0], pitch=engine.last_angles[1], roll=engine.last_angles[2]),
+                            track_id=tracked.track_id)
+                        head_method = "full_head_gpu_texture_residual"
                     if self.portrait.available:
                         generated = self._refine_full_head(tracked, image, generated, coverage, inverse, strength)
                         head_method = "full_head_gpu_liveportrait"
@@ -550,7 +572,9 @@ class ReferencePipeline:
                     replacements.append(Replacement(tracked.track_id, generated, inverse, -1,
                         head_method, coverage=coverage,
                         landmarks5=transform_points(face.landmarks5, cv2.invertAffineTransform(inverse)),
-                        render_mode=mode, full_head=True))
+                        render_mode=face_mode, full_head=True,
+                        target_silhouette=engine.target_silhouette,
+                        source_silhouette=engine.source_silhouette))
                     continue
                 swap = self.swapper.infer_frame(image, face.landmarks5, pose=face.pose,
                                                 track_id=tracked.track_id, frontalization=frontalization,
@@ -701,10 +725,15 @@ class ReferencePipeline:
                 "identity_swapper": self.swapper.model.capability() if self.swapper.model else None,
                 "portrait": self.portrait.capability(), "profile": self.config.hardware_profile,
                 "selected_track_ids": sorted(self.selected_ids) if self.selected_ids is not None else None,
-                "pose_method": "dense_68_pnp" if self.render_mode != "standard" else "five_point_geometric_estimate", "dense_landmarks": (68, 106, 203),
-                "full_head": {"active": self.render_mode != "standard", "renderer": "hardware_opengl",
+                "pose_method": "dense_68_pnp" if self.render_mode != "standard" or self.full_head_engines else "five_point_geometric_estimate", "dense_landmarks": (68, 106, 203),
+                "full_head": {"active": self.render_mode != "standard" or bool(self.full_head_engines), "renderer": "hardware_opengl",
                               "neural_refinement": self.portrait.available,
-                              "unobserved_texture": "transparent", "metric_scale": "source_template_prior"},
+                              "unobserved_texture": "diffuse_source_color_prior", "metric_scale": "source_template_prior",
+                              "visibility": "gpu_depth_tested_vertices_and_uv_texels",
+                              "texture_bank": "nine_buckets_top_two_spherical_arc_weights",
+                              "silhouette_completion": "gpu_jump_flood_background_propagation",
+                              "extreme_pose_policy": "auto_3d_above_30_yaw_or_25_pitch_no_affine_fallback",
+                              "calibration": "estimated_intrinsics_unless_supplied"},
                 "pose_projection": {"state": "AVAILABLE", "geometry": "MAKEHUMAN_FULL_HEAD" if self.render_mode != "standard" else "ESTIMATED_CANONICAL_PROXY_68",
                                     "camera": "ESTIMATED_CROP_PINHOLE", "active": self.pose_projector is not None},
                 "full_frame_compositor": self.compositor.capability(),

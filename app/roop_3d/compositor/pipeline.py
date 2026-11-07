@@ -614,6 +614,8 @@ class FrameCompositor:
                 if coverage.shape != crop.shape[:2] or not np.isfinite(coverage).all() or np.any((coverage < 0) | (coverage > 1)):
                     raise DomainError('PROJECTION_COVERAGE_INVALID', 'Projected coverage must be finite crop-space values in 0..1', 422)
                 coverage = cv2.resize(coverage, (work, work), interpolation=cv2.INTER_LINEAR)
+            if getattr(replacement, "full_head", False):
+                output = self._remove_old_silhouette(output, context, front, options)
             visible_alpha = face_alpha * (1.0 - (front if front is not None else 0.0)) * options.swap_weight
             visible_alpha = self.watchdog.feather(replacement.track_id, visible_alpha, kind="composite")
             if front is not None:
@@ -650,6 +652,11 @@ class FrameCompositor:
             restorer_seconds += spent
             temporal = self.temporal.update(replacement.track_id, replacement.inverse, face_alpha, color_stats,
                                             frame_index=frame_index, scene_cut=False)
+            if getattr(replacement, "full_head", False):
+                # Pose was already filtered in 3D before rasterization. Filtering
+                # this ROI transform again detaches the rendered depth/silhouette
+                # from its camera and from the target-minus-source ribbon.
+                temporal = replace(temporal, inverse=replacement.inverse)
             enhanced_side = harmonized.shape[0]
             if observer is not None:
                 observer('color', harmonized,
@@ -687,6 +694,47 @@ class FrameCompositor:
         self.last_timing = {"masking": max(0.0, total_ms - restorer_ms), "restorer": restorer_ms}
         return output
 
+    def _remove_old_silhouette(self, frame, context, front, options):
+        """Complete only target-minus-source pixels; never use facial skin as a donor."""
+        item = context.replacement
+        target = getattr(item, "target_silhouette", None)
+        source = getattr(item, "source_silhouette", None)
+        if source is None:
+            source = item.coverage
+        if target is None or source is None or options.swap_weight == 0:
+            return frame
+        side = context.work_crop.shape[0]
+        planes = []
+        for plane in (target, source):
+            plane = np.asarray(plane, np.float32)
+            if plane.shape != item.image.shape[:2] or not np.isfinite(plane).all() or np.any((plane < 0) | (plane > 1)):
+                raise DomainError("HEAD_SILHOUETTE_INVALID", "Head silhouettes must be finite native crop masks in 0..1", 422)
+            planes.append(cv2.resize(plane, (side, side)))
+        target, source = planes
+        # Semantic skin may extend the measured jaw into the forehead/temples.
+        if context.analysis.parser_trusted:
+            target = np.maximum(target, context.analysis.skin)
+        ribbon = np.clip(target - source, 0, 1)
+        if front is not None:
+            ribbon *= 1 - front
+        if not ribbon.any():
+            return frame
+        excluded = np.maximum(target, source) > .01
+        if front is not None:
+            excluded |= front > .01
+        excluded = cv2.dilate(excluded.astype(np.uint8), np.ones((5, 5), np.uint8)) > 0
+        # Reflected out-of-frame model padding is never valid background.
+        valid = cv2.warpAffine(np.ones(frame.shape[:2], np.uint8),
+                              cv2.invertAffineTransform(context.work_inverse), (side, side)) > 0
+        excluded |= ~valid
+        if not hasattr(self, "_background_propagator"):
+            from roop_3d.reconstruction.gpu_background import GPUBackgroundPropagator
+            self._background_propagator = GPUBackgroundPropagator()
+        filled = self._background_propagator.fill(context.work_crop, excluded)
+        context.report["silhouette_completion"] = {"method": "gpu_jump_flood", "pixels": int((ribbon > .01).sum())}
+        return fuse_crop(frame, filled, context.work_inverse, ribbon * options.swap_weight,
+                         mode=BlendMode.FEATHER)
+
     def capability(self) -> dict:
         parser = self.parser.capability() if hasattr(self.parser, "capability") else {
             "weights": "UNKNOWN", "provenance": "UNKNOWN", "license": "UNKNOWN", "inference": "UNKNOWN"}
@@ -703,6 +751,8 @@ class FrameCompositor:
         return result
 
     def release(self) -> None:
+        if hasattr(self, "_background_propagator"):
+            self._background_propagator.release()
         if self.parser is not None and hasattr(self.parser, "release"):
             self.parser.release()
         if self._analyzer is not None:

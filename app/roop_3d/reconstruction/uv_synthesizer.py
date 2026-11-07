@@ -126,6 +126,7 @@ class UVSynthesizer:
         visibility_threshold: float = 0.05,
         max_interpolation_fraction: float | None = None,
         blend_mode: str = "weighted",
+        visibility_backend: str = "cpu",
     ):
         if blend_mode not in ("weighted", "multiband"):
             raise DomainError("INVALID_BLEND_MODE", f"blend_mode must be 'weighted' or 'multiband', got {blend_mode!r}", 422)
@@ -138,6 +139,9 @@ class UVSynthesizer:
         self.uv_size = uv_size
         # 'multiband': Laplacian-pyramid blend of the per-view layers (identity/camera path only); 'weighted': per-texel average.
         self.blend_mode = blend_mode
+        if visibility_backend not in ("cpu", "gpu"):
+            raise ValueError("Visibility backend must be cpu or gpu")
+        self.visibility_backend = visibility_backend
         self.vis_thresh = float(visibility_threshold)
         # Identity path only: interpolation is bounded to this distance (in texels) from an observed texel.
         self.max_interp_px = None if max_interpolation_fraction is None else max(1.0, max_interpolation_fraction * uv_size)
@@ -368,6 +372,8 @@ class UVSynthesizer:
         """(visible, silhouette_feather) per texel. `visible` is False where the surface point is hidden behind other
         front-facing geometry; the feather ramps 0 -> 1 with distance from the projected silhouette, so texels at
         the edge of the mask (where the photo shows hair, neck or background) carry little weight."""
+        if self.visibility_backend == "gpu":
+            return self._visible_on_gpu(camera, texel_xy)
         verts = self.mesh.vertices.astype(np.float64)
         vxy, vdepth = camera.project(verts), camera.depth(verts)
         face_n = camera.rotate_normals(self.mesh.compute_face_normals())[:, 2]
@@ -391,6 +397,36 @@ class UVSynthesizer:
         distance = cv2.distanceTransform(footprint, cv2.DIST_L2, 3) / bs      # image pixels
         feather = np.clip(distance[by, bx] / max(self.SILHOUETTE_FEATHER * extent, 1.0), 0.0, 1.0)
         return visible, feather
+
+    def _visible_on_gpu(self, camera, texel_xy):
+        """Depth-test every UV surface sample, not average-depth triangle painting."""
+        from roop_3d.reconstruction.full_head import GPUHeadRasterizer, head_roi
+        class OrthographicPose:
+            perspective = False
+            def project(self, points):
+                return camera.project(points)
+            def camera_vertices(self, points):
+                return np.column_stack((np.zeros((len(points), 2)), 2. - camera.depth(points)))
+        pose = OrthographicPose()
+        side = 1024
+        inverse = head_roi(camera.project(self.mesh.vertices), side)
+        ys, xs = np.where(self.face_texel_mask)
+        points = self.pos_map[ys, xs].astype(np.float64)
+        renderer = GPUHeadRasterizer()
+        try:
+            buffers = renderer.render_buffers(self.mesh.vertices, self.mesh.faces,
+                np.column_stack((self.mesh.uvs[:, 0], 1 - self.mesh.uvs[:, 1])),
+                np.zeros((64, 64, 3), np.uint8), np.ones((64, 64), np.float32), pose, inverse, side)
+            visible = renderer.visibility(points, pose, inverse, buffers, tolerance=.0015)
+        finally:
+            renderer.release()
+        local = cv2.transform(np.asarray(texel_xy, np.float32)[None], cv2.invertAffineTransform(inverse))[0]
+        xx, yy = np.rint(local).astype(np.int64).T
+        inside = (xx >= 0) & (xx < side) & (yy >= 0) & (yy < side)
+        xx, yy = np.clip(xx, 0, side-1), np.clip(yy, 0, side-1)
+        distance = cv2.distanceTransform((buffers.silhouette > .5).astype(np.uint8), cv2.DIST_L2, 3)
+        feather = np.clip(distance[yy, xx] / (self.SILHOUETTE_FEATHER * side), 0, 1)
+        return visible & inside, feather
 
     @staticmethod
     def _local_sharpness(image: np.ndarray) -> np.ndarray:

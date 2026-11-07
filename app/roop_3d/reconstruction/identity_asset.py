@@ -49,7 +49,7 @@ from roop_3d.reconstruction.multiview_fit import (
 from roop_3d.reconstruction.uv_synthesizer import UVSynthesizer, ViewObservation
 
 SCHEMA = "roop.identity_asset.v1"
-ALGORITHM_VERSION = "identity-mv-3"          # v3: full-head runtime pose texture/identity bank
+ALGORITHM_VERSION = "identity-mv-4"          # v4: GPU UV visibility + angularly balanced texture bank
 TEMPLATE_VERSION = "canonical68-delaunay+midpoint-subdiv"
 TEMPLATES = ("canonical", "makehuman")
 FRAME_DESCRIPTION = ("mesh frame (metres): +x image-right, +y down, +z toward the viewer; a frontal head has "
@@ -321,7 +321,10 @@ def build_identity_asset(
 
     by_index = {v.index: v for v in document.views}
     q_by_index = {q.index: q for q in report.views}
-    chosen = sorted(report.usable_indices, key=lambda i: -by_index[i].quality.score)[:settings.max_views]
+    from roop_3d.reconstruction.view_texture_bank import select_bucket_views, pose_bucket, BUCKETS
+    chosen = (select_bucket_views(by_index, report.usable_indices, settings.max_views)
+              if settings.template == "makehuman" else
+              sorted(report.usable_indices, key=lambda i: -by_index[i].quality.score)[:settings.max_views])
     template = template_for(settings)
     basis_fit = None
     if settings.template == "makehuman":
@@ -393,7 +396,8 @@ def build_identity_asset(
     uv_for_atlas = np.column_stack([template.uvs[:, 0], 1.0 - template.uvs[:, 1]])
     synth = UVSynthesizer(Mesh3D(vertices, template.faces, uvs=uv_for_atlas), uv_size=settings.uv_size,
                           max_interpolation_fraction=settings.max_interpolation_fraction,
-                          blend_mode="multiband" if settings.template == "makehuman" else "weighted")
+                          blend_mode="multiband" if settings.template == "makehuman" else "weighted",
+                          visibility_backend="gpu" if settings.template == "makehuman" else "cpu")
     views_obs = []
     for i in chosen:
         vf, q = fit_by_view[i], q_by_index[i]
@@ -489,7 +493,7 @@ def build_identity_asset(
         # are neural identity features; these RGB layers are observations, not a
         # claimed learned spatial feature encoder. No unobserved texture is invented.
         bank_synth = UVSynthesizer(Mesh3D(vertices, template.faces, uvs=uv_for_atlas), uv_size=256,
-                                   max_interpolation_fraction=0)
+                                   max_interpolation_fraction=0, visibility_backend="gpu")
         layers = [bank_synth.synthesize([observation]) for observation in views_obs]
         arrays.update(view_poses=np.array([[fit_by_view[i].yaw, fit_by_view[i].pitch, fit_by_view[i].roll]
                                           for i in chosen], np.float32),
@@ -541,6 +545,8 @@ def build_identity_asset(
              "depth_observed_fraction": fit.depth_observed_fraction, "deformation_strength": strength,
              "dropped_inconsistent_views": dropped, "notes": fit.notes},
         coverage={"readiness": report.readiness, "yaw_range_deg": report.yaw_range_deg, "yaw_coverage": report.yaw_coverage,
+                  "texture_buckets": {bucket: [i for i in chosen
+                      if pose_bucket(fit_by_view[i].yaw, fit_by_view[i].pitch) == bucket] for bucket in BUCKETS},
                   "pitch_coverage": report.pitch_coverage, "missing": report.missing, "identity": report.identity,
                   "duplicate_groups": report.duplicate_groups},
         statistics={**res, "rejected_photometric_samples": atlas.rejected_samples,

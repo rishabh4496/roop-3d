@@ -299,3 +299,24 @@ class IdentitySwapper:
         self._matrices.clear()
         self._hysteresis = {}
         self._logged_cells.clear()
+
+    def refine_head_texture(self, rendered, coverage, *, pose, track_id=None):
+        """Run the selected native swapper on a pose-matched complete head ROI.
+
+        This adapter intentionally bypasses target 5-point alignment. Only a
+        high-frequency texture residual is accepted; the mesh owns low-frequency
+        anatomy, perspective and all silhouette/occlusion decisions.
+        """
+        import cv2
+        from roop_3d.reconstruction.full_head import bridge_neural_detail
+        if self.model is None or self.source is None:
+            raise DomainError("SESSION_NOT_PREPARED", "Prepare identity source before texture refinement", 409)
+        embedding, index, _ = self.reference_embedding(track_id, pose, .15)
+        projected = unit_embedding(embedding @ self.projection) if self.projection is not None else unit_embedding(embedding)
+        document = self.sources_by_track.get(track_id, self.source)
+        view = next((v for v in document.views if v.index == index), document.views[0])
+        size = self.model.resolution
+        neural = self.model.infer(cv2.resize(rendered, (size, size), interpolation=cv2.INTER_AREA),
+                                  projected, source_view=view)
+        neural = cv2.resize(neural, (rendered.shape[1], rendered.shape[0]), interpolation=cv2.INTER_LINEAR)
+        return bridge_neural_detail(rendered, neural, coverage)
