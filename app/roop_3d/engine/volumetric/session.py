@@ -79,9 +79,12 @@ def swapped_portrait(portrait: AlignedCrop, swap: SwapResult) -> np.ndarray:
     portrait_matrix = np.vstack((portrait.matrix, (0, 0, 1)))
     swap_inverse = np.vstack((swap.alignment.inverse, (0, 0, 1)))
     local = (portrait_matrix @ swap_inverse)[:2]
-    mask = np.zeros((128, 128), np.float32)
-    cv2.ellipse(mask, (64, 71), (50, 59), 0, 0, 360, 1, -1)
-    mask = cv2.GaussianBlur(mask, (15, 15), 3)
+    height, width = swap.image.shape[:2]
+    mask = np.zeros((height, width), np.float32)
+    cv2.ellipse(mask, (round(width * 0.5), round(height * 0.555)),
+                (round(width * 0.39), round(height * 0.46)), 0, 0, 360, 1, -1)
+    blur = max(3, round(min(height, width) * 0.117)) | 1
+    mask = cv2.GaussianBlur(mask, (blur, blur), max(1.0, height * 0.0234))
     size = (portrait.image.shape[1], portrait.image.shape[0])
     weight = cv2.warpAffine(mask, local, size)[:, :, None]
     fake = cv2.warpAffine(swap.image, local, size)
@@ -144,6 +147,15 @@ class ReferencePipeline:
         self.angle_frame_index: int | None = None
         self.reenactment_settings = ReenactmentSettings()
         register(self, "release_session")
+
+    def select_swapper(self, model_id: str) -> None:
+        """Select a registered swapper before source preparation/model activation."""
+        if self.prepared:
+            raise DomainError("SESSION_ALREADY_PREPARED", "Swapper selection is fixed for a prepared render session", 409)
+        if not any(item["id"] == model_id and item.get("category") == "swapper"
+                   for item in self.catalog._supported):
+            raise DomainError("SWAPPER_MODEL_UNSUPPORTED", "Selected model is not a registered swapper", 422)
+        self.swapper.model_id = model_id
 
     @guarded
     def prepare_session(self, source: FaceSetDocument, *, track_ids: set[int] | None = None,

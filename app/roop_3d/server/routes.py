@@ -79,6 +79,7 @@ def capabilities(request: Request) -> Capabilities:
     except (ValueError, OSError, TypeError, KeyError):
         ultramax = False
     options = {
+        "swapper_model_id": {item["id"]: None for item in state.models._supported if item["category"] == "swapper"},
         "execution_mode": {"swap": None, "volumetric": None if lp else "LivePortrait weights are unavailable", "hybrid": "No verified diffusion loader is configured", "diffusion_vfx": "No verified diffusion loader is configured"},
         "preferred_provider": {"auto": None, "CPUExecutionProvider": None, "CUDAExecutionProvider": None if gpu else "CUDA is unavailable", "TensorrtExecutionProvider": None if trt else "TensorRT requires the stream backend, NVIDIA GPU and packaged TensorRT libraries"},
         "hardware_profile": {"auto": None, "cpu": None, "6gb": None if gpu else "No CUDA GPU is available", "12gb": None if gpu and hardware.gpus[0].total_vram_mib >= MIN_12GB_PROFILE_VRAM_MIB else "A CUDA GPU with at least 10 GB of video memory is required"},
@@ -135,6 +136,15 @@ class ModelCompileTrtRequest(Contract):
 @router.get("/models", response_model=list[ModelSummary])
 def models(request: Request) -> list[dict]:
     return request.app.state.models.public()
+
+
+@router.post("/models/rescan")
+def rescan_models(request: Request) -> dict[str, Any]:
+    result = request.app.state.models.rescan_local()
+    rows = request.app.state.models.public()
+    result["models"] = len(rows)
+    result["installed"] = sum(bool(item.get("installed")) for item in rows)
+    return result
 
 
 @router.get("/models/hub")

@@ -78,6 +78,8 @@ def create_app(settings: Settings | None = None, *, repo_root: Path | None = Non
         install_log_sanitizer()
         from roop_3d.models.native_libraries import register_native_libraries
         await run_in_threadpool(register_native_libraries)
+        # Keep the local model catalog current before serving requests or starting jobs.
+        app.state.model_scan = await run_in_threadpool(catalog.rescan_local)
         await run_in_threadpool(jobs.recover_interrupted)
         await run_in_threadpool(queue.recover_on_startup)
         # Stage 18: crash-consistency. Nothing is running yet, so every temp file, half-published output and orphan

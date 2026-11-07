@@ -153,6 +153,50 @@ class Manifest(Contract):
         return self
 
 
+def _with_supported_candidates(manifest: Manifest, root: Path) -> Manifest:
+    """Append cataloged architecture candidates without inventing artifact evidence.
+
+    These records make supported engines visible to registry clients while their
+    hash, source, provider and license remain explicitly unknown until reviewed.
+    """
+    catalog_path = root / "roop_3d/supported_models.json"
+    if not catalog_path.is_file():
+        return manifest
+    try:
+        document = json.loads(catalog_path.read_text("utf-8"))
+        if document.get("schema_version") != 1 or not isinstance(document.get("models"), list):
+            raise ValueError
+    except (OSError, ValueError, TypeError):
+        raise DomainError("MODEL_CATALOG_INVALID", "Supported model catalog is invalid", 503) from None
+    existing = {item.model_id for item in manifest.models}
+    candidates = []
+    role_map = {"swapper": "identity_swapper", "enhancer": "face_restorer", "detector": "detector",
+                "occluder": "occlusion_mask", "upscaler": "frame_upscaler"}
+    for spec in document["models"]:
+        model_id = spec["id"]
+        if model_id in existing:
+            continue
+        filename = str(spec.get("aliases", [model_id])[0]) + ".onnx"
+        category = spec["category"]
+        candidates.append(ModelRecord(
+            model_id=model_id, name=spec["name"], role=role_map.get(category),
+            role_evidence="Architecture is listed in the supported catalog; artifact provenance and rights remain unreviewed",
+            filenames=(filename,), expected_sha256=None, byte_size=None,
+            input_output_contract={"state": "NOT_INSPECTED", "native_resolution": spec.get("native_resolution")},
+            supported_providers=(), provider_evidence="UNKNOWN: provider execution has not been verified",
+            status="candidate", evidence="Selectable architecture catalog entry; exact local bytes have not been observed",
+            provenance_state="CANDIDATE", license_notice="Source, license and redistribution terms have not been reviewed",
+            manual_acceptance_required=True, family_hint=category, model_family=spec.get("architecture", category),
+            architecture=spec.get("architecture", "UNKNOWN"), engine_type="ONNX", purpose=category,
+            serialization_format="ONNX", security_status="REVIEW_REQUIRED",
+            inference_availability="UNKNOWN"))
+        existing.add(model_id)
+    if not candidates:
+        return manifest
+    return Manifest(evidence_scope=manifest.evidence_scope + " Supported architecture catalog entries are candidates only.",
+                    source_documents=manifest.source_documents, models=manifest.models + tuple(candidates))
+
+
 def _apply_verified_sources(manifest: Manifest, document: dict[str, Any]) -> Manifest:
     """Attach reviewed public sources without rewriting the preserved local evidence.
 
@@ -280,6 +324,7 @@ class ModelRegistry:
                 reviews = safe_path(self.root, "roop_3d/models/governance_reviews.json")
                 if reviews.is_file():
                     self.manifest = _apply_governance_reviews(self.manifest, json.loads(reviews.read_text("utf-8")))
+                self.manifest = _with_supported_candidates(self.manifest, self.root)
         except (OSError, ValueError):
             raise DomainError("MODEL_REGISTRY_INVALID", "Model manifest or its discovery evidence is invalid", 503) from None
         self._records = {item.model_id: item for item in self.manifest.models}

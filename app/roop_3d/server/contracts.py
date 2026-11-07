@@ -38,13 +38,23 @@ class Health(Contract):
 
 
 class ModelSummary(Contract):
+    id: str | None = None
     model_id: str
     name: str
-    sha256: str
-    size_bytes: int
+    category: str = "other"
+    native_resolution: int | None = None
+    installed: bool = False
+    selectable: bool = False
+    vram_loaded: bool = False
+    trt_cached: bool = False
+    download_url: str | None = None
+    supports_3d_hybrid: bool = False
+    local_format: str | None = None
+    sha256: str | None = None
+    size_bytes: int | None = None
     state: Evidence
     family_hint: str
-    verified_at: str
+    verified_at: str | None
     license_state: Evidence
     provenance_state: Evidence
     inference_state: Evidence

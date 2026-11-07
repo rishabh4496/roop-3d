@@ -19,6 +19,12 @@ def _image_size(name: str) -> tuple[int, int, int]:
         return 3, 256, 256
     if "inswapper" in name:
         return 3, 128, 128
+    if any(token in name for token in ("ghost_256", "ghost_1_256", "ghost_2_256", "ghost_3_256",
+                                       "blendswap_256", "uniface_256", "hyperswap_1a_256", "hyperswap_1b_256",
+                                       "hyperswap_1c_256", "realswap_256", "simswap_256")):
+        return 3, 256, 256
+    if any(token in name for token in ("realswap_512", "simswap_512")):
+        return 3, 512, 512
     if "256" in name and any(x in name for x in ("gpen", "ultramax", "gfpgan", "codeformer")):
         return 3, 256, 256
     if "1024" in name:
@@ -186,6 +192,12 @@ def _static_input_contract(name: str) -> tuple[int, int, bool] | None:
         return 640, 640, True
     if "inswapper" in folded:
         return 128, 128, False
+    if any(token in folded for token in ("hyperswap_1a_256", "hyperswap_1b_256", "hyperswap_1c_256",
+            "realswap_256", "simswap_256", "ghost_256", "ghost_1_256", "ghost_2_256", "ghost_3_256",
+            "blendswap_256", "uniface_256")):
+        return 256, 256, False
+    if any(token in folded for token in ("realswap_512", "simswap_512")):
+        return 512, 512, False
     if "xseg" in folded:
         return 256, 256, True
     if "1k3d68" in folded or "2d106det" in folded or "landmark" in folded:

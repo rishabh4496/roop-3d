@@ -34,6 +34,7 @@ const SETTING_DOMAINS: Record<string, DomainId> = {
   temporal_d_cutoff: 'spatial',
 
   face_restoration_policy: 'pipeline',
+  swapper_model_id: 'pipeline',
   lip_sync_mode: 'pipeline',
   sparse_interval: 'pipeline',
   stream_segment_frames: 'pipeline',
@@ -164,7 +165,7 @@ export function SettingsInspector({
               {items.map(([name, schema]) => {
                 const reason = optionReason(caps, name);
                 const value = draft[name];
-                const label = name.replaceAll('_', ' ');
+                const label = name === 'swapper_model_id' ? 'Swapper engine' : name.replaceAll('_', ' ');
                 const common = {
                   id: `${namespace}-${name}`,
                   disabled: !!reason || busy,
@@ -279,7 +280,7 @@ export function SettingsInspector({
               {model.license_state ? `license: ${model.license_state}` : ''}{' '}
               {model.inference_state ? `· inference: ${model.inference_state}` : ''}
             </small>
-            <code>{model.sha256.slice(0, 16)}…</code>
+            <code>{model.sha256 ? `${model.sha256.slice(0, 16)}…` : 'Hash not recorded'}</code>
           </div>
         ))}
       </details>

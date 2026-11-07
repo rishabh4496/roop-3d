@@ -9,9 +9,10 @@ from typing import Any, BinaryIO, Iterator
 import numpy as np
 
 from roop_3d.core.errors import DomainError
-from roop_3d.core.pose import as_pose3d
+from roop_3d.core.pose import as_pose3d, pose_cell
 from roop_3d.engine.runtime import OrtModel, RuntimeConfig, tensor
 from roop_3d.engine.volumetric.preprocess import AlignedCrop, roll_compensated_aligned_crop, transform_points
+from roop_3d.engine.volumetric.swapper_engine import SwapperEngineAdapter
 from roop_3d.faceset.pose_selector import PoseSelector
 from roop_3d.faceset.schemas import FaceSetDocument
 from roop_3d.models.catalog import ModelCatalog
@@ -19,6 +20,7 @@ from roop_3d.pose_matrix import FrozenSourcePoseMatrix, FrozenPoseSelection
 from roop_3d.reconstruction.frontalization import frontalize_crop
 
 log = logging.getLogger("roop3d.stage13")
+stage0_log = logging.getLogger("roop3d.stage0")
 
 
 def _varint(stream: BinaryIO) -> int:
@@ -80,10 +82,15 @@ def embedding_map(path: Path) -> np.ndarray:
                         elif member in (4, 9) and encoding == 2:
                             raw = (position, length)
                     if name == "buff2fs":
-                        if dims != [512, 512] or dtype != 1 or raw is None or raw[1] != 512 * 512 * 4:
+                        if dims != [512, 512] or dtype not in (1, 10) or raw is None:
                             raise ValueError("Unsupported embedding projection contract")
+                        item_size = 4 if dtype == 1 else 2
+                        if raw[1] != 512 * 512 * item_size:
+                            raise ValueError("Unsupported embedding projection payload")
                         stream.seek(raw[0])
-                        return tensor(np.frombuffer(stream.read(raw[1]), dtype="<f4").reshape(512, 512).copy(), (512, 512))
+                        dtype_name = "<f4" if dtype == 1 else "<f2"
+                        return tensor(np.frombuffer(stream.read(raw[1]), dtype=dtype_name).reshape(512, 512).astype(np.float32),
+                                      (512, 512))
     except (OSError, ValueError):
         raise DomainError("SWAPPER_PROJECTION_INVALID", "Verified swapper projection could not be read", 503) from None
     raise DomainError("SWAPPER_PROJECTION_MISSING", "Swapper has no supported embedding projection", 503)
@@ -107,9 +114,11 @@ class SwapResult:
 
 
 class IdentitySwapper:
-    def __init__(self, catalog: ModelCatalog | None = None, config: RuntimeConfig = RuntimeConfig()):
+    def __init__(self, catalog: ModelCatalog | None = None, config: RuntimeConfig = RuntimeConfig(),
+                 model_id: str = "inswapper_128"):
         self.catalog, self.config = catalog or ModelCatalog(), config
-        self.model: OrtModel | None = None
+        self.model_id = model_id
+        self.model: SwapperEngineAdapter | None = None
         self.projection: np.ndarray | None = None
         self.source: FaceSetDocument | None = None
         self.canonical: np.ndarray | None = None
@@ -132,9 +141,14 @@ class IdentitySwapper:
                               for track_id, document in mapped.items()}
         self.release_session()
         try:
-            self.model = OrtModel(self.catalog, "inswapper_128.onnx", self.config)
-            from roop_3d.models.emap_cache import cached_emap
-            self.projection = cached_emap(self.model.path, embedding_map, source_sha256=self.model.record["sha256"])
+            self.model = SwapperEngineAdapter(self.catalog, self.model_id, self.config)
+            self.projection = None
+            if self.model.spec.get("identity_mode") == "arcface_emap":
+                from roop_3d.models.emap_cache import cached_emap
+                path = self.model.path or getattr(self.model.model, "path", None)
+                record = getattr(self.model.model, "record", None)
+                digest = record.get("sha256") if isinstance(record, dict) else None
+                self.projection = cached_emap(path, embedding_map, source_sha256=digest) if digest else embedding_map(path)
             self.source, self.canonical = source, canonical
             self.sources_by_track = mapped
             self.canonical_by_track = canonical_by_track
@@ -186,12 +200,18 @@ class IdentitySwapper:
             if marker not in self._logged_cells:
                 self._logged_cells.add(marker)
                 log.info("[Stage13] lookup track=%s yaw=%.1f pitch=%.1f roll=%.1f -> source=%s view=%d cells=%s",
-                         track_id, target.yaw, target.pitch, target.roll, selection.source,
-                         selection.view_index, selection.weights)
+                         track_id, target.yaw, target.pitch, target.roll, getattr(selection, "source", "matrix"),
+                         selection.view_index, getattr(selection, "weights", ()))
+                stage0_log.info("[Stage0] lookup track=%s yaw=%.1f pitch=%.1f roll=%.1f cell=%s view=%d",
+                                track_id, target.yaw, target.pitch, target.roll, pose_cell(target).name,
+                                selection.view_index)
             else:
                 log.debug("[Stage13] lookup track=%s -> view=%d", track_id, selection.view_index)
+                stage0_log.debug("[Stage0] lookup track=%s -> cell=%s view=%d", track_id,
+                                 pose_cell(target).name, selection.view_index)
             weight, view_vector, index = reference_blend * selection.confidence, selection.vector, selection.view_index
-            if abs(reference_blend - matrix.reference_blend) < 1e-8:
+            if (hasattr(matrix, "reference_blend") and hasattr(selection, "pose_selected_vector")
+                    and abs(reference_blend - matrix.reference_blend) < 1e-8):
                 return selection.pose_selected_vector.copy(), index, weight
         else:
             selector = self._selectors.get(track_id) if track_id is not None else None
@@ -204,7 +224,7 @@ class IdentitySwapper:
 
     def infer_frame(self, image: np.ndarray, landmarks5: np.ndarray, *, pose: Any = (0, 0, 0),
                     reference_blend: float = 0.15, track_id: int | None = None, frontalization: float = 0.0, identity_blend_t: float | None = None) -> SwapResult:
-        if self.model is None or self.source is None or self.canonical is None or self.projection is None:
+        if self.model is None or self.source is None or self.canonical is None:
             raise DomainError("SESSION_NOT_PREPARED", "Prepare identity source before inference", 409)
         if not 0 <= reference_blend <= 0.25:
             raise ValueError("Pose reference weight must be within 0..0.25")
@@ -230,27 +250,41 @@ class IdentitySwapper:
                 (np.sin((1-t)*angle)*a+np.sin(t*angle)*b)/np.sin(angle))
         selection = self.pose_selection(track_id, pose)
         matrix = self._matrix_for(track_id)
-        if identity_blend_t is None and matrix is not None and abs(reference_blend - matrix.reference_blend) < 1e-8:
-            # Per-cell EMAP multiplication was completed during session preparation.
+        if (identity_blend_t is None and matrix is not None and hasattr(matrix, "reference_blend")
+                and hasattr(selection, "projected_vector")
+                and abs(reference_blend - matrix.reference_blend) < 1e-8):
+            # Per-cell projection (EMAP or identity) was completed during session preparation.
             projected = selection.projected_vector.reshape(1, 512)
-        else:
+        elif self.projection is not None:
             projected = unit_embedding(embedding @ self.projection).reshape(1, 512)
+        else:
+            projected = unit_embedding(embedding).reshape(1, 512)
         target_pose = as_pose3d(pose)
         compensation = None
-        if matrix is not None:
+        if matrix is not None and callable(getattr(matrix, "roll_affine", None)):
             center = tuple(float(v) for v in np.asarray(landmarks5, np.float64)[:2].mean(axis=0))
             compensation = matrix.roll_affine(target_pose.roll, center)
-        aligned = roll_compensated_aligned_crop(image, landmarks5, target_pose.roll, 128,
-                                                compensation=compensation)
+        model_resolution = getattr(self.model, "resolution", 128)
+        model_spec = getattr(self.model, "spec", {})
+        model_id = getattr(self.model, "model_id", "inswapper_128")
+        aligned = roll_compensated_aligned_crop(image, landmarks5, target_pose.roll, model_resolution,
+                                                compensation=compensation,
+                                                template=model_spec.get("alignment_template", "arcface_112"))
         model_input, flat = aligned.image, None
-        if frontalization > 0:
+        if frontalization > 0 and model_id == "inswapper_128":
             # Reduce severe profile mismatch before inswapper_128 sees the crop; undone on the output below.
             flat = frontalize_crop(aligned.image, transform_points(np.asarray(landmarks5, np.float64), aligned.matrix), frontalization)
             model_input = flat.image
-        blob = model_input[:, :, ::-1].transpose(2, 0, 1)[None].astype(np.float32) / 255
-        result = self.model.run({"target": np.ascontiguousarray(blob), "source": projected})["output"]
-        tensor(result, (1, 3, 128, 128))
-        bgr = np.clip(result[0].transpose(1, 2, 0)[:, :, ::-1] * 255, 0, 255).astype(np.uint8)
+        document = self.sources_by_track.get(track_id, self.source) if track_id is not None else self.source
+        source_view = next((view for view in document.views if view.index == view_index), document.views[0])
+        if callable(getattr(self.model, "infer", None)):
+            bgr = self.model.infer(model_input, projected.reshape(512), source_view=source_view)
+        else:
+            # Keep the established raw-session seam used by diagnostics and test doubles.
+            blob = model_input[:, :, ::-1].transpose(2, 0, 1)[None].astype(np.float32) / 255
+            result = self.model.run({"target": np.ascontiguousarray(blob), "source": projected})["output"]
+            tensor(result, (1, 3, model_resolution, model_resolution))
+            bgr = np.clip(result[0].transpose(1, 2, 0)[:, :, ::-1] * 255, 0, 255).astype(np.uint8)
         if flat is not None:
             bgr = flat.restore(bgr)
         return SwapResult(bgr, aligned, view_index, weight)

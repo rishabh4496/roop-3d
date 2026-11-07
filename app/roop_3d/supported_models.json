@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "models": [
+    {"id":"inswapper_128","name":"InSwapper 128","category":"swapper","native_resolution":128,"aliases":["inswapper_128","inswapper_128.batch","inswapper_128_dynamic"],"architecture":"inswapper","identity_mode":"arcface_emap","alignment_template":"arcface_112","input_range":"0_1","output_range":"0_1","supports_3d_hybrid":true},
+    {"id":"inswapper_128_fp16","name":"InSwapper 128 FP16","category":"swapper","native_resolution":128,"aliases":["inswapper_128_fp16"],"architecture":"inswapper","identity_mode":"arcface_emap","alignment_template":"arcface_112","input_range":"0_1","output_range":"0_1","supports_3d_hybrid":true},
+    {"id":"hyperswap_1a_256","name":"HyperSwap 1A 256","category":"swapper","native_resolution":256,"aliases":["hyperswap_1a_256","hyperswap_1a_256.batch"],"architecture":"hyperswap","identity_mode":"arcface","input_range":"minus1_1","output_range":"minus1_1","supports_3d_hybrid":true},
+    {"id":"hyperswap_1b_256","name":"HyperSwap 1B 256","category":"swapper","native_resolution":256,"aliases":["hyperswap_1b_256","hyperswap_1b_256.batch"],"architecture":"hyperswap","identity_mode":"arcface","input_range":"minus1_1","output_range":"minus1_1","supports_3d_hybrid":true},
+    {"id":"hyperswap_1c_256","name":"HyperSwap 1C 256","category":"swapper","native_resolution":256,"aliases":["hyperswap_1c_256","hyperswap_1c_256.batch"],"architecture":"hyperswap","identity_mode":"arcface","input_range":"minus1_1","output_range":"minus1_1","supports_3d_hybrid":true},
+    {"id":"realswap_256","name":"RealSwap 256","category":"swapper","native_resolution":256,"aliases":["realswap_256"],"architecture":"realswap","identity_mode":"arcface_or_source_crop","input_range":"minus1_1","output_range":"minus1_1","supports_3d_hybrid":true},
+    {"id":"realswap_512","name":"RealSwap 512","category":"swapper","native_resolution":512,"aliases":["realswap_512"],"architecture":"realswap","identity_mode":"arcface_or_source_crop","alignment_template":"ffhq_512","input_range":"minus1_1","output_range":"minus1_1","supports_3d_hybrid":true},
+    {"id":"simswap_256","name":"SimSwap 256","category":"swapper","native_resolution":256,"aliases":["simswap_256"],"architecture":"simswap","identity_mode":"arcface_or_source_crop","input_range":"minus1_1","output_range":"minus1_1","supports_3d_hybrid":true},
+    {"id":"simswap_512_unofficial","name":"SimSwap 512 Unofficial","category":"swapper","native_resolution":512,"aliases":["simswap_512_unofficial","simswap_unofficial_512"],"architecture":"simswap","identity_mode":"arcface_or_source_crop","alignment_template":"ffhq_512","input_range":"minus1_1","output_range":"minus1_1","supports_3d_hybrid":true},
+    {"id":"ghost_256_unet_1","name":"Ghost 256 UNet 1","category":"swapper","native_resolution":256,"aliases":["ghost_256_unet_1","ghost_1_256"],"architecture":"ghost","identity_mode":"source_crop_or_arcface","input_range":"minus1_1","output_range":"minus1_1","supports_3d_hybrid":true},
+    {"id":"ghost_256_unet_2","name":"Ghost 256 UNet 2","category":"swapper","native_resolution":256,"aliases":["ghost_256_unet_2","ghost_2_256"],"architecture":"ghost","identity_mode":"source_crop_or_arcface","input_range":"minus1_1","output_range":"minus1_1","supports_3d_hybrid":true},
+    {"id":"ghost_256_unet_3","name":"Ghost 256 UNet 3","category":"swapper","native_resolution":256,"aliases":["ghost_256_unet_3","ghost_3_256"],"architecture":"ghost","identity_mode":"source_crop_or_arcface","input_range":"minus1_1","output_range":"minus1_1","supports_3d_hybrid":true},
+    {"id":"blendswap_256","name":"BlendSwap 256","category":"swapper","native_resolution":256,"aliases":["blendswap_256"],"architecture":"blendswap","identity_mode":"source_crop_or_arcface","input_range":"minus1_1","output_range":"minus1_1","supports_3d_hybrid":true},
+    {"id":"uniface_256","name":"Uniface 256","category":"swapper","native_resolution":256,"aliases":["uniface_256"],"architecture":"uniface","identity_mode":"source_crop_or_arcface","input_range":"minus1_1","output_range":"minus1_1","supports_3d_hybrid":true},
+    {"id":"ultramax","name":"UltraMax","category":"enhancer","native_resolution":1024,"aliases":["ultramax","ultramax_bfr","ultramax_bfr_1024"],"supports_3d_hybrid":true},
+    {"id":"gpen_bfr_512","name":"GPEN-BFR-512","category":"enhancer","native_resolution":512,"aliases":["gpen_bfr_512","gpen-bfr-512"],"supports_3d_hybrid":true},
+    {"id":"gpen_bfr_1024","name":"GPEN-BFR-1024","category":"enhancer","native_resolution":1024,"aliases":["gpen_bfr_1024","gpen-bfr-1024"],"supports_3d_hybrid":true},
+    {"id":"codeformer","name":"CodeFormer","category":"enhancer","native_resolution":512,"aliases":["codeformer","codeformerv0.1"],"supports_3d_hybrid":true},
+    {"id":"gfpgan_v14","name":"GFPGANv1.4","category":"enhancer","native_resolution":512,"aliases":["gfpganv1.4","gfpgan_v1.4","gfpgan_1.4"],"supports_3d_hybrid":true},
+    {"id":"restoreformer_pp","name":"RestoreFormer++","category":"enhancer","native_resolution":512,"aliases":["restoreformer++","restoreformer_pp","restoreformer_plus_plus"],"supports_3d_hybrid":true},
+    {"id":"scrfd","name":"SCRFD","category":"detector","native_resolution":640,"aliases":["scrfd","scrfd_2.5g_kps","scrfd_10g_bnkps"],"supports_3d_hybrid":true},
+    {"id":"retinaface","name":"RetinaFace","category":"detector","native_resolution":640,"aliases":["retinaface","det_10g"],"supports_3d_hybrid":true},
+    {"id":"yoloface","name":"YOLOFace","category":"detector","native_resolution":640,"aliases":["yoloface","yolo_face"],"supports_3d_hybrid":true},
+    {"id":"xseg","name":"XSeg","category":"occluder","native_resolution":256,"aliases":["xseg","xseg_256"],"supports_3d_hybrid":true},
+    {"id":"bisenet","name":"BiSeNet","category":"occluder","native_resolution":512,"aliases":["bisenet","bisenet_resnet_34","face_parser"],"supports_3d_hybrid":true},
+    {"id":"realesrgan_x2plus","name":"RealESRGAN x2plus","category":"upscaler","native_resolution":512,"aliases":["realesrgan_x2plus","realesrgan-x2plus"],"supports_3d_hybrid":true},
+    {"id":"realesrgan_x4plus","name":"RealESRGAN x4plus","category":"upscaler","native_resolution":512,"aliases":["realesrgan_x4plus","realesrgan-x4plus"],"supports_3d_hybrid":true},
+    {"id":"4x_ultrasharp","name":"4x-UltraSharp","category":"upscaler","native_resolution":512,"aliases":["4x-ultrasharp","4x_ultrasharp"],"supports_3d_hybrid":true}
+  ]
+}

@@ -3,6 +3,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import re
+import threading
 from pathlib import Path
 from typing import Any, Callable
 
@@ -13,6 +16,7 @@ from roop_3d.models.governance import ModelCompatibilityScanner
 from roop_3d.models.local_provider import LocalWeightProvider
 from roop_3d.models.registry import ModelRecord, ModelRegistry, authorize, license_info
 from roop_3d.core.storage import atomic_json
+from roop_3d.audit.isolation import is_link
 
 
 def render_dependencies(catalog) -> dict[str, str]:
@@ -59,11 +63,132 @@ class ModelCatalog:
         self.downloader = Downloader(cache_root or self.root)
         self.governance = ModelCompatibilityScanner()
         self.pin_root = cache_root or self.root
+        self.unblock_local_models = True
+        self._scan_lock = threading.RLock()
+        self._local_files: dict[str, Path] = {}
+        self._scanned_paths: tuple[Path, ...] = ()
+        self._trt_cache_names: tuple[str, ...] = ()
+        self._scan_complete = False
+        self._vram_loaded: set[str] = set()
+        try:
+            supported_path = self.root / "roop_3d/supported_models.json"
+            if not supported_path.is_file():
+                supported_path = Path(__file__).resolve().parents[1] / "supported_models.json"
+            supported = json.loads(supported_path.read_text("utf-8"))
+            if supported.get("schema_version") != 1 or not isinstance(supported.get("models"), list):
+                raise ValueError("Unsupported supported-model catalog")
+            self._supported = tuple(supported["models"])
+        except (OSError, ValueError, TypeError):
+            raise DomainError("MODEL_CATALOG_INVALID", "Supported model catalog is invalid", 503) from None
+
+    @staticmethod
+    def _stem(path: Path) -> str:
+        return path.stem.casefold().replace(" ", "_")
+
+    def rescan_local(self) -> dict[str, Any]:
+        """Discover local model files under app/models without following links.
+
+        This is a visibility/selection scan. The runtime adapter separately checks
+        ONNX graph safety before activating an unregistered local file.
+        """
+        models_root = self.root / "models"
+        found: list[Path] = []
+        if models_root.is_dir() and not is_link(models_root):
+            count = 0
+            for parent, directories, names in os.walk(models_root, followlinks=False):
+                parent_path = Path(parent)
+                directories[:] = sorted(name for name in directories
+                    if name.casefold() != ".trt_cache" and not is_link(parent_path / name))
+                for name in sorted(names):
+                    count += 1
+                    if count > 50000:
+                        raise DomainError("MODEL_SEARCH_LIMIT", "Local model scan exceeds 50000 files", 413)
+                    candidate = parent_path / name
+                    if candidate.suffix.casefold() not in {".onnx", ".pth", ".trt"} or is_link(candidate):
+                        continue
+                    try:
+                        if candidate.is_file() and candidate.stat().st_size > 0:
+                            found.append(candidate.resolve(strict=True))
+                    except OSError:
+                        continue
+        trt_root = models_root / ".trt_cache"
+        trt_names = tuple(path.name.casefold() for path in trt_root.iterdir() if path.is_file()) if trt_root.is_dir() else ()
+        aliases: dict[str, list[dict[str, Any]]] = {}
+        for spec in self._supported:
+            for alias in (spec["id"], *spec.get("aliases", ())):
+                aliases.setdefault(str(alias).casefold().replace(" ", "_"), []).append(spec)
+        local: dict[str, Path] = {}
+        matched: set[Path] = set()
+        for path in found:
+            key = self._stem(path)
+            for spec in aliases.get(key, ()):
+                existing = local.get(spec["id"])
+                priority = {".onnx": 0, ".trt": 1, ".pth": 2}
+                if existing is None or priority[path.suffix.casefold()] < priority[existing.suffix.casefold()]:
+                    local[spec["id"]] = path
+                matched.add(path)
+        custom_rows = []
+        for path in found:
+            if path in matched:
+                continue
+            relative = path.relative_to(models_root.resolve()).as_posix()
+            slug = re.sub(r"[^a-z0-9]+", "_", path.stem.casefold()).strip("_")[:64] or "model"
+            suffix = hashlib.sha256(relative.encode("utf-8")).hexdigest()[:8]
+            model_id = f"local_{slug}_{suffix}"
+            local[model_id] = path
+            custom_rows.append({"id": model_id, "model_id": model_id, "name": path.stem,
+                "category": "custom", "native_resolution": None, "installed": True, "selectable": True,
+                "vram_loaded": False, "trt_cached": path.suffix.casefold() == ".trt", "download_url": None,
+                "supports_3d_hybrid": False, "filename": path.name,
+                "local_format": path.suffix[1:].casefold(), "state": "CANDIDATE",
+                "family_hint": "custom", "license_state": "UNKNOWN",
+                "provenance_state": "UNKNOWN", "inference_state": "UNKNOWN",
+                "commercial_permission": "UNKNOWN", "sha256": None, "size_bytes": path.stat().st_size,
+                "verified_at": None, "role": None, "license_id": "UNKNOWN",
+                "commercial_use": "unknown", "license_notice": "Local custom model; runtime graph checks apply",
+                "manual_acceptance_required": False})
+        with self._scan_lock:
+            self._local_files = local
+            self._scanned_paths = tuple(found)
+            self._trt_cache_names = trt_names
+            self._scan_complete = True
+        return {"scanned_files": len(found), "registered_local_models": len(local),
+                "custom_local_models": custom_rows, "unblock_local_models": self.unblock_local_models}
+
+    def local_path(self, model_id: str) -> Path | None:
+        with self._scan_lock:
+            return self._local_files.get(model_id)
+
+    def resolve_local_model(self, model_id: str) -> Path:
+        """Resolve a scanned local ONNX weight using the explicit local-use override."""
+        if not self.unblock_local_models:
+            raise DomainError("LOCAL_MODEL_BLOCKED", "Local model activation is disabled", 403)
+        path = self.local_path(model_id)
+        if path is None and not self._scan_complete:
+            self.rescan_local()
+            path = self.local_path(model_id)
+        if path is None or path.suffix.casefold() != ".onnx":
+            raise DomainError("MODEL_NOT_INSTALLED", "A local ONNX weight for this model is unavailable", 404)
+        try:
+            resolved = path.resolve(strict=True)
+            if not resolved.is_relative_to((self.root / "models").resolve(strict=True)) or not resolved.is_file():
+                raise ValueError
+        except (OSError, ValueError):
+            raise DomainError("MODEL_PATH_INVALID", "Local model path is outside app/models", 403) from None
+        return resolved
+
+    def set_vram_loaded(self, model_id: str, loaded: bool) -> None:
+        with self._scan_lock:
+            if loaded:
+                self._vram_loaded.add(model_id)
+            else:
+                self._vram_loaded.discard(model_id)
 
     @staticmethod
     def _legacy(record: ModelRecord) -> dict[str, Any]:
         return {"model_id": record.model_id, "name": record.name, "sha256": record.expected_sha256,
                 "size_bytes": record.byte_size, "state": record.status.upper(), "family_hint": record.family_hint,
+                "upstream_url": record.upstream_url,
                 "verified_at": record.verified_at, "license_state": "UNKNOWN" if record.license_id == "UNKNOWN" else "VERIFIED_REMOTE",
                 "provenance_state": record.provenance_state, "inference_state": "UNKNOWN",
                 "commercial_permission": "UNKNOWN", "graph": record.input_output_contract,
@@ -75,8 +200,79 @@ class ModelCatalog:
         return [self._legacy(record) for record in self.registry.records() if record.status == "verified_local"]
 
     def public(self) -> list[dict[str, Any]]:
-        return [{key: value for key, value in record.items() if key not in {"graph", "locator"}}
-                for record in self.records()]
+        if not self._scan_complete:
+            self.rescan_local()
+        registered = [self._legacy(item) for item in self.registry.records()]
+        by_name: dict[str, dict[str, Any]] = {}
+        for record in registered:
+            by_name[record["name"].casefold()] = record
+        consumed: set[str] = set()
+        rows: list[dict[str, Any]] = []
+        local = self._local_files
+        for spec in self._supported:
+            aliases = {str(value).casefold() for value in (spec["id"], spec["name"], *spec.get("aliases", ()))}
+            source = next((item for item in registered if item["model_id"] == spec["id"]
+                           or item["name"].casefold() in aliases
+                           or any(Path(value).stem.casefold() in aliases for value in self.registry.get(item["model_id"]).filenames)), {})
+            if source:
+                consumed.add(source["model_id"])
+            local_path = local.get(spec["id"])
+            expected_names = {Path(filename).name.casefold()
+                              for filename in (self.registry.get(source["model_id"]).filenames if source else ())}
+            installed = local_path is not None or any(path.name.casefold() in expected_names for path in self._scanned_paths)
+            trt_cached = (local_path is not None and local_path.suffix.casefold() == ".trt") or any(
+                any(part in name for part in aliases) for name in self._trt_cache_names)
+            rows.append({"id": spec["id"], "model_id": spec["id"], "name": spec["name"],
+                "category": spec["category"], "native_resolution": spec.get("native_resolution"),
+                "installed": bool(installed), "selectable": True, "vram_loaded": spec["id"] in self._vram_loaded,
+                "trt_cached": trt_cached, "download_url": source.get("upstream_url") if source else None,
+                "supports_3d_hybrid": bool(spec.get("supports_3d_hybrid", False)),
+                "sha256": source.get("sha256") if source else None,
+                "size_bytes": source.get("size_bytes") if source else (local_path.stat().st_size if local_path else None),
+                "state": source.get("state", "CANDIDATE"), "family_hint": source.get("family_hint", spec["category"]),
+                "verified_at": source.get("verified_at"), "license_state": source.get("license_state", "UNKNOWN"),
+                "provenance_state": source.get("provenance_state", "UNKNOWN"),
+                "inference_state": source.get("inference_state", "UNKNOWN"),
+                "commercial_permission": source.get("commercial_permission", "UNKNOWN"),
+                "role": source.get("role", "identity_swapper" if spec["category"] == "swapper" else None),
+                "license_id": source.get("license_id", "UNKNOWN"),
+                "commercial_use": source.get("commercial_use", "unknown"),
+                "license_notice": source.get("license_notice", "License and provenance have not been reviewed"),
+                "manual_acceptance_required": source.get("manual_acceptance_required", False),
+                "local_format": local_path.suffix[1:].casefold() if local_path else None})
+        # Preserve every other first-party registry artifact in the API catalog too.
+        supported_ids = {spec["id"] for spec in self._supported}
+        for source in registered:
+            if source["model_id"] in consumed or source["model_id"] in supported_ids:
+                continue
+            record = self.registry.get(source["model_id"])
+            expected_names = {Path(name).name.casefold() for name in record.filenames}
+            installed = any(path.name.casefold() in expected_names for path in self._scanned_paths)
+            category = {"identity_swapper": "swapper", "face_restorer": "enhancer", "detector": "detector",
+                "occlusion_mask": "occluder", "frame_upscaler": "upscaler"}.get(source.get("role"), "other")
+            rows.append({**{key: value for key, value in source.items() if key not in {"graph", "locator", "upstream_url"}},
+                "id": source["model_id"], "category": category, "native_resolution": None,
+                "installed": installed, "selectable": True, "vram_loaded": source["model_id"] in self._vram_loaded,
+                "trt_cached": False, "download_url": record.upstream_url,
+                "supports_3d_hybrid": category in {"swapper", "enhancer"}, "local_format": None})
+        # Unknown files are selectable candidates, but never inherit a registered model's rights.
+        known_ids = {row["id"] for row in rows}
+        for model_id, path in sorted(local.items()):
+            if model_id in known_ids or any(spec["id"] == model_id for spec in self._supported):
+                continue
+            relative = path.relative_to((self.root / "models").resolve()).as_posix()
+            slug = re.sub(r"[^a-z0-9]+", "_", path.stem.casefold()).strip("_")[:64] or "model"
+            row_id = f"local_{slug}_{hashlib.sha256(relative.encode()).hexdigest()[:8]}"
+            rows.append({"id": row_id, "model_id": row_id, "name": path.stem, "category": "custom",
+                "native_resolution": None, "installed": True, "selectable": True, "vram_loaded": row_id in self._vram_loaded,
+                "trt_cached": path.suffix.casefold() == ".trt", "download_url": None, "supports_3d_hybrid": False,
+                "sha256": None, "size_bytes": path.stat().st_size, "state": "CANDIDATE",
+                "family_hint": "custom", "verified_at": None, "license_state": "UNKNOWN",
+                "provenance_state": "UNKNOWN", "inference_state": "UNKNOWN",
+                "commercial_permission": "UNKNOWN", "role": None, "license_id": "UNKNOWN",
+                "commercial_use": "unknown", "license_notice": "Local custom model; runtime graph checks apply",
+                "manual_acceptance_required": False, "local_format": path.suffix[1:].casefold()})
+        return rows
 
     def get(self, model_id: str) -> dict[str, Any]:
         return self._legacy(self.registry.get(model_id))
@@ -116,6 +312,8 @@ class ModelCatalog:
     def lifecycle(self, model_id: str, *, hardware: dict[str, Any] | None = None) -> dict[str, Any]:
         """Return governance state; resolving verifies bytes and never loads the model."""
         model = self.registry.get(model_id)
+        if model.status == "candidate" or not model.expected_sha256 or not model.byte_size:
+            return self.governance.scan(model, installed=False, integrity_verified=None, hardware=hardware)
         try:
             self.provider.resolve(model)
         except DomainError as error:

@@ -534,6 +534,9 @@ class MasterPipelineRunner:
         base_source = next(iter(source_by_track.values()))
         runtime_config = self._runtime_config(admission, settings)
         session = self.pipeline_factory(self.catalog, runtime_config)
+        select_swapper = getattr(session, "select_swapper", None)
+        if callable(select_swapper):
+            select_swapper(record.request.swapper_model_id or settings.swapper_model_id)
         mapped_seen: set[int] = set()
         started = time.monotonic()
         decoded_count = 0

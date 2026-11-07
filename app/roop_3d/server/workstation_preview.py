@@ -206,6 +206,9 @@ class PreviewService:
             runtime = RuntimeConfig(provider=admission.provider, hardware_profile=admission.profile,
                                     reserve_mib=settings.memory_safety_reserve_mb)
             session = ReferencePipeline(self.state.models, runtime)
+            select_swapper = getattr(session, "select_swapper", None)
+            if callable(select_swapper):
+                select_swapper(value.request.swapper_model_id or settings.swapper_model_id)
             tracking = runner.tracking_options(value.request)
             session.prepare_session(next(iter(sources.values())), track_ids=set(sources), sources_by_track=sources,
                                     retarget='off' if value.effective_parameters.uses_mesh_projection() else 'auto',

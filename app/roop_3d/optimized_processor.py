@@ -234,6 +234,12 @@ def make_stream_runner(root, catalog, media, settings_provider, *, pipeline_trac
         def run_prepared(self, record, admission, *, prepared, control, mark_running, report_progress):
             settings = prepared.settings
             requested = settings.render_backend
+            # The fused batch kernel currently encodes InSwapper's fixed 128px
+            # target/source contract. Alternate native-size architectures share
+            # the reference direct pipeline's dynamic crop compositor instead.
+            if (record.request.swapper_model_id or settings.swapper_model_id) != "inswapper_128":
+                return super().run_prepared(record, admission, prepared=prepared, control=control,
+                    mark_running=mark_running, report_progress=report_progress)
             basic = (settings.execution_mode == "swap" and settings.lip_sync_mode == "off"
                 and record.request.export is None and record.request.trim_start_seconds is None
                 and record.request.trim_end_seconds is None and record.request.face_segments is None

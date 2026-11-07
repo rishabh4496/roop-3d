@@ -9,6 +9,10 @@ from roop_3d.core.errors import DomainError
 from roop_3d.engine.runtime import image_bgr
 from roop_3d.faceset.recognizer import ARCFACE_REFERENCE_5PTS
 
+FFHQ_REFERENCE_5PTS_512 = np.array(((192.98138, 239.94708), (318.90277, 240.19360),
+                                    (256.63416, 314.01935), (201.26117, 371.41043),
+                                    (313.08905, 371.15118)), np.float64)
+
 
 @dataclass(frozen=True)
 class AlignedCrop:
@@ -33,23 +37,26 @@ def similarity(source: np.ndarray, destination: np.ndarray) -> np.ndarray:
     return np.array(((a, -b, tx), (b, a, ty)), np.float64)
 
 
-def aligned_crop(image: np.ndarray, landmarks5: np.ndarray, size: int = 128) -> AlignedCrop:
+def aligned_crop(image: np.ndarray, landmarks5: np.ndarray, size: int = 128, *,
+                 template: str = "arcface_112") -> AlignedCrop:
     image_bgr(image)
-    if size not in (112, 128, 256, 512) or np.asarray(landmarks5).shape != (5, 2):
+    if size not in (112, 128, 256, 512) or template not in ("arcface_112", "ffhq_512") or np.asarray(landmarks5).shape != (5, 2):
         raise DomainError("ALIGNMENT_CONTRACT", "Expected five landmarks and a supported canonical crop size", 422)
-    reference = ARCFACE_REFERENCE_5PTS.astype(np.float64).copy()
-    if size == 112:
-        pass
+    if template == "ffhq_512":
+        reference = FFHQ_REFERENCE_5PTS_512 * (size / 512.0)
     else:
-        reference[:, 0] += 8
-        reference *= size / 128
+        reference = ARCFACE_REFERENCE_5PTS.astype(np.float64).copy()
+        if size != 112:
+            reference[:, 0] += 8
+            reference *= size / 128
     matrix = similarity(landmarks5, reference)
     crop = cv2.warpAffine(image, matrix, (size, size), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT)
     return AlignedCrop(crop, matrix, cv2.invertAffineTransform(matrix))
 
 
 def roll_compensated_aligned_crop(image: np.ndarray, landmarks5: np.ndarray, roll: float, size: int = 128,
-                                 *, compensation: np.ndarray | None = None) -> AlignedCrop:
+                                 *, compensation: np.ndarray | None = None,
+                                 template: str = "arcface_112") -> AlignedCrop:
     """Counter-rotate a target face around its eye midpoint before canonical alignment.
 
     The returned transforms still map exactly between the original full frame and the
@@ -69,7 +76,7 @@ def roll_compensated_aligned_crop(image: np.ndarray, landmarks5: np.ndarray, rol
     upright = cv2.warpAffine(image, rotation, (width, height), flags=cv2.INTER_LINEAR,
                              borderMode=cv2.BORDER_REFLECT_101)
     upright_points = transform_points(points, rotation)
-    aligned = aligned_crop(upright, upright_points, size)
+    aligned = aligned_crop(upright, upright_points, size, template=template)
     composed = (np.vstack((aligned.matrix, (0.0, 0.0, 1.0)))
                 @ np.vstack((rotation, (0.0, 0.0, 1.0))))[:2]
     return AlignedCrop(aligned.image, composed, cv2.invertAffineTransform(composed))

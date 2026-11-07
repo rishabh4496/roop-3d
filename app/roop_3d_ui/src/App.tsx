@@ -318,7 +318,7 @@ export default function App() {
       const lockIssue = lockProblem(identityLock, Object.fromEntries(selected.map(item => [item.track_id, item.faceset_id])));
       if (lockIssue) throw new Error(`${lockIssue} Re-lock or release the identity lock before rendering.`);
     }
-    return { engine_id: selectedEngine, identity_lock_id: identityLock?.lock_id, identity_blend: identitySourceB && sourceId ? {method: 'slerp',source_face_ids: [sourceId, identitySourceB],weights:[1,0]} : undefined, target_path: target, inspection_id: inspection.inspection_id, face_mappings: selected, processing: 'local', remote_consent: false, trim_start_seconds: trimStart || null, trim_end_seconds: trimEnd, mask_base64: maskBase64 || undefined, workstation_parameters: parameters, parameter_curves: { tracks: curves }, face_segments: segments, export: exportOptions };
+    return { engine_id: selectedEngine, swapper_model_id: typeof config?.swapper_model_id === 'string' ? config.swapper_model_id : undefined, identity_lock_id: identityLock?.lock_id, identity_blend: identitySourceB && sourceId ? {method: 'slerp',source_face_ids: [sourceId, identitySourceB],weights:[1,0]} : undefined, target_path: target, inspection_id: inspection.inspection_id, face_mappings: selected, processing: 'local', remote_consent: false, trim_start_seconds: trimStart || null, trim_end_seconds: trimEnd, mask_base64: maskBase64 || undefined, workstation_parameters: parameters, parameter_curves: { tracks: curves }, face_segments: segments, export: exportOptions };
   };
   const executeQueue = () => void run('Queueing local render', async () => {
     const saved = await persistProject(), fingerprint = JSON.stringify({ project: saved.project_id, request: saved.request });
