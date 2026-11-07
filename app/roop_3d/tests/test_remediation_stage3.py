@@ -136,14 +136,20 @@ def test_native_ultramax_bypass_before_model_construction():
             calls.append(1)
             return image
     spec = RestorerSpec("ultramax", "explicit-fixture", CODEFORMER_REFERENCE, 128)
-    pool = DecoupledRestorer(Restorer, spec, workers=2)
+    # The bypass is an explicit opt-in (default OFF) judged on the destination face box in the target frame.
+    default_pool = DecoupledRestorer(Restorer, spec, workers=1)
+    assert default_pool.bypass is False
+    default_pool.close()
+    pool = DecoupledRestorer(Restorer, spec, workers=2, ultramax_native_bypass=True)
     image = np.full((64, 64, 3), 80, np.uint8)
     points = (CODEFORMER_REFERENCE / 8).astype(np.float32)
     try:
         for size in (20, 319, 320):
-            np.testing.assert_array_equal(pool.submit(image, points, np.array([0, 0, size, size]), 1).result(), image)
+            # Same output geometry as a restored face (enhancer resolution), no model construction.
+            skipped = pool.submit(image, points, np.array([0, 0, size, size]), 1).result()
+            assert skipped.shape == (128, 128, 3) and int(skipped.max()) == int(skipped.min()) == 80
         assert not calls and not pool.instances
-        assert pool.submit(image, points, np.array([0, 0, 321, 321]), 1).result().shape == image.shape
+        assert pool.submit(image, points, np.array([0, 0, 321, 321]), 1).result().shape == (128, 128, 3)
         assert len(calls) == 1
     finally:
         pool.close()

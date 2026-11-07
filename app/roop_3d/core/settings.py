@@ -74,7 +74,13 @@ class Settings(Contract):
     sparse_interval: int = Field(default=25, ge=1, le=1000, strict=True)
     restorer_threads: int = Field(default=1, ge=1, le=8, strict=True)
     restorer_pool_size: int = Field(default=2, ge=1, le=32, strict=True)
-    ultramax_native_bypass: bool = True
+    # Dynamic enhancer controls read on every frame: blend of restored vs. swapped pixels, and the CodeFormer /
+    # UltraMax fidelity input `w`.
+    enhancer_blend: float = Field(default=1.0, ge=0, le=1)
+    restorer_fidelity: float = Field(default=0.5, ge=0, le=1)
+    # OFF by default: UltraMax restores every face. True is an explicit opt-in that skips faces whose destination
+    # bounding box in the target frame is <= ultramax_min_pixels.
+    ultramax_native_bypass: bool = False
     ultramax_min_pixels: int = Field(default=320, ge=1, le=4096, strict=True)
     host: Literal["127.0.0.1"] = "127.0.0.1"
     port: int = Field(default=8030, ge=1, le=65535)

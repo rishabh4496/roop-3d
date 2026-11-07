@@ -302,12 +302,16 @@ def make_stream_runner(root, catalog, media, settings_provider, *, pipeline_trac
                         from roop_3d.compositor.stream_restoration import DecoupledRestorer, OnnxFaceRestorer, gpen_spec, codeformer_spec, load_ultramax_spec
                         if settings.face_restoration_policy == "ultramax":
                             spec = load_ultramax_spec(self.root)
+                        elif settings.face_restoration_policy == "gfpgan":
+                            from roop_3d.compositor.stream_restoration import gfpgan_spec
+                            spec = gfpgan_spec()
                         else:
                             spec = codeformer_spec() if settings.face_restoration_policy == "codeformer" else gpen_spec()
                         restorer = DecoupledRestorer(lambda: OnnxFaceRestorer(catalog, config, spec), spec,
                             workers=settings.restorer_threads, pool_size=settings.restorer_pool_size,
                             cuda=admission.profile != "cpu", ultramax_native_bypass=settings.ultramax_native_bypass,
                             ultramax_min_pixels=settings.ultramax_min_pixels,
+                            enhancer_blend=settings.enhancer_blend, fidelity_weight=settings.restorer_fidelity,
                             cuda_provider=accelerator if accelerator != 'CPUExecutionProvider' else 'CUDAExecutionProvider',
                             hardware_profile=admission.profile if admission.profile != 'cpu' else '6gb')
                     selected_session = model.session

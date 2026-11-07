@@ -177,15 +177,14 @@ class LivePreviewPayload(Contract):
         return tuple(dict.fromkeys(ids))
 
     def validate_restorer(self) -> None:
-        if self.restorer == "gfpgan":
-            raise DomainError("RESTORER_UNAVAILABLE",
-                              f"The {self.restorer} restorer has no verified adapter in the preview compositor; use gpen, codeformer, ultramax or off", 422)
+        # gpen, codeformer, gfpgan and ultramax each have their own adapter (and ONNX engine) in the preview compositor.
+        return None
 
     def unsupported(self) -> list[str]:
         """Accepted-but-inert fields: the engine has no corresponding control. Never silently dropped."""
         items = []
-        if "fidelity_weight" in self.model_fields_set and self.restorer != "codeformer":
-            items.append("fidelity_weight")  # only CodeFormer exposes a fidelity input; GPEN has none
+        if "fidelity_weight" in self.model_fields_set and self.restorer not in ("codeformer", "ultramax"):
+            items.append("fidelity_weight")  # only the CodeFormer-based engines expose a fidelity input
         return items
 
     def config_digest(self) -> dict[str, Any]:
@@ -465,7 +464,7 @@ class LivePreviewService:
         if any(item.track_id not in track_ids for item in mappings):
             raise DomainError("TRACK_NOT_FOUND", "Selected target face is absent from this inspection", 422)
 
-        restoring = payload.restorer in ("gpen", "codeformer", "ultramax")
+        restoring = payload.restorer in ("gpen", "codeformer", "gfpgan", "ultramax")
         blend_amount = (payload.restoration_blend if payload.restoration_blend is not None else 0.7) if restoring else 0.0
         values: dict[str, Any] = {"restoration_blend": blend_amount, "feather_px": payload.occlusion.feather_px,
                                   "erosion_px": payload.occlusion.erosion_px, "color_strength": payload.color_strength,
@@ -483,7 +482,9 @@ class LivePreviewService:
         if payload.restorer == 'codeformer':
             values.update(restorer_model='codeformer', fidelity_weight=payload.fidelity_weight)
         elif payload.restorer == 'ultramax':
-            values.update(restorer_model='ultramax')
+            values.update(restorer_model='ultramax', fidelity_weight=payload.fidelity_weight)
+        elif payload.restorer == 'gfpgan':
+            values.update(restorer_model='gfpgan')
         if payload.ultramax_small_face_mode is not None:
             values['ultramax_small_face_mode'] = payload.ultramax_small_face_mode
         if payload.ultramax_min_native_pixels is not None:
@@ -558,9 +559,9 @@ class LivePreviewService:
             applied.append("pose_frontalization")
         if payload.tps_expression_weight:
             applied.append("tps_expression_weight")
-        if payload.restorer in ("gpen", "codeformer", "ultramax"):
+        if payload.restorer in ("gpen", "codeformer", "gfpgan", "ultramax"):
             applied.append("restorer:" + payload.restorer)
-        if payload.restorer == "codeformer":
+        if payload.restorer in ("codeformer", "ultramax"):
             applied.append("fidelity_weight")
         if payload.mask_base64 or payload.mask_strokes:
             applied.append("custom_mask")

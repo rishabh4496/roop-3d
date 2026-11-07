@@ -197,9 +197,17 @@ def test_enhancers_ultramax_gpen_and_codeformer():
     """
     # 1. UltraMax native <= 320px bypass
     small_crop = np.full((240, 240, 3), 100, dtype=np.uint8)
-    restorer = UltraMaxRestorer(native_bypass=True, min_native_pixels=320)
+    restorer = UltraMaxRestorer(native_bypass=True, min_native_pixels=320, allow_reference_filter=True)
     bypassed = restorer.enhance(small_crop, native_resolution=240)
-    assert np.array_equal(bypassed, small_crop), "UltraMax failed to bypass <=320px crop"
+    assert np.array_equal(bypassed, small_crop), "explicit opt-in bypass must skip a <=320px destination face"
+    # The bypass is judged on the destination size only: without it the working-crop size never skips UltraMax.
+    never_default = UltraMaxRestorer(allow_reference_filter=True)
+    assert never_default.native_bypass is False
+    assert never_default.enhance(small_crop).shape == (512, 512, 3)
+    # A missing model is a loud error, not a quiet fake enhancement.
+    from roop_3d.core.errors import DomainError
+    with pytest.raises(DomainError):
+        UltraMaxRestorer().enhance(small_crop)
 
     # UltraMax on 512px crop runs Laplacian fusion
     large_crop = np.full((512, 512, 3), 150, dtype=np.uint8)
@@ -214,20 +222,20 @@ def test_enhancers_ultramax_gpen_and_codeformer():
     # Chroma balance preserved
     assert recoloured[0, 0, 2] < 220, "GPEN pink cast was not attenuated"
 
-    gpen_eng = GPENRealisticRestorer(resolution=512)
+    gpen_eng = GPENRealisticRestorer(resolution=512, allow_reference_filter=True)
     assert gpen_eng.supports_dynamic_batch is False
     out_gpen = gpen_eng.enhance(np.zeros((64, 64, 3), dtype=np.uint8))
-    assert out_gpen.shape == (64, 64, 3)
+    assert out_gpen.shape == (512, 512, 3), "GPEN output keeps its native resolution"
 
     # 3. Dynamic CodeFormer w binding
-    codeformer = DynamicCodeFormerRestorer()
+    codeformer = DynamicCodeFormerRestorer(allow_reference_filter=True)
     res_w0 = codeformer.enhance(large_crop, fidelity_weight=0.0)
     res_w1 = codeformer.enhance(large_crop, fidelity_weight=1.0)
     assert res_w0.shape == (512, 512, 3)
     assert res_w1.shape == (512, 512, 3)
 
     # 4. RestoreFormer++
-    rf = RestoreFormerPlusPlusRestorer()
+    rf = RestoreFormerPlusPlusRestorer(allow_reference_filter=True)
     rf_out = rf.enhance(large_crop)
     assert rf_out.shape == (512, 512, 3)
 

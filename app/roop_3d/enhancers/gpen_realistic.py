@@ -1,9 +1,16 @@
-"""GPEN Realistic: Static Batch-1 FP32-safe restoration with luma-only recoloring."""
+"""GPEN Realistic: static batch-1 FP32-safe restoration with luma-only recolouring."""
 from __future__ import annotations
 
+import logging
 from typing import Any
+
 import cv2
 import numpy as np
+
+from roop_3d.core.errors import DomainError
+from roop_3d.enhancers.ultramax import from_model_output, require_session, to_model_input
+
+log = logging.getLogger(__name__)
 
 
 def luma_only_delta_recolour(swap_crop: np.ndarray, gpen_output: np.ndarray) -> np.ndarray:
@@ -27,14 +34,17 @@ def luma_only_delta_recolour(swap_crop: np.ndarray, gpen_output: np.ndarray) -> 
 
 class GPENRealisticRestorer:
     """GPEN Realistic restorer supporting 512 and 1024 resolutions.
-    Enforces static batch-1 execution and luma-only delta recoloring.
+
+    Static batch-1 execution, RGB [-1, 1] input contract, luma-only delta recolouring. The output keeps the model's
+    native resolution (512 / 1024); the caller warps it straight into the frame.
     """
 
-    def __init__(self, resolution: int = 512, session: Any = None):
+    def __init__(self, resolution: int = 512, session: Any = None, allow_reference_filter: bool = False):
         if resolution not in (512, 1024):
             raise ValueError(f"GPEN Realistic resolution must be 512 or 1024, got {resolution}")
         self.resolution = resolution
         self.session = session
+        self.allow_reference_filter = allow_reference_filter
         self.supports_dynamic_batch = False  # Static batch-1 mandatory
         self._gpu_runner = None
         self._output_name = None
@@ -43,32 +53,35 @@ class GPENRealisticRestorer:
             self._gpu_runner = GpuIoBinding(session)
             self._output_name = session.get_outputs()[0].name
 
-    def enhance(self, swap_crop: np.ndarray) -> np.ndarray:
+    def enhance(self, swap_crop: np.ndarray, enhancer_blend: float = 1.0) -> np.ndarray:
+        if not np.isfinite(enhancer_blend) or not 0 <= enhancer_blend <= 1:
+            raise ValueError("enhancer_blend must be within 0..1")
+        require_session(self.session, "GPEN Realistic", self.allow_reference_filter)
         h, w = swap_crop.shape[:2]
         res = self.resolution
-
-        if (h, w) != (res, res):
-            crop_res = cv2.resize(swap_crop, (res, res), interpolation=cv2.INTER_CUBIC)
-        else:
-            crop_res = swap_crop
+        crop_res = swap_crop if (h, w) == (res, res) else cv2.resize(swap_crop, (res, res), interpolation=cv2.INTER_CUBIC)
 
         if self.session is not None:
-            inp = crop_res.astype(np.float32) / 255.0
-            inp = (inp - 0.5) / 0.5
-            chw = np.transpose(inp, (2, 0, 1))[np.newaxis, ...]
-            if self._gpu_runner is not None:
-                output = self._gpu_runner.run({"input": chw})[self._output_name].numpy()
-            else:
-                output = self.session.run(None, {"input": chw})[0]
-            raw = output[0].transpose(1, 2, 0).astype(np.float32, copy=False)
-            gpen_out = np.clip((raw * 0.5 + 0.5) * 255.0, 0, 255).astype(np.uint8)
+            chw = to_model_input(crop_res)
+            try:
+                if self._gpu_runner is not None:
+                    output = self._gpu_runner.run({"input": chw})[self._output_name].numpy()
+                else:
+                    output = self.session.run(None, {"input": chw})[0]
+            except Exception as error:
+                log.critical("GPEN inference failed (input %s): %s", chw.shape, error, exc_info=True)
+                raise DomainError("ENHANCER_INFERENCE_FAILED", f"GPEN inference failed: {error}", 503) from error
+            if output.shape != (1, 3, res, res) or not np.isfinite(output).all():
+                log.critical("GPEN returned an invalid tensor %s", getattr(output, "shape", None))
+                raise DomainError("ENHANCER_OUTPUT_INVALID", "GPEN returned an unsupported output tensor", 503)
+            gpen_out = from_model_output(output)
         else:
-            # High-fidelity reference filter for unmocked offline tests
+            # Explicit offline reference filter (tests only; ``allow_reference_filter=True``).
             gpen_out = cv2.bilateralFilter(crop_res, d=5, sigmaColor=50, sigmaSpace=50)
 
-        # Apply luma-only delta recoloring to eliminate pink/magenta cast
+        # Luma-only delta recolouring removes the pink/magenta cast; blend weight applied last.
         recoloured = luma_only_delta_recolour(crop_res, gpen_out)
-
-        if (h, w) != (res, res):
-            return cv2.resize(recoloured, (w, h), interpolation=cv2.INTER_AREA)
+        if enhancer_blend < 1.0:
+            recoloured = np.clip(crop_res.astype(np.float32) * (1 - enhancer_blend)
+                                 + recoloured.astype(np.float32) * enhancer_blend, 0, 255).round().astype(np.uint8)
         return recoloured

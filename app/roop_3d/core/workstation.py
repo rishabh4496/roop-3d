@@ -6,7 +6,7 @@ from roop_3d.core.settings import Contract
 
 class WorkstationParameters(Contract):
     color_method: Literal['lab', 'reinhard_lab', 'histogram'] = 'lab'
-    restorer_model: Literal['auto', 'gpen', 'codeformer', 'ultramax'] = 'auto'
+    restorer_model: Literal['auto', 'gpen', 'codeformer', 'gfpgan', 'ultramax'] = 'auto'
     identity_blend_t: float | None = Field(default=None, ge=0, le=1)
     fidelity_weight: float = Field(default=.5, ge=0, le=1)
     restoration_blend: float = Field(default=0, ge=0, le=1)
@@ -36,7 +36,7 @@ class WorkstationParameters(Contract):
     relight_strength: float = Field(default=0.8, ge=0, le=1)
     specular_sheen: float = Field(default=0.25, ge=0, le=1)
     shadow_preservation: float = Field(default=0.85, ge=0, le=1)
-    ultramax_small_face_mode: Literal['bypass', 'adaptive', 'off'] = 'bypass'
+    ultramax_small_face_mode: Literal['bypass', 'adaptive', 'off'] = 'off'
     ultramax_min_native_pixels: int = Field(default=320, ge=64, le=1024)
     lighting_mode: Literal['auto', 'manual'] = 'auto'
     manual_light_yaw: float = Field(default=35.0, ge=-180.0, le=180.0)

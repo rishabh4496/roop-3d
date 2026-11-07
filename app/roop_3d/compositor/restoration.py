@@ -86,6 +86,33 @@ class GpenRestorer:
         self.inference_verified = True
         return cv2.resize(bgr, (image.shape[1], image.shape[0]), interpolation=cv2.INTER_CUBIC)
 
+    def restore_hires(self, image: np.ndarray, landmarks5=None, **_unused) -> np.ndarray:
+        """GPEN output at its native 512 px (BGR uint8), expressed in the crop's frame of reference.
+
+        The caller re-bases the crop->frame matrix by ``512 / crop`` and warps this tensor straight into the frame;
+        ``restore`` (which shrinks back to the crop) stays only for callers that need crop-sized pixels.
+        """
+        from roop_3d.engine.runtime import image_bgr as validate_image
+
+        validate_image(image)
+        shape = (512, 512)
+        interpolation = cv2.INTER_CUBIC if image.shape[0] < 512 else cv2.INTER_AREA
+        rgb = cv2.resize(image, shape, interpolation=interpolation)[:, :, ::-1].astype(np.float32) / 255.0
+        if self.normalization == "minus_one_one":
+            rgb = rgb * 2.0 - 1.0
+        values = np.ascontiguousarray(rgb.transpose(2, 0, 1)[None], dtype=np.float32)
+        output = self._load().run({"input": values})
+        if "output" not in output:
+            raise DomainError("RESTORATION_OUTPUT_INVALID", "GPEN output tensor is unavailable", 503)
+        result = np.asarray(output["output"], dtype=np.float32)
+        if result.shape != (1, 3, 512, 512) or not np.isfinite(result).all():
+            raise DomainError("RESTORATION_OUTPUT_INVALID", "GPEN output tensor has an unsupported contract", 503)
+        result = result[0].transpose(1, 2, 0)
+        if self.normalization == "minus_one_one":
+            result = (result + 1.0) * 0.5
+        self.inference_verified = True
+        return np.clip(result[:, :, ::-1] * 255.0, 0, 255).astype(np.uint8)
+
     def capability(self) -> dict[str, str]:
         return {"weights": "VERIFIED_LOCAL", "provenance": "UNKNOWN", "license": "UNKNOWN",
                 "inference": "VERIFIED_LOCAL" if self.inference_verified else "UNKNOWN",
@@ -132,6 +159,19 @@ class CodeFormerRestorer:
         self.inference_verified = True
         return np.clip(warped * alpha + image * (1-alpha), 0, 255).round().astype(np.uint8)
 
+    def restore_hires(self, image, landmarks5=None, **_unused):
+        """Restored face at the enhancer's native resolution, in the crop's frame of reference (BGR uint8)."""
+        from roop_3d.compositor.stream_restoration import restore_in_crop_space
+        self.runner.fidelity_weight = getattr(self, 'fidelity_weight', 0.5)
+        # CodeFormer / UltraMax are trained on five-point FFHQ alignment: without landmarks there is no valid input, and
+        # running the model on an unaligned crop would silently degrade the result. Fail closed, as before.
+        points = np.asarray(landmarks5 if landmarks5 is not None else (), np.float64)
+        if points.shape != (5, 2) or not np.isfinite(points).all():
+            raise DomainError('RESTORER_LANDMARKS_REQUIRED', 'CodeFormer requires five crop-space landmarks', 422)
+        result, _ = restore_in_crop_space(self.runner.restore, image, points, self.spec)
+        self.inference_verified = True
+        return result
+
     def capability(self):
         return {'architecture': 'codeformer', 'alignment': 'CODEFORMER_REFERENCE_5PTS',
                 'inference': 'VERIFIED_THIS_SESSION' if self.inference_verified else 'NOT_RUN',
@@ -152,7 +192,9 @@ class UltraMaxPipelineRestorer(CodeFormerRestorer):
     def __init__(self, catalog, config):
         super().__init__(catalog, config)
         self.fidelity_weight = 0.7
-        self.small_face_mode = "bypass"
+        # "off" = UltraMax runs on every face. "bypass" / "adaptive" are explicit user settings, judged on the face's
+        # destination size in the target frame (never on the size of the swap crop).
+        self.small_face_mode = "off"
         self.min_native_pixels = 320
 
     def restore_aligned(self, image, landmarks5, *, native_face_size_px=None):
@@ -168,6 +210,27 @@ class UltraMaxPipelineRestorer(CodeFormerRestorer):
                             0, 255).round().astype(np.uint8)
         return fused
 
+    def restore_hires(self, image, landmarks5=None, *, native_face_size_px=None, **_unused):
+        """UltraMax at native resolution: CodeFormer at 512, luma-only recolour, then 3-level Laplacian fusion with
+        the (cubic-enlarged) swap so colour and low/mid bands stay the swap's and the finest bands are the restorer's.
+        Returns ``None`` only when the user explicitly opted into skipping this (small) face."""
+        from roop_3d.enhancers.ultramax import laplacian_pyramid_fusion
+        small = native_face_size_px is not None and native_face_size_px <= self.min_native_pixels
+        if small and self.small_face_mode == "bypass":
+            return None
+        restored = super().restore_hires(image, landmarks5)
+        base = (image if image.shape[:2] == restored.shape[:2]
+                else cv2.resize(image, (restored.shape[1], restored.shape[0]), interpolation=cv2.INTER_CUBIC))
+        # S = restorer / swap resolution; the log2(S) finest bands lie above the swap's own Nyquist limit.
+        detail = max(1, int(round(np.log2(max(restored.shape[0] / image.shape[0], 1.0)))))
+        fused = laplacian_pyramid_fusion(np.ascontiguousarray(base), restored, levels=max(3, detail + 1),
+                                         detail_levels=detail)
+        if small and self.small_face_mode == "adaptive":
+            strength = float(np.clip(native_face_size_px / max(self.min_native_pixels, 1), 0, 1))
+            fused = np.clip(base.astype(np.float32) + (fused.astype(np.float32) - base) * strength,
+                            0, 255).round().astype(np.uint8)
+        return fused
+
     def restore(self, image: np.ndarray, landmarks5: np.ndarray | None = None) -> np.ndarray:
         from roop_3d.enhancers.ultramax import laplacian_pyramid_fusion
         if landmarks5 is not None:
@@ -179,3 +242,35 @@ class UltraMaxPipelineRestorer(CodeFormerRestorer):
 
     def capability(self):
         return {**super().capability(), 'architecture': 'ultramax'}
+
+
+class GfpganRestorer:
+    """Lazy, hash-verified GFPGAN v1.4: facexlib FFHQ-512 alignment, RGB, [-1, 1]; no fidelity input (blend only)."""
+    def __init__(self, catalog, config):
+        from roop_3d.compositor.stream_restoration import OnnxFaceRestorer, gfpgan_spec
+        self.spec = gfpgan_spec()
+        self.runner = OnnxFaceRestorer(catalog, config, self.spec)
+        self.inference_verified = False
+
+    def restore_hires(self, image, landmarks5=None, **_unused):
+        from roop_3d.compositor.stream_restoration import restore_in_crop_space
+        points = np.asarray(landmarks5 if landmarks5 is not None else (), np.float64)
+        if points.shape != (5, 2) or not np.isfinite(points).all():
+            raise DomainError('RESTORER_LANDMARKS_REQUIRED', 'GFPGAN requires five crop-space landmarks', 422)
+        result, _ = restore_in_crop_space(self.runner.restore, image, points, self.spec)
+        self.inference_verified = True
+        return result
+
+    def restore_aligned(self, image, landmarks5):
+        """Crop-sized result (legacy callers); the hi-res path uses ``restore_hires``."""
+        restored = self.restore_hires(image, landmarks5)
+        return cv2.resize(restored, (image.shape[1], image.shape[0]), interpolation=cv2.INTER_AREA)
+
+    def capability(self):
+        return {'architecture': 'gfpgan', 'alignment': 'FFHQ_512_FACEXLIB_5PTS', 'preprocessing': 'RGB_MINUS_ONE_ONE',
+                'inference': 'VERIFIED_THIS_SESSION' if self.inference_verified else 'NOT_RUN',
+                'weights': 'VERIFIED_LOCAL' if self.runner.model is not None else 'NOT_LOADED'}
+
+    def release(self):
+        self.runner.close()
+        self.inference_verified = False

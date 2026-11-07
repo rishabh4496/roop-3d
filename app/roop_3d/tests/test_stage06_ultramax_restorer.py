@@ -24,11 +24,11 @@ def test_workstation_parameters_accept_ultramax_and_keep_the_wire_format():
         WorkstationParameters.model_validate({"restorer_model": "nonsense"})
 
 
-def test_live_preview_accepts_ultramax_but_still_refuses_gfpgan():
-    _payload(restorer="ultramax").validate_restorer()          # must not raise
-    with pytest.raises(DomainError) as error:
-        _payload(restorer="gfpgan").validate_restorer()
-    assert error.value.code == "RESTORER_UNAVAILABLE" and "ultramax" in error.value.message
+def test_live_preview_accepts_every_restorer_with_its_own_adapter():
+    for name in ("gpen", "codeformer", "gfpgan", "ultramax"):
+        _payload(restorer=name).validate_restorer()          # must not raise
+    assert "fidelity_weight" in _payload(restorer="gfpgan", fidelity_weight=0.2).unsupported()
+    assert "fidelity_weight" not in _payload(restorer="ultramax", fidelity_weight=0.2).unsupported()
 
 
 def test_ultramax_keeps_the_swap_colour_and_takes_only_restorer_detail(monkeypatch):

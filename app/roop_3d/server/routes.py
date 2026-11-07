@@ -84,7 +84,7 @@ def capabilities(request: Request) -> Capabilities:
         "preferred_provider": {"auto": None, "CPUExecutionProvider": None, "CUDAExecutionProvider": None if gpu else "CUDA is unavailable", "TensorrtExecutionProvider": None if trt else "TensorRT requires the stream backend, NVIDIA GPU and packaged TensorRT libraries"},
         "hardware_profile": {"auto": None, "cpu": None, "6gb": None if gpu else "No CUDA GPU is available", "12gb": None if gpu and hardware.gpus[0].total_vram_mib >= MIN_12GB_PROFILE_VRAM_MIB else "A CUDA GPU with at least 10 GB of video memory is required"},
         "precision_policy": {"auto": None, "fp32": None, "fp16": "The reference session uses observed FP32 graph contracts"},
-        "face_restoration_policy": {"off": None, "auto": None, "gfpgan": "No verified GFPGAN adapter",
+        "face_restoration_policy": {"off": None, "auto": None, "gfpgan": None if stream and "GFPGANv1.4.onnx" in available else "GFPGAN requires the stream backend and registered weights",
             "gpen": None if stream and "gpen_bfr_512.onnx" in available else "GPEN requires the stream backend and registered weights",
             "codeformer": None if stream and "CodeFormerv0.1.onnx" in available else "CodeFormer requires the stream backend and registered weights",
             "ultramax": None if stream and ultramax else "UltraMax requires an explicit registered model and preprocessing contract"},

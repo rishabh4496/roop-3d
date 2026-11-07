@@ -22,7 +22,7 @@ class RenderPolicy:
     segment_frames: int = 250
     strict_nvdec: bool = False
     strict_nvenc: bool = False
-    ultramax_native_bypass: bool = True
+    ultramax_native_bypass: bool = False
     ultramax_min_pixels: int = 320
     hardware_profile: str = "6gb"
 

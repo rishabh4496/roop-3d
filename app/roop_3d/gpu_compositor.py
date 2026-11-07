@@ -234,9 +234,13 @@ class CompositorOptions:
     erosion: int = 0
     feather_sigma: float = 0.
     jaw_falloff: float = 0.
+    # Multi-band blend depth at the native frame ROI resolution (used when laplacian_blend_weight > 0).
+    blend_levels: int = 4
 
     def __post_init__(self):
-        if (self.color_method not in ('reinhard_lab', 'regional_reinhard')
+        from roop_3d.hires_handoff import COLOR_METHODS
+        if (self.color_method not in COLOR_METHODS or type(self.blend_levels) is not int
+                or not 1 <= self.blend_levels <= 6
                 or not 0 <= self.color_strength <= 1 or not 0 <= self.laplacian_blend_weight <= 1
                 or type(self.erosion) is not int or abs(self.erosion) > 64
                 or not 0 <= self.feather_sigma <= 64 or not 0 <= self.jaw_falloff <= 1):
@@ -261,21 +265,25 @@ class GpuCompositor:
         from roop_3d.vectorized_pipeline import crop_matrix
         if not frame.is_cuda or frame.dtype != torch.float32 or frame.ndim != 4 or frame.shape[:2] != (1, 3):
             raise ValueError('Compositor requires CUDA NCHW float32 RGB frames')
-        result = frame
+        from roop_3d.hires_handoff import (composite_hires_face, invert_affine_np, scale_matrix_input)
+        result = frame.clone() if faces else frame
         for face in faces:
             crop_size = 512 if self.restorer or self.masker or self.options.laplacian_blend_weight else 128
-            matrix = torch.as_tensor(crop_matrix(face.landmarks5, crop_size), device=frame.device, dtype=frame.dtype)[None]
+            matrix_np = crop_matrix(face.landmarks5, crop_size)          # frame -> crop
+            matrix = torch.as_tensor(matrix_np, device=frame.device, dtype=frame.dtype)[None]
             target = warp(frame, invert_affine(matrix), (crop_size, crop_size))
             swap_input = target if crop_size == 128 else F.interpolate(target, (128, 128), mode="bilinear", align_corners=False)
             swapped = self.swapper(swap_input.contiguous(), face)
-            # Preserve the 128 reference geometry when no 512 processing is requested.
-            enhanced = self.restorer(F.interpolate(swapped, (512, 512), mode="bilinear", align_corners=False), face) if self.restorer else swapped
+            # Stage 2 hands over the swap in aligned crop space. It is only ever enlarged (bicubic) for the enhancer,
+            # never pasted or shrunk before the enhancer has seen it.
+            enhanced = (self.restorer(F.interpolate(swapped, (512, 512), mode="bicubic", align_corners=False).clamp(0, 1), face)
+                        if self.restorer else swapped)
             size = enhanced.shape[-1]
             if (enhanced.shape != (1, 3, size, size) or size not in (128, 256, 512, 1024)
                     or enhanced.device != frame.device or enhanced.dtype != torch.float32):
                 raise ValueError("Restorer/swapper returned an invalid device image shape")
-            local_target = target if size == crop_size else F.interpolate(target, (size, size), mode="bilinear", align_corners=False)
             alpha = face_feather(enhanced, size)
+            inner = None
             if self.masker:
                 semantic, skin, visibility = self.masker(target, face)
                 for value in (semantic, skin, visibility):
@@ -285,19 +293,18 @@ class GpuCompositor:
                 alpha = soft_matte(alpha * semantic, visibility, erosion=self.options.erosion,
                                    sigma=self.options.feather_sigma, jaw_falloff=self.options.jaw_falloff)
                 inner = morphology(skin * visibility, max(1, self.options.erosion)) * visibility
-                if self.options.color_strength:
-                    enhanced = color_transfer(enhanced, local_target, inner, strength=self.options.color_strength,
-                                              regional=self.options.regional_color or self.options.color_method == 'regional_reinhard')
             else:
                 alpha = soft_matte(alpha, torch.ones_like(alpha), erosion=self.options.erosion,
                                    sigma=self.options.feather_sigma, jaw_falloff=self.options.jaw_falloff)
-            if self.options.laplacian_blend_weight:
-                enhanced = laplacian_blend(enhanced, local_target, alpha,
-                                            laplacian_blend_weight=self.options.laplacian_blend_weight)
-            # Matrix maps native frame pixels into crop pixels for inverse composite.
-            forward = matrix * (size / crop_size)
-            rgba = warp(torch.cat((enhanced, alpha), 1), forward, frame.shape[-2:])
-            result = rgba[:, :3] * rgba[:, 3:] + result * (1 - rgba[:, 3:])
+            # M_hr: crop -> frame with basis and translation re-based onto the enhanced tensor (S = size / crop_size),
+            # then ONE bicubic warp of the full-resolution tensor into the native frame ROI. Colour matching and the
+            # multi-band blend both happen there, against the real target pixels.
+            hr_to_frame = scale_matrix_input(invert_affine_np(matrix_np), size / crop_size)
+            composite_hires_face(
+                result, enhanced, alpha, hr_to_frame, skin=inner,
+                color_method=('regional_reinhard' if self.options.regional_color else self.options.color_method),
+                color_strength=self.options.color_strength if inner is not None else 0.0,
+                blend_weight=self.options.laplacian_blend_weight, levels=self.options.blend_levels)
         return result.clamp(0, 1)
 
 

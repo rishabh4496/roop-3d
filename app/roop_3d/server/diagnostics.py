@@ -342,20 +342,22 @@ def _configuration_checks(root: Path, state, payload: PreFlightLintRequest, hw) 
                                "parameter": "pose_frontalization", "value": FRONTALIZATION_OVERCORRECT}
     out.append(front)
 
-    # c. UltraMax without the small-crop native bypass on high-resolution multi-face video.
-    ultra = _check("ultramax_crop_bypass", "UltraMax Crop Bypass", "UltraMax configuration is safe for this target.")
+    # c. UltraMax small-face bypass. It is an explicit opt-in: when enabled, every face whose destination bounding box
+    #    in the target frame is <= ultramax_min_pixels is NOT restored and keeps the swapper's low-resolution output.
+    ultra = _check("ultramax_crop_bypass", "UltraMax Crop Bypass", "UltraMax restores every face.")
     if settings.face_restoration_policy == "ultramax":
-        edge, faces = _target_geometry(state, payload)
-        bypass = settings.ultramax_native_bypass and settings.ultramax_min_pixels <= 320
-        if not bypass and edge >= HIGH_RES_MIN_EDGE and faces > 1:
+        if settings.ultramax_native_bypass:
             ultra["status"] = "WARN"
-            ultra["message"] = (f"UltraMax is enabled without the <=320px native crop bypass on {edge}p video with {faces} simultaneous faces; "
-                                "every small crop is up-scaled and restored, which multiplies restorer cost and softens distant faces.")
-            ultra["details"] = [f"ultramax_native_bypass={settings.ultramax_native_bypass}, ultramax_min_pixels={settings.ultramax_min_pixels}"]
-            ultra["action"] = {"id": "set_setting", "label": "Enable <=320px crop bypass",
-                               "settings": {"ultramax_native_bypass": True, "ultramax_min_pixels": 320}}
-        elif not bypass:
-            ultra["details"] = ["Crop bypass is off, but the target is not high-resolution multi-face video."]
+            ultra["message"] = (f"UltraMax is configured to skip faces whose box in the target frame is <= {settings.ultramax_min_pixels}px; "
+                                "those faces keep the swapper's low-resolution output instead of the enhanced result.")
+            ultra["details"] = [f"ultramax_native_bypass=True, ultramax_min_pixels={settings.ultramax_min_pixels}"]
+            ultra["action"] = {"id": "set_setting", "label": "Restore every face with UltraMax",
+                               "settings": {"ultramax_native_bypass": False}}
+        else:
+            edge, faces = _target_geometry(state, payload)
+            if edge >= HIGH_RES_MIN_EDGE and faces > 1:
+                ultra["details"] = [f"UltraMax restores all {faces} faces on {edge}p video; restorer cost scales with the face count. "
+                                    "The optional small-face bypass (ultramax_native_bypass) trades quality for speed."]
     else:
         ultra["message"] = "UltraMax restoration is not enabled."
     out.append(ultra)

@@ -42,6 +42,11 @@ def codeformer_spec(model_name="CodeFormerv0.1.onnx"):
     return RestorerSpec("codeformer", model_name, CODEFORMER_REFERENCE.copy())
 
 
+def gfpgan_spec(model_name="GFPGANv1.4.onnx"):
+    """GFPGAN v1.4: facexlib FFHQ-512 five-point alignment (same template as CodeFormer), RGB, [-1, 1]."""
+    return RestorerSpec("gfpgan", model_name, CODEFORMER_REFERENCE.copy())
+
+
 def ultramax_spec():
     """Observed preserved processor: CodeFormer fp16, FFHQ-512, RGB [-1,1]."""
     return RestorerSpec("ultramax", "codeformer.fp16.onnx", CODEFORMER_REFERENCE.copy())
@@ -60,6 +65,33 @@ def load_ultramax_spec(root):
         raise ValueError("UltraMax alignment/normalization evidence is required")
     return RestorerSpec("ultramax", info["model_name"], np.asarray(info["template"], np.float64),
                         info["size"], info["normalization"])
+
+
+def restore_in_crop_space(restore, image: np.ndarray, points: np.ndarray, spec: RestorerSpec, *, blend: float = 1.0):
+    """Align ``image`` (square swap crop) to ``spec``'s training template, restore it and put the result back into
+    crop space AT THE ENHANCER'S RESOLUTION (``max(crop, spec.size)``) with a single bicubic warp.
+
+    The crop->frame matrix of the returned image is ``scale_matrix_input(inverse, out / crop)``. Returns
+    ``(uint8 BGR out x out, float32 support mask out x out)``; ``blend`` (0..1) is the dynamic enhancer weight.
+    """
+    from roop_3d.hires_handoff import scale_matrix_input
+    side = image.shape[0]
+    matrix = similarity(points, spec.template * spec.size / 512)
+    crop = cv2.warpAffine(image, matrix, (spec.size, spec.size), flags=cv2.INTER_CUBIC, borderMode=cv2.BORDER_CONSTANT)
+    restored = restore(crop)
+    if restored.shape != crop.shape or restored.dtype != np.uint8:
+        raise ValueError("Restoration returned an invalid crop")
+    scale = max(1.0, spec.size / side)
+    out = int(round(side * scale))
+    to_aligned = scale_matrix_input(matrix, scale)
+    warped = cv2.warpAffine(restored, to_aligned, (out, out), flags=cv2.INTER_CUBIC | cv2.WARP_INVERSE_MAP)
+    # Blend only where the aligned crop actually sampled valid input pixels.
+    support = cv2.warpAffine(np.ones(image.shape[:2], np.float32), matrix, (spec.size, spec.size))
+    mask = np.clip(cv2.warpAffine(support, to_aligned, (out, out), flags=cv2.INTER_LINEAR | cv2.WARP_INVERSE_MAP), 0, 1)
+    base = image if out == side else cv2.resize(image, (out, out), interpolation=cv2.INTER_CUBIC)
+    weight = mask * float(blend)
+    result = np.clip(warped.astype(np.float32) * weight[:, :, None] + base * (1 - weight[:, :, None]), 0, 255)
+    return result.round().astype(np.uint8), mask
 
 
 class MaskSeamWatchdog:
@@ -212,11 +244,24 @@ class OnnxFaceRestorer:
 
 
 class DecoupledRestorer:
+    """Worker-pooled restorer. Results are returned at the enhancer's NATIVE resolution in the (square) swap-crop
+    frame of reference, i.e. ``max(crop, spec.size)`` pixels, together with ``hires_scale`` so the caller can
+    re-base the crop->frame matrix (``roop_3d.hires_handoff.scale_matrix_input``) instead of shrinking the face.
+
+    ``ultramax_native_bypass`` is OFF by default: UltraMax runs on every face unless the user explicitly opts into
+    skipping faces whose destination box in the target frame is ``<= ultramax_min_pixels``.
+    """
     def __init__(self, factory, spec: RestorerSpec, *, workers=1, pool_size=2, cuda=False,
-                 ultramax_native_bypass=True, ultramax_min_pixels=320,
-                 cuda_provider='CUDAExecutionProvider', hardware_profile='6gb'):
+                 ultramax_native_bypass=False, ultramax_min_pixels=320,
+                 cuda_provider='CUDAExecutionProvider', hardware_profile='6gb',
+                 enhancer_blend=1.0, fidelity_weight=0.5):
         if not 1 <= workers <= 8 or not 1 <= pool_size <= 32 or ultramax_min_pixels < 1:
             raise ValueError("Invalid restoration pool limits")
+        for name, value in (("enhancer_blend", enhancer_blend), ("fidelity_weight", fidelity_weight)):
+            if not np.isfinite(value) or not 0 <= value <= 1:
+                raise ValueError(f"{name} must be within 0..1")
+        # Both are read on every call, so a slider change applies to the next frame without rebuilding a session.
+        self.enhancer_blend, self.fidelity_weight = float(enhancer_blend), float(fidelity_weight)
         self.factory, self.spec, self.cuda = factory, spec, cuda
         if cuda_provider not in ('CUDAExecutionProvider', 'TensorrtExecutionProvider') or hardware_profile not in ('6gb', '12gb'):
             raise ValueError('Invalid CUDA restorer provider/profile')
@@ -227,6 +272,10 @@ class DecoupledRestorer:
         self.instances, self.lock = [], threading.Lock()
         self.watchdog = MaskSeamWatchdog()
         self.closed = False
+
+    def hires_scale(self, crop_side: int) -> float:
+        """S = enhancer_res / swap_res (never below 1): how much larger a restored face is than its swap crop."""
+        return max(1.0, self.spec.size / crop_side)
 
     def cuda_adapter(self, stream):
         """Worker-owned device restoration, preserving explicit training geometry.
@@ -276,29 +325,46 @@ class DecoupledRestorer:
                                                    dtype=dtypes[value.type], device=stream.device)
 
         def restore(image, face):
+            """Return the restored face in crop space at the enhancer's native resolution (``max(crop, spec.size)``).
+
+            The enhanced tensor is NOT shrunk back to the crop size: the compositor re-bases the crop->frame matrix by
+            ``out_size / image.shape[-1]`` and warps this tensor straight into the frame.
+            """
+            import torch.nn.functional as F
+            from roop_3d.hires_handoff import bicubic_warp, scale_matrix_input
             if self.closed or adapter.model._stat() != adapter.model._identity:
                 raise ValueError('CUDA restorer is closed or its model changed')
             if self.spec.name == 'ultramax' and self.bypass:
+                # Opt-in only. Judged on the destination face box in the target frame, never on the working crop.
                 native = min(max(0, face.box[2] - face.box[0]), max(0, face.box[3] - face.box[1]))
                 if native <= self.threshold:
                     return image
-            crop = crop_matrix(face.landmarks5, image.shape[-1])
+            in_size = image.shape[-1]
+            crop = crop_matrix(face.landmarks5, in_size)
             points = face.landmarks5 @ crop[:, :2].T + crop[:, 2]
-            matrix = torch.as_tensor(similarity(points, self.spec.template * self.spec.size / 512),
-                                     device=image.device, dtype=image.dtype)[None]
+            matrix_np = similarity(points, self.spec.template * self.spec.size / 512)
+            matrix = torch.as_tensor(matrix_np, device=image.device, dtype=image.dtype)[None]
             aligned = warp(image, invert_affine(matrix), (self.spec.size, self.spec.size))
             values = normalize_model_input(aligned, channel_order='RGB', value_range=self.spec.normalization)
             values = values.to(dtypes[image_input.type]).contiguous()
+            for tensor in auxiliary.values():  # dynamic fidelity slider, applied to the very next frame
+                tensor.fill_(self.fidelity_weight)
             output = runner.run({image_input.name: values, **auxiliary},
                 {image_output.name: ((1, 3, self.spec.size, self.spec.size), dtypes[image_output.type])})[image_output.name]
             output = model_output_to_rgb01(output, value_range=self.spec.normalization, channel_order='RGB')
             if self.spec.name in ('ultramax', 'gpen_realistic'):
                 coefficients = image.new_tensor((.299, .587, .114))[None, :, None, None]
                 output = (aligned + ((output - aligned) * coefficients).sum(1, keepdim=True)).clamp(0, 1)
-            restored = warp(output, matrix, image.shape[-2:])
-            support = warp(warp(torch.ones_like(image[:, :1]), invert_affine(matrix),
-                                (self.spec.size, self.spec.size)), matrix, image.shape[-2:]).clamp(0, 1)
-            return restored * support + image * (1 - support)
+            scale = max(1.0, self.spec.size / in_size)
+            out_size = int(round(in_size * scale))
+            to_aligned = torch.as_tensor(scale_matrix_input(matrix_np, scale), device=image.device,
+                                         dtype=image.dtype)[None]
+            restored = bicubic_warp(output, to_aligned, (out_size, out_size))
+            support = bicubic_warp(warp(torch.ones_like(image[:, :1]), invert_affine(matrix),
+                                        (self.spec.size, self.spec.size)), to_aligned, (out_size, out_size))
+            base = image if out_size == in_size else F.interpolate(image, size=(out_size, out_size), mode='bicubic',
+                                                                    align_corners=False).clamp(0, 1)
+            return base + (restored - base) * (support * self.enhancer_blend)
         return restore
 
     def submit(self, image, landmarks5, native_box, face_id, *, native_shape=None):
@@ -310,7 +376,10 @@ class DecoupledRestorer:
         native = min(max(0, box[2] - box[0]), max(0, box[3] - box[1]))
         if self.spec.name.casefold() == "ultramax" and self.bypass and native <= self.threshold:
             future = Future()
-            future.set_result(image.copy())
+            # Explicit user opt-in only. Same output geometry as a restored face so callers can batch both.
+            out = int(round(image.shape[0] * self.hires_scale(image.shape[0])))
+            future.set_result(image.copy() if out == image.shape[0]
+                              else cv2.resize(image, (out, out), interpolation=cv2.INTER_CUBIC))
             return future  # No model construction, alignment or queue contention.
         if self.closed:
             raise RuntimeError("Restorer pool is closed")
@@ -331,18 +400,11 @@ class DecoupledRestorer:
             with self.lock:
                 self.instances.append(self.local.model)
         with self.local.context.activate():
-            matrix = similarity(points, self.spec.template * self.spec.size / 512)
-            crop = cv2.warpAffine(image, matrix, (self.spec.size, self.spec.size), borderMode=cv2.BORDER_CONSTANT)
-            restored = self.local.model.restore(crop)
-            if restored.shape != crop.shape or restored.dtype != np.uint8:
-                raise ValueError("Restoration returned an invalid crop")
-            inverse = cv2.invertAffineTransform(matrix)
-            warped = cv2.warpAffine(restored, inverse, (image.shape[1], image.shape[0]))
-            # Blend only where the aligned crop actually sampled valid input pixels.
-            support = cv2.warpAffine(np.ones(image.shape[:2], np.float32), matrix, (self.spec.size, self.spec.size))
-            mask = cv2.warpAffine(support, inverse, (image.shape[1], image.shape[0]))
+            self.local.model.fidelity_weight = self.fidelity_weight  # dynamic slider, read per call
+            result, mask = restore_in_crop_space(self.local.model.restore, image, points, self.spec,
+                                                 blend=self.enhancer_blend)
             self.watchdog.observe(face_id, mask, kind="restoration")
-            return np.clip(warped.astype(np.float32) * mask[:, :, None] + image * (1 - mask[:, :, None]), 0, 255).round().astype(np.uint8)
+            return result
 
     def close(self):
         self.closed = True

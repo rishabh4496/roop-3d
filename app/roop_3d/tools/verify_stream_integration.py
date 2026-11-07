@@ -345,10 +345,194 @@ def verify_gpu_inference_benchmark(*, iterations: int = 5) -> dict:
             "aggregate_speedup": round(aggregate_speedup, 2),
             "minimum_speedup": min(value["speedup"] for value in results)}
 
+MIN_DETAIL_GAIN = 3.0        # required spatial-frequency (Laplacian variance) gain of an enhancer over the unenhanced swap
+
+
+def _lap_var(image: np.ndarray) -> float:
+    from roop_3d.hires_handoff import laplacian_variance
+    return laplacian_variance(image)
+
+
+def _smooth_swap_crop(size: int = 128) -> np.ndarray:
+    """A soft, face-like aligned swap crop: what a 128 px swapper hands to Stage 3 (no detail above ~24 cycles)."""
+    rng = np.random.default_rng(5)
+    base = cv2.GaussianBlur(rng.integers(90, 170, (size, size, 3), dtype=np.uint8), (0, 0), 6)
+    cv2.ellipse(base, (size // 2, size // 2), (size // 3, int(size * 0.42)), 0, 0, 360, (150, 170, 205), -1)
+    return cv2.GaussianBlur(base, (0, 0), 2.0)
+
+
+def _compose_enhanced(restorer, crop: np.ndarray, *, blend: float):
+    """One face through the production FrameCompositor (standard path), scale 2.0 crop->frame."""
+    from types import SimpleNamespace
+    from roop_3d.compositor.pipeline import CompositeOptions, FrameCompositor
+    from roop_3d.compositor.temporal import TemporalSmoother
+    frame = np.full((340, 340, 3), 96, np.uint8)
+    inverse = np.array(((2.0, 0, 40), (0, 2.0, 40)), np.float32)
+    points = np.array(((70, 90), (230, 90), (150, 150), (95, 210), (205, 210)), np.float32)
+    replacement = SimpleNamespace(track_id=1, image=crop, inverse=inverse, landmarks5=((points - 40) / 2.0).astype(np.float32))
+    compositor = FrameCompositor(parser=SimpleNamespace(predict=lambda image: None), temporal=TemporalSmoother())
+    compositor.restorer = restorer
+    out = compositor.compose(frame, (replacement,), {1: points},
+                             options=CompositeOptions(restoration_blend=blend, color_strength=0, feather_px=2))
+    return out[110:250, 110:250]
+
+
+class _CropSizedLegacy:
+    """The behaviour this gate guards against: the enhanced face forced back to the 128 px swap crop."""
+    def __init__(self, inner):
+        self.inner = inner
+
+    def restore_aligned(self, crop, landmarks5):
+        restored = self.inner.restore_hires(crop, landmarks5)
+        return cv2.resize(restored, (crop.shape[1], crop.shape[0]), interpolation=cv2.INTER_AREA)
+
+
+def verify_enhancer_detail():
+    """UltraMax and GPEN Realistic must deliver distinct, high-resolution detail with >= 3x the Laplacian variance of the
+    unenhanced swap, and the enhanced face must reach the frame at its native resolution (not via a 128 px crop).
+
+    Scope: the two engines are explicit fixtures with the production adapters' real tensor contracts (BGR/RGB order,
+    [-1, 1] range, 512 px, five-point alignment, UltraMax Laplacian fusion, GPEN luma handling). No production-weights
+    claim is made here; ``--real-models`` runs the same measurement with the installed weights.
+    """
+    from types import SimpleNamespace
+    from roop_3d.compositor.restoration import GpenRestorer, UltraMaxPipelineRestorer
+    from roop_3d.compositor.stream_restoration import codeformer_spec
+
+    def detail_fixture(seed: int, sigma: float):
+        noise = cv2.GaussianBlur(np.random.default_rng(seed).normal(0, 1, (512, 512, 3)).astype(np.float32), (0, 0), sigma)
+        return noise / max(float(noise.std()), 1e-6)
+
+    ultramax_detail, gpen_detail = detail_fixture(101, 0.9), detail_fixture(202, 1.3)
+    ultramax = object.__new__(UltraMaxPipelineRestorer)
+    ultramax.spec, ultramax.fidelity_weight, ultramax.inference_verified = codeformer_spec(), 0.7, False
+    ultramax.small_face_mode, ultramax.min_native_pixels = "off", 320
+    ultramax.runner = SimpleNamespace(fidelity_weight=0.7, restore=lambda aligned: np.clip(
+        aligned.astype(np.float32) + 38.0 * ultramax_detail, 0, 255).astype(np.uint8))
+
+    gpen = object.__new__(GpenRestorer)
+    gpen.model_name, gpen.normalization, gpen.inference_verified = "gpen_bfr_512.onnx", "minus_one_one", False
+
+    class GpenFixtureModel:
+        def run(self, feeds):
+            tensor = feeds["input"]                                         # RGB, [-1, 1], NCHW float32
+            assert tensor.shape == (1, 3, 512, 512) and tensor.dtype == np.float32
+            assert -1.0001 <= float(tensor.min()) and float(tensor.max()) <= 1.0001
+            return {"output": np.clip(tensor + 0.30 * gpen_detail.transpose(2, 0, 1)[None], -1, 1).astype(np.float32)}
+    gpen.model = GpenFixtureModel()
+
+    crop = _smooth_swap_crop()
+    baseline = _lap_var(_compose_enhanced(None, crop, blend=0.0))
+    landmarks = (codeformer_spec().template / 4.0).astype(np.float32)
+    report = {}
+    outputs = {}
+    for name, engine in (("ultramax", ultramax), ("gpen_realistic", gpen)):
+        native = engine.restore_hires(crop, landmarks)
+        assert native.shape == (512, 512, 3), f"{name} must hand Stage 3 its native 512 px face, got {native.shape}"
+        enhanced = _compose_enhanced(engine, crop, blend=1.0)
+        crop_sized = _compose_enhanced(_CropSizedLegacy(engine), crop, blend=1.0)
+        gain, legacy_gain = _lap_var(enhanced) / baseline, _lap_var(crop_sized) / baseline
+        assert gain >= MIN_DETAIL_GAIN, f"{name}: only {gain:.2f}x the unenhanced swap's Laplacian variance"
+        assert gain >= 2.0 * legacy_gain, f"{name}: native warp must clearly beat the 128 px crop path ({gain:.1f}x vs {legacy_gain:.1f}x)"
+        report[name] = {"laplacian_gain_vs_unenhanced": round(gain, 2), "crop_sized_path_gain": round(legacy_gain, 2),
+                        "restorer_output_px": native.shape[0]}
+        outputs[name] = enhanced
+    difference = float(np.abs(outputs["ultramax"].astype(np.float32) - outputs["gpen_realistic"].astype(np.float32)).mean())
+    assert difference > 1.0, "UltraMax and GPEN Realistic outputs must be measurably distinct"
+    report["mean_abs_difference_ultramax_vs_gpen"] = round(difference, 2)
+    # UltraMax is never bypassed by default, even for a small destination face.
+    ultramax.small_face_mode = "off"
+    assert ultramax.restore_hires(crop, landmarks, native_face_size_px=40) is not None
+    report["ultramax_default_bypass"] = "off"
+    return report
+
+
+def verify_enhancer_detail_real_models(*, frames=(1200, 3000), require_gain: bool = False):
+    """The same measurement on REAL inference: SCRFD + 2d106 + inswapper_128 + BiSeNet + installed enhancer weights, on a
+    local video frame, with a local multi-view FaceSet. Reports NOT_RUN (with the reason) when anything is missing.
+
+    Gain is the Laplacian variance of the swapped face interior relative to the unenhanced swap. ``require_gain`` makes a
+    miss of ``MIN_DETAIL_GAIN`` fail instead of being reported as BELOW_TARGET.
+    """
+    import glob
+    import shutil
+    from roop_3d.audit.project_paths import legacy_root
+    from roop_3d.compositor.pipeline import CompositeOptions
+    from roop_3d.compositor.restoration import GpenRestorer, UltraMaxPipelineRestorer
+    from roop_3d.core.errors import DomainError
+    try:
+        from roop_3d.engine.volumetric.session import ReferencePipeline
+        from roop_3d.faceset.faceset_reader import FaceSetReader
+        from roop_3d.reconstruction.identity_asset import IdentityAssetStore
+        document = FaceSetReader().read(legacy_root() / "app/facesets/ashna.fsz")
+        videos = glob.glob(str(application_root() / "roop_3d/.runtime/media/03de3642*.mp4"))
+        if not videos:
+            raise FileNotFoundError("local test video 03de3642*.mp4")
+    except (DomainError, OSError, KeyError, ValueError, ImportError) as error:
+        return {"state": "NOT_RUN", "reason": f"local models, FaceSet or video unavailable: {error}"}
+
+    scratch = owned(application_root(), "roop_3d/.runtime/enhancer-detail-gate")
+    scratch.mkdir(parents=True, exist_ok=True)
+    session = ReferencePipeline()
+    results = []
+    try:
+        with tempfile.TemporaryDirectory(dir=scratch) as temporary:
+            try:
+                session.prepare_session(document, retarget="off", identity_store=IdentityAssetStore(Path(temporary) / "assets"))
+            except (DomainError, OSError, ValueError, RuntimeError) as error:
+                return {"state": "NOT_RUN", "reason": f"reference session unavailable: {error}"}
+            capture = cv2.VideoCapture(videos[0])
+            fps = capture.get(cv2.CAP_PROP_FPS) or 30.0
+            for start in frames:
+                capture.set(cv2.CAP_PROP_POS_FRAMES, start)
+                ok, frame = capture.read()
+                if not ok:
+                    continue
+                session.set_frame_timestamp(start / fps)
+                result = session.infer_frame(frame)
+                if not result.replacements:
+                    continue
+                inverse = np.asarray(result.replacements[0].inverse, np.float64)
+                side = result.replacements[0].image.shape[0]
+                corners = np.array(((.15, .15), (.85, .15), (.85, .85), (.15, .85))) * side
+                mapped = corners @ inverse[:, :2].T + inverse[:, 2]
+                x0, y0 = np.maximum(np.floor(mapped.min(0)).astype(int), 0)
+                x1, y1 = np.ceil(mapped.max(0)).astype(int)
+                interior = lambda image: image[y0:y1, x0:x1]
+                options = lambda blend: CompositeOptions(restoration_blend=blend, color_strength=0.65, feather_px=5)
+                session.compositor.restorer = None
+                plain = interior(session.composite_frame(frame, result, options=options(0.0)))
+                row = {"frame": start, "swap_crop_px": side}
+                composites = {}
+                for name, factory in (("ultramax", UltraMaxPipelineRestorer), ("gpen_realistic", GpenRestorer)):
+                    restorer = factory(session.catalog if hasattr(session, "catalog") else None, session.config)
+                    session.compositor.restorer = restorer
+                    composites[name] = interior(session.composite_frame(frame, result, options=options(1.0)))
+                    restorer.release()
+                    row[name] = {"laplacian_gain": round(_lap_var(composites[name]) / _lap_var(plain), 2)}
+                row["mean_abs_difference"] = round(float(np.abs(composites["ultramax"].astype(np.float32)
+                                                          - composites["gpen_realistic"].astype(np.float32)).mean()), 2)
+                assert row["mean_abs_difference"] > 0.3, f"frame {start}: UltraMax and GPEN outputs are not distinct"
+                for name in ("ultramax", "gpen_realistic"):
+                    assert row[name]["laplacian_gain"] > 1.0, f"frame {start}: {name} added no detail"
+                    row[name]["meets_target"] = row[name]["laplacian_gain"] >= MIN_DETAIL_GAIN
+                    if require_gain:
+                        assert row[name]["meets_target"], f"frame {start}: {name} gain {row[name]['laplacian_gain']} < {MIN_DETAIL_GAIN}"
+                results.append(row)
+            capture.release()
+    finally:
+        session.release_session()
+        shutil.rmtree(scratch, ignore_errors=True)
+    if not results:
+        return {"state": "NOT_RUN", "reason": "no face was detected in the selected local frames"}
+    return {"state": "MEASURED", "target_gain": MIN_DETAIL_GAIN, "frames": results,
+            "all_meet_target": all(row[name]["meets_target"] for row in results for name in ("ultramax", "gpen_realistic"))}
+
 
 def run_verification():
     verify_ring()
     verify_geometry()
+    enhancer_report = verify_enhancer_detail()
     base = owned(application_root(), "roop_3d/.runtime/stage3-integration")
     base.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(dir=base) as temporary:
@@ -383,8 +567,9 @@ def run_verification():
         assert any(e["stage"] == "STAGE_2_ACTIVE_PREPASS" and e["state"] == "RESTORED" for e in events)
         assert set(first["segments"]).isdisjoint(second["segments"])
         return {"state": "PASS", "checks": ["out_of_frame_affine", "cross_process_zero_frame_pickle_ring", "emap_cache",
-                "fp32_enhancer_precision_rewrite", "three_stage_synthetic_clip", "stage2_checkpoint_restore",
-                "unique_stream_copy_segments"],
+                "fp32_enhancer_precision_rewrite", "enhancer_laplacian_detail_3x", "three_stage_synthetic_clip",
+                "stage2_checkpoint_restore", "unique_stream_copy_segments"],
+                "enhancer_detail": enhancer_report,
                 "frames": first["frames"], "verified_target_frames": first["verified_target_frames"],
                 "max_synthetic_batch": max(batches),
                 "scope": "synthetic_CPU_inference_and_real_FFmpeg_streaming; no production_GPU_parity_or_FPS_claim"}
@@ -394,6 +579,10 @@ def main():
     import argparse
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--hardware", action="store_true", help="Require real CUDA, NVDEC and NVENC execution on a synthetic clip")
+    parser.add_argument("--real-models", action="store_true",
+                        help="Measure UltraMax / GPEN Laplacian detail gain on real video with the installed weights")
+    parser.add_argument("--require-3x", action="store_true",
+                        help="With --real-models: fail when an enhancer misses the 3x Laplacian-variance target")
     parser.add_argument("--benchmark-gpu", action="store_true",
                         help="Compile/benchmark installed production models; require zero CPU nodes and >4x CPU speedup")
     args = parser.parse_args()
@@ -402,6 +591,8 @@ def main():
         if args.hardware:
             from roop_3d.tools.verify_stream_hardware import verify_hardware
             report["hardware"] = verify_hardware()
+        if args.real_models or args.require_3x:
+            report["enhancer_detail_real_models"] = verify_enhancer_detail_real_models(require_gain=args.require_3x)
         if args.benchmark_gpu:
             report["gpu_benchmark"] = verify_gpu_inference_benchmark()
         print(json.dumps(report, indent=2))

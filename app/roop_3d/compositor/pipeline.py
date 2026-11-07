@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
 import functools
+import logging
 import time
 from typing import Mapping
 from collections.abc import Callable
@@ -32,6 +33,9 @@ from roop_3d.compositor.temporal import TemporalSmoother
 from roop_3d.temporal import TemporalMaskEMA
 from roop_3d.core.errors import DomainError
 from roop_3d.engine.runtime import RuntimeConfig, image_bgr
+from roop_3d.hires_handoff import destination_face_side, fit_hires_to_frame, scale_matrix_input
+
+log = logging.getLogger(__name__)
 
 OCCLUSION_MODES = ("standard", "robust")
 
@@ -73,7 +77,9 @@ class CompositeOptions:
     relight_strength: float = 0.8
     specular_sheen: float = 0.25
     shadow_preservation: float = 0.85
-    ultramax_small_face_mode: str = "bypass"
+    # UltraMax runs on every face by default. "bypass"/"adaptive" are explicit opt-ins judged on the face's
+    # destination size in the target frame.
+    ultramax_small_face_mode: str = "off"
     ultramax_min_native_pixels: int = 320
     lighting_mode: str = "auto"
     manual_light_yaw: float = 35.0
@@ -187,10 +193,15 @@ class FrameCompositor:
 
     @staticmethod
     def _color_process(swapped: np.ndarray, target: np.ndarray, alpha: np.ndarray, method: str,
-                       strength: float, smooth_histogram=None) -> tuple[np.ndarray, ColorStats]:
-        stats = estimate_lab_stats(swapped, target, alpha)
+                       strength: float, smooth_histogram=None, stats_mask: np.ndarray | None = None
+                       ) -> tuple[np.ndarray, ColorStats]:
+        """LAB mean/std (or histogram) transfer. ``stats_mask`` (the parser's skin class inside the face) decides which
+        pixels the statistics come from, so eyes, brows, lips and hair do not skew the skin tone; ``alpha`` is where the
+        correction is written (mean/std) and the fallback when no skin class is available."""
+        basis = alpha if stats_mask is None else stats_mask
+        stats = estimate_lab_stats(swapped, target, basis)
         if method == "histogram":
-            matched = masked_histogram_match(swapped, target, alpha, smooth_histogram=smooth_histogram)
+            matched = masked_histogram_match(swapped, target, basis, smooth_histogram=smooth_histogram)
             if strength < 1:
                 active = alpha > 0
                 partial = swapped.copy()
@@ -217,57 +228,113 @@ class FrameCompositor:
         return include, exclude
 
     # -- shared enhancement: restoration, mouth, colour, relighting -----------------------------------
+    @staticmethod
+    def _resize_plane(plane, side: int):
+        if plane is None or plane.shape[0] == side:
+            return plane
+        return np.clip(cv2.resize(np.asarray(plane, np.float32), (side, side), interpolation=cv2.INTER_CUBIC), 0, 1)
+
+    def _run_restorer(self, crop, replacement, alpha, options):
+        """Restored face at the enhancer's NATIVE resolution (square, >= crop) or ``None`` for an explicit bypass."""
+        restorer = self.restorer
+        if hasattr(restorer, 'fidelity_weight'):
+            restorer.fidelity_weight = options.fidelity_weight
+        elif options.fidelity_weight != .5:
+            raise DomainError('FIDELITY_UNAVAILABLE', 'The selected restorer has no CodeFormer fidelity input', 422)
+        landmarks = getattr(replacement, 'landmarks5', None)
+        try:
+            if hasattr(restorer, 'restore_hires'):
+                kwargs = {}
+                if hasattr(restorer, 'small_face_mode'):
+                    restorer.small_face_mode = options.ultramax_small_face_mode
+                    restorer.min_native_pixels = options.ultramax_min_native_pixels
+                    if options.ultramax_small_face_mode != 'off':
+                        # The destination bounding box in the TARGET frame, not the size of the swap crop.
+                        kwargs['native_face_size_px'] = destination_face_side(replacement.inverse, alpha)
+                return restorer.restore_hires(crop, landmarks, **kwargs)
+            if hasattr(restorer, 'restore_aligned'):
+                return restorer.restore_aligned(crop, landmarks)
+            return restorer.restore(crop)
+        except DomainError:
+            raise
+        except Exception as error:
+            # Never fall back to the unenhanced crop: that would hide a shape / provider mismatch behind a
+            # normal-looking (low resolution) swap.
+            log.critical("Restorer %s failed on a %s crop: %s", type(restorer).__name__, crop.shape, error, exc_info=True)
+            raise DomainError('RESTORER_FAILED', f'{type(restorer).__name__} failed: {error}', 503) from error
+
     def _enhance(self, replacement, crop, target_crop, alpha, *, probabilities, skin, options, observer,
-                 lip_result, frame_index, protect=None, mouth_mask=None, local_illumination: float = 0.0):
+                 lip_result, frame_index, protect=None, mouth_mask=None, local_illumination: float = 0.0,
+                 frame=None):
+        """Restoration, mouth, colour and relighting.
+
+        When the restorer returns more pixels than the swap crop (GPEN/CodeFormer/GFPGAN 512, UltraMax 512/1024), every
+        later step runs at that resolution and the returned image is the large one. Callers re-base the crop->frame
+        matrix with ``scale_matrix_input(inverse, harmonized.shape[0] / crop.shape[0])``.
+        """
         restorer_seconds = 0.0
         enhanced = crop
+        side = crop.shape[0]
+        current_alpha, current_target, current_skin, current_protect, current_mouth = alpha, target_crop, skin, protect, mouth_mask
+        current_inverse = replacement.inverse
         if options.restoration_blend > 0:
             if self.restorer is None:
                 raise DomainError("RESTORER_UNAVAILABLE", "A positive restoration blend requires an explicit local restorer", 503)
             restore_began = time.perf_counter()
-            if hasattr(self.restorer, 'fidelity_weight'):
-                self.restorer.fidelity_weight = options.fidelity_weight
-            elif options.fidelity_weight != .5:
-                raise DomainError('FIDELITY_UNAVAILABLE', 'The selected restorer has no CodeFormer fidelity input', 422)
-            if hasattr(self.restorer, 'restore_aligned'):
-                if hasattr(self.restorer, 'small_face_mode'):
-                    self.restorer.small_face_mode = options.ultramax_small_face_mode
-                    self.restorer.min_native_pixels = options.ultramax_min_native_pixels
-                    linear = np.asarray(replacement.inverse, np.float32)[:, :2]
-                    native_side = int(round(min(crop.shape[1] * np.linalg.norm(linear[:, 0]),
-                                                crop.shape[0] * np.linalg.norm(linear[:, 1]))))
-                    restored = self.restorer.restore_aligned(crop, getattr(replacement, 'landmarks5', None),
-                                                              native_face_size_px=native_side)
+            restored = self._run_restorer(crop, replacement, alpha, options)
+            if restored is not None:
+                size = restored.shape[0]
+                if restored.shape[:2] != (size, size) or size < side:
+                    raise DomainError('RESTORATION_OUTPUT_INVALID', 'Restorer must return a square image no smaller than the crop', 503)
+                if size != side:
+                    scale = size / side
+                    current_inverse = scale_matrix_input(replacement.inverse, scale)
+                    base = cv2.resize(crop, (size, size), interpolation=cv2.INTER_CUBIC)
+                    current_alpha = self._resize_plane(alpha, size)
+                    current_protect = self._resize_plane(protect, size)
+                    current_skin = self._resize_plane(skin, size)
+                    current_mouth = self._resize_plane(mouth_mask, size)
+                    # Real target pixels at the enhanced resolution (not an upsample of the 128 px sample).
+                    current_target = (self._crop_to_frame(frame, current_inverse, (size, size)) if frame is not None
+                                      else cv2.resize(target_crop, (size, size), interpolation=cv2.INTER_CUBIC))
                 else:
-                    restored = self.restorer.restore_aligned(crop, getattr(replacement, 'landmarks5', None))
-            else:
-                restored = self.restorer.restore(crop)
-            enhanced = blend_restored_roi(crop, restored, alpha, options.restoration_blend, protect=protect)
+                    base = crop
+                enhanced = blend_restored_roi(base, restored, current_alpha, options.restoration_blend, protect=current_protect)
             restorer_seconds += time.perf_counter() - restore_began
+        size = enhanced.shape[0]
 
         if observer is not None:
-            observer('restorer', enhanced, replacement.inverse, alpha)
+            observer('restorer', enhanced, current_inverse, current_alpha)
         if lip_result is not None and bool(getattr(lip_result, "applied", False)):
             lip_image = np.asarray(getattr(lip_result, "image", None))
             lip_blend = float(getattr(lip_result, "blend", 0.0))
             lip_mask = getattr(lip_result, "mouth_mask", None)
             if lip_mask is None:
-                lip_mask = mouth_mask if mouth_mask is not None else lower_face_soft_mask(
+                lip_mask = current_mouth if current_mouth is not None else lower_face_soft_mask(
                     crop.shape, probabilities, feather_px=options.feather_px)
+            if lip_image.shape[0] != size:
+                lip_image = cv2.resize(lip_image, (size, size), interpolation=cv2.INTER_CUBIC)
+            lip_mask = self._resize_plane(np.asarray(lip_mask, np.float32), size)
             enhanced = composite_mouth_region(enhanced, lip_image, lip_mask, lip_blend)
 
+        stats_mask = None
+        if current_skin is not None and current_skin is not current_alpha:
+            candidate = np.minimum(np.asarray(current_alpha, np.float32), np.asarray(current_skin, np.float32))
+            if np.count_nonzero(candidate > 0.15) >= 64:      # a real skin class; otherwise keep the whole-face basis
+                stats_mask = candidate
         harmonized, color_stats = self._color_process(
-            enhanced, target_crop, alpha, options.color_method, options.color_strength,
+            enhanced, current_target, current_alpha, options.color_method, options.color_strength,
             lambda histogram: self.histogram_stabilizer.filter(
                 replacement.track_id, "histogram", histogram,
-                getattr(self, "timestamp_seconds", (frame_index if frame_index is not None else self.frames_composited) / 30.0)))
+                getattr(self, "timestamp_seconds", (frame_index if frame_index is not None else self.frames_composited) / 30.0)),
+            stats_mask=stats_mask)
         if local_illumination > 0:
             from roop_3d.compositor.quality import local_illumination_match
-            harmonized = local_illumination_match(harmonized, target_crop, alpha, strength=local_illumination)
+            harmonized = local_illumination_match(harmonized, current_target, current_alpha, strength=local_illumination)
         if options.relight:
             from roop_3d.relighting_3d import relighter
             relit_crop, normal_vis, sh_vis, _ = relighter.relight(
-                harmonized, target_crop, skin_mask=skin, face_mask=alpha,
+                harmonized, current_target, skin_mask=current_skin, face_mask=current_alpha,
                 relight_strength=getattr(options, "relight_strength", 0.8),
                 specular_sheen=getattr(options, "specular_sheen", 0.25),
                 shadow_preservation=getattr(options, "shadow_preservation", 0.85),
@@ -276,8 +343,8 @@ class FrameCompositor:
                 manual_light_pitch=getattr(options, "manual_light_pitch", 25.0))
             harmonized = relit_crop
             if observer is not None:
-                observer('normal_map', normal_vis, replacement.inverse, alpha)
-                observer('sh_lighting', sh_vis, replacement.inverse, alpha)
+                observer('normal_map', normal_vis, current_inverse, current_alpha)
+                observer('sh_lighting', sh_vis, current_inverse, current_alpha)
         return harmonized, color_stats, restorer_seconds
 
     def compose(self, frame: np.ndarray, replacements, landmarks_by_track: Mapping[int, np.ndarray] | None = None,
@@ -364,18 +431,28 @@ class FrameCompositor:
             skin = face_mask.skin if getattr(face_mask, "source", "").startswith("bisenet") else alpha
             harmonized, color_stats, spent = self._enhance(
                 replacement, crop, target_crop, alpha, probabilities=probabilities, skin=skin, options=options,
-                observer=observer, lip_result=lip_sync_results.get(replacement.track_id), frame_index=frame_index)
+                observer=observer, lip_result=lip_sync_results.get(replacement.track_id), frame_index=frame_index,
+                frame=frame)
             restorer_seconds += spent
             temporal = self.temporal.update(replacement.track_id, replacement.inverse, alpha / max(options.swap_weight, 1e-8), color_stats,
                                             frame_index=frame_index, scene_cut=False)
             if observer is not None:
-                observer('color', harmonized, replacement.inverse, alpha)
+                hr = harmonized.shape[0] != crop.shape[0]
+                observer('color', harmonized, scale_matrix_input(replacement.inverse, harmonized.shape[0] / crop.shape[0]) if hr else replacement.inverse,
+                         self._resize_plane(alpha, harmonized.shape[0]) if hr else alpha)
             effective_alpha = temporal.alpha * options.swap_weight
             if coverage is not None:
                 effective_alpha = np.minimum(effective_alpha, coverage)
             if observer is not None:
                 observer('vfx', crop, temporal.inverse, effective_alpha)
-            output = fuse_crop(output, harmonized, temporal.inverse, effective_alpha,
+            fuse_image, fuse_alpha, fuse_inverse = harmonized, effective_alpha, temporal.inverse
+            if harmonized.shape[0] != crop.shape[0]:
+                # Warp the native-resolution face straight into the frame with M_hr (basis and translation re-based by
+                # S = enhanced / crop); it is never reduced to the swap-crop size first.
+                fuse_inverse = scale_matrix_input(temporal.inverse, harmonized.shape[0] / crop.shape[0])
+                fuse_alpha = self._resize_plane(effective_alpha, harmonized.shape[0])
+                fuse_image, fuse_alpha, fuse_inverse = fit_hires_to_frame(harmonized, fuse_alpha, fuse_inverse)
+            output = fuse_crop(output, fuse_image, fuse_inverse, fuse_alpha,
                                mode=options.mode, levels=options.pyramid_levels,
                                linear_light=options.linear_light, transfer=options.blend_transfer)
         self.frames_composited += 1
@@ -569,21 +646,37 @@ class FrameCompositor:
                 replacement, crop, context.target_crop, alpha_native, probabilities=None,
                 skin=skin_native if analysis.parser_trusted else alpha_native, options=options, observer=observer,
                 lip_result=lip_sync_results.get(replacement.track_id), frame_index=frame_index, protect=protect,
-                mouth_mask=mouth, local_illumination=robust.local_illumination)
+                mouth_mask=mouth, local_illumination=robust.local_illumination, frame=frame)
             restorer_seconds += spent
             temporal = self.temporal.update(replacement.track_id, replacement.inverse, face_alpha, color_stats,
                                             frame_index=frame_index, scene_cut=False)
+            enhanced_side = harmonized.shape[0]
             if observer is not None:
-                observer('color', harmonized, replacement.inverse, alpha_native)
+                observer('color', harmonized,
+                         scale_matrix_input(replacement.inverse, enhanced_side / side) if enhanced_side != side else replacement.inverse,
+                         self._resize_plane(alpha_native, enhanced_side) if enhanced_side != side else alpha_native)
             smoothed_face = temporal.alpha * options.swap_weight
             if coverage is not None:
                 smoothed_face = np.minimum(smoothed_face, coverage)
-            source = cv2.resize(harmonized, (work, work), interpolation=cv2.INTER_CUBIC) if work != side else harmonized
-            work_inverse = self._scaled_inverse(temporal.inverse, scale)
             if observer is not None:
                 observer('vfx', crop, temporal.inverse, cv2.resize(smoothed_face, (side, side), interpolation=cv2.INTER_AREA) if work != side else smoothed_face)
+            skin_for_fusion = analysis.skin if analysis.parser_trusted else None
+            if enhanced_side != side:
+                # Fuse at the enhancer's resolution (capped at ~1.25x the face's footprint in the frame so the warp does
+                # not alias): the masks follow the image, and M_hr re-bases the crop->frame matrix by S.
+                footprint = float(np.sqrt(abs(np.linalg.det(np.asarray(temporal.inverse, np.float64)[:, :2]))))
+                fuse_side = max(work, min(enhanced_side, int(round(side * footprint * 1.25))))
+                source = (harmonized if fuse_side == enhanced_side else
+                          cv2.resize(harmonized, (fuse_side, fuse_side), interpolation=cv2.INTER_AREA))
+                smoothed_face = self._resize_plane(smoothed_face, fuse_side)
+                front = self._resize_plane(front, fuse_side)
+                skin_for_fusion = self._resize_plane(skin_for_fusion, fuse_side)
+                work_inverse = scale_matrix_input(temporal.inverse, fuse_side / side)
+            else:
+                source = cv2.resize(harmonized, (work, work), interpolation=cv2.INTER_CUBIC) if work != side else harmonized
+                work_inverse = self._scaled_inverse(temporal.inverse, scale)
             output, fusion = fuse_robust(output, source, work_inverse, smoothed_face, front,
-                                         analysis.skin if analysis.parser_trusted else None,
+                                         skin_for_fusion,
                                          frame_motion=context.motion, mode=options.mode, levels=options.pyramid_levels,
                                          options=fusion_options)
             context.report["fusion"] = {"sharpness": fusion.sharpness, "texture_gain": fusion.texture_gain,

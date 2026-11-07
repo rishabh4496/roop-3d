@@ -226,14 +226,17 @@ class PreviewService:
                 axis and axis.parameter == 'restoration_blend' and max(axis.values) > 0 for axis in (value.x, value.y))
             needs_restorer = needs_restorer or bool(value.request.parameter_curves and any(key.value > 0 for key in value.request.parameter_curves.tracks.get('restorer_opacity', ())))
             if needs_restorer:
-                architecture = parameters.restorer_model if parameters.restorer_model != 'auto' else {
-                    'ultramax': 'gpen', 'gfpgan': 'gpen'}.get(settings.face_restoration_policy, settings.face_restoration_policy)
+                architecture = (parameters.restorer_model if parameters.restorer_model != 'auto'
+                                else settings.face_restoration_policy)
                 if architecture == 'ultramax':
                     from roop_3d.compositor.restoration import UltraMaxPipelineRestorer
                     session.compositor.restorer = UltraMaxPipelineRestorer(self.state.models, runtime)
                 elif architecture == 'codeformer':
                     from roop_3d.compositor.restoration import CodeFormerRestorer
                     session.compositor.restorer = CodeFormerRestorer(self.state.models, runtime)
+                elif architecture == 'gfpgan':
+                    from roop_3d.compositor.restoration import GfpganRestorer
+                    session.compositor.restorer = GfpganRestorer(self.state.models, runtime)
                 elif architecture in ('off', 'auto', 'gpen'):
                     session.compositor.restorer = GpenRestorer(self.state.models, runtime)
                 else:

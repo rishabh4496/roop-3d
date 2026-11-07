@@ -102,13 +102,13 @@ def test_lint_frontalization_passes_when_matrix_not_populated(tmp_path, monkeypa
 
 
 @pytest.mark.parametrize("bypass,pixels,geometry,expected", [
-    (False, 320, (2160, 3), "WARN"),    # no bypass, 4K, multi-face
-    (True, 320, (2160, 3), "PASS"),     # bypass at the 320px crop bound
-    (True, 640, (2160, 3), "WARN"),     # bypass threshold above 320 is not the <=320 crop bypass
-    (False, 320, (720, 3), "PASS"),     # not high-res
-    (False, 320, (2160, 1), "PASS"),    # single face
+    (False, 320, (2160, 3), "PASS"),    # default: UltraMax restores every face, even on 4K multi-face video
+    (True, 320, (2160, 3), "WARN"),     # explicit opt-in bypass skips small faces: say so
+    (True, 640, (2160, 3), "WARN"),
+    (False, 320, (720, 3), "PASS"),
+    (False, 320, (2160, 1), "PASS"),
 ])
-def test_lint_ultramax_requires_crop_bypass_on_high_res_multi_face(tmp_path, monkeypatch, bypass, pixels, geometry, expected):
+def test_lint_ultramax_warns_only_when_the_small_face_bypass_is_enabled(tmp_path, monkeypatch, bypass, pixels, geometry, expected):
     app, payload, _ = project_fixture(tmp_path)
     configure(app, monkeypatch, face_restoration_policy="ultramax", ultramax_native_bypass=bypass, ultramax_min_pixels=pixels)
     monkeypatch.setattr(diagnostics, "_target_geometry", lambda _state, _payload: geometry)
@@ -116,7 +116,7 @@ def test_lint_ultramax_requires_crop_bypass_on_high_res_multi_face(tmp_path, mon
         check = lint(client, payload)["ultramax_crop_bypass"]
     assert check["status"] == expected
     if expected == "WARN":
-        assert check["action"]["settings"] == {"ultramax_native_bypass": True, "ultramax_min_pixels": 320}
+        assert check["action"]["settings"] == {"ultramax_native_bypass": False}
 
 
 def test_lint_ultramax_check_ignores_other_restorers(tmp_path, monkeypatch):

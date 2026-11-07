@@ -28,15 +28,29 @@ def feather_mask(size=128):
                     - ((y - (size - 1) / 2) / (size * 0.48))**2) * 8, 0, 1).astype(np.float32)
 
 
-def composite_cpu(frame, crops, matrices):
+def composite_cpu(frame, crops, matrices, *, swap_size=128):
+    """Alpha-composite aligned crops into ``frame``.
+
+    ``matrices`` are frame->crop matrices of the ``swap_size`` swap crop. ``crops`` may be larger (an enhancer's native
+    resolution): the matrix is then re-based by S = crops.shape[-1] / swap_size and the hi-res crop is warped straight
+    into the frame, never shrunk to the swap size first.
+    """
+    from roop_3d.hires_handoff import fit_hires_to_frame, scale_matrix_input
     result = frame.astype(np.float32)
     height, width = frame.shape[:2]
-    mask = feather_mask(crops.shape[-1])
+    side = crops.shape[-1]
+    scale = side / swap_size
+    mask = feather_mask(side)
     for crop, matrix in zip(crops, matrices):
         inverse = cv2.invertAffineTransform(matrix)
-        rgb = crop.transpose(1, 2, 0)[:, :, ::-1] * 255
-        warped = cv2.warpAffine(rgb, inverse, (width, height), flags=cv2.INTER_LINEAR)
-        alpha = cv2.warpAffine(mask, inverse, (width, height), flags=cv2.INTER_LINEAR)[:, :, None]
+        rgb = np.ascontiguousarray(crop.transpose(1, 2, 0)[:, :, ::-1] * 255)
+        layer_mask = mask
+        if scale != 1:
+            inverse = scale_matrix_input(inverse, scale)
+            rgb, layer_mask, inverse = fit_hires_to_frame(rgb, mask, inverse)
+        flags = cv2.INTER_CUBIC if scale != 1 else cv2.INTER_LINEAR
+        warped = cv2.warpAffine(rgb, np.asarray(inverse, np.float64), (width, height), flags=flags)
+        alpha = cv2.warpAffine(layer_mask, np.asarray(inverse, np.float64), (width, height), flags=cv2.INTER_LINEAR)[:, :, None]
         result = warped * alpha + result * (1 - alpha)
     return np.clip(result, 0, 255).round().astype(np.uint8)
 
@@ -68,6 +82,7 @@ class CpuBatchPipeline:
                 crop = np.clip(output[index].transpose(1, 2, 0)[:, :, ::-1] * 255, 0, 255).astype(np.uint8)
                 points = cv2.transform(face.landmarks5[None], aligned[index].matrix)[0]
                 futures.append(self.restorer.submit(crop, points, face.box, face.track_id, native_shape=frames[index].shape[:2]))
+            # Restored faces arrive at the enhancer's native resolution; composite_cpu re-bases the matrix.
             output = np.stack([v.result()[:, :, ::-1].transpose(2, 0, 1) for v in futures]).astype(np.float32) / 255
         return [composite_cpu(frame, output[index:index + 1], [aligned[index].matrix]) for index, frame in enumerate(frames)]
 
@@ -87,18 +102,16 @@ class CpuBatchPipeline:
                     image = np.clip(output[index].transpose(1, 2, 0)[:, :, ::-1] * 255, 0, 255).astype(np.uint8)
                     local_points = cv2.transform(face.landmarks5[None], aligned[index].matrix)[0]
                     futures.append(self.restorer.submit(image, local_points, face.box, face.track_id, native_shape=frame.shape[:2]))
-                for index, future in enumerate(futures):
-                    image = future.result()
-                    output[index] = image[:, :, ::-1].transpose(2, 0, 1).astype(np.float32) / 255
+                output = np.stack([future.result()[:, :, ::-1].transpose(2, 0, 1) for future in futures]).astype(np.float32) / 255
             return composite_cpu(frame, output, [v.matrix for v in aligned])
 
 
-def affine_graph(height, width, batch, *, compose=False, multi_frame=False):
+def affine_graph(height, width, batch, *, compose=False, multi_frame=False, crop_size=128):
     """Build ordinary ONNX GridSample/MatMul operators, executable on CPU or CUDA."""
     import onnx
     h, t = onnx.helper, onnx.TensorProto
     oh, ow = (height, width) if compose else (128, 128)
-    ih, iw = (128, 128) if compose else (height, width)
+    ih, iw = (crop_size, crop_size) if compose else (height, width)
     y, x = np.mgrid[:oh, :ow].astype(np.float32)
     grid = np.stack([x, y, np.ones_like(x)], -1).reshape(1, -1, 3)
     initializers = []
@@ -111,7 +124,7 @@ def affine_graph(height, width, batch, *, compose=False, multi_frame=False):
              h.make_node("MatMul", ["grid", "mt"], ["xy"]),
              h.make_node("Reshape", ["xy", "grid_shape"], ["sampling_grid"])]
     if compose:
-        constant("mask", np.repeat(feather_mask()[None, None], batch, 0))
+        constant("mask", np.repeat(feather_mask(crop_size)[None, None], batch, 0))
         nodes.append(h.make_node("Concat", ["crops", "mask"], ["rgba"], axis=1))
         nodes.append(h.make_node("GridSample", ["rgba", "sampling_grid"], ["warped"], align_corners=1,
                                  mode="bilinear", padding_mode="zeros"))
@@ -147,7 +160,7 @@ def affine_graph(height, width, batch, *, compose=False, multi_frame=False):
     inputs = [h.make_tensor_value_info("image", t.FLOAT, [batch if multi_frame else 1, 3, height, width]),
               h.make_tensor_value_info("matrix", t.FLOAT, [batch, 2, 3])]
     if compose:
-        inputs.append(h.make_tensor_value_info("crops", t.FLOAT, [batch, 3, 128, 128]))
+        inputs.append(h.make_tensor_value_info("crops", t.FLOAT, [batch, 3, crop_size, crop_size]))
     outputs = [h.make_tensor_value_info("output", t.FLOAT, [batch if multi_frame else 1, 3, height, width] if compose else [batch, 3, 128, 128])]
     model = h.make_model(h.make_graph(nodes, "roop3d_gpu_affine", inputs, outputs, initializers),
                          opset_imports=[h.make_opsetid("", 17)])
@@ -226,14 +239,15 @@ class GpuBatchPipeline:
                                 execution_threads=self.execution_threads, compositor_options=self.compositor_options,
                                 device_masker_factory=self.device_masker_factory)
 
-    def _graph(self, height, width, count, compose, multi_frame=False):
-        key = height, width, count, compose, multi_frame
+    def _graph(self, height, width, count, compose, multi_frame=False, crop_size=128):
+        key = height, width, count, compose, multi_frame, crop_size
         if key not in self._graphs:
             import onnxruntime as ort
             options = ort.SessionOptions()
             options.intra_op_num_threads = 1
             options.add_session_config_entry("session.disable_cpu_ep_fallback", "1")
-            session = ort.InferenceSession(affine_graph(height, width, count, compose=compose, multi_frame=multi_frame).SerializeToString(),
+            session = ort.InferenceSession(affine_graph(height, width, count, compose=compose, multi_frame=multi_frame,
+                                              crop_size=crop_size).SerializeToString(),
                 sess_options=options, providers=[("CUDAExecutionProvider", {"use_tf32": False,
                     "gpu_mem_limit": (512 if self.hardware_profile == "6gb" else 1024) * 1048576})])
             session.disable_fallback()
@@ -275,9 +289,11 @@ class GpuBatchPipeline:
                     points = cv2.transform(face.landmarks5[None], matrices[index])[0]
                     futures.append(self.restorer.submit(crop, points, face.box, face.track_id, native_shape=frames[index].shape[:2]))
                 swapped = np.ascontiguousarray(np.stack([v.result()[:, :, ::-1].transpose(2, 0, 1) for v in futures]).astype(np.float32) / 255)
-            forward = np.stack([normalized_matrix(m, 128, 128) for m in matrices])
+            side = swapped.shape[-1]
+            from roop_3d.hires_handoff import scale_matrix_output
+            forward = np.stack([normalized_matrix(scale_matrix_output(m, side / 128), side, side) for m in matrices])
             # Rebind the crop runner's existing device image buffer rather than upload it twice.
-            result = self._graph(height, width, count, True, True).run(
+            result = self._graph(height, width, count, True, True, side).run(
                 {"image": crop_runner.inputs["image"], "crops": swapped, "matrix": forward})["output"].numpy()
             if not np.isfinite(result).all():
                 raise RuntimeError("Multi-frame GPU compositor produced non-finite pixels")
@@ -321,10 +337,11 @@ class GpuBatchPipeline:
                         points = cv2.transform(face.landmarks5[None], matrices[index])[0]
                         futures.append(self.restorer.submit(image, points, face.box, face.track_id, native_shape=frame.shape[:2]))
                     restored = np.stack([future.result()[:, :, ::-1].transpose(2, 0, 1) for future in futures]).astype(np.float32) / 255
-                    runner = self._graph(height, width, count, True)
                     swapped = np.ascontiguousarray(restored)
-                forward = np.stack([normalized_matrix(m, 128, 128) for m in matrices])
-                device_frame = self._graph(height, width, count, True).run(
+                side = swapped.shape[-1] if isinstance(swapped, np.ndarray) else 128
+                from roop_3d.hires_handoff import scale_matrix_output
+                forward = np.stack([normalized_matrix(scale_matrix_output(m, side / 128), side, side) for m in matrices])
+                device_frame = self._graph(height, width, count, True, False, side).run(
                     {"image": device_frame, "crops": swapped, "matrix": forward})["output"]
             output = device_frame.numpy()[0].transpose(1, 2, 0)[:, :, ::-1]
             if not np.isfinite(output).all():
