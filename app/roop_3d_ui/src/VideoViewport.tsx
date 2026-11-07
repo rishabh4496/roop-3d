@@ -17,7 +17,8 @@ import PipelineNodeFlowBar from './components/workstation/PipelineNodeFlowBar';
 import ContactSheetModal, { type Patch } from './components/workstation/ContactSheetModal';
 import SettingControl from './components/controls/SettingControl';
 import { PANELS, settingValue, settingsOf, type PanelId } from './components/controls/settingsRegistry';
-import FaceContextMenu, { type FaceMenuTarget } from './components/canvas/FaceContextMenu';
+import FaceContextMenu, { type FaceMenuTarget, type TargetAction } from './components/canvas/FaceContextMenu';
+import { useTargetLock } from './components/canvas/useTargetLock';
 import { useFaceExtraction } from './components/canvas/useFaceExtraction';
 import { facePose } from './components/canvas/poseHud';
 import { calculateLetterbox, mapBoxToPixels } from './utils/letterbox';
@@ -252,6 +253,8 @@ export function VideoViewport({
   /** Faces of this exact frame, or null until detection has run for it (then the track boxes are drawn instead). */
   const frameFaces = !playing && scrub.current && scrub.faces ? matchedFaces : null;
   const [lockingId, setLockingId] = useState<string | null>(null);
+  // Stage 12: the person locked from a frame (multi-angle reference bank, persistent cluster id); keyed to the native frame on screen.
+  const targetLock = useTargetLock({ target, frameIndex: scrub.meta?.frame_index ?? 0 });
   const outputPreview = usePreview(enabled && previewLive ? output : '', time, duration, fps, playing);
   // The real swapped frame (or, when a node is soloed, that stage's buffer) from POST /api/preview: debounced, 503-aware.
   const [liveSwap, setLiveSwap] = preference('live_swap');
@@ -264,6 +267,7 @@ export function VideoViewport({
     const meta = scrub.meta;
     if (!match || !meta || lockingId) return;
     const store = useFaceSelectionStore.getState();
+    void targetLock.lockFace(match.face.face_index);        // Stage 12: the click also locks the PERSON (reference bank + cluster id)
     if (match.stored) { store.setActiveSelection(match.stored.id); return; }
     setLockingId(match.id);
     try {
@@ -279,7 +283,18 @@ export function VideoViewport({
       noticeLater(source ? `Face #${match.face.face_index + 1} locked and mapped to ${source.name}.` : `Face #${match.face.face_index + 1} locked as a target. Choose a source FaceSet to swap it.`);
     } catch (error) { noticeLater((error as Error).message || 'Locking the face failed.'); }
     finally { setLockingId(null); }
-  }, [scrub.meta, lockingId, target, sources, activeSourceId, onAssignSource, onInspectionUpdate, noticeLater]);
+  }, [scrub.meta, lockingId, target, sources, activeSourceId, onAssignSource, onInspectionUpdate, noticeLater, targetLock.lockFace]);
+  /** Right-click menu: lock as primary target / add this angle / bind the active source / exclude, for the face with this left-to-right rank. */
+  const onTargetAction = useCallback(async (action: TargetAction, menu: FaceMenuTarget) => {
+    const match = frameFaces?.find(item => item.face.face_index === menu.faceRank);
+    if (action === 'add_angle') { await targetLock.addAngle(menu.faceRank); return; }
+    if (action === 'lock_primary') { if (match) await lockFrameFace(match); else await targetLock.lockFace(menu.faceRank); return; }
+    if (!match) { noticeLater('Pause on a frame with detected faces first.'); return; }
+    if (action === 'bind_source') { await lockFrameFace(match); return; }       // creates the track and maps it to the active source
+    await lockFrameFace(match);
+    const store = useFaceSelectionStore.getState(), face = store.detectedFaces.find(item => item.id === store.activeSelection);
+    if (face?.clusterId) { store.setClusterMode(face.clusterId, 'exclude'); noticeLater(`Face #${menu.faceRank + 1} is excluded from the swap.`); }
+  }, [frameFaces, lockFrameFace, targetLock.addAngle, targetLock.lockFace, noticeLater]);
   // The locked face's pose follows the frame under the playhead (the stored track keeps one pose for all its frames).
   const activeFaceId = useFaceSelectionStore(state => state.activeSelection);
   useEffect(() => {
@@ -683,6 +698,8 @@ export function VideoViewport({
         </span>
         {detectionNotice && <span className="detection-inline-notice">{detectionNotice}</span>}
         {extraction.toast && <span className={`face-toast ${extraction.toast.kind}`} role="status">{extraction.toast.text}</span>}
+        {targetLock.toast && <span className={`face-toast ${targetLock.toast.kind}`} role="status">{targetLock.toast.text}</span>}
+        {targetLock.lock && <span className="target-lock-chip" title={`${targetLock.lock.bank_size} reference angles · scan ${targetLock.lock.scan.state}`}>TARGET LOCKED ✓ {targetLock.lock.label}</span>}
         {solo && <button className="button small" onClick={() => setSolo(null)}>Exit solo · {solo}</button>}
 
         {/* Mask Editing Mode Toggle */}
@@ -973,7 +990,8 @@ export function VideoViewport({
       </div>; return studio ? (studio.panels ? createPortal(panels, studio.panels) : null) : panels; })()}
       {floating.portal}
       {historyOpen && <HistoryDrawer onClose={() => setHistoryOpen(false)}/>}
-      {faceMenu && <FaceContextMenu target={faceMenu} activeSourceName={activeSourceName} busy={extraction.busy} onClose={() => setFaceMenu(null)}
+      {faceMenu && <FaceContextMenu target={faceMenu} activeSourceName={activeSourceName} busy={extraction.busy || targetLock.busy} onClose={() => setFaceMenu(null)}
+        targetLabel={targetLock.lock?.label ?? null} onTargetAction={(action, menu) => { setFaceMenu(null); void onTargetAction(action, menu); }}
         onChoose={(destination, menu) => { setFaceMenu(null); void extraction.run(destination, menu); }}/>}
       {sweepPanel && <ContactSheetModal panel={sweepPanel} parameters={parameters} frameLabel={`Frame ${currentFrame} · ${time.toFixed(3)} s`}
         payloadFor={(patch: Patch) => {

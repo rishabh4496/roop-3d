@@ -2859,3 +2859,7 @@ button.lane-label:hover{background:var(--raised)}
 .face-mapping .link-button{min-height:24px;padding:2px 8px;background:none;border:0;color:inherit;cursor:pointer;text-align:left}
 .face-mapping-row .arrow{color:var(--muted)}
 .face-mapping-row .badge{font-size:10px;color:var(--muted)}
+
+/* Stage 12: the person locked from a frame */
+.target-lock-chip { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 999px; font: 600 11px ui-monospace, Menlo, Consolas, monospace; color: #04130d; background: #34d399; border: 1px solid #34d399; white-space: nowrap; }
+.face-context-menu [role="separator"] { margin-top: 6px; padding-top: 6px; border-top: 1px solid rgba(232, 241, 242, 0.14); }

@@ -23,7 +23,6 @@ router = APIRouter(prefix="/api/v1")
 UNSUPPORTED = {
     "embedding_norm": "ArcFace embeddings are L2-normalised before they leave the recognizer, so their norm is always 1.0; "
                       "locking a face computes and stores its real embedding.",
-    "track_id": "A single-frame detection has no tracker. It is null until the face is locked, which creates its track.",
 }
 
 
@@ -56,7 +55,14 @@ def media_frame(request: Request, path: Annotated[str, Query(min_length=1, max_l
     frames = request.app.state.media.frames
     result = frames.read(path, frame_index=frame_index, timestamp=timestamp)
     data, out_w, out_h = frames.jpeg(path, result, max_size=max_size, quality=quality)
-    faces = frames.faces(path, result, threshold) if detect_faces else None
+    faces = None
+    if detect_faces:
+        # JPEG responses carry the metadata in a header, so they stay light; format=json returns the full per-face analysis.
+        from roop_3d.server.target_lock import annotate
+        analyzed = frames.analyzed_faces(path, result, threshold)
+        faces = [dict(face) for face in frames.faces(path, result, threshold, detail="full" if format == "json" else "basic")]
+        if analyzed:
+            annotate(request, path, result.frame_index, analyzed, faces)
     meta = _meta(result, frames.info(path), (out_w, out_h), faces)
     headers = {"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"}
     if format == "json":

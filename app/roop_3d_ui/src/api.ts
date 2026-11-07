@@ -73,6 +73,21 @@ export const extractFaceFromFrame = (body: {
   norm_cx?: number;
   norm_cy?: number;
 }) => post<ExtractFromFrameResult>('/faces/extract_from_frame', body);
+/** Stage 12: a person locked from a frame, with the multi-angle reference bank that keeps the lock through head turns. */
+export type TargetLock = {
+  lock_id: string; target_number: number; label: string; media_path: string; cluster_id: number;
+  anchor_frame_index: number; bank_size: number; observed_frames: number[];
+  reference_bank: { yaw: number; pitch: number; roll: number; frame_index: number; source: 'anchor' | 'auto' | 'user'; match_score: number }[];
+  scan: { state: 'idle' | 'running' | 'done' | 'error' | 'skipped'; sampled?: number; requested?: number; matched?: number };
+  selected_face_index?: number; added?: boolean; similarity_to_bank?: number;
+};
+type FaceSelector = { face_index: number } | { point: [number, number] };
+/** Click a face on any frame: locks that person and (in the background) samples the video for more angles of them. */
+export const lockTargetFromFrame = (body: { path: string; frame_index: number; sample_count?: number; wait?: boolean } & FaceSelector) =>
+  post<TargetLock>('/target/lock-from-frame', body);
+/** "Add This Angle to Target #n": e.g. an extreme profile that the scan could not link by itself. */
+export const addTargetAngleSample = (body: { lock_id: string; frame_index: number; force?: boolean } & FaceSelector) =>
+  post<TargetLock>('/target/add-angle-sample', body);
 export const mediaURL = (path: string) => `/api/v1/media/content?${new URLSearchParams({ path })}`;
 export async function upload(file: File, capabilities: Capabilities, progress: (value: number) => void, signal: AbortSignal) {
   if (file.size > capabilities.workstation.max_asset_bytes) throw new Error('This file exceeds the advertised upload limit.');

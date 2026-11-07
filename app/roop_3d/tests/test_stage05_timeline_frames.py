@@ -226,7 +226,7 @@ def test_frame_endpoint_returns_faces_only_when_asked_and_scales_the_image_not_t
     assert (meta["image_width"], meta["image_height"]) == (128, 32)           # the JPEG is smaller ...
     assert (meta["width"], meta["height"]) == (WIDTH, HEIGHT)                 # ... the face boxes stay in native pixels
     assert [face["bbox"][0] for face in meta["faces"]] == [20.0, 150.0]
-    assert "embedding_norm" in meta["unsupported"] and "track_id" in meta["unsupported"]
+    assert "embedding_norm" in meta["unsupported"] and "track_id" not in meta["unsupported"]   # Stage 12: track_id is provided (appearance cluster)
 
 
 def test_frame_endpoint_json_format(client):

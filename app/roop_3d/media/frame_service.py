@@ -111,9 +111,11 @@ class _Entry:
 class VideoFrameService:
     """Thread-safe: one decode at a time per file, different files decode in parallel."""
 
-    def __init__(self, resolve: Callable[[str], Path], detector: Any = None, *, max_open: int = MAX_OPEN_CONTAINERS):
+    def __init__(self, resolve: Callable[[str], Path], detector: Any = None, *, max_open: int = MAX_OPEN_CONTAINERS,
+                 analyzer: Any = None):
         self._resolve = resolve
         self.detector = detector
+        self.analyzer = analyzer      # media.face_analysis.FaceAnalyzer: embeddings, dense landmarks, adaptive thresholds
         self._max_open = max(1, max_open)
         self._entries: OrderedDict[tuple, _Entry] = OrderedDict()
         self._lock = threading.Lock()
@@ -293,13 +295,35 @@ class VideoFrameService:
         return data, out_w, out_h
 
     # ------------------------------------------------------------------ faces
-    def faces(self, value: str, result: FrameResult, threshold: float = 0.5) -> list[dict]:
+    def analyzed_faces(self, value: str, result: FrameResult, threshold: float = 0.5):
+        """Cached ``FaceAnalyzer`` output (left to right) for one decoded frame; None when no analyzer is configured."""
+        if self.analyzer is None:
+            return None
+        key = ("analysis", self._resolve(value).as_posix(), result.frame_index, result.timestamp_sec, round(float(threshold), 3),
+               self.analyzer.signature())
+        with self._cache_lock:
+            cached = self._detections.get(key)
+            if cached is not None:
+                self._detections.move_to_end(key)
+                return cached
+        faces = self.analyzer.analyze(result.image, float(threshold), detector=self.detector)
+        with self._cache_lock:
+            _lru_put(self._detections, key, faces, limit_entries=DETECTION_CACHE_ENTRIES)
+        return faces
+
+    def faces(self, value: str, result: FrameResult, threshold: float = 0.5, detail: str = "basic") -> list[dict]:
         """Every face of the frame, left to right: native-pixel box, 5-point landmarks, pose and confidence.
 
-        Read-only: unlike ``MediaService.detect_frame_faces`` nothing is written, so scrubbing can call it freely.
+        With a ``FaceAnalyzer`` (production) each face also carries ``detection_tier`` / ``landmark_validity`` and, with
+        ``detail="full"``, the embedding, thumbnail and dense landmarks. Read-only: nothing is written.
         """
         if self.detector is None:
             raise DomainError("DETECTOR_UNAVAILABLE", "Face detection is not configured", 503)
+        analyzed = self.analyzed_faces(value, result, threshold)
+        height, width = result.image.shape[:2]
+        if analyzed is not None:
+            from roop_3d.media.face_analysis import face_to_dict
+            return [face_to_dict(face, rank, result.frame_index, width, height, detail=detail) for rank, face in enumerate(analyzed)]
         key = (self._resolve(value).as_posix(), result.frame_index, result.timestamp_sec, round(float(threshold), 3))
         with self._cache_lock:
             cached = self._detections.get(key)
@@ -312,7 +336,6 @@ class VideoFrameService:
             detections, _ = scored_detect(result.image, threshold)
         else:
             detections = [(box, points, None) for box, points in self.detector.detect(result.image, threshold)[0]]
-        height, width = result.image.shape[:2]
         # Same order as face extraction (`face_extract`: by left edge), so face #n here is face #n there.
         ordered = sorted(detections, key=lambda item: float(item[0][0]))[:MAX_FACES]
         faces = []
@@ -321,8 +344,10 @@ class VideoFrameService:
             pose3d = as_pose3d((yaw, pitch, roll))
             x1, y1, x2, y2 = (float(v) for v in box)
             faces.append({
+                "face_id": f"f{result.frame_index}_{rank}",
                 "face_index": rank,                       # left edge, left to right: the rank `Use as source` / face extraction takes
                 "track_id": None,                         # a per-frame detection has no tracker; locking a face creates its track
+                "cluster_id": None,
                 "bbox": [round(x1, 1), round(y1, 1), round(x2, 1), round(y2, 1)],
                 "bbox_norm": [round(x1 / width, 5), round(y1 / height, 5), round(x2 / width, 5), round(y2 / height, 5)],
                 "kps_5": [[round(float(p[0]), 1), round(float(p[1]), 1)] for p in points],

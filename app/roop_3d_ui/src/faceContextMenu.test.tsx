@@ -63,7 +63,7 @@ describe('"Use Face From Frame" on-canvas context menu', () => {
   });
   afterEach(async () => { await act(async () => root.unmount()); host.remove(); document.body.innerHTML = ''; vi.useRealTimers(); vi.unstubAllGlobals(); });
 
-  it('right-clicking a face opens a menu with the three actions, labelled with the face\'s pose cell', async () => {
+  it('right-clicking a face opens a menu with the three extraction actions and the four Stage 12 target actions, labelled with the face\'s pose cell', async () => {
     await mount({ activeSourceId: 'alice', sources: [{ faceset_id: 'alice', name: 'Alice', item_count: 3 }] });
     expect(menuItems()).toHaveLength(0);
     await rightClickFace();
@@ -73,8 +73,12 @@ describe('"Use Face From Frame" on-canvas context menu', () => {
       'Use as Active Source Face',
       'Add to .fsz Faceset (Auto-Pose Cell [Yaw +28°, Pitch -16°] → right_down)',
       'Lock as Target Identity Cluster',
+      'Lock as Primary Target',
+      'Add This Angle to Target Reference BankLock a primary target first',
+      'Bind Specific Source / .fsz to This Person',
+      'Exclude / Ignore This Face in Current Segment',
     ]);
-    expect(items.every(item => !item.disabled)).toBe(true);
+    expect(items.filter(item => item.disabled).map(item => item.textContent)).toEqual([expect.stringContaining('Add This Angle')]);   // needs a lock first
     expect(host.ownerDocument.querySelector('.face-menu-title')!.textContent).toContain('Face 2');
   });
 
@@ -126,7 +130,7 @@ describe('"Use Face From Frame" on-canvas context menu', () => {
   it('the Target Faces bar action opens the same menu', async () => {
     await mount({ activeSourceId: 'alice', sources: [{ faceset_id: 'alice', name: 'Alice', item_count: 3 }] });
     await act(async () => (host.querySelector('[data-testid="tray-action"]') as HTMLButtonElement).click());
-    expect(menuItems()).toHaveLength(3);
+    expect(menuItems()).toHaveLength(7);
     const style = (host.ownerDocument.querySelector('.face-context-menu') as HTMLElement).style;
     expect([style.left, style.top]).toEqual(['40px', '60px']);             // anchored at the button
   });
@@ -148,7 +152,7 @@ describe('"Use Face From Frame" on-canvas context menu', () => {
     await act(async () => { document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' })); });
     expect(menuItems()).toHaveLength(0);
     await rightClickFace();
-    expect(menuItems()).toHaveLength(3);
+    expect(menuItems()).toHaveLength(7);
     await act(async () => { document.body.dispatchEvent(new Event('pointerdown', { bubbles: true })); });
     expect(menuItems()).toHaveLength(0);
     expect(extractCalls()).toEqual([]);

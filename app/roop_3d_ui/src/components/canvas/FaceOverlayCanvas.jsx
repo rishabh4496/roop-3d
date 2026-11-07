@@ -734,6 +734,17 @@ function toOverlayFace(match, meta) {
 
 const FRAME_CYAN = '#22d3ee', FRAME_LOCKED = '#34d399';
 const signed = value => `${value >= 0 ? '+' : '-'}${Math.abs(value).toFixed(0)}`;
+/** One decimal and never `-0.0`: the live pose pill (`#1 · Y: -34.2° P: +6.1° R: -2.0°`). */
+export const signed1 = value => { const v = Math.round(value * 10) / 10; return `${v < 0 ? '-' : '+'}${Math.abs(v).toFixed(1)}`; };
+
+/** Screen-space unit vectors of the head's roll axes (x right, y down) and of its facing direction, from a standard-frame pose. */
+export function poseAxes(pose) {
+  const rad = Math.PI / 180, yaw = pose.yaw * rad, pitch = pose.pitch * rad, roll = pose.roll * rad;
+  return {
+    x: [Math.cos(roll), Math.sin(roll)], y: [-Math.sin(roll), Math.cos(roll)],
+    z: [Math.sin(yaw) * Math.cos(pitch), -Math.sin(pitch)],        // where the nose points: + yaw = toward image right, + pitch = up
+  };
+}
 
 function pill(ctx, text, x, y, { fill, stroke, color, font = '600 10px ui-monospace, Menlo, Consolas, monospace' }) {
   ctx.save();
@@ -775,13 +786,27 @@ function drawFrameFaces(ctx, faces, { letterbox, hoveredFaceId, lockingId, showL
     if (showPose) {
       const attitude = facePose(face);
       if (attitude) {
-        const text = `Y ${signed(attitude.yaw)}° P ${signed(attitude.pitch)}°`;
+        const text = `#${face.rank + 1} · Y: ${signed1(attitude.yaw)}° P: ${signed1(attitude.pitch)}° R: ${signed1(attitude.roll)}°`;
         ctx.save(); ctx.font = '600 10px ui-monospace, Menlo, Consolas, monospace';
         const width = ctx.measureText(text).width + 10;
         ctx.restore();
         const left = Math.max(letterbox.offsetX, Math.min(box.x + box.w - width, letterbox.offsetX + letterbox.displayW - width));
         const below = Math.min(bounds.height - 18, box.y + box.h + 3);
         pill(ctx, text, left, below, { fill: 'rgba(8, 14, 16, 0.88)', stroke: 'rgba(232, 241, 242, 0.25)', color: '#e8f1f2' });
+      }
+    }
+
+    if (showPose && Array.isArray(face.landmarks5) && face.landmarks5[2]) {
+      // Subtle 3D pose axes at the nose tip: roll axes (red/green) and the facing direction (blue).
+      const attitude = facePose(face);
+      if (attitude) {
+        const origin = mapPointToPixels(face.landmarks5[2], letterbox), axes = poseAxes(attitude), length = Math.max(14, box.w * 0.32);
+        ctx.save(); ctx.lineWidth = 1.5; ctx.globalAlpha = 0.75; ctx.lineCap = 'round';
+        for (const [key, color] of [['x', '#f87171'], ['y', '#4ade80'], ['z', '#60a5fa']]) {
+          ctx.beginPath(); ctx.moveTo(origin.x, origin.y); ctx.lineTo(origin.x + axes[key][0] * length * (key === 'z' ? 1.25 : 0.8), origin.y + axes[key][1] * length * (key === 'z' ? 1.25 : 0.8));
+          ctx.strokeStyle = color; ctx.stroke();
+        }
+        ctx.restore();
       }
     }
 

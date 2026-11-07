@@ -24,6 +24,12 @@ export interface FrameFace {
   pose3d: { yaw: number; pitch: number; roll: number };
   pose_cell?: string;
   confidence: number | null;
+  /** Stage 12: frame-local id, persistent person cluster (rank-preserved: unchanged when the left-to-right order swaps). */
+  face_id?: string;
+  cluster_id?: number | null;
+  is_target?: boolean;
+  target_number?: number | null;
+  detection_tier?: 'primary' | 'profile_tolerant';
 }
 
 export interface FrameMeta {

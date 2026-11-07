@@ -43,7 +43,11 @@ class MediaService:
         self.settings = settings
         self._color_cache: dict = {}
         # Persistent decoders + frame/detection caches for timeline scrubbing (see media/frame_service.py).
-        self.frames = VideoFrameService(self.path, self.detector)
+        from roop_3d.faceset.recognizer import Recognizer
+        from roop_3d.faceset_loader import LandmarkEngine
+        from roop_3d.media.face_analysis import FaceAnalyzer
+        self.analyzer = FaceAnalyzer(self.detector, Recognizer(catalog), LandmarkEngine(root))
+        self.frames = VideoFrameService(self.path, self.detector, analyzer=self.analyzer)
 
     def path(self, value: str) -> Path:
         try:
