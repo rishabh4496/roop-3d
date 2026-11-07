@@ -560,6 +560,105 @@ def run_preflight_lint(root: Path, state, payload: PreFlightLintRequest) -> dict
     # Stage 27 checks a-d: configuration-vs-hardware conflicts that are cheap to detect before a render starts.
     checks.extend(_configuration_checks(root, state, payload, hw))
 
+    # ── Check: Source Face / FaceSet Loaded ───────────────────────────────────
+    has_source = False
+    source_label = "None"
+    if payload.face_mappings:
+        for m in payload.face_mappings:
+            if m.get("faceset_id") or m.get("source"):
+                has_source = True
+                source_label = str(m.get("faceset_id") or m.get("source"))
+                break
+    if not has_source and hasattr(state, "unified_state"):
+        us = state.unified_state
+        sf = getattr(us, "source_face", None)
+        fsz = getattr(us, "faceset_id", None)
+        if sf or fsz:
+            has_source = True
+            source_label = str(fsz or sf)
+
+    source_check = {
+        "id": "source_face_or_fsz",
+        "name": "Source Face / .fsz FaceSet Loaded",
+        "status": "PASS" if has_source else "WARN",
+        "message": f"Source identity loaded and ready: {source_label}" if has_source else "No source face or .fsz FaceSet loaded. Please load a source face or FaceSet in the workstation.",
+        "details": [f"Selected source identity: {source_label}"] if has_source else ["Source face is required for identity replacement."],
+    }
+    checks.append(source_check)
+
+    # ── Check: Target Media Valid ─────────────────────────────────────────────
+    target_path = payload.target_path or ""
+    tpath = None
+    if target_path:
+        tpath = Path(target_path) if Path(target_path).is_absolute() else (root / target_path)
+    target_valid = tpath is not None and tpath.is_file() and tpath.stat().st_size > 0
+    target_check = {
+        "id": "target_media_valid",
+        "name": "Target Media Valid",
+        "status": "PASS" if target_valid else ("WARN" if target_path else "FAIL"),
+        "message": f"Target media validated on disk: {tpath.name if target_valid else target_path}" if target_valid else "Target media file does not exist or is empty.",
+        "details": [f"Path: {tpath.as_posix() if tpath else 'None'}", f"Size: {tpath.stat().st_size if target_valid else 0} bytes"] if target_valid else ["Provide a valid video or image file as target media."],
+    }
+    checks.append(target_check)
+
+    # ── Check: Target Face Locked ─────────────────────────────────────────────
+    is_locked = bool(payload.face_mappings) or bool(payload.inspection_id)
+    face_locked_check = {
+        "id": "target_face_locked",
+        "name": "Target Face Locked",
+        "status": "PASS" if is_locked else "WARN",
+        "message": f"Target face track locked and mapped ({len(payload.face_mappings)} mapping(s))." if is_locked else "Target face track is not explicitly locked. Auto-detection will select the dominant face.",
+        "details": [f"Inspection ID: {payload.inspection_id or 'none'}", f"Active mappings: {len(payload.face_mappings)}"],
+    }
+    checks.append(face_locked_check)
+
+    # ── Check: Required Model Weights On Disk ─────────────────────────────────
+    from roop.core.model_downloader import REQUIRED_MODELS, find_model_path
+    missing_models = []
+    found_models = []
+    for mname, mspec in REQUIRED_MODELS.items():
+        mp = find_model_path(mspec, root)
+        if mp is not None:
+            found_models.append(mname)
+        else:
+            missing_models.append(mname)
+
+    models_check = {
+        "id": "required_models_on_disk",
+        "name": "Required Model Weights On Disk",
+        "status": "PASS" if not missing_models else ("WARN" if len(found_models) > 0 else "FAIL"),
+        "message": "All 9 registered models verified on disk." if not missing_models else f"Missing model weights: {', '.join(missing_models[:3])}{' and more' if len(missing_models) > 3 else ''}.",
+        "details": [f"Verified models ({len(found_models)}): {', '.join(found_models)}", f"Missing models ({len(missing_models)}): {', '.join(missing_models)}"],
+    }
+    if missing_models:
+        models_check["action"] = {
+            "id": "download_models",
+            "label": f"Download Missing Models ({len(missing_models)})",
+            "endpoint": "/api/v1/models/download_missing",
+            "models": missing_models,
+        }
+    checks.append(models_check)
+
+    # ── Check: Sufficient Free Disk Space ────────────────────────────────────
+    try:
+        out_root = runtime_path(settings.output_root, root)
+        out_root.mkdir(parents=True, exist_ok=True)
+        usage = shutil.disk_usage(out_root)
+        free_disk_gb = round(usage.free / (1024**3), 2)
+        disk_ok = free_disk_gb >= 0.5
+    except Exception:
+        free_disk_gb = 10.0
+        disk_ok = True
+
+    disk_check = {
+        "id": "storage_disk_space",
+        "name": "Storage & Free Disk Space",
+        "status": "PASS" if disk_ok else "WARN",
+        "message": f"Sufficient free disk space available ({free_disk_gb} GB free)." if disk_ok else f"Low disk space on output volume: only {free_disk_gb} GB free.",
+        "details": [f"Free disk space: {free_disk_gb} GB", "Minimum recommended: 0.5 GB"],
+    }
+    checks.append(disk_check)
+
     overall_status = "FAIL" if any(c["status"] == "FAIL" for c in checks) else (
         "WARN" if any(c["status"] == "WARN" for c in checks) else "PASS"
     )

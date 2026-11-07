@@ -291,6 +291,50 @@ def download(model_id: str, request: Request,
                              resumed=result.resumed)
 
 
+@router.get("/models/required_status")
+@router.get("/models/required-status")
+def models_required_status(request: Request) -> dict[str, Any]:
+    from roop.core.model_downloader import verify_all_required_models
+    return {
+        "status": "ok",
+        "models": verify_all_required_models(request.app.state.root),
+    }
+
+
+class DownloadMissingModelsRequest(Contract):
+    models: list[str] | None = None
+
+
+@router.post("/models/download_missing")
+@router.post("/models/download-missing")
+def download_missing_models_endpoint(
+    request: Request,
+    value: Annotated[DownloadMissingModelsRequest | None, Body()] = None,
+) -> dict[str, Any]:
+    from roop.core.model_downloader import REQUIRED_MODELS, download_model, find_model_path
+    req_models = value.models if (value and value.models) else list(REQUIRED_MODELS.keys())
+    results = []
+    root = request.app.state.root
+    dest_dir = root / "app/models"
+    dest_dir.mkdir(parents=True, exist_ok=True)
+
+    for mname in req_models:
+        mspec = REQUIRED_MODELS.get(mname)
+        if not mspec:
+            continue
+        existing = find_model_path(mspec, root)
+        if existing is not None:
+            results.append({"name": mspec.name, "status": "ALREADY_PRESENT", "path": str(existing)})
+            continue
+        try:
+            path = download_model(mspec.name, destination_dir=dest_dir, app_state=request.app.state)
+            results.append({"name": mspec.name, "status": "DOWNLOADED", "path": str(path)})
+        except Exception as error:
+            results.append({"name": mspec.name, "status": "FAILED", "error": str(error)})
+
+    return {"status": "ok", "results": results}
+
+
 @router.get("/facesets", response_model=list[FaceSetSummary])
 def get_facesets(request: Request) -> list[FaceSetSummary]:
     return facesets(request.app.state.root)

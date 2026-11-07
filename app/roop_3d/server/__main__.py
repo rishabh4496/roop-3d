@@ -8,6 +8,9 @@ import os
 import socket
 import sys
 
+from roop_3d.core.dll_injection import setup_environment
+setup_environment()
+
 import uvicorn
 
 from roop_3d.core.settings import Settings

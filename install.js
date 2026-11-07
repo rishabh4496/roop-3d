@@ -19,7 +19,7 @@ module.exports = {
     method: "shell.run",
     params: {
       path: "app/roop_3d_ui",
-      message: ["npm ci", "npm run build"],
+      message: ["npm ci", "npx --no-install vite build"],
       on: [{ event: "/(npm error|npm ERR!)/i", break: true }]
     }
   }, {

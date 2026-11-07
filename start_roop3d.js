@@ -13,10 +13,20 @@ module.exports = {
       params: { uri: "install.js" }
     },
     {
+      when: "{{!exists('app/roop_3d_ui/node_modules') || !exists('app/roop_3d_ui/dist')}}",
       method: "shell.run",
       params: {
         path: "app/roop_3d_ui",
-        message: ["npm run build"]
+        message: ["npm ci", "npx --no-install vite build"],
+        on: [{ event: "/(npm error|npm ERR!)/i", break: true }]
+      }
+    },
+    {
+      when: "{{exists('app/roop_3d_ui/node_modules') && exists('app/roop_3d_ui/dist')}}",
+      method: "shell.run",
+      params: {
+        path: "app/roop_3d_ui",
+        message: ["npx --no-install vite build"]
       }
     },
     {

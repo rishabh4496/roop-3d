@@ -5,6 +5,7 @@
 **/venv/
 **/env/
 app/env/
+app/env
 
 # Python bytecode & test caches
 **/__pycache__/
@@ -25,6 +26,7 @@ test-results/
 
 # Heavy weights & compiled TensorRT engines
 app/models/
+app/models
 models/
 roop_3d/models/
 roop_3d/models/cache/
@@ -41,6 +43,7 @@ engines/
 
 # Local facesets & media caches
 app/facesets/
+app/facesets
 facesets/
 *.fsz
 

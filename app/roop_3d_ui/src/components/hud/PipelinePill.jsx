@@ -190,6 +190,7 @@ export default function PipelinePill({
   const progress = liveProgress || activeJob?.progress || null;
   const currentStage = progress?.stage || (activeJob?.state === 'running' ? 'warp' : 'idle');
   const currentFps = progress?.fps || 0;
+  const gpuUtil = liveTelemetry?.gpu_utilization_pct ?? gpu?.gpu_utilization_pct ?? (gpu ? vramStats.usedPct : 0);
   const bottleneck = useMemo(
     () => computeBottleneck(liveTelemetry, currentFps, currentStage),
     [liveTelemetry, currentFps, currentStage]
@@ -210,17 +211,15 @@ export default function PipelinePill({
         aria-expanded={expanded}
       >
         <span className="pill-dot-pulse" style={{ background: wsConnected ? '#00f5d4' : '#dfb977' }} />
-        <span className="pill-badge" style={{ color: provider.color }}>{provider.badge}</span>
+        <span className="pill-badge" style={{ color: provider.color }}>{provider.type === 'tensorrt' ? 'TensorRT FP16' : provider.badge}</span>
+        <span className="pill-sep">|</span>
+        <span className="pill-gpu-util">GPU {gpuUtil}%</span>
         <span className="pill-sep">|</span>
         <span className="pill-metric">
           {vramStats.totalMib > 0 ? `${vramStats.formattedUsed} / ${vramStats.formattedTotal}` : `${liveTelemetry?.logical_cpu_count || 4} Cores`}
         </span>
-        {currentFps > 0 && (
-          <>
-            <span className="pill-sep">|</span>
-            <span className="pill-fps">{currentFps.toFixed(1)} FPS</span>
-          </>
-        )}
+        <span className="pill-sep">|</span>
+        <span className="pill-fps">{currentFps > 0 ? `${currentFps.toFixed(1)} FPS` : '0.0 FPS'}</span>
         <span className="pill-sep">|</span>
         <span className="pill-stage">{currentStage.toUpperCase()}</span>
         <span className="pill-chevron">{expanded ? '▲' : '▼'}</span>

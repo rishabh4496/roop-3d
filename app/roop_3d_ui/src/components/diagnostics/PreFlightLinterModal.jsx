@@ -59,7 +59,17 @@ export default function PreFlightLinterModal({
     const patch = value => setActionState(previous => ({ ...previous, [check.id]: value }));
     patch({ busy: true, message: '', error: false });
     try {
-      if (action.id === 'optimize_models') {
+      if (action.id === 'download_models') {
+        patch({ busy: true, message: 'Downloading required models…', error: false });
+        const result = await post(action.endpoint, { models: action.models });
+        const downloaded = (result.results || []).filter(item => item.status === 'DOWNLOADED' || item.status === 'ALREADY_PRESENT');
+        const failed = (result.results || []).filter(item => item.status === 'FAILED');
+        patch({
+          busy: false,
+          error: failed.length > 0,
+          message: `${downloaded.length} model(s) ready` + (failed.length ? `; failed: ${failed.map(f => f.name).join(', ')}` : '.'),
+        });
+      } else if (action.id === 'optimize_models') {
         const result = await post(action.endpoint, { models: action.models });
         const failed = (result.results || []).filter(item => item.state !== 'CONVERTED');
         patch({ busy: false, error: failed.length > 0, message: `${result.converted} model(s) converted` + (failed.length ? `; ${failed.map(item => `${item.model}: ${item.state}`).join(', ')}` : '.') });
