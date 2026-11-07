@@ -31,6 +31,7 @@ class PoseBlendGeometry:
     flat_pixels: np.ndarray
     flat_visible_faces: np.ndarray
     mesh_visible_faces: np.ndarray
+    sampling_device: str = "cpu"
 
 
 @dataclass(frozen=True)
@@ -65,14 +66,16 @@ def reblend(projection: PoseBlendResult, weight: float) -> PoseBlendResult:
         homogeneous = vertices @ geometry.camera_matrix.T
         pixels = homogeneous[:, :2] / homogeneous[:, 2:3]
         image, alpha, faces = rasterize(geometry.texture, geometry.texture_coverage, pixels, vertices,
-            geometry.uv, geometry.faces, tps.shape[:2], perspective=True)
+            geometry.uv, geometry.faces, tps.shape[:2], perspective=True,
+            sampling_device=geometry.sampling_device)
     image[alpha <= 0] = 0
     return replace(projection, image=image, coverage=alpha, blend_pixels=pixels, visible_faces=faces)
 
 
 def rasterize(texture: np.ndarray, texture_coverage: np.ndarray, pixels: np.ndarray,
               camera_vertices: np.ndarray, uv: np.ndarray, faces: np.ndarray,
-              shape: tuple[int, int], *, perspective: bool) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+              shape: tuple[int, int], *, perspective: bool,
+              sampling_device: str = "cpu") -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Bounded triangle rasterizer. UVs use image origin (top-left), in pixels."""
     h, w = shape
     depth = np.full((h, w), np.inf, np.float64)
@@ -113,8 +116,11 @@ def rasterize(texture: np.ndarray, texture_coverage: np.ndarray, pixels: np.ndar
         owner[y0:y1 + 1, x0:x1 + 1][valid] = face_index
         map_x[y0:y1 + 1, x0:x1 + 1][valid] = sampled[..., 0][valid]
         map_y[y0:y1 + 1, x0:x1 + 1][valid] = sampled[..., 1][valid]
-    image = cv2.remap(texture, map_x, map_y, cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT)
-    coverage = cv2.remap(texture_coverage, map_x, map_y, cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT)
+    from roop_3d.reconstruction.uv_synthesizer import remap_points
+    image = remap_points(texture, map_x.reshape(-1), map_y.reshape(-1), cv2.INTER_LINEAR,
+                         device=sampling_device).reshape(h, w, *texture.shape[2:])
+    coverage = remap_points(texture_coverage, map_x.reshape(-1), map_y.reshape(-1), cv2.INTER_LINEAR,
+                            device=sampling_device).reshape(h, w)
     coverage *= np.isfinite(depth)
     visible = np.unique(owner[owner >= 0])
     return image, np.clip(coverage, 0, 1).astype(np.float32), faces[visible]
@@ -124,12 +130,16 @@ class PoseBlendProjector:
     MAX_SIZE = 512
 
     def __init__(self, *, vertices: np.ndarray | None = None, faces: np.ndarray | None = None,
-                 anchors: np.ndarray | None = None, geometry: str = "ESTIMATED_CANONICAL_PROXY_68") -> None:
+                 anchors: np.ndarray | None = None, geometry: str = "ESTIMATED_CANONICAL_PROXY_68",
+                 sampling_device: str = "cpu") -> None:
         # Default: the generic canonical proxy (unchanged behaviour). Stage 4 "3D Pose" mode supplies the SOURCE
         # identity's own geometry and 5 anchors (same mesh frame: x right, y down, z toward the viewer).
         if (vertices is None) != (faces is None) or (vertices is None) != (anchors is None):
             raise DomainError('POSE_GEOMETRY_INVALID', 'vertices, faces and anchors must be supplied together', 422)
         self.geometry = geometry
+        if sampling_device not in ("cpu", "cuda"):
+            raise ValueError("Sampling device must be cpu or cuda")
+        self.sampling_device = sampling_device
         if vertices is None:
             mesh = build_canonical_head_mesh(68)
             self.vertices = mesh.vertices.copy()
@@ -154,7 +164,7 @@ class PoseBlendProjector:
         self.uv = atlas.transform_points(self.vertices[:, :2] * 5)
 
     @classmethod
-    def from_identity_asset(cls, asset) -> "PoseBlendProjector":
+    def from_identity_asset(cls, asset, *, sampling_device: str = "cpu") -> "PoseBlendProjector":
         """Same renderer, driven by the Stage 3 source identity's geometry (coarse proxy-resolution mesh)."""
         from roop_3d.reconstruction.multiview_fit import identity_template
         if asset.manifest.settings.get("template", "canonical") != "canonical":
@@ -165,7 +175,9 @@ class PoseBlendProjector:
         count = len(coarse.vertices)
         vertices = asset.vertices[:count].astype(np.float64)
         anchors = np.vstack([vertices[36:42].mean(axis=0), vertices[42:48].mean(axis=0), vertices[30], vertices[48], vertices[54]])
-        return cls(vertices=vertices, faces=coarse.faces, anchors=anchors, geometry="IDENTITY_ASSET_" + asset.manifest.build_key[:12])
+        return cls(vertices=vertices, faces=coarse.faces, anchors=anchors,
+                   geometry="IDENTITY_ASSET_" + asset.manifest.build_key[:12],
+                   sampling_device=sampling_device)
 
     def render(self, crop: np.ndarray, observed: np.ndarray, weight: float) -> PoseBlendResult:
         image_bgr(crop)
@@ -215,8 +227,10 @@ class PoseBlendProjector:
         mesh_pixels = projected.reshape(-1, 2)
         flat_camera = np.column_stack((flat_pixels, np.ones(len(flat_pixels))))
         uv = self.uv * scale
-        tps_image, tps_alpha, flat_visible = rasterize(texture, valid, flat_pixels, flat_camera, uv, self.faces, (h, w), perspective=False)
-        mesh_image, mesh_alpha, visible = rasterize(texture, valid, mesh_pixels, camera_vertices, uv, self.faces, (h, w), perspective=True)
+        tps_image, tps_alpha, flat_visible = rasterize(texture, valid, flat_pixels, flat_camera, uv, self.faces,
+            (h, w), perspective=False, sampling_device=self.sampling_device)
+        mesh_image, mesh_alpha, visible = rasterize(texture, valid, mesh_pixels, camera_vertices, uv, self.faces,
+            (h, w), perspective=True, sampling_device=self.sampling_device)
         if not np.any(tps_alpha > .5) or not np.any(mesh_alpha > .5):
             raise DomainError('POSE_VISIBILITY_EMPTY', 'No observed face surface is available for projection', 422)
         depth = float(np.mean(camera_vertices[:, 2]))
@@ -224,6 +238,6 @@ class PoseBlendProjector:
                                                (flat_pixels[:, 1] - h / 2) / focal * depth,
                                                np.full(len(flat_pixels), depth)))
         geometry = PoseBlendGeometry(texture, valid, flat_camera_vertices, camera_vertices,
-            camera, uv, self.faces, flat_pixels, flat_visible, visible)
+            camera, uv, self.faces, flat_pixels, flat_visible, visible, self.sampling_device)
         return reblend(PoseBlendResult(tps_image, tps_alpha, tps_image, tps_alpha,
             mesh_image, mesh_alpha, mesh_pixels, visible, error, geometry, mesh_pixels), weight)

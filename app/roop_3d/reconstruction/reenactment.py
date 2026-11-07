@@ -411,6 +411,7 @@ class ReenactmentEngine:
     def __init__(self, rig: IdentityRig, settings: ReenactmentSettings | None = None):
         self.rig = rig
         self.s = settings or ReenactmentSettings()
+        self.sampling_device = "cpu"
         self.reset()
 
     # ------------------------------------------------------------------ state
@@ -647,8 +648,10 @@ class ReenactmentEngine:
             uv = (bary[:, :1] * rig.uv_pixels[tri[:, 0]] + bary[:, 1:2] * rig.uv_pixels[tri[:, 1]]
                   + bary[:, 2:3] * rig.uv_pixels[tri[:, 2]])
             from roop_3d.reconstruction.uv_synthesizer import remap_points
-            image[ys, xs] = remap_points(rig.texture, uv[:, 0], uv[:, 1], cv2.INTER_LINEAR).reshape(-1, 3)
-            coverage[ys, xs] = remap_points(rig.texture_coverage, uv[:, 0], uv[:, 1], cv2.INTER_LINEAR).reshape(-1) * ok
+            image[ys, xs] = remap_points(rig.texture, uv[:, 0], uv[:, 1], cv2.INTER_LINEAR,
+                                         device=self.sampling_device).reshape(-1, 3)
+            coverage[ys, xs] = remap_points(rig.texture_coverage, uv[:, 0], uv[:, 1], cv2.INTER_LINEAR,
+                                             device=self.sampling_device).reshape(-1) * ok
         inside = footprint
         support = float(coverage[inside].mean()) if inside.any() else 0.0
         coverage = coverage * cv2.GaussianBlur(footprint.astype(np.float32), (0, 0), 1.0)

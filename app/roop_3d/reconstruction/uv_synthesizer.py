@@ -27,17 +27,54 @@ from roop_3d.reconstruction.geometry_types import (
 )
 
 
-def remap_points(image: np.ndarray, xs: np.ndarray, ys: np.ndarray, interpolation: int = cv2.INTER_LINEAR) -> np.ndarray:
+def remap_points(image: np.ndarray, xs: np.ndarray, ys: np.ndarray, interpolation: int = cv2.INTER_LINEAR,
+                 *, device: str = "cpu") -> np.ndarray:
     """Sample `image` at N sub-pixel points. `cv2.remap` rejects maps with >= 32767 rows, so the points are laid
-    out as a (ceil(N/1024), 1024) grid; returns (N,) or (N, C)."""
+    out as a (ceil(N/1024), 1024) grid; returns (N,) or (N, C). CUDA uses
+    ``torch.grid_sample`` when available and otherwise keeps the CPU reference path."""
+    if device not in ("cpu", "cuda"):
+        raise ValueError("Sampling device must be cpu or cuda")
     xs, ys = np.asarray(xs, np.float32).reshape(-1), np.asarray(ys, np.float32).reshape(-1)
     n = len(xs)
+    if n == 0:
+        return np.empty((0, *np.asarray(image).shape[2:]), dtype=np.asarray(image).dtype)
     width = 1024
     rows = max(1, -(-n // width))
     gx = np.zeros(rows * width, np.float32)
     gy = np.zeros(rows * width, np.float32)
     gx[:n], gy[:n] = xs, ys
-    out = cv2.remap(image, gx.reshape(rows, width), gy.reshape(rows, width), interpolation,
+    source = np.asarray(image)
+    if device == "cuda":
+        try:
+            import torch
+            import torch.nn.functional as functional
+            if torch.cuda.is_available():
+                height, image_width = source.shape[:2]
+                x = np.zeros_like(gx) if image_width <= 1 else gx * (2.0 / (image_width - 1)) - 1.0
+                y = np.zeros_like(gy) if height <= 1 else gy * (2.0 / (height - 1)) - 1.0
+                x[n:], y[n:] = 2.0, 2.0
+                grid = torch.as_tensor(np.stack((x, y), axis=-1).reshape(1, rows, width, 2),
+                                       dtype=torch.float32, device="cuda")
+                pixels = torch.as_tensor(source, dtype=torch.float32, device="cuda")
+                if pixels.ndim == 2:
+                    pixels = pixels[None, None]
+                    single_channel = True
+                else:
+                    pixels = pixels.permute(2, 0, 1)[None]
+                    single_channel = False
+                mode = "nearest" if interpolation == cv2.INTER_NEAREST else "bilinear"
+                sampled = functional.grid_sample(pixels, grid, mode=mode, padding_mode="zeros",
+                                                align_corners=True)[0].permute(1, 2, 0).cpu().numpy()
+                if single_channel:
+                    sampled = sampled[..., 0]
+                if source.dtype == np.uint8:
+                    sampled = np.clip(np.rint(sampled), 0, 255).astype(np.uint8)
+                else:
+                    sampled = sampled.astype(source.dtype, copy=False)
+                return sampled.reshape(rows * width, *sampled.shape[2:])[:n]
+        except (ImportError, RuntimeError, ValueError):
+            pass
+    out = cv2.remap(source, gx.reshape(rows, width), gy.reshape(rows, width), interpolation,
                     borderMode=cv2.BORDER_CONSTANT, borderValue=0)
     return out.reshape(rows * width, *out.shape[2:])[:n]
 

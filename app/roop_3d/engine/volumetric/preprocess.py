@@ -48,6 +48,33 @@ def aligned_crop(image: np.ndarray, landmarks5: np.ndarray, size: int = 128) -> 
     return AlignedCrop(crop, matrix, cv2.invertAffineTransform(matrix))
 
 
+def roll_compensated_aligned_crop(image: np.ndarray, landmarks5: np.ndarray, roll: float, size: int = 128,
+                                 *, compensation: np.ndarray | None = None) -> AlignedCrop:
+    """Counter-rotate a target face around its eye midpoint before canonical alignment.
+
+    The returned transforms still map exactly between the original full frame and the
+    canonical crop, so the compositor and 3D projector need no special roll handling.
+    ``compensation`` may be a precomputed Stage 13 affine for this roll and center.
+    """
+    points = np.asarray(landmarks5, np.float64)
+    if points.shape != (5, 2) or not np.isfinite(points).all() or not np.isfinite(roll):
+        raise DomainError("LANDMARKS_INVALID", "Roll compensation requires five finite landmarks and a finite roll", 422)
+    image_bgr(image)
+    center = tuple(float(v) for v in points[:2].mean(axis=0))
+    rotation = (np.asarray(compensation, np.float64) if compensation is not None
+                else cv2.getRotationMatrix2D(center, -float(np.clip(roll, -180.0, 180.0)), 1.0))
+    if rotation.shape != (2, 3) or not np.isfinite(rotation).all():
+        raise DomainError("ALIGNMENT_INVALID", "Roll compensation matrix must be finite 2x3 affine", 422)
+    height, width = image.shape[:2]
+    upright = cv2.warpAffine(image, rotation, (width, height), flags=cv2.INTER_LINEAR,
+                             borderMode=cv2.BORDER_REFLECT_101)
+    upright_points = transform_points(points, rotation)
+    aligned = aligned_crop(upright, upright_points, size)
+    composed = (np.vstack((aligned.matrix, (0.0, 0.0, 1.0)))
+                @ np.vstack((rotation, (0.0, 0.0, 1.0))))[:2]
+    return AlignedCrop(aligned.image, composed, cv2.invertAffineTransform(composed))
+
+
 def landmark_crop(image: np.ndarray, points: np.ndarray, size: int, expansion: float = 1.5,
                   vertical_shift: float = -0.1) -> AlignedCrop:
     """LivePortrait crop: eye-to-mouth axis, rotated point extents, forehead margin."""

@@ -594,6 +594,29 @@ class MasterPipelineRunner:
                 # Show the saved position immediately; inference replays the earlier frames to rebuild tracker state.
                 report_progress(JobProgress(frame=checkpoint.completed_frame + 1, total_frames=total_frames, stage="resume"))
 
+            angle_scan = getattr(session, "scan_angle_trajectories", None)
+            install_angle_scan = getattr(session, "set_angle_trajectories", None)
+            if callable(angle_scan) and callable(install_angle_scan):
+                media_info = self.media.probe(record.request.target_path)
+                try:
+                    scan_fps = float(media_info.fps) if media_info.fps else 30.0
+                except (TypeError, ValueError):
+                    scan_fps = 30.0
+
+                def scan_progress(scanned: int) -> None:
+                    self._check_control(control, checkpoint, last_completed)
+                    if scanned % 30 == 0 or scanned == total_frames:
+                        reported = min(scanned, total_frames) if total_frames is not None else scanned
+                        report_progress(JobProgress(frame=reported, total_frames=total_frames, stage="angle_scan"))
+
+                trajectories = angle_scan(target, numeric_ids, fps=scan_fps, hdr_policy=hdr_policy,
+                    min_cutoff=settings.temporal_min_cutoff, beta=settings.temporal_beta,
+                    derivative_cutoff=settings.temporal_d_cutoff, on_frame=scan_progress)
+                install_angle_scan(trajectories)
+                if total_frames is None:
+                    report_progress(JobProgress(frame=max((len(items) for items in trajectories.values()), default=0),
+                                                total_frames=None, stage="angle_scan"))
+
             reader = VideoReader(target, hardware="auto", hdr_policy=hdr_policy)
             frames = reader.frames()
             iteration_end = time.perf_counter()
@@ -608,6 +631,8 @@ class MasterPipelineRunner:
                     parameters = record.request.parameters_at(decoded.index) if record.request.workstation_parameters or record.request.parameter_curves else None
                     if hasattr(session, 'set_frame_timestamp'):
                         session.set_frame_timestamp(float(decoded.timestamp.seconds))
+                    if hasattr(session, 'set_angle_frame'):
+                        session.set_angle_frame(decoded.index)
                     result = (session.infer_frame(decoded.image, **parameters.inference_options())
                               if parameters else session.infer_frame(decoded.image))
                     if identity_report is not None:

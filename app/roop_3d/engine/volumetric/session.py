@@ -5,7 +5,8 @@ and its occlusion/segmentation logic remain Stage 09 work.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from pathlib import Path
 import threading
 import time
 from collections.abc import Mapping
@@ -14,7 +15,7 @@ import cv2
 import numpy as np
 
 from roop_3d.core.errors import DomainError
-from roop_3d.engine.detection.face_tracker import FaceTracker, TrackedFace
+from roop_3d.engine.detection.face_tracker import FaceObservation, FaceTracker, TrackedFace
 from roop_3d.engine.runtime import RuntimeConfig, image_bgr
 from roop_3d.engine.volumetric.identity_swapper import IdentitySwapper, SwapResult
 from roop_3d.engine.volumetric.preprocess import AlignedCrop, landmark_crop, transform_points
@@ -87,6 +88,33 @@ def swapped_portrait(portrait: AlignedCrop, swap: SwapResult) -> np.ndarray:
     return np.clip(fake * weight + portrait.image * (1 - weight), 0, 255).astype(np.uint8)
 
 
+def profile_aware_mask(shape: tuple[int, int], landmarks5: np.ndarray, yaw: float) -> np.ndarray:
+    """Tighten the far cheek edge for turned faces while leaving the near side untouched."""
+    height, width = shape
+    result = np.ones((height, width), np.float32)
+    if abs(float(yaw)) <= 35.0 or width < 16 or height < 16:
+        return result
+    points = np.asarray(landmarks5, np.float64)
+    if points.shape != (5, 2) or not np.isfinite(points).all():
+        return result
+    nose_x = float(points[2, 0])
+    eye_distance = max(1.0, float(np.linalg.norm(points[1] - points[0])))
+    # The far cheek silhouette sits about two thirds of an inter-ocular distance past the bridge.
+    # A cosine feather keeps the bridge and eye coverage continuous at the cutoff.
+    feather = max(4.0, width * 0.07)
+    if yaw > 0:
+        edge = nose_x - 0.65 * eye_distance
+        x = np.arange(width, dtype=np.float32)
+        ramp = np.clip((x - (edge - feather)) / feather, 0.0, 1.0)
+    else:
+        edge = nose_x + 0.65 * eye_distance
+        x = np.arange(width, dtype=np.float32)
+        ramp = np.clip(((edge + feather) - x) / feather, 0.0, 1.0)
+    ramp = 0.5 - 0.5 * np.cos(np.pi * ramp)
+    result *= ramp[None, :]
+    return result
+
+
 class ReferencePipeline:
     def __init__(self, catalog: ModelCatalog | None = None, config: RuntimeConfig = RuntimeConfig()):
         self.catalog, self.config = catalog or ModelCatalog(), config
@@ -112,6 +140,8 @@ class ReferencePipeline:
         self.rig_status: dict[str, dict] = {}
         self.reenactors: dict[int, ReenactmentEngine] = {}
         self.pose_projectors: dict[str, PoseBlendProjector] = {}
+        self.angle_trajectories: dict[int, tuple[Any, ...]] = {}
+        self.angle_frame_index: int | None = None
         self.reenactment_settings = ReenactmentSettings()
         register(self, "release_session")
 
@@ -219,6 +249,206 @@ class ReferencePipeline:
             self.tracker.timestamp_seconds = seconds
         self.compositor.timestamp_seconds = seconds
 
+    def set_angle_trajectories(self, trajectories: Mapping[int, tuple[Any, ...]]) -> None:
+        """Install the Stage 13 scan before rendering begins; keys are replayed tracker IDs."""
+        if any(type(track_id) is not int or track_id < 0 for track_id in trajectories):
+            raise ValueError("Angle trajectory IDs must be nonnegative integers")
+        self.angle_trajectories = {track_id: tuple(frames) for track_id, frames in trajectories.items()}
+
+    def set_angle_frame(self, frame_index: int) -> None:
+        if type(frame_index) is not int or frame_index < 0:
+            raise ValueError("Angle scan frame index must be a nonnegative integer")
+        self.angle_frame_index = frame_index
+
+    def scan_angle_trajectories(self, video_path, track_ids: set[int], *, fps: float = 30.0,
+                                hdr_policy: str = "tonemap_sdr", min_cutoff: float = 0.15,
+                                beta: float = 0.04, derivative_cutoff: float = 1.0,
+                                on_frame=None) -> dict[int, tuple[Any, ...]]:
+        """Run Stage A/B/C over the video, then reset association state for deterministic render replay."""
+        if not self.prepared or self.tracker is None:
+            raise DomainError("SESSION_NOT_PREPARED", "Prepare a session before scanning target angles", 409)
+        if any(type(track_id) is not int or track_id < 0 for track_id in track_ids):
+            raise ValueError("Angle scan IDs must be nonnegative integers")
+        from roop_3d.angle_tracker import (AngleDetection, AngleTrajectoryTracer,
+                                           optical_flow_landmarks_3d)
+        from roop_3d.faceset_loader import LandmarkEngine
+        from roop_3d.identity.target_lock import BankEntry
+        from roop_3d.media.video_reader import VideoReader
+
+        detections: list[dict[int, AngleDetection]] = []
+        barriers: list[set[int]] = []
+        flow_refinements: dict[tuple[int, int, int], dict[int, np.ndarray]] = {}
+        last_detection: dict[int, AngleDetection] = {}
+        last_gray: dict[int, np.ndarray] = {}
+        pending_gray: dict[int, list[np.ndarray]] = {}
+        flow_scale = 1.0
+        landmark_engine = LandmarkEngine(root=Path(__file__).resolve().parents[3])
+        has_landmarks68 = landmark_engine.has_68
+        reader = VideoReader(video_path, hardware="auto", hdr_policy=hdr_policy)
+        frames = reader.frames()
+        try:
+            for frame_index, decoded in enumerate(frames):
+                if decoded.image is None:
+                    detections.append({})
+                    barriers.append(set(track_ids))
+                    continue
+                gray = cv2.cvtColor(decoded.image, cv2.COLOR_BGR2GRAY)
+                flow_scale = min(1.0, 640.0 / max(gray.shape))
+                flow_image = (cv2.resize(gray, None, fx=flow_scale, fy=flow_scale,
+                                          interpolation=cv2.INTER_AREA)
+                              if flow_scale < 1.0 else gray)
+                self.set_frame_timestamp(float(decoded.timestamp.seconds))
+                tracked_faces = self.tracker.process(decoded.image)
+                frame_detections: dict[int, AngleDetection] = {}
+                frame_barriers = set(track_ids) if self.tracker.scene_cut else set()
+                if self.tracker.scene_cut:
+                    last_detection.clear()
+                    last_gray.clear()
+                    pending_gray.clear()
+                for tracked in tracked_faces:
+                    if tracked.track_id not in track_ids:
+                        continue
+                    face = tracked.observation
+                    if not tracked.swap_allowed:
+                        frame_barriers.add(tracked.track_id)
+                        last_detection.pop(tracked.track_id, None)
+                        last_gray.pop(tracked.track_id, None)
+                        pending_gray.pop(tracked.track_id, None)
+                        continue
+                    from roop_3d.core.pose import as_pose3d
+                    pose = as_pose3d(face.pose).as_tuple()
+                    landmarks68 = (landmark_engine.landmarks68(decoded.image, face.box)
+                                   if has_landmarks68 else None)
+                    frame_detections[tracked.track_id] = AngleDetection(
+                        face.box, face.landmarks5, pose, face.embedding,
+                        landmarks68, face.landmarks106, tracked.confidence, frame_index)
+                for track_id, current in frame_detections.items():
+                    previous = last_detection.get(track_id)
+                    missed = pending_gray.pop(track_id, [])
+                    gap = frame_index - previous.frame_index - 1 if previous is not None else 0
+                    if (previous is not None and previous.landmarks68_3d is not None
+                            and current.landmarks68_3d is not None and 1 <= gap <= 8
+                            and len(missed) == gap and track_id in last_gray):
+                        images = [last_gray[track_id], *missed, flow_image]
+
+                        def flow(before, after, points):
+                            scaled = points.copy()
+                            scaled[:, :2] *= flow_scale
+                            moved = optical_flow_landmarks_3d(before, after, scaled)
+                            moved[:, :2] /= flow_scale
+                            return moved
+
+                        try:
+                            forward = {}
+                            moved = previous.landmarks68_3d.copy()
+                            for step in range(1, gap + 1):
+                                moved = flow(images[step - 1], images[step], moved)
+                                forward[step] = moved.copy()
+                            backward = {}
+                            moved = current.landmarks68_3d.copy()
+                            for step in range(gap, 0, -1):
+                                moved = flow(images[step + 1], images[step], moved)
+                                backward[step] = moved.copy()
+                            refinements = {}
+                            for step in range(1, gap + 1):
+                                amount = step / (gap + 1)
+                                points = (1.0 - amount) * forward[step] + amount * backward[step]
+                                points[:, 2] = ((1.0 - amount) * previous.landmarks68_3d[:, 2]
+                                                + amount * current.landmarks68_3d[:, 2])
+                                refinements[previous.frame_index + step] = points.astype(np.float32)
+                            flow_refinements[(track_id, previous.frame_index, frame_index)] = refinements
+                        except (ValueError, cv2.error):
+                            pass
+                    last_detection[track_id] = current
+                    last_gray[track_id] = flow_image.copy()
+                for track_id in track_ids:
+                    if track_id in frame_detections:
+                        continue
+                    if track_id in frame_barriers:
+                        last_detection.pop(track_id, None)
+                        last_gray.pop(track_id, None)
+                        pending_gray.pop(track_id, None)
+                        continue
+                    previous = last_detection.get(track_id)
+                    if (previous is not None and previous.landmarks68_3d is not None
+                            and frame_index - previous.frame_index <= 8):
+                        pending_gray.setdefault(track_id, []).append(flow_image.copy())
+                    else:
+                        pending_gray.pop(track_id, None)
+                detections.append(frame_detections)
+                barriers.append(frame_barriers)
+                if on_frame is not None:
+                    on_frame(frame_index + 1)
+        finally:
+            frames.close()
+            self.tracker.reset_tracking()
+            self.angle_frame_index = None
+
+        tracer = AngleTrajectoryTracer(min_cutoff=min_cutoff, beta=beta,
+                                       derivative_cutoff=derivative_cutoff)
+        trajectories: dict[int, tuple[Any, ...]] = {}
+        for track_id in sorted(track_ids):
+            output: list[Any] = [None] * len(detections)
+            references: list[BankEntry] = []
+            for frame_index, frame in enumerate(detections):
+                face = frame.get(track_id)
+                if face is None:
+                    continue
+                if all(np.hypot(face.pose[0] - item.yaw, face.pose[1] - item.pitch) >= 12.0
+                       for item in references):
+                    references.append(BankEntry(face.embedding.copy(), face.pose[0], face.pose[1],
+                                                face.pose[2], frame_index, face.bbox.tolist(), "scan"))
+                    if len(references) >= 12:
+                        break
+            start = 0
+            for boundary in [index for index, row in enumerate(barriers) if track_id in row] + [len(detections)]:
+                if boundary > start:
+                    sequence = [[row[track_id]] if track_id in row else []
+                                for row in detections[start:boundary]]
+                    if any(sequence):
+                        def gap_flow(left, right, _left_points, _right_points):
+                            return flow_refinements.get((track_id, start + left, start + right), {})
+
+                        result = tracer.scan(sequence, reference_bank=references, fps=fps,
+                                             gap_flow=gap_flow)
+                        for offset, point in enumerate(result.target_frames):
+                            if point is not None:
+                                output[start + offset] = replace(point, frame_index=start + offset,
+                                    track_id=track_id, alignment_matrix=point.alignment_matrix.copy())
+                # A scene-cut frame may already contain the reacquired face. Keep that observation
+                # as the first point of a fresh segment; explicitly withheld/missing frames stay empty.
+                start = (boundary if boundary < len(detections) and track_id in detections[boundary]
+                         else boundary + 1)
+            trajectories[track_id] = tuple(output)
+        return trajectories
+
+    def _apply_angle_trajectories(self, faces: tuple[TrackedFace, ...]) -> tuple[TrackedFace, ...]:
+        frame_index = self.angle_frame_index
+        if frame_index is None or not self.angle_trajectories:
+            return faces
+        from roop_3d.core.pose import as_pose3d
+        by_id = {item.track_id: item for item in faces}
+        for track_id, trajectory in self.angle_trajectories.items():
+            if frame_index >= len(trajectory):
+                continue
+            point = trajectory[frame_index]
+            if point is None or point.landmarks106 is None or point.embedding is None:
+                continue
+            current = by_id.get(track_id)
+            pose = as_pose3d(point.pose, frame="standard").legacy_tuple()
+            if current is None:
+                observation = FaceObservation(point.bbox.copy(), point.landmarks5.copy(),
+                    point.landmarks106.copy(), point.embedding.copy(), pose)
+                by_id[track_id] = TrackedFace(track_id, observation, 1,
+                    self.tracker.scene_id if self.tracker is not None else 0,
+                    state="TRACKED", confidence=min(0.65, float(point.confidence)), swap_allowed=True)
+                continue
+            observation = replace(current.observation, box=point.bbox.copy(),
+                landmarks5=point.landmarks5.copy(), landmarks106=point.landmarks106.copy(),
+                embedding=point.embedding.copy(), pose=pose)
+            by_id[track_id] = replace(current, observation=observation)
+        return tuple(by_id[key] for key in sorted(by_id))
+
     @guarded
     def infer_frame(self, image: np.ndarray, *, strength: float = 0.35, pose_blend: float | None = None,
                     frontalization: float = 0.0, tps_expression: float = 0.0, identity_blend_t: float | None = None,
@@ -241,6 +471,7 @@ class ReferencePipeline:
                 pose_blend = 1.0
             began = time.perf_counter()
             faces = self.tracker.process(image, include203=self.portrait.available and pose_blend is None)
+            faces = self._apply_angle_trajectories(faces)
             detection_end = time.perf_counter()
             self.portrait.retain_tracks(self.tracker.active_ids)
             self.reenactors = {key: engine for key, engine in self.reenactors.items() if key in self.tracker.active_ids}
@@ -268,7 +499,7 @@ class ReferencePipeline:
                                                 track_id=tracked.track_id, frontalization=frontalization,
                                                 **({"identity_blend_t": identity_blend_t} if identity_blend_t is not None else {}))
                 swap_seconds += time.perf_counter() - at
-                if self.portrait.available and pose_blend is None:
+                if self.portrait.available and pose_blend is None and face.landmarks203 is not None:
                     at = time.perf_counter()
                     crop = landmark_crop(image, face.landmarks106, 512, expansion=2.3, vertical_shift=-0.15)
                     driving_points = transform_points(face.landmarks203, crop.matrix).astype(np.float32)
@@ -297,7 +528,8 @@ class ReferencePipeline:
                             projector, fallback_reason = self._pose_3d_projector(tracked.track_id)
                         else:
                             if self.pose_projector is None:
-                                self.pose_projector = PoseBlendProjector()
+                                self.pose_projector = PoseBlendProjector(
+                                    sampling_device="cuda" if self.config.provider == "CUDAExecutionProvider" else "cpu")
                             projector = self.pose_projector
                         observed = transform_points(face.landmarks5, cv2.invertAffineTransform(inverse))
                         projection = projector.render(generated, observed, pose_blend)
@@ -314,6 +546,10 @@ class ReferencePipeline:
                     generated, coverage, method, fallback_reason, reenactment = self._reenact(
                         tracked, image, generated, inverse, coverage, method)
                     projection_seconds += time.perf_counter() - at
+                if abs(face.pose[0]) > 35.0:
+                    crop_landmarks = transform_points(face.landmarks5, cv2.invertAffineTransform(inverse))
+                    profile_mask = profile_aware_mask(generated.shape[:2], crop_landmarks, face.pose[0])
+                    coverage = profile_mask if coverage is None else coverage * profile_mask
                 replacements.append(Replacement(tracked.track_id, generated, inverse.copy(), swap.reference_index,
                                                 method, coverage, projection,
                                                 transform_points(face.landmarks5, cv2.invertAffineTransform(inverse)),
@@ -330,11 +566,13 @@ class ReferencePipeline:
         rig = self._rig_for(track_id)
         if document is None or rig is None:
             if self.pose_projector is None:
-                self.pose_projector = PoseBlendProjector()
+                self.pose_projector = PoseBlendProjector(
+                    sampling_device="cuda" if self.config.provider == "CUDAExecutionProvider" else "cpu")
             return self.pose_projector, self._unavailable_reason(track_id)
         projector = self.pose_projectors.get(document.faceset_id)
         if projector is None:
-            projector = self.pose_projectors[document.faceset_id] = PoseBlendProjector.from_identity_asset(rig.asset)
+            projector = self.pose_projectors[document.faceset_id] = PoseBlendProjector.from_identity_asset(
+                rig.asset, sampling_device="cuda" if self.config.provider == "CUDAExecutionProvider" else "cpu")
         return projector, None
 
     def _reenact(self, tracked: TrackedFace, image: np.ndarray, generated: np.ndarray, inverse: np.ndarray,
@@ -350,6 +588,7 @@ class ReferencePipeline:
         engine = self.reenactors.get(tracked.track_id)
         if engine is None:
             engine = self.reenactors[tracked.track_id] = ReenactmentEngine(rig, self.reenactment_settings)
+            engine.sampling_device = "cuda" if self.config.provider == "CUDAExecutionProvider" else "cpu"
         face = tracked.observation
         to_crop = cv2.invertAffineTransform(inverse)
         cut = bool(self.tracker is not None and self.tracker.scene_cut)
@@ -442,6 +681,8 @@ class ReferencePipeline:
             self.rig_status.clear()
             self.reenactors.clear()
             self.pose_projectors.clear()
+            self.angle_trajectories.clear()
+            self.angle_frame_index = None
 
 
 def prepare_session(source: FaceSetDocument, *, catalog: ModelCatalog | None = None,

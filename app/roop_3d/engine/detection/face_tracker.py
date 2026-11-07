@@ -456,6 +456,20 @@ class FaceTracker:
     def active_ids(self) -> frozenset[int]:
         return frozenset(self._mem if self.policy is not None else self._tracks)
 
+    def reset_tracking(self) -> None:
+        """Reset temporal association state while keeping detector/recognizer sessions warm."""
+        self._tracks.clear()
+        self._mem.clear()
+        self._lost.clear()
+        self.stabilizer.reset()
+        self.frame_index = self.next_id = self.scene_id = 0
+        self.previous_thumbnail = None
+        self.scene_cut = False
+        self.events.clear()
+        self.events_dropped = 0
+        self._policy_frame = -1
+        self._small_gray = self._flow_frames = None
+
     def release(self) -> None:
         self._tracks.clear()
         self._mem.clear()

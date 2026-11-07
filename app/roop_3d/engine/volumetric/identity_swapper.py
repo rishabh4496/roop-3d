@@ -11,14 +11,14 @@ import numpy as np
 from roop_3d.core.errors import DomainError
 from roop_3d.core.pose import as_pose3d
 from roop_3d.engine.runtime import OrtModel, RuntimeConfig, tensor
-from roop_3d.engine.volumetric.preprocess import AlignedCrop, aligned_crop, transform_points
-from roop_3d.faceset import pose_matrix as stage0
+from roop_3d.engine.volumetric.preprocess import AlignedCrop, roll_compensated_aligned_crop, transform_points
 from roop_3d.faceset.pose_selector import PoseSelector
 from roop_3d.faceset.schemas import FaceSetDocument
 from roop_3d.models.catalog import ModelCatalog
+from roop_3d.pose_matrix import FrozenSourcePoseMatrix, FrozenPoseSelection
 from roop_3d.reconstruction.frontalization import frontalize_crop
 
-log = logging.getLogger("roop3d.stage0")
+log = logging.getLogger("roop3d.stage13")
 
 
 def _varint(stream: BinaryIO) -> int:
@@ -116,7 +116,7 @@ class IdentitySwapper:
         self.sources_by_track: dict[int, FaceSetDocument] = {}
         self.canonical_by_track: dict[int, np.ndarray] = {}
         self._selectors: dict[int, PoseSelector] = {}
-        self._matrices: dict[int | None, stage0.PoseMatrix | None] = {}
+        self._matrices: dict[int | None, FrozenSourcePoseMatrix | None] = {}
         self._logged_cells: set[tuple[int | None, int]] = set()
 
     def prepare_session(self, source: FaceSetDocument, *,
@@ -139,10 +139,13 @@ class IdentitySwapper:
             self.sources_by_track = mapped
             self.canonical_by_track = canonical_by_track
             self._selectors = {track_id: PoseSelector(document) for track_id, document in mapped.items()}
-            # Stage 0 pre-flight: freeze the 3x3 pose matrix of every source before any frame is rendered.
+            # Stage 13: freeze pose-selected identities and EMAP projections before frame 0.
             self._logged_cells = set()
-            self._matrices = {None: stage0.preflight(source)}
-            self._matrices.update({track_id: stage0.preflight(document) for track_id, document in mapped.items()})
+            device = "cuda" if self.config.provider == "CUDAExecutionProvider" else "cpu"
+            self._matrices = {None: FrozenSourcePoseMatrix.from_document(
+                source, projection=self.projection, device=device)}
+            self._matrices.update({track_id: FrozenSourcePoseMatrix.from_document(
+                document, projection=self.projection, device=device) for track_id, document in mapped.items()})
         except BaseException:
             self.release_session()
             raise
@@ -152,39 +155,44 @@ class IdentitySwapper:
         self.sources_by_track[track_id] = document
         self.canonical_by_track[track_id] = unit_embedding(np.asarray(document.canonical_embedding))
         self._selectors[track_id] = PoseSelector(document)
-        self._matrices[track_id] = stage0.preflight(document)
+        device = "cuda" if self.config.provider == "CUDAExecutionProvider" else "cpu"
+        self._matrices[track_id] = FrozenSourcePoseMatrix.from_document(
+            document, projection=self.projection, device=device)
+
+    def _matrix_for(self, track_id: int | None) -> FrozenSourcePoseMatrix | None:
+        return self._matrices.get(track_id) if track_id in self._matrices else self._matrices.get(None)
+
+    def pose_selection(self, track_id: int | None, pose: Any) -> FrozenPoseSelection | None:
+        matrix = self._matrix_for(track_id)
+        return matrix.lookup(pose) if matrix is not None else None
 
     def reference_embedding(self, track_id: int | None, pose: Any, reference_blend: float = 0.15
                             ) -> tuple[np.ndarray, int, float]:
         """The identity vector for a target pose: (unit embedding, reference view index, reference weight).
 
-        `pose` may be a 2-/3-tuple, array, dict or `Pose3D` (legacy frame unless it is a `Pose3D`). With Stage 0 on,
-        the reference vector is an O(1) lookup in the frozen pose matrix; otherwise the per-frame `PoseSelector`
-        search is used (ROOP_STAGE0=0, or a portfolio with no usable pose spread).
+        `pose` may be a 2-/3-tuple, array, dict or `Pose3D` (legacy frame unless it is a `Pose3D`).
+        The render-session matrix uses smooth bilinear interpolation over its frozen 3x3 or 96-bin vectors;
+        `PoseSelector` remains the fallback for a source without a usable pose matrix.
         """
         if self.source is None or self.canonical is None:
             raise DomainError("SESSION_NOT_PREPARED", "Prepare identity source before inference", 409)
         target = as_pose3d(pose)
         source = self.sources_by_track.get(track_id, self.source) if track_id is not None else self.source
         canonical = self.canonical_by_track.get(track_id, self.canonical) if track_id is not None else self.canonical
-        matrix = self._matrices.get(track_id) if track_id in self._matrices else self._matrices.get(None)
+        matrix = self._matrix_for(track_id)
         if matrix is not None:
-            from roop_3d.temporal_stabilizer import PoseHysteresis
-            from roop_3d.core.pose import PoseCell
-            if not hasattr(self, '_hysteresis'):
-                self._hysteresis = {}
-            gate = self._hysteresis.setdefault(track_id, PoseHysteresis(getattr(self, 'pose_deadband', 2.5)))
-            yaw, pitch = gate.update(target.yaw, target.pitch)
-            entry = matrix.entry(PoseCell(yaw + 1, pitch + 1))
-            marker = (track_id, entry.cell.index)
+            selection = matrix.lookup(target)
+            marker = (track_id, selection.view_index)
             if marker not in self._logged_cells:
                 self._logged_cells.add(marker)
-                log.info("[Stage0] lookup track=%s yaw=%.1f pitch=%.1f roll=%.1f -> cell=%s view=%d%s", track_id, target.yaw,
-                         target.pitch, target.roll, entry.cell.name, entry.view_index,
-                         f" (filled from {entry.filled_from.name})" if entry.filled else "")
+                log.info("[Stage13] lookup track=%s yaw=%.1f pitch=%.1f roll=%.1f -> source=%s view=%d cells=%s",
+                         track_id, target.yaw, target.pitch, target.roll, selection.source,
+                         selection.view_index, selection.weights)
             else:
-                log.debug("[Stage0] lookup track=%s -> cell=%s view=%d", track_id, entry.cell.name, entry.view_index)
-            weight, view_vector, index = reference_blend * entry.confidence, entry.vector, entry.view_index
+                log.debug("[Stage13] lookup track=%s -> view=%d", track_id, selection.view_index)
+            weight, view_vector, index = reference_blend * selection.confidence, selection.vector, selection.view_index
+            if abs(reference_blend - matrix.reference_blend) < 1e-8:
+                return selection.pose_selected_vector.copy(), index, weight
         else:
             selector = self._selectors.get(track_id) if track_id is not None else None
             if selector is None:
@@ -220,8 +228,20 @@ class IdentitySwapper:
             t=identity_blend_t
             embedding=unit_embedding((1-t)*a+t*b if angle < 1e-5 else
                 (np.sin((1-t)*angle)*a+np.sin(t*angle)*b)/np.sin(angle))
-        projected = unit_embedding(embedding @ self.projection).reshape(1, 512)
-        aligned = aligned_crop(image, landmarks5, 128)
+        selection = self.pose_selection(track_id, pose)
+        matrix = self._matrix_for(track_id)
+        if identity_blend_t is None and matrix is not None and abs(reference_blend - matrix.reference_blend) < 1e-8:
+            # Per-cell EMAP multiplication was completed during session preparation.
+            projected = selection.projected_vector.reshape(1, 512)
+        else:
+            projected = unit_embedding(embedding @ self.projection).reshape(1, 512)
+        target_pose = as_pose3d(pose)
+        compensation = None
+        if matrix is not None:
+            center = tuple(float(v) for v in np.asarray(landmarks5, np.float64)[:2].mean(axis=0))
+            compensation = matrix.roll_affine(target_pose.roll, center)
+        aligned = roll_compensated_aligned_crop(image, landmarks5, target_pose.roll, 128,
+                                                compensation=compensation)
         model_input, flat = aligned.image, None
         if frontalization > 0:
             # Reduce severe profile mismatch before inswapper_128 sees the crop; undone on the output below.
