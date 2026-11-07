@@ -235,13 +235,17 @@ class DecoupledRestorer:
         normalization contract. It never calls the host restore/submit path.
         """
         import torch
+        from dataclasses import replace
         from roop_3d.engine.runtime import OrtModel
         from roop_3d.gpu_compositor import TorchIOBinding, stream_session, warp, invert_affine
+        from roop_3d.gpu_transforms import normalize_model_input, model_output_to_rgb01
         from roop_3d.vectorized_pipeline import crop_matrix
         adapter = self.factory()
         if not isinstance(adapter, OnnxFaceRestorer):
             raise ValueError('CUDA restoration requires the registered ONNX restorer adapter')
-        adapter.model = OrtModel(adapter.catalog, self.spec.model_name, adapter.config)
+        model_config = (replace(adapter.config, provider='CUDAExecutionProvider')
+                        if self.cuda_provider == 'TensorrtExecutionProvider' else adapter.config)
+        adapter.model = OrtModel(adapter.catalog, self.spec.model_name, model_config)
         with self.lock:
             self.instances.append(adapter)
         if self.cuda_provider == 'TensorrtExecutionProvider':
@@ -283,13 +287,11 @@ class DecoupledRestorer:
             matrix = torch.as_tensor(similarity(points, self.spec.template * self.spec.size / 512),
                                      device=image.device, dtype=image.dtype)[None]
             aligned = warp(image, invert_affine(matrix), (self.spec.size, self.spec.size))
-            values = aligned * 2 - 1 if self.spec.normalization == 'minus_one_one' else aligned
+            values = normalize_model_input(aligned, channel_order='RGB', value_range=self.spec.normalization)
             values = values.to(dtypes[image_input.type]).contiguous()
             output = runner.run({image_input.name: values, **auxiliary},
-                {image_output.name: ((1, 3, self.spec.size, self.spec.size), dtypes[image_output.type])})[image_output.name].float()
-            if self.spec.normalization == 'minus_one_one':
-                output = (output + 1) * .5
-            output = output.clamp(0, 1)
+                {image_output.name: ((1, 3, self.spec.size, self.spec.size), dtypes[image_output.type])})[image_output.name]
+            output = model_output_to_rgb01(output, value_range=self.spec.normalization, channel_order='RGB')
             if self.spec.name in ('ultramax', 'gpen_realistic'):
                 coefficients = image.new_tensor((.299, .587, .114))[None, :, None, None]
                 output = (aligned + ((output - aligned) * coefficients).sum(1, keepdim=True)).clamp(0, 1)

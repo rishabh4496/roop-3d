@@ -4,14 +4,6 @@ from __future__ import annotations
 import cv2
 import numpy as np
 
-try:
-    import torch
-    import torch.nn.functional as F
-    _HAS_TORCH_CUDA = torch.cuda.is_available()
-except ImportError:
-    _HAS_TORCH_CUDA = False
-    torch = None  # type: ignore
-
 
 def laplacian_pyramid_fusion(
     swap_crop: np.ndarray,
@@ -69,9 +61,12 @@ class UltraMaxRestorer:
         self.native_bypass = native_bypass
         self.min_native_pixels = min_native_pixels
         self.session = session
-        self.io_binding = None
+        self._gpu_runner = None
+        self._output_name = None
         if session is not None and hasattr(session, "io_binding"):
-            self.io_binding = session.io_binding()
+            from roop_3d.core.ort_session import GpuIoBinding
+            self._gpu_runner = GpuIoBinding(session)
+            self._output_name = session.get_outputs()[0].name
 
     def enhance(
         self,
@@ -101,21 +96,11 @@ class UltraMaxRestorer:
             chw = np.transpose(inp, (2, 0, 1))[np.newaxis, ...]
             fw = np.array([fidelity_weight], dtype=np.float32)
 
-            if _HAS_TORCH_CUDA and self.io_binding is not None:
-                # Direct CUDA tensor IOBinding
-                try:
-                    dev_id = 0
-                    self.io_binding.bind_cpu_input("x", chw)
-                    self.io_binding.bind_cpu_input("w", fw)
-                    self.io_binding.bind_output("y", "cuda", dev_id)
-                    self.session.run_with_iobinding(self.io_binding)
-                    out_t = self.io_binding.copy_outputs_to_cpu()[0]
-                    raw_out = out_t[0].transpose(1, 2, 0)
-                except Exception:
-                    # Fallback to standard run
-                    raw_out = self.session.run(None, {"x": chw, "w": fw})[0][0].transpose(1, 2, 0)
+            if self._gpu_runner is not None:
+                outputs = self._gpu_runner.run({"x": chw, "w": fw})
+                raw_out = outputs[self._output_name].numpy()[0].transpose(1, 2, 0).astype(np.float32, copy=False)
             else:
-                raw_out = self.session.run(None, {"x": chw, "w": fw})[0][0].transpose(1, 2, 0)
+                raw_out = self.session.run(None, {"x": chw, "w": fw})[0][0].transpose(1, 2, 0).astype(np.float32, copy=False)
 
             restored_512 = np.clip((raw_out * 0.5 + 0.5) * 255.0, 0, 255).astype(np.uint8)
         else:

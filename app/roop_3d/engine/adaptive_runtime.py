@@ -269,32 +269,26 @@ class CudaIoBinder:
     """CUDA I/O binding accelerator for fixed-shape ONNX Runtime sessions."""
 
     def __init__(self, session: ort.InferenceSession, device_id: int = 0):
+        from roop_3d.core.ort_session import GpuIoBinding
         self.session = session
         self.device_id = device_id
-        self._binding = None
         self._input_nodes = {node.name: node for node in session.get_inputs()}
         self._output_nodes = {node.name: node for node in session.get_outputs()}
+        outputs = {}
+        for node in self._output_nodes.values():
+            if all(type(dim) is int and dim > 0 for dim in node.shape):
+                dtype = {"tensor(float)": np.float32, "tensor(float16)": np.float16,
+                         "tensor(double)": np.float64, "tensor(int64)": np.int64,
+                         "tensor(int32)": np.int32}.get(node.type)
+                if dtype is not None:
+                    outputs[node.name] = (tuple(node.shape), dtype)
+        self._runner = GpuIoBinding(session, device_id=device_id, output_buffers=outputs)
 
     def bind_and_run(self, feeds: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
-        """Execute inference using IOBinding for contiguous device buffers with host fallback."""
-        try:
-            binding = self.session.io_binding()
-            for name, array in feeds.items():
-                if name not in self._input_nodes:
-                    continue
-                contiguous = np.ascontiguousarray(array)
-                binding.bind_cpu_input(name, contiguous)
-
-            for out_name in self._output_nodes:
-                binding.bind_output(out_name, "cuda", self.device_id)
-
-            self.session.run_with_iobinding(binding)
-            outputs_cpu = binding.copy_outputs_to_cpu()
-            return {name: outputs_cpu[i] for i, name in enumerate(self._output_nodes.keys())}
-        except Exception:
-            # Safe transparent fallback to standard session.run
-            raw_outputs = self.session.run(None, feeds)
-            return {name: raw_outputs[i] for i, name in enumerate(self._output_nodes.keys())}
+        """Execute via retained CUDA buffers; callers choose the explicit host boundary."""
+        device_outputs = self._runner.run({name: value for name, value in feeds.items()
+                                           if name in self._input_nodes})
+        return {name: device_outputs[name].numpy() for name in self._output_nodes}
 
 
 class AdaptivePipelineOptimizer:

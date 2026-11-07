@@ -7,7 +7,6 @@ from __future__ import annotations
 
 from collections import deque
 from dataclasses import dataclass
-import math
 
 import numpy as np
 
@@ -19,21 +18,8 @@ def _torch():
 
 def warp(image, destination_to_source, size):
     """Pixel-coordinate affine sampling, zero outside the source image."""
-    torch = _torch()
-    import torch.nn.functional as F
-    height, width = size
-    y, x = torch.meshgrid(torch.arange(height, device=image.device, dtype=image.dtype),
-                          torch.arange(width, device=image.device, dtype=image.dtype), indexing="ij")
-    # Tiny coordinate transforms do not need GEMM. Using pointwise math avoids
-    # cuBLAS retaining an otherwise unowned workspace for every worker stream.
-    def coordinate(row):
-        return (x[None] * destination_to_source[:, row, 0, None, None]
-                + y[None] * destination_to_source[:, row, 1, None, None]
-                + destination_to_source[:, row, 2, None, None])
-    grid = torch.stack((coordinate(0), coordinate(1)), -1)
-    scale = image.new_tensor((max(image.shape[-1] - 1, 1), max(image.shape[-2] - 1, 1)))
-    grid = grid * (2 / scale) - 1
-    return F.grid_sample(image, grid, align_corners=True, padding_mode="zeros")
+    from roop_3d.gpu_transforms import warp_affine_gpu
+    return warp_affine_gpu(image, destination_to_source, size)
 
 
 def invert_affine(matrix):
@@ -48,21 +34,8 @@ def invert_affine(matrix):
 
 
 def gaussian(image, sigma=2.0):
-    torch = _torch()
-    import torch.nn.functional as F
-    if not math.isfinite(sigma) or not 0 <= sigma <= 64:
-        raise ValueError("Gaussian sigma must be in 0..64")
-    if sigma == 0:
-        return image
-    radius = math.ceil(3 * sigma)
-    x = torch.arange(-radius, radius + 1, dtype=image.dtype, device=image.device)
-    kernel = (-x.square() / (2 * sigma * sigma)).exp()
-    kernel = kernel / kernel.sum()
-    channels = image.shape[1]
-    value = F.conv2d(F.pad(image, (radius, radius, 0, 0), mode="replicate"),
-                     kernel.view(1, 1, 1, -1).expand(channels, 1, 1, -1), groups=channels)
-    return F.conv2d(F.pad(value, (0, 0, radius, radius), mode="replicate"),
-                    kernel.view(1, 1, -1, 1).expand(channels, 1, -1, 1), groups=channels)
+    from roop_3d.gpu_transforms import gaussian_feather_mask
+    return gaussian_feather_mask(image, sigma)
 
 
 def morphology(mask, radius):
@@ -217,13 +190,19 @@ class TorchIOBinding:
                 if options[provider].get("user_compute_stream") != str(stream.cuda_stream):
                     raise ValueError("Inference session must use the worker compute stream")
         self.session, self.stream = session, stream
+        self._binding = session.io_binding()
+        self._outputs = {}
+        self._input_refs = {}
 
     def run(self, feeds, outputs):
         import onnxruntime as ort
         torch = _torch()
         if torch.cuda.current_stream() != self.stream:
             raise ValueError("I/O binding invoked outside its owning compute stream")
-        binding = self.session.io_binding()
+        binding = self._binding
+        binding.clear_binding_inputs()
+        binding.clear_binding_outputs()
+        self._input_refs = dict(feeds)
         for name, value in feeds.items():
             if not value.is_cuda or not value.is_contiguous():
                 raise ValueError("Device inputs must be contiguous CUDA tensors")
@@ -231,7 +210,11 @@ class TorchIOBinding:
                                tuple(value.shape), value.data_ptr())
         result = {}
         for name, (shape, dtype) in outputs.items():
-            value = torch.empty(shape, dtype=dtype, device=self.stream.device)
+            key = (name, tuple(shape), dtype, str(self.stream.device))
+            value = self._outputs.get(key)
+            if value is None:
+                value = torch.empty(shape, dtype=dtype, device=self.stream.device)
+                self._outputs[key] = value
             binding.bind_output(name, "cuda", value.device.index, np.dtype(str(dtype).split('.')[-1]), shape, value.data_ptr())
             result[name] = value
         options = ort.RunOptions()

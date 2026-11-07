@@ -32,6 +32,7 @@ class Recognizer:
         self._session_sha: str | None = None
         self._input_name: str | None = None
         self._output_name: str | None = None
+        self._io_runner: Any = None
         self._session_factory = session_factory
         register(self, "release_for_build")
 
@@ -51,7 +52,12 @@ class Recognizer:
                 self._session_sha = record["sha256"]
                 self._input_name = self._session.get_inputs()[0].name
                 self._output_name = self._session.get_outputs()[0].name
+                self._io_runner = None
+                if hasattr(self._session, "io_binding"):
+                    from roop_3d.core.ort_session import GpuIoBinding
+                    self._io_runner = GpuIoBinding(self._session)
             session = self._session
+            io_runner = self._io_runner
             input_name = self._input_name
             output_name = self._output_name
 
@@ -70,8 +76,12 @@ class Recognizer:
             swapRB=True,
         )
 
-        outputs = session.run([output_name], {input_name: blob})
-        embedding = outputs[0].reshape(-1).astype(np.float32)
+        if io_runner is not None:
+            value = io_runner.run({input_name: blob}, output_names=(output_name,))[output_name].numpy()
+        else:
+            # SessionFacade keeps its underlying OrtModel I/O binding.
+            value = session.run([output_name], {input_name: blob})[0]
+        embedding = value.reshape(-1).astype(np.float32)
         if len(embedding) != 512:
             raise DomainError("RECOGNIZER_OUTPUT_INVALID", f"Expected 512-D embedding, got {len(embedding)}", 500)
 
@@ -84,6 +94,7 @@ class Recognizer:
     def release_for_build(self) -> None:
         with self._lock:
             self._session = None
+            self._io_runner = None
             self._session_sha = None
             self._input_name = self._output_name = None
 

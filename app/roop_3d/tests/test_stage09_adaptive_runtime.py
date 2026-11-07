@@ -259,7 +259,7 @@ def test_adaptive_model_pool_release_heavy_and_all():
         assert len(pool.stats()["cached_models"]) == 0
 
 
-def test_cuda_io_binder_fallback():
+def test_cuda_io_binder_surfaces_binding_failure_without_session_run():
     mock_session = MagicMock()
     mock_input = MagicMock()
     mock_input.name = "input_tensor"
@@ -271,16 +271,9 @@ def test_cuda_io_binder_fallback():
 
     # Simulate IOBinding failing so it tests transparent fallback
     mock_session.io_binding.side_effect = RuntimeError("CUDA IOBinding not supported")
-    expected_output = np.zeros((1, 3, 128, 128), dtype=np.float32)
-    mock_session.run.return_value = [expected_output]
-
-    binder = CudaIoBinder(mock_session, device_id=0)
-    feed = {"input_tensor": np.ones((1, 3, 128, 128), dtype=np.float32)}
-
-    result = binder.bind_and_run(feed)
-    assert "output_tensor" in result
-    np.testing.assert_array_equal(result["output_tensor"], expected_output)
-    mock_session.run.assert_called_once()
+    with pytest.raises(RuntimeError, match="CUDA IOBinding not supported"):
+        CudaIoBinder(mock_session, device_id=0)
+    mock_session.run.assert_not_called()
 
 
 def test_adaptive_pipeline_optimizer_decode_threads():

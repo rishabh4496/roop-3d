@@ -268,10 +268,12 @@ def make_stream_runner(root, catalog, media, settings_provider, *, pipeline_trac
             from roop_3d.engine.volumetric.identity_swapper import embedding_map, unit_embedding
             from roop_3d.vectorized_pipeline import CpuBatchPipeline, GpuBatchPipeline
             from roop_3d.render_policy import CudaWorkerContext
-            config = self._runtime_config(admission, settings)
             from roop_3d.core.hardware import probe_hardware, resolve_accelerator
             hardware = probe_hardware(settings)
             accelerator = resolve_accelerator(settings.preferred_provider, hardware.advertised_providers, bool(hardware.gpus))
+            if admission.profile == "cpu":
+                accelerator = "CPUExecutionProvider"
+            config = replace(self._runtime_config(admission, settings), provider=accelerator)
             context = CudaWorkerContext(enabled=admission.profile != "cpu")
             tracker = detector = model = restorer = None
             def check():
@@ -303,25 +305,27 @@ def make_stream_runner(root, catalog, media, settings_provider, *, pipeline_trac
                             cuda_provider=accelerator if accelerator != 'CPUExecutionProvider' else 'CUDAExecutionProvider',
                             hardware_profile=admission.profile if admission.profile != 'cpu' else '6gb')
                     selected_session = model.session
-                    if accelerator == "TensorrtExecutionProvider" and admission.profile != "cpu":
-                        from roop_3d.trt_session_builder import TensorRTSessionBuilder
-                        try:
-                            selected_session = TensorRTSessionBuilder(hardware_profile=admission.profile,
-                                telemetry=pipeline_tracker.compilation_event if pipeline_tracker else None).build(model.path)
-                            __import__("logging").getLogger("roop3d.render").info(
-                                "Swap session provider: %s", selected_session.get_providers()[0])
-                        except Exception as error:
-                            if settings.preferred_provider == "TensorrtExecutionProvider":
-                                raise
-                            # `auto` prefers TensorRT but must never leave the user without a working swap.
-                            __import__("logging").getLogger("roop3d.render").warning(
-                                "TensorRT engine unavailable (%s); continuing on CUDA", str(error)[:300])
                     if admission.profile == "cpu":
-                        pipeline = CpuBatchPipeline(lambda target, source: selected_session.run(None, {"target": target,
-                            "source": source})[0], embeddings=embeddings, restorer=restorer)
+                        swap_output_name = model.record["graph"]["outputs"][0]["name"]
+                        pipeline = CpuBatchPipeline(lambda target, source: model.run({"target": target,
+                            "source": source})[swap_output_name], embeddings=embeddings, restorer=restorer)
                     else:
+                        compositor_options = None
+                        try:
+                            import torch
+                            if torch.cuda.is_available():
+                                from roop_3d.gpu_compositor import CompositorOptions
+                                compositor_options = CompositorOptions()
+                            elif restorer is not None:
+                                raise DomainError("GPU_RESTORER_UNAVAILABLE",
+                                    "GPU face restoration requires a working PyTorch CUDA device", 503)
+                        except (ImportError, OSError):
+                            if restorer is not None:
+                                raise DomainError("GPU_RESTORER_UNAVAILABLE",
+                                    "GPU face restoration requires the installed CUDA compositor extra", 503) from None
                         pipeline = GpuBatchPipeline(selected_session, embeddings, max_batch=settings.stream_batch_size,
-                            hardware_profile=admission.profile, restorer=restorer, execution_threads=settings.execution_threads)
+                            hardware_profile=admission.profile, restorer=restorer,
+                            execution_threads=settings.execution_threads, compositor_options=compositor_options)
                 timings = StageTimings()
                 def detect(image):
                     with context.activate(), timings.measure("detection"):
@@ -347,10 +351,15 @@ def make_stream_runner(root, catalog, media, settings_provider, *, pipeline_trac
                 metadata = processor.run(destination, audio=settings.audio_policy == "copy")
                 relative = destination.relative_to(self.root).as_posix()
                 manifest_path = relative + ".manifest.json"
+                execution_backend = getattr(pipeline, "backend", "unknown")
+                gpu_resident_compositor = execution_backend == "CUDA_RESIDENT_TRIPLE_BUFFER"
                 metadata.update(output_path=relative, manifest_path=manifest_path, audio_policy=settings.audio_policy,
                     model_hashes={"identity_swapper": model.record["sha256"]}, verified_frames=metadata["frames"],
                     sparse_absence_evidence="SPARSE_ESTIMATE", render_backend="stream",
-                    restorer=settings.face_restoration_policy, restorer_host_bridge=restorer is not None)
+                    render_execution_backend=execution_backend,
+                    gpu_resident_compositor=gpu_resident_compositor,
+                    restorer=settings.face_restoration_policy,
+                    restorer_host_bridge=restorer is not None and not gpu_resident_compositor)
                 if restorer:
                     metadata["restorer_providers"] = sorted({v.model.provider for v in restorer.instances if v.model})
                     metadata["restorer_model_hashes"] = sorted({v.model.record["sha256"] for v in restorer.instances if v.model})

@@ -23,7 +23,7 @@ def owned_path(path: Path) -> Path:
 
 
 def cache_directory() -> Path:
-    path = owned_path(project_root() / "app/models/trt_cache")
+    path = owned_path(project_root() / "app/models/.trt_cache")
     path.mkdir(parents=True, exist_ok=True)
     return path
 

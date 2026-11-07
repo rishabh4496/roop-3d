@@ -17,8 +17,10 @@ from fastapi.testclient import TestClient
 from roop_3d.models.dynamic_shapes import (DynamicShapeError, StaticBatchRequired, convert, input_shapes,
                                           static_batch_reason, surgery, validate_conversion)
 from roop_3d.models.owned_files import owned_path
+from roop_3d.core.ort_session import (_static_model_path, _trt_excluded_ops,
+                                     GpuIoBinding, SessionManager)
 from roop_3d.trt_session_builder import (BatchProfile, StaticBatchError, TensorRTBuildError,
-                                        TensorRTSessionBuilder, precision_for)
+                                        TensorRTSessionBuilder, auto_shape_profiles, precision_for)
 
 
 def graph(*, dynamic=False, codeformer=False, fixed_reshape=True):
@@ -43,9 +45,12 @@ def test_swapper_fp32_overflow_guard(name):
     assert precision_for(name, {"ROOP_SWAP_FP16": "1", "ROOP_TRT_FP16": "0"}) == "FP32"
 
 
-@pytest.mark.parametrize("name", ["scrfd_2.5g_kps.onnx", "det_10g_dynamic.onnx", "GPEN-BFR-512.onnx", "CodeFormer.onnx"])
-def test_detector_enhancer_precision_defaults(name):
-    assert precision_for(name, {}) == "FP16"
+@pytest.mark.parametrize("name,expected", [
+    ("scrfd_2.5g_kps.onnx", "FP16"), ("det_10g_dynamic.onnx", "FP16"),
+    ("GPEN-BFR-512.onnx", "FP32"), ("CodeFormer.onnx", "FP16"),
+])
+def test_detector_enhancer_precision_defaults(name, expected):
+    assert precision_for(name, {}) == expected
     assert precision_for(name, {"ROOP_TRT_FP16": "0"}) == "FP32"
 
 
@@ -107,7 +112,8 @@ def fake_trt(tmp_path, monkeypatch):
     import roop_3d.models.trt_builder as parity_builder
     cache = tmp_path / "engines"
     cache.mkdir()
-    state = types.SimpleNamespace(write_engine=True, finite=True, cpu=False, activate=True, batches=[], options=None)
+    state = types.SimpleNamespace(write_engine=True, finite=True, cpu=False, activate=True, batches=[], options=None,
+                                  graph_fail_once=False, graph_options=[])
     original_version = module.importlib.metadata.version
     monkeypatch.setattr(module.importlib.metadata, "version", lambda name: "10.9.0.34" if name == "tensorrt-cu12-libs" else original_version(name))
     monkeypatch.setattr(module, "register_native_libraries", lambda: ())
@@ -123,6 +129,10 @@ def fake_trt(tmp_path, monkeypatch):
             state.options = sess_options
             state.providers = providers
             self.config = providers[0][1]
+            state.graph_options.append(self.config.get("trt_cuda_graph_enable", False))
+            if state.graph_fail_once and self.config.get("trt_cuda_graph_enable"):
+                state.graph_fail_once = False
+                raise RuntimeError("This session cannot use the CUDA Graph feature as requested because all graph nodes have not been assigned to TensorrtExecutionProvider")
             self.trace = Path(sess_options.profile_file_prefix + ".json")
 
         def disable_fallback(self):
@@ -130,6 +140,9 @@ def fake_trt(tmp_path, monkeypatch):
 
         def get_providers(self):
             return [module.TRT] if state.activate else ["CPUExecutionProvider"]
+
+        def get_outputs(self):
+            return [types.SimpleNamespace(name="output")]
 
         def run(self, names, inputs):
             state.batches.append(inputs["image"].shape[0])
@@ -143,6 +156,22 @@ def fake_trt(tmp_path, monkeypatch):
             return str(self.trace)
 
     monkeypatch.setattr(ort, "InferenceSession", Session)
+
+    class FakeDeviceValue:
+        def __init__(self, value):
+            self.value = value
+
+        def numpy(self):
+            return self.value
+
+    class FakeGpuIoBinding:
+        def __init__(self, session):
+            self.session = session
+
+        def run(self, feeds):
+            return {"output": FakeDeviceValue(self.session.run(None, feeds)[0])}
+
+    monkeypatch.setattr(module, "GpuIoBinding", FakeGpuIoBinding)
     path = tmp_path / "inswapper_128_dynamic.onnx"
     onnx.save(graph(dynamic=True, fixed_reshape=False), path)
     return state, path
@@ -204,9 +233,133 @@ def test_gpen_default_profile_is_batch_one(fake_trt):
     onnx.save(graph(), gpen)
     TensorRTSessionBuilder().build(gpen)
     assert state.batches == [1]
-    assert state.providers[0][1]["trt_fp16_enable"] is True
+    assert state.providers[0][1]["trt_fp16_enable"] is False
     with pytest.raises(StaticBatchError):
         TensorRTSessionBuilder().build(gpen, profile=BatchProfile())
+
+
+def test_static_mixed_graph_retries_without_tensor_rt_cuda_graph(fake_trt):
+    state, path = fake_trt
+    gpen = path.with_name("GPEN-BFR-512.onnx")
+    onnx.save(graph(), gpen)
+    state.graph_fail_once = True
+    builder = TensorRTSessionBuilder()
+    builder.build(gpen)
+    assert state.graph_options[:2] == [True, False]
+    assert builder.last_build["cuda_graph_enabled"] is False
+
+
+def test_session_manager_retries_mixed_static_graph_without_cuda_graph(tmp_path, monkeypatch):
+    source = tmp_path / "GPEN-BFR-512.onnx"
+    onnx.save(graph(), source)
+    import roop_3d.core.ort_session as module
+    import roop_3d.models.native_libraries as native_libraries
+    monkeypatch.setattr(native_libraries, "register_native_libraries", lambda: ())
+    monkeypatch.setattr(ort, "get_available_providers", lambda: [module.TRT, module.CUDA])
+    monkeypatch.setattr(ort, "preload_dlls", lambda: None, raising=False)
+    attempts = []
+
+    class Session:
+        def __init__(self, path, sess_options, providers):
+            attempts.append(providers[0][1]["trt_cuda_graph_enable"])
+            if providers[0][1]["trt_cuda_graph_enable"]:
+                raise RuntimeError("CUDA Graph requires all graph nodes assigned to TensorRT")
+
+        def get_providers(self):
+            return [module.TRT, module.CUDA]
+
+        def disable_fallback(self):
+            pass
+
+    monkeypatch.setattr(ort, "InferenceSession", Session)
+    result = SessionManager(cache_path=tmp_path / "cache", hardware_profile="12gb").create(
+        source, model_name=source.name, providers=(module.TRT, module.CUDA))
+    assert result.provider == module.TRT
+    assert attempts == [True, False]
+
+
+def test_enhancer_exclusions_do_not_fragment_residual_operator_types():
+    model = graph(codeformer=True)
+    excluded = set(_trt_excluded_ops(model, "CodeFormer.fp16.onnx").split(","))
+    assert excluded == {"NonMaxSuppression", "GridSample"}
+    assert not excluded.intersection({"Add", "Mul", "Tanh", "Sigmoid", "Softmax",
+                                     "LayerNormalization", "InstanceNormalization"})
+
+
+def test_gpen_uses_full_fp32_trt_after_fp16_canary_overflow():
+    h, t = onnx.helper, onnx.TensorProto
+    nodes = [
+        h.make_node("Conv", ["x", "w"], ["conv"]),
+        h.make_node("ReduceMean", ["conv"], ["mean"], axes=[1]),
+        h.make_node("Sub", ["conv", "mean"], ["centered"]),
+        h.make_node("Pow", ["centered", "power"], ["powered"]),
+        h.make_node("Sqrt", ["powered"], ["root"]),
+        h.make_node("Div", ["centered", "root"], ["normalized"]),
+        h.make_node("Gemm", ["normalized", "w", "b"], ["y"]),
+    ]
+    model = h.make_model(h.make_graph(
+        nodes, "sensitive_norm", [h.make_tensor_value_info("x", t.FLOAT, [1, 3, 16, 16])],
+        [h.make_tensor_value_info("y", t.FLOAT, [1, 3, 16, 16])],
+        [h.make_tensor("w", t.FLOAT, [1], [1.0]), h.make_tensor("b", t.FLOAT, [1], [0.0]),
+         h.make_tensor("power", t.FLOAT, [], [2.0])]),
+        opset_imports=[h.make_opsetid("", 17)])
+    excluded = set(_trt_excluded_ops(model, "gpen_bfr_1024.onnx").split(","))
+    assert excluded == {"NonMaxSuppression", "GridSample"}
+    assert precision_for("gpen_bfr_1024.onnx", {}) == "FP32"
+
+
+def test_cpu_reference_session_uses_ort_io_binding(tmp_path):
+    path = tmp_path / "cpu_iobinding.onnx"
+    onnx.save(graph(), path)
+    session = ort.InferenceSession(str(path), providers=["CPUExecutionProvider"])
+    binding = GpuIoBinding(session)
+    assert binding.device_name == "cpu"
+    value = np.arange(12, dtype=np.float32).reshape(1, 3, 2, 2)
+    output = binding.run({"image": value})["output"].numpy()
+    np.testing.assert_array_equal(output, value.reshape(1, 12))
+
+
+def test_motion_extractor_uses_full_fp32_trt_to_avoid_partition_explosion():
+    h, t = onnx.helper, onnx.TensorProto
+    model = h.make_model(h.make_graph(
+        [h.make_node("ReduceMean", ["x"], ["mean"], axes=[1]),
+         h.make_node("Div", ["x", "mean"], ["normalized"]),
+         h.make_node("MatMul", ["normalized", "weight"], ["y"])],
+        "motion_precision", [h.make_tensor_value_info("x", t.FLOAT, [1, 3])],
+        [h.make_tensor_value_info("y", t.FLOAT, [1, 3])],
+        [h.make_tensor("weight", t.FLOAT, [3, 3], np.eye(3, dtype=np.float32))]),
+        opset_imports=[h.make_opsetid("", 17)])
+    assert set(_trt_excluded_ops(model, "liveportrait_motion_extractor.batch.onnx").split(",")) == {
+        "NonMaxSuppression", "GridSample"}
+    assert precision_for("liveportrait_motion_extractor.batch.onnx", {}) == "FP32"
+
+
+def test_detector_dynamic_spatial_profiles_are_explicit():
+    h, t = onnx.helper, onnx.TensorProto
+    model = h.make_model(h.make_graph(
+        [h.make_node("Identity", ["input"], ["output"])], "retinaface_profile",
+        [h.make_tensor_value_info("input", t.FLOAT, ["batch", 3, "height", "width"])],
+        [h.make_tensor_value_info("output", t.FLOAT, ["batch", 3, "height", "width"]) ]),
+        opset_imports=[h.make_opsetid("", 17)])
+    assert auto_shape_profiles(model, "retinaface_r50.onnx") == [
+        {"input": (1, 3, 640, 640)}, {"input": (2, 3, 640, 640)}, {"input": (4, 3, 640, 640)}]
+
+
+def test_detector_shape_subgraphs_are_specialized_without_mutating_source(tmp_path):
+    source = tmp_path / "retinaface_r50.onnx"
+    h, t = onnx.helper, onnx.TensorProto
+    model = h.make_model(h.make_graph(
+        [h.make_node("Identity", ["input"], ["output"])], "retinaface_static",
+        [h.make_tensor_value_info("input", t.FLOAT, ["batch", 3, "height", "width"])],
+        [h.make_tensor_value_info("output", t.FLOAT, ["batch", 3, "height", "width"])]),
+        opset_imports=[h.make_opsetid("", 17)])
+    onnx.save(model, source)
+    original = source.read_bytes()
+    derived, specialized = _static_model_path(source, tmp_path / "cache", source.name)
+    dimensions = specialized.graph.input[0].type.tensor_type.shape.dim
+    assert derived != source
+    assert [dimension.dim_value for dimension in dimensions] == [1, 3, 640, 640]
+    assert source.read_bytes() == original
 
 
 def test_strict_environment_cannot_select_cpu(monkeypatch):

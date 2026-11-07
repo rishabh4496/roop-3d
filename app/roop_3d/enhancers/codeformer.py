@@ -14,6 +14,12 @@ class DynamicCodeFormerRestorer:
     def __init__(self, session: Any = None):
         self.session = session
         self.resolution = 512
+        self._gpu_runner = None
+        self._output_names = None
+        if session is not None and hasattr(session, "io_binding"):
+            from roop_3d.core.ort_session import GpuIoBinding
+            self._gpu_runner = GpuIoBinding(session)
+            self._output_names = tuple(node.name for node in session.get_outputs())
 
     def enhance(self, swap_crop: np.ndarray, fidelity_weight: float = 0.5) -> np.ndarray:
         h, w = swap_crop.shape[:2]
@@ -29,7 +35,12 @@ class DynamicCodeFormerRestorer:
             inp = (inp - 0.5) / 0.5
             chw = np.transpose(inp, (2, 0, 1))[np.newaxis, ...]
             fw_arr = np.array([w_val], dtype=np.float32)
-            raw = self.session.run(None, {"x": chw, "w": fw_arr})[0][0].transpose(1, 2, 0)
+            if self._gpu_runner is not None:
+                bound = self._gpu_runner.run({"x": chw, "w": fw_arr})
+                value = bound[self._output_names[0]].numpy()
+            else:
+                value = self.session.run(None, {"x": chw, "w": fw_arr})[0]
+            raw = value[0].transpose(1, 2, 0).astype(np.float32, copy=False)
             restored = np.clip((raw * 0.5 + 0.5) * 255.0, 0, 255).astype(np.uint8)
         else:
             # Weighted blend between input and smoothed high-frequency detail
@@ -47,6 +58,12 @@ class RestoreFormerPlusPlusRestorer:
     def __init__(self, session: Any = None):
         self.session = session
         self.resolution = 512
+        self._gpu_runner = None
+        self._output_names = None
+        if session is not None and hasattr(session, "io_binding"):
+            from roop_3d.core.ort_session import GpuIoBinding
+            self._gpu_runner = GpuIoBinding(session)
+            self._output_names = tuple(node.name for node in session.get_outputs())
 
     def enhance(self, swap_crop: np.ndarray) -> np.ndarray:
         h, w = swap_crop.shape[:2]
@@ -60,7 +77,11 @@ class RestoreFormerPlusPlusRestorer:
             inp = crop_512.astype(np.float32) / 255.0
             inp = (inp - 0.5) / 0.5
             chw = np.transpose(inp, (2, 0, 1))[np.newaxis, ...]
-            raw = self.session.run(None, {"input": chw})[0][0].transpose(1, 2, 0)
+            if self._gpu_runner is not None:
+                value = self._gpu_runner.run({"input": chw})[self._output_names[0]].numpy()
+            else:
+                value = self.session.run(None, {"input": chw})[0]
+            raw = value[0].transpose(1, 2, 0).astype(np.float32, copy=False)
             restored = np.clip((raw * 0.5 + 0.5) * 255.0, 0, 255).astype(np.uint8)
         else:
             restored = cv2.edgePreservingFilter(crop_512, flags=1, sigma_s=50, sigma_r=0.4)

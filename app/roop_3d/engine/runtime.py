@@ -14,7 +14,7 @@ from roop_3d.engine.resources import guarded, register
 
 # Shared low-level session construction is also available to GPU graph callers.
 # This additive adapter keeps the verified catalog as the only model path source.
-from roop_3d.core.ort_session import SessionManager, SessionInfo
+from roop_3d.core.ort_session import GpuIoBinding, SessionManager, SessionInfo
 
 
 @dataclass(frozen=True)
@@ -27,12 +27,12 @@ class RuntimeConfig:
     graph_optimization: str = "all"
 
     def __post_init__(self) -> None:
-        if self.provider not in ("CPUExecutionProvider", "CUDAExecutionProvider"):
-            raise ValueError("Reference inference supports CPU or CUDA; TensorRT belongs to Stage 07")
+        if self.provider not in ("CPUExecutionProvider", "CUDAExecutionProvider", "TensorrtExecutionProvider"):
+            raise ValueError("Unsupported ONNX Runtime provider")
         if self.hardware_profile not in ("cpu", "6gb", "12gb") or self.reserve_mib < 0:
             raise ValueError("Invalid hardware profile")
-        if self.provider == "CUDAExecutionProvider" and self.hardware_profile == "cpu":
-            raise ValueError("CUDA requires an explicit 6gb or 12gb profile")
+        if self.provider in ("CUDAExecutionProvider", "TensorrtExecutionProvider") and self.hardware_profile == "cpu":
+            raise ValueError("GPU providers require an explicit 6gb or 12gb profile")
         if not 1 <= self.cpu_threads <= 8:
             raise ValueError("CPU thread budget must be within 1..8")
         if self.graph_optimization not in ("all", "extended"):
@@ -111,11 +111,12 @@ class OrtModel:
         import onnxruntime as ort
 
         self.catalog, self.record = catalog, record_named(catalog, name)
+        self.config = config
         authorize(catalog.registry.get(self.record["model_id"]), action="activate")
         if self.record["graph"].get("external_data"):
             raise DomainError("MODEL_GRAPH_UNSUPPORTED", "External tensor references are not supported by this adapter", 422)
         self.path = catalog.resolve_for_inference(self.record["model_id"])
-        if config.provider == "CUDAExecutionProvider" and name == "liveportrait_warping_spade.onnx":
+        if config.provider in ("CUDAExecutionProvider", "TensorrtExecutionProvider") and name == "liveportrait_warping_spade.onnx":
             try:
                 from roop_3d.models.stage16 import prepare_generator
                 self.path = prepare_generator(catalog)[0]
@@ -128,31 +129,50 @@ class OrtModel:
         options.log_severity_level = 3
         options.graph_optimization_level = (ort.GraphOptimizationLevel.ORT_ENABLE_EXTENDED
             if config.graph_optimization == "extended" else ort.GraphOptimizationLevel.ORT_ENABLE_ALL)
+        if config.provider in ("CUDAExecutionProvider", "TensorrtExecutionProvider"):
+            options.add_session_config_entry("session.disable_cpu_ep_fallback", "1")
         self.executions = 0
         self.provider = self.requested_provider = config.provider
         self.fallback_reason: str | None = None
         self._options = options
         self.session = None
         providers: list = ["CPUExecutionProvider"]
-        if config.provider == "CUDAExecutionProvider":
+        divisor = {
+            "inswapper_128.onnx": 4, "inswapper_128.batch.onnx": 4,
+            "inswapper_128_dynamic.onnx": 4, "gpen_bfr_512.onnx": 4,
+            "GPEN-BFR-512.onnx": 4, "CodeFormerv0.1.onnx": 3, "codeformer.fp16.onnx": 8,
+            "scrfd_2.5g_kps.onnx": 32, "scrfd_10g_bnkps.onnx": 16, "det_10g.onnx": 16,
+            "w600k_r50.onnx": 16, "bisenet_resnet_34.onnx": 16, "face_parser.onnx": 16,
+            "liveportrait_warping_spade.onnx": 2,
+            "liveportrait_motion_extractor.onnx": 8, "liveportrait_motion_extractor.batch.onnx": 8,
+            "liveportrait_landmark.onnx": 16, "1k3d68.onnx": 16, "2d106det.onnx": 32, "landmark_203.onnx": 32,
+            "liveportrait_appearance_feature_extractor.onnx": 32,
+            "liveportrait_appearance_feature_extractor.batch.onnx": 32,
+            "liveportrait_stitching.onnx": 32, "liveportrait_stitching.batch.onnx": 32,
+            "liveportrait_stitching_eye.onnx": 32, "liveportrait_stitching_eye.batch.onnx": 32,
+            "liveportrait_stitching_lip.onnx": 32,
+        }.get(name, 32)
+        self._gpu_memory_limit = (config.gpu_budget_bytes // divisor
+                                  if config.provider in ("CUDAExecutionProvider", "TensorrtExecutionProvider") else None)
+        if config.provider == "TensorrtExecutionProvider":
+            if "TensorrtExecutionProvider" not in ort.get_available_providers():
+                raise DomainError("PROVIDER_UNAVAILABLE", "Requested TensorRT provider is unavailable", 503)
+            if "CUDAExecutionProvider" not in ort.get_available_providers():
+                raise DomainError("PROVIDER_UNAVAILABLE", "CUDAExecutionProvider is required for TensorRT graph partitions", 503)
+            try:
+                info = SessionManager(fp16=True, hardware_profile=config.hardware_profile,
+                    gpu_memory_limit=self._gpu_memory_limit).create(self.path, model_name=name,
+                        providers=("TensorrtExecutionProvider", "CUDAExecutionProvider"))
+                self.session = info.session
+                self.provider = self.session.get_providers()[0]
+                if self.provider != "TensorrtExecutionProvider":
+                    self.fallback_reason = "; ".join(info.fallback_errors) or "TensorRT initialization failed; session remained on CUDAExecutionProvider"
+            except Exception:
+                raise DomainError("MODEL_SESSION_FAILED", "Verified model could not initialize on TensorRT or CUDA", 503) from None
+        elif config.provider == "CUDAExecutionProvider":
             if config.provider not in ort.get_available_providers():
                 raise DomainError("PROVIDER_UNAVAILABLE", "Requested CUDA provider is unavailable", 503)
             ort.preload_dlls()
-            divisor = {
-                "inswapper_128.onnx": 4, "inswapper_128.batch.onnx": 4,
-                "inswapper_128_dynamic.onnx": 4, "gpen_bfr_512.onnx": 4,
-                "GPEN-BFR-512.onnx": 4, "CodeFormerv0.1.onnx": 3, "codeformer.fp16.onnx": 8,
-                "scrfd_2.5g_kps.onnx": 32, "scrfd_10g_bnkps.onnx": 16, "det_10g.onnx": 16,
-                "w600k_r50.onnx": 16, "bisenet_resnet_34.onnx": 16, "face_parser.onnx": 16,
-                "liveportrait_warping_spade.onnx": 2,
-                "liveportrait_motion_extractor.onnx": 8, "liveportrait_motion_extractor.batch.onnx": 8,
-                "liveportrait_landmark.onnx": 16, "1k3d68.onnx": 16, "2d106det.onnx": 32, "landmark_203.onnx": 32,
-                "liveportrait_appearance_feature_extractor.onnx": 32,
-                "liveportrait_appearance_feature_extractor.batch.onnx": 32,
-                "liveportrait_stitching.onnx": 32, "liveportrait_stitching.batch.onnx": 32,
-                "liveportrait_stitching_eye.onnx": 32, "liveportrait_stitching_eye.batch.onnx": 32,
-                "liveportrait_stitching_lip.onnx": 32,
-            }.get(name, 32)
             arena = "kNextPowerOfTwo" if config.hardware_profile == "12gb" else "kSameAsRequested"
             cuda_opts = {
                 "gpu_mem_limit": config.gpu_budget_bytes // divisor,
@@ -164,27 +184,24 @@ class OrtModel:
             else:
                 cuda_opts["cudnn_conv_algo_search"] = "HEURISTIC"
             providers = [(config.provider, cuda_opts), "CPUExecutionProvider"]
-        retry_reason = None
-        try:
-            self.session = ort.InferenceSession(str(self.path), sess_options=options, providers=providers)
-        except Exception as error:
-            retry_reason = cuda_fallback_reason(str(error)) if config.provider == "CUDAExecutionProvider" else None
-            if retry_reason is None:
-                raise DomainError("MODEL_SESSION_FAILED", "Verified model could not initialize on the requested provider", 503) from None
-        if retry_reason is not None:
-            self._switch_to_cpu(retry_reason)
+        if config.provider != "TensorrtExecutionProvider":
+            retry_reason = None
+            try:
+                self.session = ort.InferenceSession(str(self.path), sess_options=options, providers=providers)
+                if config.provider == "CUDAExecutionProvider":
+                    self.session.disable_fallback()
+            except Exception as error:
+                retry_reason = cuda_fallback_reason(str(error)) if config.provider == "CUDAExecutionProvider" else None
+                if retry_reason is None:
+                    raise DomainError("MODEL_SESSION_FAILED", "Verified model could not initialize on the requested provider", 503) from None
+            if retry_reason is not None:
+                self._switch_to_cpu(retry_reason)
         if self.session.get_providers()[0] != self.provider:
             self.session = None
             raise DomainError("PROVIDER_UNAVAILABLE", "Runtime did not activate the requested provider", 503)
         catalog.verify(self.record)
         self._check_graph()
-        self._io_binder = None
-        if self.provider == "CUDAExecutionProvider":
-            try:
-                from roop_3d.engine.adaptive_runtime import CudaIoBinder
-                self._io_binder = CudaIoBinder(self.session)
-            except Exception:
-                self._io_binder = None
+        self._io_binder = GpuIoBinding(self.session)
         register(self, "release")
 
     def _switch_to_cpu(self, reason: str) -> None:
@@ -201,6 +218,23 @@ class OrtModel:
         self.provider = "CPUExecutionProvider"
         self.fallback_reason = reason
         self._check_graph()
+        self._io_binder = GpuIoBinding(self.session)
+
+    def _switch_to_cuda(self, reason: str) -> None:
+        """Recover a failed TensorRT engine with a CUDA-only session."""
+        self.session = None
+        self._io_binder = None
+        try:
+            info = SessionManager(fp16=False, hardware_profile=self.config.hardware_profile,
+                gpu_memory_limit=self._gpu_memory_limit).create(self.path, model_name=self.record["name"],
+                    providers=("CUDAExecutionProvider",))
+        except Exception:
+            raise DomainError("MODEL_SESSION_FAILED", "CUDA-only recovery session could not initialize", 503) from None
+        self.session, self.provider = info.session, info.provider
+        self.fallback_reason = reason
+        self._identity = self._stat()
+        self._check_graph()
+        self._io_binder = GpuIoBinding(self.session)
 
     def _stat(self) -> tuple[int, int, int]:
         stat = self.path.stat()
@@ -242,22 +276,37 @@ class OrtModel:
         retry_reason = None
         try:
             if getattr(self, "_io_binder", None) is not None:
-                out_map = self._io_binder.bind_and_run(values)
-                arrays = [out_map[node.name] for node in self.session.get_outputs()]
+                out_map = self._io_binder.run(values)
+                arrays = [out_map[node.name].numpy() for node in self.session.get_outputs()]
             else:
                 arrays = self.session.run(None, values)
         except Exception as error:
-            retry_reason = cuda_fallback_reason(str(error)) if self.provider == "CUDAExecutionProvider" else None
+            if self.provider == "TensorrtExecutionProvider":
+                retry_reason = f"TensorRT inference failed; CUDA-only session selected: {type(error).__name__}"
+            elif self.requested_provider == "TensorrtExecutionProvider":
+                raise DomainError("MODEL_INFERENCE_FAILED", "CUDA-only inference failed after TensorRT recovery", 503) from None
+            else:
+                retry_reason = cuda_fallback_reason(str(error)) if self.provider == "CUDAExecutionProvider" else None
             if retry_reason is None:
                 raise DomainError("MODEL_INFERENCE_FAILED", "Model execution failed", 503) from None
         # Exit the exception handler first so its traceback cannot retain the
         # failed CUDA session/arena while the reference session is constructed.
         if retry_reason is not None:
-            self._switch_to_cpu(retry_reason)
+            if self.requested_provider == "TensorrtExecutionProvider":
+                self._switch_to_cuda(retry_reason)
+            else:
+                self._switch_to_cpu(retry_reason)
             try:
-                arrays = self.session.run(None, values)
+                if self._io_binder is not None:
+                    out_map = self._io_binder.run(values)
+                    arrays = [out_map[node.name].numpy() for node in self.session.get_outputs()]
+                else:
+                    arrays = self.session.run(None, values)
             except Exception:
-                raise DomainError("MODEL_INFERENCE_FAILED", "CPU reference execution failed", 503) from None
+                message = ("CUDA-only inference failed after TensorRT recovery"
+                           if self.requested_provider == "TensorrtExecutionProvider"
+                           else "CPU reference execution failed")
+                raise DomainError("MODEL_INFERENCE_FAILED", message, 503) from None
         outputs = {}
         for node, value in zip(self.session.get_outputs(), arrays):
             outputs[node.name] = contract_array(value, node.shape,
@@ -302,7 +351,7 @@ class SessionFacade:
 
 def session_factory(catalog: ModelCatalog, config: RuntimeConfig):
     factory = config.model_factory
-    if factory is None and config.provider == "CUDAExecutionProvider":
+    if factory is None and config.provider in ("CUDAExecutionProvider", "TensorrtExecutionProvider"):
         factory = OrtModel
     if factory is None:
         return None

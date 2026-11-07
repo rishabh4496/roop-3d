@@ -1,4 +1,4 @@
-"""GPEN Realistic: Static Batch-1 FP16 Restoration with Luma-Only Delta Recoloring."""
+"""GPEN Realistic: Static Batch-1 FP32-safe restoration with luma-only recoloring."""
 from __future__ import annotations
 
 from typing import Any
@@ -36,6 +36,12 @@ class GPENRealisticRestorer:
         self.resolution = resolution
         self.session = session
         self.supports_dynamic_batch = False  # Static batch-1 mandatory
+        self._gpu_runner = None
+        self._output_name = None
+        if session is not None and hasattr(session, "io_binding"):
+            from roop_3d.core.ort_session import GpuIoBinding
+            self._gpu_runner = GpuIoBinding(session)
+            self._output_name = session.get_outputs()[0].name
 
     def enhance(self, swap_crop: np.ndarray) -> np.ndarray:
         h, w = swap_crop.shape[:2]
@@ -50,7 +56,11 @@ class GPENRealisticRestorer:
             inp = crop_res.astype(np.float32) / 255.0
             inp = (inp - 0.5) / 0.5
             chw = np.transpose(inp, (2, 0, 1))[np.newaxis, ...]
-            raw = self.session.run(None, {"input": chw})[0][0].transpose(1, 2, 0)
+            if self._gpu_runner is not None:
+                output = self._gpu_runner.run({"input": chw})[self._output_name].numpy()
+            else:
+                output = self.session.run(None, {"input": chw})[0]
+            raw = output[0].transpose(1, 2, 0).astype(np.float32, copy=False)
             gpen_out = np.clip((raw * 0.5 + 0.5) * 255.0, 0, 255).astype(np.uint8)
         else:
             # High-fidelity reference filter for unmocked offline tests

@@ -1,4 +1,4 @@
-"""Stage 3 local integration gate. Always use Roop 3D's dedicated interpreter."""
+"""Stage 3 integration gate; --benchmark-gpu checks installed TensorRT model throughput."""
 from pathlib import Path
 import sys
 import warnings

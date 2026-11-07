@@ -77,8 +77,9 @@ def test_swapper_has_no_low_precision_override(name):
 
 @pytest.mark.parametrize("name", sorted(HEAVY_RESTORERS))
 def test_fp8_is_opt_in_and_allowlisted(name):
-    assert precision_for(name + ".onnx", {}) == "FP16"
-    assert precision_for(name + ".onnx", {"ROOP_TRT_FP8": "1"}) == "FP8"
+    stable_precision = "FP32" if "gpen" in name else "FP16"
+    assert precision_for(name + ".onnx", {}) == stable_precision
+    assert precision_for(name + ".onnx", {"ROOP_TRT_FP8": "1"}) == ("FP32" if stable_precision == "FP32" else "FP8")
     assert precision_for(name + ".onnx", {"ROOP_TRT_FP8": "1", "ROOP_TRT_FP16": "0"}) == "FP32"
     assert precision_for("CodeFormer.onnx", {"ROOP_TRT_FP8": "1"}) == "FP16"
 

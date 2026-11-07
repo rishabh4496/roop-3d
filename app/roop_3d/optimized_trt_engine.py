@@ -16,6 +16,7 @@ class OptimizedTRTEngine:
         self.model, self.builder = Path(model), builder or TensorRTSessionBuilder()
         self.profile, self.shapes = profile, shapes
         self._session = None
+        self._io_runner = None
         self._build = None
         self._lock = threading.RLock()
 
@@ -24,6 +25,8 @@ class OptimizedTRTEngine:
         with self._lock:
             if self._session is None:
                 self._session = self.builder.build(self.model, profile=self.profile, shapes=self.shapes)
+                from roop_3d.core.ort_session import GpuIoBinding
+                self._io_runner = GpuIoBinding(self._session)
                 self._build = copy.deepcopy(self.builder.last_build)
             return self._session
 
@@ -40,7 +43,8 @@ class OptimizedTRTEngine:
                 if name not in limits["min"] or len(value.shape) != len(limits["min"][name]) or any(
                     not lo <= n <= hi for lo, n, hi in zip(limits["min"][name], value.shape, limits["max"][name])):
                     raise ValueError(f"Input {name} is outside the compiled shape profile")
-            outputs = session.run(None, feeds)
+            outputs_by_name = self._io_runner.run(feeds)
+            outputs = [outputs_by_name[node.name].numpy() for node in session.get_outputs()]
             assert_finite(outputs)
             return outputs
 

@@ -65,6 +65,7 @@ class LandmarkEngine:
     def __init__(self, root: Path | None = None, model_dirs: Sequence[Path] | None = None):
         self._dirs = [Path(d) for d in model_dirs] if model_dirs is not None else _model_dirs(root)
         self._sessions: dict[str, Any] = {}
+        self._io_bindings: dict[str, Any] = {}
         self._lock = threading.Lock()
 
     def _path(self, name: str) -> Path | None:
@@ -82,10 +83,21 @@ class LandmarkEngine:
                     try:
                         import onnxruntime as ort
                         session = ort.InferenceSession(str(path), providers=["CPUExecutionProvider"])
+                        from roop_3d.core.ort_session import GpuIoBinding
+                        self._io_bindings[name] = GpuIoBinding(session)
                     except Exception as err:                       # unreadable model == unavailable, never fabricated
                         log.warning("landmark model %s unusable: %s", name, err)
                 self._sessions[name] = session
             return self._sessions[name]
+
+    def _run(self, name: str, session, feeds: dict[str, np.ndarray]) -> list[np.ndarray]:
+        names = tuple(node.name for node in session.get_outputs())
+        binding = self._io_bindings.get(name)
+        if binding is not None:
+            outputs = binding.run(feeds, output_names=names)
+            return [outputs[output].numpy() for output in names]
+        # SessionFacade routes through OrtModel's persistent I/O binding.
+        return session.run(None, feeds)
 
     @property
     def has_68(self) -> bool:
@@ -119,7 +131,8 @@ class LandmarkEngine:
             return None
         crop, inverse = self._crop(image, bbox)
         blob = cv2.dnn.blobFromImage(crop, 1.0, (192, 192), (0, 0, 0), swapRB=True)
-        out = session.run(None, {session.get_inputs()[0].name: blob})[0][0].reshape(-1, 3)[-68:].astype(np.float64)
+        out = self._run("1k3d68.onnx", session,
+                        {session.get_inputs()[0].name: blob})[0][0].reshape(-1, 3)[-68:].astype(np.float64)
         xy = (out[:, :2] + 1.0) * 96.0
         z = out[:, 2] * 96.0 * float(np.hypot(inverse[0, 0], inverse[1, 0]))
         xy = xy @ inverse[:, :2].T + inverse[:, 2]
@@ -131,7 +144,8 @@ class LandmarkEngine:
             return None
         crop, inverse = self._crop(image, bbox)
         blob = cv2.dnn.blobFromImage(crop, 1.0, (192, 192), (0, 0, 0), swapRB=True)
-        out = session.run(None, {session.get_inputs()[0].name: blob})[0][0].reshape(-1, 2).astype(np.float64)
+        out = self._run("2d106det.onnx", session,
+                        {session.get_inputs()[0].name: blob})[0][0].reshape(-1, 2).astype(np.float64)
         return ((out + 1.0) * 96.0) @ inverse[:, :2].T + inverse[:, 2]
 
 

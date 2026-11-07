@@ -518,6 +518,7 @@ class UnifiedModelRegistry:
 
     def get_trt_cache_paths(self) -> list[Path]:
         return [
+            self.root / "app/models/.trt_cache",
             self.root / "app/models/trt_cache",
             self.root / ".cache/trt",
             self.root / "cache/trt",

@@ -10,7 +10,7 @@ import sys
 class BoundaryError(RuntimeError):
     pass
 
-GENERATED_PARTS = {'.venv','venv','env','__pycache__','node_modules','.runtime','.pytest_cache','.cache','cache','outputs','dist','engines','trt_cache','.ruff_cache','.mypy_cache','logs'}
+GENERATED_PARTS = {'.venv','venv','env','__pycache__','node_modules','.runtime','.pytest_cache','.cache','.trt_cache','cache','outputs','dist','engines','trt_cache','.ruff_cache','.mypy_cache','logs'}
 GENERATED_SUFFIXES = {'.pyc','.pyo','.engine','.trt','.plan','.part','.onnx','.pth','.pt','.safetensors','.log'}
 GENERATED_FILES = {'protected_all_paths.json','stage00_verification.json','stage01_verification.json'}
 

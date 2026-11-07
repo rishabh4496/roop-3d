@@ -74,7 +74,7 @@ An unrelated model's cached engine cannot satisfy this gate.
 The default profile is min=1, opt=4, max=8, with executed canaries `(1,4,8)`.
 Static inputs reject a multi-batch profile before a session is constructed.
 Nonbatch dimensions remain fixed unless concrete shape overrides are supplied.
-Timing and engine caches live in `app/models/trt_cache/`. Engine prefixes include
+Timing and engine caches live in `app/models/.trt_cache/`. Engine prefixes include
 model hash, precision, ORT/TRT versions, profiles and workspace; ORT additionally
 manages hardware-specific engine filenames. Native cache paths reject links and
 hardlinks. The default workspace caps are 1 GiB for 6 GB and 2 GiB for 12 GB profiles.
@@ -82,11 +82,16 @@ CUDA partition memory is capped against observed free VRAM, the hardware profile
 the workspace and a 768 MiB reserve. These caps do not guarantee a model will fit
 a particular GPU; allocation failures remain hard failures.
 
-Precision defaults are FP16 for detectors/enhancers and FP32 for
-`inswapper_128.onnx` and `inswapper_128_dynamic.onnx`. The swapper exception guards
-against silent FP16 arithmetic overflow. `ROOP_SWAP_FP16=1` opts the swapper into
-FP16; `ROOP_TRT_FP16=0` takes precedence and forces global FP32. Finite canaries
-cannot alone establish visual parity or detect every color corruption.
+Precision defaults are FP16 for detectors, parsers and CodeFormer/UltraMax, and
+FP32 for `inswapper_128`, LivePortrait motion extraction and GPEN. The swapper
+exception guards against silent FP16 arithmetic overflow. LivePortrait motion
+and GPEN produced non-finite TRT outputs in FP16 canaries; full FP32 TRT keeps
+their graphs in one device engine and passes finite-output checks. The RTX 4070
+benchmark measured motion at 3.60x and GPEN at 10.63x against CPU with FP32 TRT.
+The GPEN FP16 CUDA-island attempt fragmented into 122 regions and was stopped
+before its canary; FP16 GPEN Tensor Core execution is not verified.
+`ROOP_TRT_FP16=0` forces global FP32. Finite canaries cannot alone establish
+visual parity or detect every color corruption.
 
 The API exposes a metadata-only `app.state.trt_builder` wired to its pipeline
 tracker. Explicit builds through it broadcast `COMPILING_TRT`, `RUNNING_CANARY`
@@ -158,3 +163,23 @@ Packaging follows the [NVIDIA TensorRT installation guide](https://docs.nvidia.c
 - Prebuild and benchmark CLIs failed nonzero as intended when packaged TRT libraries
   were absent. Native TRT compilation, production dynamic-model fidelity, and FPS
   have not been measured in this environment.
+
+## Stage 3 GPU verification, 2026-11-07
+
+- Focused remediation/runtime suite: 64 tests passed.
+- Expanded GPU/compositor/runtime suite: 95 tests passed, 2 CUDA hardware tests skipped.
+- `verify_integration.py --benchmark-gpu`: PASS on an RTX 4070 (SM 8.9), six
+  representative single-frame models, zero CPUExecutionProvider nodes, 14.91x
+  aggregate CPU-to-GPU speedup, 3.60x minimum per-model speedup, and zero FP16
+  output saturation values. The aggregate suite exceeds the 4x gate; the slowest
+  individual model does not exceed 4x.
+- GPEN Realistic and LivePortrait motion use static FP32 TensorRT plans because
+  their FP16 canaries produced non-finite outputs. The GPEN FP32 plan passed as
+  one TensorRT engine with CUDA graph capture; the tested FP16 CUDA-island plan
+  fragmented into 122 regions before its canary was stopped.
+- ORT profiling confirms execution-provider placement, not per-kernel Tensor
+  Core counters. The CUDA-resident swap/composite path uses pinned host frame
+  slots at ingress/egress and keeps crop/model/composite tensors in VRAM, but
+  frame decode, tracking, CPU provider compatibility paths, and video encode
+  still cross or use host memory. The single-frame benchmark does not establish
+  sustained 85-98% GPU utilization or full decode-to-encode zero-copy behavior.

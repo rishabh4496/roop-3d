@@ -21,6 +21,10 @@ from roop_3d.models.owned_files import cache_directory, owned_path, model_source
 from roop_3d.core.storage import exclusive
 from roop_3d.audit.project_paths import application_root
 from roop_3d.engine.resources import guarded
+from roop_3d.core.ort_session import (GpuIoBinding, _fp32_safe_model_path,
+                                      _profiles, _static_input_contract, _static_model_path,
+                                      _static_graph_inputs, _trt_excluded_ops,
+                                      _is_cuda_graph_partition_error)
 
 LOG = logging.getLogger(__name__)
 TRT = "TensorrtExecutionProvider"
@@ -38,7 +42,7 @@ def precision_for(model: str | Path, environ: Mapping[str, str] | None = None) -
     env = os.environ if environ is None else environ
     from roop_3d.trt_fp8_builder import HEAVY_RESTORERS, model_name
     name = model_name(model)
-    if name == "inswapper_128":
+    if name == "inswapper_128" or "motion_extractor" in name or "gpen" in name:
         return "FP32"
     if env.get("ROOP_TRT_FP16") == "0":
         return "FP32"
@@ -66,6 +70,20 @@ def validate_profile(model, profile: BatchProfile) -> None:
         fixed = dims[0].dim_value
         if fixed and any(b != fixed for b in profile.batches):
             raise StaticBatchError(f"{value.name} has static batch {fixed}; convert to <name>_dynamic.onnx before using {profile.batches}")
+
+
+def auto_shape_profiles(model, name: str) -> list[dict[str, tuple[int, ...]]]:
+    """Return explicit min/opt/max shapes for dynamic model inputs."""
+    initializers = {value.name for value in model.graph.initializer}
+
+    class InputShape:
+        def __init__(self, value):
+            self.name = value.name
+            self.shape = [dim.dim_value if dim.dim_value > 0 else dim.dim_param or None
+                          for dim in value.type.tensor_type.shape.dim]
+
+    inputs = [InputShape(value) for value in model.graph.input if value.name not in initializers]
+    return _profiles(inputs, name)
 
 
 def cuda_memory_budget(hardware_profile: str, workspace_bytes: int) -> int:
@@ -132,12 +150,17 @@ class TensorRTSessionBuilder:
         if any(v.data_location == onnx.TensorProto.EXTERNAL for v in model.graph.initializer):
             raise TensorRTBuildError("External tensor data needs separately verified registry support")
         reason = static_batch_reason(path.name)
-        profile = profile or (BatchProfile((1,), 1) if reason else BatchProfile())
+        static_contract = _static_input_contract(path.name)
+        batch_one_contract = static_contract is not None and static_contract[2]
+        profile = profile or (BatchProfile((1,), 1) if reason or batch_one_contract else BatchProfile())
         if reason and profile.batches != (1,):
             raise StaticBatchError(reason)
         validate_profile(model, profile)
-        if TRT not in ort.get_available_providers():
+        available = set(ort.get_available_providers())
+        if TRT not in available:
             raise TensorRTBuildError("ONNX Runtime does not advertise TensorRT; CPU fallback is forbidden")
+        if "CUDAExecutionProvider" not in available:
+            raise TensorRTBuildError("CUDAExecutionProvider is required for TensorRT graph partitions; CPU fallback is forbidden")
         precision = precision_for(path)
         reference_digest = sha256_file(path)[1]
         fp8_evidence = None
@@ -170,17 +193,39 @@ class TensorRTSessionBuilder:
             validate_profile(quantized, profile)
             path, model, precision = candidate, quantized, "FP8"
         cache = cache_directory()
+        if precision == "FP16":
+            path, safe_model = _fp32_safe_model_path(path, cache, model_name(path))
+            if safe_model is not None:
+                model = safe_model
+        try:
+            path, static_model = _static_model_path(path, cache, model_name(path))
+        except (ValueError, onnx.checker.ValidationError) as error:
+            raise TensorRTBuildError(f"Static detector graph preparation failed: {error}") from error
+        if static_model is not None:
+            model = static_model
+        validate_profile(model, profile)
         # Keep native/JIT temporary writes within the checkout as well.
         from roop_3d.models.trt_builder import configure_native_paths
         configure_native_paths(application_root())
-        shape_sets = {key: input_shapes(model, batch, shapes) for key, batch in
-                      (("min", profile.batches[0]), ("opt", profile.optimum), ("max", profile.batches[-1]))}
+        auto_profiles = auto_shape_profiles(model, path.name)
+        shape_sets = {}
+        for key, batch, automatic in zip(
+                ("min", "opt", "max"),
+                (profile.batches[0], profile.optimum, profile.batches[-1]), auto_profiles):
+            overrides = dict(automatic)
+            overrides.update(shapes or {})
+            shape_sets[key] = input_shapes(model, batch, overrides)
         try:
             trt_version = importlib.metadata.version("tensorrt-cu12-libs")
         except importlib.metadata.PackageNotFoundError:
             raise TensorRTBuildError("Packaged tensorrt-cu12-libs is missing; run the NVIDIA installer") from None
+        excluded_ops = _trt_excluded_ops(model, path.name)
+        static_inputs = _static_graph_inputs(model)
         identity = {"model": sha256_file(path)[1], "precision": precision, "profiles": shape_sets,
-                    "ort": ort.__version__, "trt": trt_version, "workspace_mib": self.workspace_mib}
+                    "ort": ort.__version__, "trt": trt_version, "workspace_mib": self.workspace_mib,
+                    "builder_optimization_level": 5, "auxiliary_streams": 2,
+                    "force_sequential_engine_build": False, "cuda_graph": static_inputs,
+                    "excluded_ops": excluded_ops}
         if fp8_evidence:
             identity.update(reference_model=reference_digest, fp8=fp8_evidence)
         prefix = "roop3d_" + hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()[:32]
@@ -190,9 +235,14 @@ class TensorRTSessionBuilder:
             "trt_engine_cache_enable": True, "trt_engine_cache_path": str(cache),
             "trt_engine_cache_prefix": prefix,
             "trt_timing_cache_enable": True, "trt_timing_cache_path": str(cache),
-            "trt_force_timing_cache": False, "trt_force_sequential_engine_build": True,
-            "trt_auxiliary_streams": 0, "trt_layer_norm_fp32_fallback": True,
-            "trt_detailed_build_log": True,
+            "trt_force_timing_cache": False,
+            "trt_builder_optimization_level": 5,
+            "trt_force_sequential_engine_build": False,
+            "trt_auxiliary_streams": 2,
+            "trt_cuda_graph_enable": static_inputs,
+            "trt_layer_norm_fp32_fallback": True,
+            "trt_op_types_to_exclude": excluded_ops,
+            "trt_detailed_build_log": False,
         }
         for key, shape_set in shape_sets.items():
             provider_options[f"trt_profile_{key}_shapes"] = ",".join(
@@ -205,7 +255,8 @@ class TensorRTSessionBuilder:
         options.enable_profiling = True
         trace = owned_path(cache / f"{prefix}_execution")
         options.profile_file_prefix = str(trace)
-        cuda_options = {"use_tf32": False, "arena_extend_strategy": "kSameAsRequested",
+        cuda_options = {"use_tf32": False, "cudnn_conv_algo_search": "DEFAULT",
+                        "arena_extend_strategy": "kSameAsRequested",
                         "cudnn_conv_use_max_workspace": False,
                         "gpu_mem_limit": cuda_memory_budget(self.hardware_profile, self.workspace_mib * 1048576)}
         if compute_stream is not None:
@@ -224,21 +275,38 @@ class TensorRTSessionBuilder:
             session = None
             try:
                 self._emit("COMPILING_TRT" if cold else "RUNNING_CANARY", path.name, precision)
-                session = ort.InferenceSession(str(path), sess_options=options,
-                    providers=[(TRT, provider_options), ("CUDAExecutionProvider", cuda_options)])
+                provider_list = [(TRT, provider_options), ("CUDAExecutionProvider", cuda_options)]
+                try:
+                    session = ort.InferenceSession(str(path), sess_options=options, providers=provider_list)
+                except Exception as error:
+                    if (not provider_options["trt_cuda_graph_enable"]
+                            or not _is_cuda_graph_partition_error(error)):
+                        raise
+                    # ORT's TensorRT CUDA-graph capture requires the whole session
+                    # graph to belong to TRT. Static models with CUDA-only safe or
+                    # unsupported nodes retry the same engine policy without graph
+                    # capture, retaining TRT/CUDA execution and CPU fallback ban.
+                    provider_options["trt_cuda_graph_enable"] = False
+                    session = ort.InferenceSession(str(path), sess_options=options,
+                        providers=[(TRT, provider_options), ("CUDAExecutionProvider", cuda_options)])
+                session._model_path = str(path)
                 session.disable_fallback()
                 if not session.get_providers() or session.get_providers()[0] != TRT:
                     raise TensorRTBuildError(f"TensorRT activation failed: {session.get_providers()}")
                 compile_seconds = 0.0
+                canary_runner = GpuIoBinding(session)
                 for index, batch in enumerate(profile.batches):
                     # Cold engine compilation can happen at creation OR first run.
                     before_run = time.perf_counter()
-                    feeds = canary_inputs(batch) if canary_inputs else sample_inputs(model, batch, shapes)
-                    expected = input_shapes(model, batch, shapes)
+                    # Use the optimum spatial profile for representative input
+                    # tensors, while still exercising every declared batch size.
+                    feeds = canary_inputs(batch) if canary_inputs else sample_inputs(model, batch, shape_sets["opt"])
+                    expected = input_shapes(model, batch, shape_sets["opt"])
                     if set(feeds) != set(expected) or any(tuple(feeds[n].shape) != s for n, s in expected.items()):
                         raise TensorRTBuildError(f"Canary inputs do not match batch {batch} profile")
                     assert_finite(list(feeds.values()))
-                    outputs = session.run(None, feeds)
+                    device_outputs = canary_runner.run(feeds)
+                    outputs = [device_outputs[node.name].numpy() for node in session.get_outputs()]
                     assert_finite(outputs)
                     if index == 0 and cold:
                         compile_seconds = time.perf_counter() - started
@@ -262,6 +330,7 @@ class TensorRTSessionBuilder:
                              path.name, precision, compile_seconds)
                 self.last_build = {**identity, "engine_prefix": prefix, "cache_hit": not cold,
                                    "compile_seconds": compile_seconds, "checked_batches": list(profile.batches),
+                                   "cuda_graph_enabled": provider_options["trt_cuda_graph_enable"],
                                    "engines": [p.name for p in engines], "node_providers": sorted(p for p in providers if p)}
                 return session
             except Exception as error:
