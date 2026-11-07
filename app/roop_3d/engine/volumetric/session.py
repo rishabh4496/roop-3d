@@ -201,11 +201,14 @@ class ReferencePipeline:
 
     def configure_temporal(self, settings) -> None:
         from roop_3d.temporal import TrackTemporalStabilizer
+        from roop_3d.temporal_stabilizer import TemporalStabilizer
         config = dict(min_cutoff=settings.temporal_min_cutoff, beta=settings.temporal_beta,
                       derivative_cutoff=settings.temporal_d_cutoff)
         if self.tracker is not None:
             self.tracker.stabilizer = TrackTemporalStabilizer(**config)
-        self.compositor.histogram_stabilizer = TemporalStabilizer(**config)
+        # The histogram stabilizer's One-Euro filter names the derivative cutoff `d_cutoff`.
+        self.compositor.histogram_stabilizer = TemporalStabilizer(
+            min_cutoff=config['min_cutoff'], beta=config['beta'], d_cutoff=config['derivative_cutoff'])
         self.swapper.pose_deadband = settings.pose_hysteresis_degrees
         self.swapper._hysteresis = {}
 

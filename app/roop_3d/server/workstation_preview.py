@@ -128,6 +128,10 @@ def collect_composite(session, image, result, parameters, *, capture=True, occlu
     final = session.compositor.compose(image, result.replacements, landmarks, scene_cut=True,
         options=parameters.composite_options(), observer=observe if capture else None, occluder_masks=occluder_masks)
     buffers['final'] = final
+    if not capture:
+        # Replayed warm-up frames and sweep cells only consume `final`; the normal map / SH shading are full-resolution
+        # numpy work that made a tracking-replay preview exceed its time budget.
+        return buffers
     if 'normal_map' not in buffers:
         from roop_3d.relighting_3d import SurfaceNormalEstimator
         est = SurfaceNormalEstimator()
