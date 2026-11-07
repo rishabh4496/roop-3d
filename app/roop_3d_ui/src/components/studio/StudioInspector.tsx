@@ -46,6 +46,8 @@ export interface StudioInspectorProps {
   /** State of the FaceSet 3D reconstruction request (idle until a source is chosen). */
   reconstruction?: ReconstructionStatus | null;
   reconstructionPicker: ReactNode;
+  /** "+ Create .fsz from Video/Photos" control rendered inside the 3D viewer panel. */
+  facesetCreator?: ReactNode;
   /** VideoViewport portals its Geometry / Masking / Restorer parameter panels into this element (Advanced Diagnostics). */
   panelsRef: Ref<HTMLDivElement>;
   processing: ReactNode;
@@ -64,7 +66,7 @@ export const ENHANCERS: readonly { id: 'none' | RestorerModel; label: string; hi
 export const activeEnhancer = (parameters: WorkstationParameters): 'none' | RestorerModel =>
   parameters.restoration_blend > 0 ? (parameters.restorer_model ?? 'gpen') : 'none';
 
-export default function StudioInspector({ caps, track, sheet, sources, assignedId, onAssign, parameters, setParameters, coverage, mesh, reconstruction, reconstructionPicker, panelsRef, processing, footer }: StudioInspectorProps) {
+export default function StudioInspector({ caps, track, sheet, sources, assignedId, onAssign, parameters, setParameters, coverage, mesh, reconstruction, reconstructionPicker, facesetCreator, panelsRef, processing, footer }: StudioInspectorProps) {
   const engine = useSelectedEngine();
   const engines = useEngines();
   const cluster = useFaceSelectionStore(state => (track ? state.targetClusters.find(item => item.id === track.track_id) ?? null : null));
@@ -98,7 +100,7 @@ export default function StudioInspector({ caps, track, sheet, sources, assignedI
           <small className="muted" data-testid="render-mode-hint">{info.hint}</small>
           <small className="render-mode-preview">Viewer tab for this mode: <b>{PREVIEW_TAB_LABEL[info.preview]}</b></small>
           <div className="inspector-viewer">
-            <Suspense fallback={<div className="skeleton-tile wide" aria-label="Loading 3D viewer" />}><PoseGeometryViewer coverage={coverage} track={track} mesh={mesh} renderMode={renderMode} reconstruction={reconstruction} /></Suspense>
+            <Suspense fallback={<div className="skeleton-tile wide" aria-label="Loading 3D viewer" />}><PoseGeometryViewer coverage={coverage} track={track} mesh={mesh} renderMode={renderMode} reconstruction={reconstruction} creator={facesetCreator} /></Suspense>
           </div>
           {reconstructionPicker}
         </section>

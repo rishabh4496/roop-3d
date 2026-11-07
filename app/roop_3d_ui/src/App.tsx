@@ -99,7 +99,10 @@ export default function App() {
   const [identityMesh, setIdentityMesh] = useState<Reconstruction | null>(null);
   const [reconstructionState, setReconstruction] = useState<{ state: 'idle' | 'loading' | 'ready' | 'error'; message?: string }>({ state: 'idle' });
   const [reconstructAttempt, setReconstructAttempt] = useState(0);
-  const reconstruction = useMemo(() => ({ ...reconstructionState, retry: () => setReconstructAttempt(value => value + 1) }), [reconstructionState]);
+  const reconstruction = useMemo(() => {
+    const again = () => setReconstructAttempt(value => value + 1);
+    return { ...reconstructionState, retry: again, refresh: again, sourceId };
+  }, [reconstructionState, sourceId]);
   const [zoom, setZoom] = useState(() => {
     const v = parseFloat(localStorage.getItem('roop3d_zoom') || '1');
     return Number.isFinite(v) && v >= 0.5 && v <= 1.6 ? v : 1;
@@ -256,7 +259,15 @@ export default function App() {
   useEffect(() => {
     if (!sourceId) { setCoverage(null); setMesh(null); setReconstruction({ state: 'idle' }); return; }
     const controller = new AbortController(); setCoverage(null); setMesh(null); setReconstruction({ state: 'loading' });
+    // Always on: this runs for every render mode (including Standard identity swap). POST builds (or hits the server's
+    // archive-hash cache), then GET 3d-state reads back the cached reconstruction the viewer binds to; if the read-back
+    // fails for any reason other than an abort, the POST payload (identical content) is used.
     void post<Coverage>('/faceset/reconstruct-3d', { faceset_id: sourceId }, { signal: controller.signal })
+      .then(async posted => {
+        const cached = await api<Coverage>(`/faceset/3d-state?${new URLSearchParams({ faceset_id: sourceId })}`, { signal: controller.signal })
+          .catch(error => { if (error.name === 'AbortError') throw error; return posted; });
+        return cached?.faceset_id === sourceId ? cached : posted;
+      })
       .then(value => { setCoverage(value); setReconstruction({ state: 'ready' }); })
       .catch(error => { if (error.name !== 'AbortError') setReconstruction({ state: 'error', message: error.message }); });
     return () => controller.abort();
@@ -590,7 +601,10 @@ export default function App() {
             <div className="studio-panel-head"><span className="eyebrow">04 · INSPECTOR</span></div>
             <PanelBoundary name="Inspector"><StudioInspector caps={caps} track={currentTrack} sheet={sheet} sources={sources} assignedId={currentTrack ? assigned[currentTrack.track_id] ?? '' : ''} onAssign={assignTrack}
               parameters={parameters} setParameters={setParameters} coverage={coverage} reconstruction={reconstruction} mesh={identityMesh ?? mesh} panelsRef={setPanelsSlot}
-              reconstructionPicker={reconstructionPicker} processing={<SettingsInspector namespace="workstation-setting" caps={caps} config={config} save={saveSettings} busy={!!busy}/>}
+              reconstructionPicker={reconstructionPicker}
+              facesetCreator={<FacesetBuilder sourceId={sourceId} label="+ Create .fsz from Video/Photos" className="viewer-action-btn"
+                onSaved={async id => { await refreshSources(); setSourceId(id); window.dispatchEvent(new Event('faceset-builder-saved')); }} />}
+              processing={<SettingsInspector namespace="workstation-setting" caps={caps} config={config} save={saveSettings} busy={!!busy}/>}
               footer={<RenderFooter job={currentJob && currentJob.request.target_path === target ? currentJob : null} onStart={queue}
                 startBlockedReason={reason('queue') ?? (!target ? 'Load a target video first.' : !inspection ? 'Inspect the target faces first.' : !renderMappings().length ? 'Assign a source FaceSet to at least one target face first.' : busy ? 'Busy' : null)}
                 frameBlockedReason={reason('frame_preview') ?? (!target ? 'Load a target video first.' : !previewRequest ? 'Assign a source FaceSet to a target face first: the preview needs a face mapping.' : null)} />} /></PanelBoundary>

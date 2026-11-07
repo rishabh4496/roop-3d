@@ -129,7 +129,11 @@ export interface Coverage {
 }
 /** `identity_asset` is the Stage 3 per-FaceSet asset served by `GET /facesets/{id}/identity-asset/mesh` (glTF frame). */
 /** State of the `POST /faceset/reconstruct-3d` request that feeds the 3D viewer. */
-export interface ReconstructionStatus { state: 'idle' | 'loading' | 'ready' | 'error'; message?: string; retry?: () => void }
+export interface ReconstructionStatus { state: 'idle' | 'loading' | 'ready' | 'error'; message?: string; retry?: () => void;
+  /** Re-run `POST /faceset/reconstruct-3d` + `GET /faceset/3d-state` for the active source (the "Generate / Refresh 3D Faceset" button). */
+  refresh?: () => void;
+  /** Id of the source FaceSet the request is for ('' while none is loaded). */
+  sourceId?: string }
 /** `mesh` is the backend mesh frame of the `mesh_2_5d` / `mesh_full_3d` payloads (+x image-right, +y down, +z toward the viewer). */
 export type ReconstructionFrame = 'opencv' | 'opengl' | 'mesh';
 export interface Reconstruction { method: 'flame' | 'tps_2_5d' | 'identity_asset';coordinate_system: ReconstructionFrame; vertices: number[][]; faces: number[][]; uvs: number[][] | null; face_uvs?: number[][] | null; texture: string | null; provenance: string; normals?: number[][] | null }

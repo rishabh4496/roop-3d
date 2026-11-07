@@ -8,7 +8,7 @@ import './FacesetBuilder.css';
 type Sample = { sample_id: string; bin_index: number; yaw: number; pitch: number; roll: number; score: number; thumbnail_base64: string; occlusion_tier: string; eligible?: boolean };
 type Cluster = { rank: number; detections: number; coverage: number; samples: Sample[]; selected_ids: string[] };
 type Draft = { job_id: string; status: string; progress: number; scanned: number; error: string | null; clusters: Cluster[] };
-export default function FacesetBuilder({ sourceId, onSaved }: { sourceId?: string; onSaved: (id: string) => void | Promise<void> }) {
+export default function FacesetBuilder({ sourceId, onSaved, label = 'Build / Edit .fsz Faceset', className = 'button small' }: { sourceId?: string; onSaved: (id: string) => void | Promise<void>; label?: string; className?: string }) {
   const [open, setOpen] = useState(false), [draft, setDraft] = useState<Draft | null>(null);
   const [rank, setRank] = useState(0), [selected, setSelected] = useState<string[]>([]);
   const [name, setName] = useState('New multi-angle faceset'), [path, setPath] = useState('');
@@ -57,7 +57,7 @@ export default function FacesetBuilder({ sourceId, onSaved }: { sourceId?: strin
   }
   const toggle = (sample: Sample) => setSelected(previous => previous.includes(sample.sample_id) ? previous.filter(id => id !== sample.sample_id) : [...previous.filter(id => cluster?.samples.find(s => s.sample_id === id)?.bin_index !== sample.bin_index), sample.sample_id]);
   const covered = new Set(cluster?.samples.filter(s => selected.includes(s.sample_id)).map(s => s.bin_index));
-  return <><button type="button" className="button small" onClick={() => setOpen(true)}>Build / Edit .fsz Faceset</button>{open && <div className="fsb-backdrop"><DialogPanel label="Multi-angle Faceset Builder" className="fsb-panel" onClose={() => { if (!busy) setOpen(false); }}>
+  return <><button type="button" className={className} onClick={() => setOpen(true)}>{label}</button>{open && <div className="fsb-backdrop"><DialogPanel label="Multi-angle Faceset Builder" className="fsb-panel" onClose={() => { if (!busy) setOpen(false); }}>
     <header><h2>Multi-angle .fsz Faceset Builder</h2><button className="button" disabled={busy} onClick={() => setOpen(false)}>Close</button></header>
     <label>Faceset name<input value={name} onChange={e => setName(e.target.value)} /></label>
     <div className="fsb-drop" onDragOver={e => e.preventDefault()} onDrop={e => { e.preventDefault(); if (!busy && !running) void files(Array.from(e.dataTransfer.files)); }}>

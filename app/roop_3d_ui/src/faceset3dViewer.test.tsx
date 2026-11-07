@@ -206,6 +206,42 @@ describe('PoseGeometryViewer with a FaceSet reconstruction payload', () => {
     expect(host.querySelector('.pose-viewer-overlay')).toBeNull();
   });
 
+  it('never draws the placeholder crystal head once a source is loading, failed or ready', async () => {
+    const crystal = () => host.querySelector('group[name="reference-head"]');
+    await render({ coverage: null, track: null, mesh: null });
+    expect(crystal()).not.toBeNull(); // idle empty state only
+    await render({ coverage: null, track: null, mesh: null, reconstruction: { state: 'loading', sourceId: 'alice' } });
+    expect(crystal()).toBeNull();
+    await render({ coverage: null, track: null, mesh: null, reconstruction: { state: 'error', message: 'x', sourceId: 'alice' } });
+    expect(crystal()).toBeNull();
+    await render({ coverage: payload(), track: null, mesh: null, reconstruction: { state: 'ready', sourceId: 'alice' } });
+    expect(crystal()).toBeNull();
+  });
+
+  it('offers Generate / Refresh 3D Faceset and a create-.fsz slot inside the panel', async () => {
+    const refresh = vi.fn();
+    await render({ coverage: null, track: null, mesh: null, creator: <button type="button" data-testid="creator">+ Create .fsz from Video/Photos</button>,
+      reconstruction: { state: 'idle', sourceId: '', refresh } });
+    const generate = host.querySelector<HTMLButtonElement>('[data-testid="generate-3d-faceset"]')!;
+    expect(generate.textContent).toContain('Generate / Refresh 3D Faceset');
+    expect(generate.disabled).toBe(true); // nothing to reconstruct yet
+    expect(host.querySelector('[data-testid="creator"]')!.textContent).toBe('+ Create .fsz from Video/Photos');
+    await render({ coverage: payload(), track: null, mesh: null, reconstruction: { state: 'ready', sourceId: 'alice', refresh } });
+    await act(async () => { host.querySelector<HTMLButtonElement>('[data-testid="generate-3d-faceset"]')!.dispatchEvent(new MouseEvent('click', { bubbles: true })); });
+    expect(refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it('holds the vertex / UV buffers, texture and telemetry of a loaded source in the viewer state', async () => {
+    const data = payload();
+    const full = buildMeshAssets(payloadToReconstruction(data.mesh_full_3d, 'identity_asset', data.uv_texture_data_url))!;
+    expect(full.geometry.getAttribute('position').count).toBeGreaterThan(0);
+    expect(full.geometry.getAttribute('uv').count).toBe(full.geometry.getAttribute('position').count);
+    expect(payloadToReconstruction(data.mesh_full_3d, 'identity_asset', data.uv_texture_data_url)!.texture).toMatch(/^data:image\/png;base64,/);
+    await render({ coverage: data, track: null, mesh: null, reconstruction: { state: 'ready', sourceId: 'alice' } });
+    expect(readout()).toContain('Observed Views 5');
+    expect(readout()).toContain('4 / 96 (4.17%)');
+  });
+
   it('draws a glowing dot for every observed pose point and no target dot without a target', async () => {
     await render({ coverage: payload(), track: null, mesh: null });
     // Each GlowDot is a group of three spheres; the lattice cells are single spheres.

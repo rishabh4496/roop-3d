@@ -391,7 +391,7 @@ function ReferenceHead() {
     if (group.current && !reducedMotion()) group.current.rotation.y += delta * 0.35;
   });
   return (
-    <group ref={group}>
+    <group ref={group} name="reference-head">
       <mesh geometry={geometry}>
         <meshBasicMaterial color={CYAN} wireframe transparent opacity={0.28} />
       </mesh>
@@ -621,6 +621,7 @@ export default function PoseGeometryViewer({
   mesh = null,
   renderMode,
   reconstruction = null,
+  creator = null,
 }) {
   const hostRef = useRef(null);
   const controlsRef = useRef(null);
@@ -701,6 +702,9 @@ export default function PoseGeometryViewer({
 
   const state = reconstruction?.state ?? (estimatedMesh || fullMesh ? 'ready' : 'idle');
   const hasGeometry = !!assets;
+  // A source face / FaceSet is active (its reconstruction is loading, failed or done) or a mesh was supplied explicitly.
+  const sourceLoaded = state !== 'idle' || !!coverage || !!mesh;
+  const canRefresh = !!reconstruction?.refresh && !!reconstruction?.sourceId;
   const overlay = state === 'loading' ? { kind: 'loading', text: 'Reconstructing 3D face from the FaceSet…' }
     : state === 'error' ? { kind: 'error', text: reconstruction?.message || '3D reconstruction failed.' }
     : !hasGeometry ? { kind: 'idle', text: IDLE_MESSAGE } : null;
@@ -750,6 +754,19 @@ export default function PoseGeometryViewer({
         </button>
       </div>
 
+      {(reconstruction?.refresh || creator) && (
+        <div className="pose-viewer-actions" role="group" aria-label="3D FaceSet actions">
+          {reconstruction?.refresh && (
+            <button type="button" className="viewer-action-btn primary" onClick={reconstruction.refresh}
+              disabled={!canRefresh || state === 'loading'} data-testid="generate-3d-faceset"
+              title={canRefresh ? 'Rebuild the textured 3D head from the active source / .fsz (cached until the archive changes)' : 'Load a source face or .fsz faceset first'}>
+              ⚡ {state === 'loading' ? 'Generating…' : 'Generate / Refresh 3D Faceset'}
+            </button>
+          )}
+          {creator}
+        </div>
+      )}
+
       {/* R3F Canvas */}
       <div className="pose-canvas-wrapper">
         <Canvas
@@ -769,9 +786,10 @@ export default function PoseGeometryViewer({
           {assets ? (
             <ReconstructedHead pose={targetPose} assets={assets} texture={texture} volumetric={volumetric}
               wireframe={wireframe} landmarks={showLandmarks && viewMode === 'estimated_2_5d'} />
-          ) : (
+          ) : !sourceLoaded ? (
+            // Empty-state hint only: once a source exists (loading, error or ready) the crystal is never drawn.
             <ReferenceHead />
-          )}
+          ) : null}
 
           {/* FaceSet orientation heatmap, orbital rings and the glowing observed-pose dots */}
           {(observations.length > 0 || coverage) && (

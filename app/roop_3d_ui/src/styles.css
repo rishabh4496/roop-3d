@@ -200,6 +200,11 @@
 .viewer-toggle[aria-pressed="true"]{color:var(--accent);border-color:var(--accent)}
 .viewer-toggle:disabled{opacity:.45}
 .pose-viewer-options .camera-reset-btn{margin-left:auto}
+.pose-viewer-actions{display:flex;flex-wrap:wrap;gap:4px;padding:4px 8px;background:rgba(17,23,25,0.7);border-bottom:1px solid var(--line);z-index:10}
+.viewer-action-btn{background:var(--raised);border:1px solid var(--line);color:var(--text);font-size:10px;min-height:24px;padding:2px 9px;border-radius:4px;cursor:pointer;white-space:nowrap}
+.viewer-action-btn:hover:not(:disabled){border-color:var(--accent);color:var(--accent)}
+.viewer-action-btn.primary{border-color:var(--accent);color:var(--accent)}
+.viewer-action-btn:disabled{opacity:.5;cursor:not-allowed}
 .pose-viewer-overlay{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;padding:14px 24px;pointer-events:none;text-align:center;font-size:11px;line-height:1.4;color:var(--text);z-index:5}
 .pose-viewer-overlay.idle,.pose-viewer-overlay.loading{justify-content:flex-end;align-items:flex-start;text-align:left;padding:14px 96px 14px 14px;background:linear-gradient(transparent 55%,rgba(8,13,14,0.82))}
 .pose-viewer-overlay.error{background:rgba(8,13,14,0.7);color:var(--danger)}
