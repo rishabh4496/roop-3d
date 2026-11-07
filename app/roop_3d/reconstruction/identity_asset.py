@@ -34,13 +34,16 @@ from roop_3d.faceset.schemas import FaceSetDocument, FaceView
 from roop_3d.reconstruction.faceset_quality import FaceSetCoverageReport, analyze_faceset
 from roop_3d.reconstruction.geometry_types import ConfidenceState, Mesh3D
 from roop_3d.reconstruction.mesh_io import export_mesh_glb
+from roop_3d.reconstruction.rbf_deform import deform_template_rbf, welded_vertex_normals
 from roop_3d.reconstruction.multiview_fit import (
     IdentityShapeFit,
+    ViewFit,
     ViewLandmarks,
     deform_template,
     fit_identity_landmarks,
     identity_template,
     kernel_support,
+    solve_view_pose,
 )
 from roop_3d.reconstruction.uv_synthesizer import UVSynthesizer, ViewObservation
 
@@ -190,8 +193,9 @@ def _settings_template_hash(settings: IdentityAssetSettings) -> str:
 
 
 def _template_supports_dense(template: Mesh3D) -> bool:
-    """Only the canonical template has the 68-point correspondence."""
-    return getattr(template, "landmark_vertices", None) is None
+    """Whether the template defines the 68-point correspondence (canonical natively; MakeHuman by derivation)."""
+    layouts = getattr(template, "landmark_vertices", None)
+    return layouts is None or "68pt" in layouts
 
 
 def _key_settings(settings: IdentityAssetSettings) -> dict[str, Any]:
@@ -224,7 +228,7 @@ def compute_build_key(document: FaceSetDocument, settings: IdentityAssetSettings
             "quality": [round(v.quality.score, 4), round(v.quality.sharpness, 4)],
         })
     masks = {str(i): hashlib.sha256(np.ascontiguousarray(m).tobytes()).hexdigest() for i, m in sorted((occlusion_masks or {}).items())}
-    payload = {"schema": SCHEMA, "algorithm": ALGORITHM_VERSION, "settings": _key_settings(settings), "views": views,
+    payload = {"schema": SCHEMA, "algorithm": ALGORITHM_VERSION + ("+mh-rbf-mb1" if settings.template == "makehuman" else ""), "settings": _key_settings(settings), "views": views,
                "masks": masks, "template": _settings_template_hash(settings), "flame": flame_status()}
     return hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str).encode()).hexdigest()
 
@@ -261,8 +265,36 @@ def _decode(view: FaceView) -> np.ndarray:
     return img
 
 
+def padding_clear_mask(image: np.ndarray) -> np.ndarray | None:
+    """255 where the photo has content, 0 on letterbox/pillarbox padding (pure-black regions touching the border).
+
+    None when there is no such padding. Texels that project onto padding must not count as observed skin."""
+    dark = (image.max(axis=2) <= 4).astype(np.uint8)
+    if dark.mean() < 0.01:
+        return None
+    h, w = dark.shape
+    flood = dark.copy()
+    ff = np.zeros((h + 2, w + 2), np.uint8)
+    for seed in ((0, 0), (w - 1, 0), (0, h - 1), (w - 1, h - 1), (w // 2, 0), (w // 2, h - 1), (0, h // 2), (w - 1, h // 2)):
+        if flood[seed[1], seed[0]] == 1:
+            cv2.floodFill(flood, ff, seed, 2)
+    pad = cv2.dilate((flood == 2).astype(np.uint8), np.ones((5, 5), np.uint8))
+    return None if not pad.any() else np.where(pad > 0, 0, 255).astype(np.uint8)
+
+
 def _landmarks_of(view: FaceView, use68: bool) -> np.ndarray:
     return np.asarray(view.landmarks_68 if use68 else view.landmarks, np.float64)
+
+
+def _view_mask(i: int, image: np.ndarray, masks: Mapping[int, np.ndarray] | None) -> np.ndarray | None:
+    explicit = None if not masks else masks.get(i)
+    pad = padding_clear_mask(image) if settings_use_padding_mask else None
+    if explicit is None or pad is None:
+        return explicit if explicit is not None else pad
+    return np.minimum(explicit, pad)
+
+
+settings_use_padding_mask = True
 
 
 def build_identity_asset(
@@ -285,7 +317,15 @@ def build_identity_asset(
     q_by_index = {q.index: q for q in report.views}
     chosen = sorted(report.usable_indices, key=lambda i: -by_index[i].quality.score)[:settings.max_views]
     template = template_for(settings)
-    use68 = all(by_index[i].landmarks_68 is not None for i in chosen) and _template_supports_dense(template)
+    supports_dense = _template_supports_dense(template)
+    dense_ids = [i for i in chosen if by_index[i].landmarks_68 is not None]
+    # MakeHuman only: when some views (typically profiles, where the dense model is unreliable) lack 68 landmarks, the
+    # geometry is fitted from the dense views and the others are registered against that geometry for texture.
+    mixed = settings.template == "makehuman" and supports_dense and 2 <= len(dense_ids) < len(chosen)
+    use68 = supports_dense and (len(dense_ids) == len(chosen) or mixed)
+    extra_ids = [i for i in chosen if i not in dense_ids] if mixed else []
+    if mixed:
+        chosen = dense_ids
 
     def observations(indices: list[int]) -> list[ViewLandmarks]:
         out = []
@@ -311,8 +351,22 @@ def build_identity_asset(
     fit_by_view = {vf.view_index: vf for vf in fit.views}
 
     # ---- geometry: template carried onto the fitted landmarks, with per-vertex support
-    vertices, _, strength = deform_template(template, fit.template_landmarks, fit.landmarks_3d, fit.confidence_xy)
+    if settings.template == "makehuman":
+        vertices, _, strength = deform_template_rbf(template, fit.template_landmarks, fit.landmarks_3d, fit.confidence_xy,
+                                                    template.landmark_vertices[fit.layout])
+    else:
+        vertices, _, strength = deform_template(template, fit.template_landmarks, fit.landmarks_3d, fit.confidence_xy)
     geo = Mesh3D(vertices, template.faces, uvs=template.uvs)
+    if extra_ids:                       # views without dense landmarks: camera from their 5 points against the fitted head
+        idx5 = np.asarray(template.landmark_vertices["5pt"], np.int64)
+        normals5 = welded_vertex_normals(vertices, template.faces)[idx5].astype(np.float64)
+        for i in extra_ids:
+            pose = view_pose(by_index[i])
+            pf = solve_view_pose(np.asarray(by_index[i].landmarks, np.float64), vertices[idx5].astype(np.float64), normals5,
+                                 (pose.yaw, pose.pitch, pose.roll), np.array([1.0, 1.0, 1.0, 0.6, 0.6]))
+            fit_by_view[i] = ViewFit(i, pf.yaw, pf.pitch, pf.roll, pf.scale, pf.tx, pf.ty, pf.rms_mm, None, 1.0, True,
+                                     camera=pf.camera())
+        chosen = chosen + extra_ids
     support_xy = kernel_support(template.vertices, fit.template_landmarks, fit.confidence_xy)
     support_z = kernel_support(template.vertices, fit.template_landmarks, fit.confidence_z)
     geometry_confidence = np.minimum(support_xy, support_z)
@@ -320,18 +374,20 @@ def build_identity_asset(
     # ---- texture atlas (the synthesizer addresses rows as v*(H-1); the asset keeps OBJ v-up, so flip for it)
     uv_for_atlas = np.column_stack([template.uvs[:, 0], 1.0 - template.uvs[:, 1]])
     synth = UVSynthesizer(Mesh3D(vertices, template.faces, uvs=uv_for_atlas), uv_size=settings.uv_size,
-                          max_interpolation_fraction=settings.max_interpolation_fraction)
+                          max_interpolation_fraction=settings.max_interpolation_fraction,
+                          blend_mode="multiband" if settings.template == "makehuman" else "weighted")
     views_obs = []
     for i in chosen:
         vf, q = fit_by_view[i], q_by_index[i]
         consistency = math.exp(-((max(vf.rms_mm, vf.holdout_mm or 0.0) / 6.0) ** 2))
+        view_img = _decode(by_index[i])
         # Real-photo finding: near-profile views are registered poorly from 5 landmarks (the template geometry at 85 deg is a
         # guess), so their texture lands on background. Full trust up to 60 deg, fading to 10 % at 90 deg.
         registration = float(np.clip(1.0 - (abs(vf.yaw) - 60.0) / 30.0, 0.1, 1.0))
         views_obs.append(ViewObservation(
-            image=_decode(by_index[i]), camera=fit.camera_for(vf), sharpness=max(q.sharpness, 0.1),
+            image=view_img, camera=fit.camera_for(vf), sharpness=max(q.sharpness, 0.1),
             view_quality=float(np.clip(q.landmark_score * consistency * registration * (0.5 + 0.5 * q.exposure_score), 0.0, 1.0)),
-            view_index=i, occlusion_mask=None if not occlusion_masks else occlusion_masks.get(i)))
+            view_index=i, occlusion_mask=_view_mask(i, view_img, occlusion_masks)))
     atlas = synth.synthesize(views_obs)
     assert atlas.confidence_score is not None and atlas.view_count is not None and atlas.dominant_view is not None
 
@@ -384,14 +440,21 @@ def build_identity_asset(
     ]
     if not flame["used"]:
         limitations.append(f"FLAME not used: {flame['reason']}.")
-    if settings.template == "makehuman" and any(v.landmarks_68 is not None for v in document.views):
-        limitations.append("The MakeHuman template has no 68-point correspondence: dense landmarks were ignored and the 5-point layout was used.")
+    if settings.template == "makehuman" and any(v.landmarks_68 is not None for v in document.views) and fit.layout != "68pt":
+        limitations.append("Dense landmarks were not available on every used view, so the 5-point layout was used for the MakeHuman fit.")
+    if extra_ids:
+        limitations.append(f"{len(extra_ids)} view(s) without dense landmarks (views {extra_ids}) did not shape the geometry: they were "
+                           "registered against the fitted head from their 5 landmarks and contribute texture only.")
+    if settings.template == "makehuman" and fit.layout == "68pt":
+        limitations.append("The MakeHuman 68-point correspondence is derived from the anthropometric model (registered on the five "
+                           "detector landmarks, snapped to surface vertices), not hand annotated.")
     if fit.layout == "5pt":
         limitations.append("Only 5 landmarks per view are available: lateral and vertical shape detail is far less constrained than with 68.")
 
     arrays = {
         "vertices": vertices.astype(np.float32), "faces": template.faces.astype(np.int32),
-        "normals": geo.normals.astype(np.float32), "uvs": template.uvs.astype(np.float32),
+        "normals": (welded_vertex_normals(vertices, template.faces) if settings.template == "makehuman"
+                    else geo.normals.astype(np.float32)), "uvs": template.uvs.astype(np.float32),
         "vertex_confidence": vertex_conf, "vertex_state": vertex_state, "texture": atlas.texture_map,
         "texel_state": states, "texel_confidence": atlas.confidence_score, "texel_view_count": atlas.view_count,
         "texel_source_view": atlas.dominant_view, "landmarks_3d": fit.landmarks_3d.astype(np.float32),

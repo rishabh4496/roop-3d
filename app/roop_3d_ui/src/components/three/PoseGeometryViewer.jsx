@@ -263,6 +263,16 @@ export function buildMeshAssets(mesh, { landmarkCount = 0 } = {}) {
       positions[i * 3 + 2] = vertex[2] * signs[2];
     }
     geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    if (mesh.normals?.length === vertexCount) {
+      // Backend normals are welded across UV seams (no creases); reflecting them with the axis signs keeps them outward.
+      const normals = new Float32Array(vertexCount * 3);
+      for (let i = 0; i < vertexCount; i++) {
+        normals[i * 3] = mesh.normals[i][0] * signs[0];
+        normals[i * 3 + 1] = mesh.normals[i][1] * signs[1];
+        normals[i * 3 + 2] = mesh.normals[i][2] * signs[2];
+      }
+      geometry.setAttribute('normal', new THREE.BufferAttribute(normals, 3));
+    }
     if (mesh.uvs?.length === vertexCount) {
       const uvs = new Float32Array(vertexCount * 2);
       for (let i = 0; i < vertexCount; i++) { uvs[i * 2] = mesh.uvs[i][0]; uvs[i * 2 + 1] = mesh.uvs[i][1]; }
@@ -274,7 +284,7 @@ export function buildMeshAssets(mesh, { landmarkCount = 0 } = {}) {
     if (landmarkCount > 0) landmarkSource = Math.min(landmarkCount, vertexCount);
   }
 
-  geometry.computeVertexNormals();
+  if (!geometry.getAttribute('normal')) geometry.computeVertexNormals();
   geometry.computeBoundingBox();
   const center = geometry.boundingBox.getCenter(new THREE.Vector3());
   geometry.translate(-center.x, -center.y, -center.z);
@@ -311,6 +321,7 @@ export function payloadToReconstruction(value, method, fallbackTexture) {
   return {
     method, coordinate_system: 'mesh', vertices: value.vertices, faces: value.indices,
     uvs: value.uvs?.length === value.vertices.length ? value.uvs : null,
+    normals: value.normals?.length === value.vertices.length ? value.normals : null,
     texture: value.texture_base64 ? `data:image/png;base64,${value.texture_base64}` : fallbackTexture ?? null,
     provenance: value.reconstruction_level,
   };

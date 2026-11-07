@@ -3,7 +3,8 @@
 Produces a ``Mesh3D`` in the identity-asset mesh frame (metres; +x image-right, +y down, +z toward the viewer, outward
 CCW normals), with per-vertex UVs (vertices are split at UV seams) normalised to fill the atlas, and the five detector
 landmark vertices exposed as ``mesh.landmark_vertices["5pt"]`` in detector order (image-left eye, image-right eye, nose
-tip, image-left mouth corner, image-right mouth corner). There is no 68-point correspondence for this template.
+tip, image-left mouth corner, image-right mouth corner), plus a DERIVED ``mesh.landmark_vertices["68pt"]`` (iBUG order, see
+``makehuman_landmarks``).
 """
 from __future__ import annotations
 
@@ -19,7 +20,7 @@ from roop_3d.reconstruction.makehuman_build import ASSET_NAME, BUILD_VERSION, CO
 from roop_3d.reconstruction.makehuman_head import MakeHumanHeadModel
 
 TEMPLATE_KIND = "makehuman"
-TEMPLATE_VERSION = f"makehuman-cc0-head-v{BUILD_VERSION}@{COMMIT[:7]}"
+TEMPLATE_VERSION = f"makehuman-cc0-head-v{BUILD_VERSION}@{COMMIT[:7]}+lm68"
 
 
 UV_PAD = 0.008  # atlas padding between islands (about 4 texels at 512), so dilation / bilinear taps never bleed across islands
@@ -126,6 +127,8 @@ def makehuman_template(path: Path | str | None = None) -> Mesh3D:
     a = _cached(str(target.resolve()), target.stat().st_mtime_ns)
     mesh = Mesh3D(a["vertices"].copy(), a["faces"].copy(), uvs=a["uvs"].copy())
     mesh.landmark_vertices = {"5pt": a["landmarks"].copy()}      # consumed by multiview_fit.template_landmarks / landmark_normals
+    from roop_3d.reconstruction.makehuman_landmarks import landmark_68_vertices
+    mesh.landmark_vertices["68pt"] = landmark_68_vertices(mesh)   # derived correspondence (see makehuman_landmarks)
     mesh.template_kind = TEMPLATE_KIND
     return mesh
 
@@ -134,6 +137,6 @@ def template_hash(path: Path | str | None = None) -> str:
     """Content hash of the template geometry, topology and UVs (part of the identity-asset build key)."""
     mesh = makehuman_template(path)
     h = hashlib.sha256(TEMPLATE_VERSION.encode())
-    for arr in (mesh.vertices, mesh.faces, mesh.uvs, mesh.landmark_vertices["5pt"]):
+    for arr in (mesh.vertices, mesh.faces, mesh.uvs, mesh.landmark_vertices["5pt"], mesh.landmark_vertices["68pt"]):
         h.update(str(arr.dtype).encode() + str(arr.shape).encode() + np.ascontiguousarray(arr).tobytes())
     return h.hexdigest()

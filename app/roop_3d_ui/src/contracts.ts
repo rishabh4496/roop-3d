@@ -117,7 +117,9 @@ export interface IdentityAssetStatus {
   flame: Record<string, unknown>;
 }
 export interface Probe { width: number; height: number; duration_seconds: number | null; fps_rational: string | null; declared_frame_count: number | null; audio_tracks: unknown[] }
-export interface ReconstructedMesh { vertices: number[][]; uvs: number[][]; indices: number[][]; normals: number[][]; texture_base64: string; reconstruction_level: string; limitations: string[] }
+export interface ReconstructedMesh { vertices: number[][]; uvs: number[][]; indices: number[][]; normals: number[][]; texture_base64: string; reconstruction_level: string; limitations: string[]; template?: string; deformation?: MeshDeformation; texture_completion?: TextureCompletion }
+export interface MeshDeformation { template: string; landmark_layout: string; reconstruction_level: string; method: string; vertex_count: number; deviation_from_neutral_mm: { mean: number; p95: number; max: number }; landmark_fit_rms_mm: number; yaw_span_deg: number; deformation_strength: number }
+export interface TextureCompletion { method: string; observed_ratio: number; symmetry_ratio: number; harmonic_ratio: number; note: string }
 export interface ObservedPosePoint { view_index: number; yaw: number; pitch: number; roll: number; bin_index: number; position_xyz: [number, number, number]; reprojection_error_px: number }
 export interface Coverage {
   faceset_id: string; views: { yaw: number; pitch: number; roll: number; pose_bin: string }[]; bins: Record<string, number>;
@@ -130,7 +132,7 @@ export interface Coverage {
 export interface ReconstructionStatus { state: 'idle' | 'loading' | 'ready' | 'error'; message?: string; retry?: () => void }
 /** `mesh` is the backend mesh frame of the `mesh_2_5d` / `mesh_full_3d` payloads (+x image-right, +y down, +z toward the viewer). */
 export type ReconstructionFrame = 'opencv' | 'opengl' | 'mesh';
-export interface Reconstruction { method: 'flame' | 'tps_2_5d' | 'identity_asset';coordinate_system: ReconstructionFrame; vertices: number[][]; faces: number[][]; uvs: number[][] | null; face_uvs?: number[][] | null; texture: string | null; provenance: string }
+export interface Reconstruction { method: 'flame' | 'tps_2_5d' | 'identity_asset';coordinate_system: ReconstructionFrame; vertices: number[][]; faces: number[][]; uvs: number[][] | null; face_uvs?: number[][] | null; texture: string | null; provenance: string; normals?: number[][] | null }
 export interface Project {
   project_id: string;
   name: string;

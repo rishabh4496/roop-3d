@@ -88,7 +88,10 @@ class UVSynthesizer:
         uv_size: int = 512,
         visibility_threshold: float = 0.05,
         max_interpolation_fraction: float | None = None,
+        blend_mode: str = "weighted",
     ):
+        if blend_mode not in ("weighted", "multiband"):
+            raise DomainError("INVALID_BLEND_MODE", f"blend_mode must be 'weighted' or 'multiband', got {blend_mode!r}", 422)
         if uv_size < 64 or uv_size > 4096:
             raise DomainError("INVALID_UV_SIZE", f"UV size must be in [64, 4096], got {uv_size}", 422)
         if mesh.uvs is None:
@@ -96,6 +99,8 @@ class UVSynthesizer:
 
         self.mesh = mesh
         self.uv_size = uv_size
+        # 'multiband': Laplacian-pyramid blend of the per-view layers (identity/camera path only); 'weighted': per-texel average.
+        self.blend_mode = blend_mode
         self.vis_thresh = float(visibility_threshold)
         # Identity path only: interpolation is bounded to this distance (in texels) from an observed texel.
         self.max_interp_px = None if max_interpolation_fraction is None else max(1.0, max_interpolation_fraction * uv_size)
@@ -459,6 +464,15 @@ class UVSynthesizer:
         denom = np.maximum(total, 1e-9)
         for c in range(3):
             mean_color[:, c] = (weights * colors[:, :, c]).sum(axis=0) / denom
+
+        if self.blend_mode == "multiband" and int((weights.max(axis=1) > 0).sum()) > 1:
+            from roop_3d.reconstruction.uv_completion import multiband_blend
+            used = np.nonzero(weights.max(axis=1) > 0)[0]
+            layer_c = np.zeros((len(used), h, w, 3), np.float32)
+            layer_w = np.zeros((len(used), h, w), np.float32)
+            layer_c[:, ys, xs] = colors[used]
+            layer_w[:, ys, xs] = weights[used]
+            mean_color = multiband_blend(layer_c, layer_w)[ys, xs].astype(np.float64)
 
         texture = np.zeros((h, w, 3), np.uint8)
         state = np.zeros((h, w), np.uint8)

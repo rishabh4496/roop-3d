@@ -171,6 +171,8 @@ class ViewFit:
     holdout_mm: float | None     # error when this view is NOT used to fit the geometry
     inlier_fraction: float
     consistent: bool = True
+    # A view registered AGAINST the fitted geometry (it did not take part in the shape fit) carries its own camera.
+    camera: WeakPerspectiveCamera | None = None
 
 
 @dataclass
@@ -199,6 +201,8 @@ class IdentityShapeFit:
 
     def camera_for(self, view: ViewFit) -> WeakPerspectiveCamera:
         """The fitted view as a camera acting on MESH coordinates (the fit works about `model_center`)."""
+        if view.camera is not None:
+            return view.camera
         rot = batch_rotations(np.array([[view.yaw, view.pitch, view.roll]]))[0]
         shift = view.scale * (rot @ self.model_center)[:2]
         return WeakPerspectiveCamera(rotation=tuple(tuple(float(x) for x in row) for row in rot), scale=view.scale,

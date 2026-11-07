@@ -14,6 +14,7 @@ from roop_3d.audit.isolation import safe_path
 from roop_3d.core.errors import DomainError
 from roop_3d.core.settings import Contract
 from roop_3d.faceset.faceset_reader import FaceSetReader
+from roop_3d.faceset_loader import LandmarkEngine, enrich_document
 from roop_3d.reconstruction.faceset_3d import reconstruct_faceset
 
 router = APIRouter(prefix="/api/v1")
@@ -96,17 +97,24 @@ def _reconstruct(request: Request, value: Reconstruct3DRequest):
         document = _from_images(request, value.source_image_paths)
     else:
         document = _read_archive(request, value.faceset_id, value.faceset_path)
+    engine = getattr(request.app.state, "landmark_engine", None)
+    if engine is None:
+        engine = request.app.state.landmark_engine = LandmarkEngine(request.app.state.root)
+    # Stage 11: 68/106-point landmarks, aligned crops and both pose indexes for every sample (cached per archive + model).
+    loaded = enrich_document(document, engine)
+    signature = engine.signature()
     state: dict[str, Any] = getattr(request.app.state, "faceset_3d_state", None)
     if state is None:
         state = request.app.state.faceset_3d_state = {"lock": threading.RLock(), "values": {}, "latest": None}
     with state["lock"]:
         cached = state["values"].get(document.faceset_id)
-        if cached and cached.get("source_sha256") == document.source_sha256:
+        if cached and cached.get("source_sha256") == document.source_sha256 and cached.get("signature") == signature:
             result = cached["payload"]
         else:
-            result = reconstruct_faceset(document, live_pose=value.live_pose)
+            result = reconstruct_faceset(loaded.document, live_pose=value.live_pose, loaded=loaded)
             result["source_sha256"] = document.source_sha256
-            state["values"][document.faceset_id] = {"source_sha256": document.source_sha256, "payload": result}
+            state["values"][document.faceset_id] = {"source_sha256": document.source_sha256, "signature": signature,
+                                                    "payload": result}
         if value.live_pose:
             result["live_pose"] = {"yaw": float(value.live_pose["yaw"]), "pitch": float(value.live_pose["pitch"]),
                                    "roll": float(value.live_pose.get("roll", 0.0))}

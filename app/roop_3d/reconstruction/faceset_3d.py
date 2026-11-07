@@ -13,7 +13,7 @@ from roop_3d.faceset.pose_matrix import view_pose
 from roop_3d.faceset.schemas import FaceSetDocument, FaceView
 from roop_3d.reconstruction.geometry_types import CameraIntrinsics, Mesh3D
 from roop_3d.reconstruction.multiview_fit import (
-    ViewLandmarks, deform_template, fit_identity_landmarks, identity_template,
+    ViewLandmarks, deform_template, fit_identity_landmarks, five_from_68, identity_template,
 )
 from roop_3d.reconstruction.tps_fallback import get_canonical_3d_landmarks, solve_pose_pnp
 
@@ -25,6 +25,10 @@ def _pose(view: FaceView) -> tuple[float, float, float, float]:
     """Return PnP pose and reprojection RMS; use the stored measured pose on degeneracy."""
     image = cv2.imdecode(np.frombuffer(view.image_bytes, np.uint8), cv2.IMREAD_COLOR)
     points = np.asarray(view.landmarks_68 if view.landmarks_68 is not None else view.landmarks, np.float64)
+    if points.shape[0] == 68:
+        # PnP against the canonical 68-point model is ill-conditioned (flip ambiguity: measured pitch -177 deg on a frontal
+        # photo), so the dense set is reduced to the same five landmarks every other consumer of pose uses.
+        points = five_from_68(points)
     if view.landmarks_trusted and image is not None and points.shape[0] in (5, 68) and np.isfinite(points).all():
         try:
             h, w = image.shape[:2]
@@ -74,8 +78,9 @@ def _png_base64(image: np.ndarray) -> str:
     return base64.b64encode(encoded.tobytes()).decode("ascii")
 
 
-def _serialize_mesh(mesh: Mesh3D, texture: np.ndarray, *, level: str, limitations: list[str]) -> dict[str, Any]:
-    return {"vertices": np.round(mesh.vertices.astype(np.float64), 6).tolist(),
+def _serialize_mesh(mesh: Mesh3D, texture: np.ndarray, *, level: str, limitations: list[str],
+                    extra: dict[str, Any] | None = None) -> dict[str, Any]:
+    return {**(extra or {}),"vertices": np.round(mesh.vertices.astype(np.float64), 6).tolist(),
             "uvs": np.round(mesh.uvs.astype(np.float64), 6).tolist() if mesh.uvs is not None else [],
             "indices": mesh.faces.astype(np.int64).tolist(),
             "normals": np.round(mesh.normals.astype(np.float64), 6).tolist(),
@@ -111,6 +116,40 @@ def _estimated_mesh(view: FaceView, pose: tuple[float, float, float]) -> tuple[M
     return mesh, texture, level, limitations
 
 
+def _display_texture(asset, mesh: Mesh3D) -> tuple[np.ndarray, dict[str, Any]]:
+    """Hole-free BGRA atlas for the viewer: symmetry projection + harmonic skin-tone fill of never-observed texels.
+
+    The asset's own atlas stays observation-only (the reenactment/blending code relies on that); this is display only."""
+    from roop_3d.reconstruction.geometry_types import ConfidenceState
+    from roop_3d.reconstruction.uv_completion import complete_texture
+    from roop_3d.reconstruction.uv_synthesizer import UVSynthesizer
+    size = int(asset.texture.shape[0])
+    uv_for_atlas = np.column_stack([asset.uvs[:, 0], 1.0 - asset.uvs[:, 1]])
+    synth = UVSynthesizer(Mesh3D(asset.vertices, asset.faces, uvs=uv_for_atlas), uv_size=size)
+    state = np.asarray(asset.texel_state)
+    known = (state == int(ConfidenceState.OBSERVED)) | (state == int(ConfidenceState.INTERPOLATED))
+    mirror_x = float(np.median(asset.vertices[:, 0]))
+    result = complete_texture(asset.texture, known, synth.face_texel_mask, synth.pos_map.astype(np.float64), mirror_x=mirror_x)
+    return result.texture, {"method": "symmetry_projection+harmonic_skin_tone", **result.stats,
+                            "note": "Completed texels are generated for display only; they are not observations."}
+
+
+def _deformation_report(asset, settings) -> dict[str, Any]:
+    from roop_3d.reconstruction.identity_asset import template_for
+    base = template_for(settings).vertices.astype(np.float64)
+    dev = np.linalg.norm(asset.vertices.astype(np.float64) - base, axis=1) * 1000.0
+    fit = asset.manifest.fit
+    return {"template": settings.template, "landmark_layout": asset.manifest.landmark_layout,
+            "reconstruction_level": asset.manifest.reconstruction_level, "method": "wendland_rbf+laplacian_regularised",
+            "vertex_count": int(len(base)),
+            "deviation_from_neutral_mm": {"mean": round(float(dev.mean()), 3), "p95": round(float(np.percentile(dev, 95)), 3),
+                                          "max": round(float(dev.max()), 3)},
+            "landmark_fit_rms_mm": round(float(fit.get("rms_mm", float("nan"))), 3),
+            "yaw_span_deg": round(float(fit.get("yaw_span_deg", 0.0)), 2),
+            "deformation_strength": round(float(fit.get("deformation_strength", 1.0)), 3),
+            "dropped_inconsistent_views": list(fit.get("dropped_inconsistent_views", []))}
+
+
 def _full_mesh(document: FaceSetDocument, estimated: Mesh3D, fallback_texture: np.ndarray):
     from roop_3d.reconstruction.identity_asset import IdentityAssetSettings, build_identity_asset
     errors = []
@@ -123,15 +162,19 @@ def _full_mesh(document: FaceSetDocument, estimated: Mesh3D, fallback_texture: n
             asset = build_identity_asset(document, settings)
             mesh = asset.mesh()
             limitations = list(asset.manifest.limitations) + list(asset.manifest.missing_information)
-            return mesh, asset.texture, asset.manifest.reconstruction_level, limitations
+            texture, completion = _display_texture(asset, mesh)
+            extra = {"template": template, "deformation": _deformation_report(asset, settings), "texture_completion": completion}
+            return mesh, texture, asset.manifest.reconstruction_level, limitations, extra
         except Exception as error:
             errors.append(f"{template}: {str(error)[:160]}")
     limitations = ["Identity-specific multiview fitting was unavailable; symmetric canonical facial geometry is shown.",
                    "The fallback mesh covers the facial region, not the skull or back of the head."]
-    return estimated, fallback_texture, "canonical_symmetric_fallback", limitations + errors
+    return estimated, fallback_texture, "canonical_symmetric_fallback", limitations + errors, {"template": "canonical_fallback"}
 
 
-def reconstruct_faceset(document: FaceSetDocument, *, live_pose: dict[str, float] | None = None) -> dict[str, Any]:
+def reconstruct_faceset(document: FaceSetDocument, *, live_pose: dict[str, float] | None = None,
+                        loaded: Any | None = None) -> dict[str, Any]:
+    """``loaded`` (a ``faceset_loader.LoadedFaceSet``) adds the per-sample landmark/pose/bin report to the payload."""
     if not document.views:
         raise DomainError("FACESET_EMPTY", "At least one face sample is required for reconstruction", 422)
     observations = observe_poses(document)
@@ -142,7 +185,7 @@ def reconstruct_faceset(document: FaceSetDocument, *, live_pose: dict[str, float
     primary_pose = pose_by_index[primary.index]
     estimated, face_texture, estimated_level, estimated_limits = _estimated_mesh(
         primary, (primary_pose["yaw"], primary_pose["pitch"], primary_pose["roll"]))
-    full, full_texture, full_level, full_limits = _full_mesh(document, estimated, face_texture)
+    full, full_texture, full_level, full_limits, full_extra = _full_mesh(document, estimated, face_texture)
     populated = {item["bin_index"] for item in observations}
     count = len(populated)
     compatibility_views = [{"yaw": item["yaw"], "pitch": item["pitch"], "roll": item["roll"],
@@ -157,5 +200,10 @@ def reconstruct_faceset(document: FaceSetDocument, *, live_pose: dict[str, float
                           {"yaw": primary_pose["yaw"], "pitch": primary_pose["pitch"], "roll": primary_pose["roll"]}),
             "observed_pose_points": observations,
             "mesh_2_5d": _serialize_mesh(estimated, face_texture, level=estimated_level, limitations=estimated_limits),
-            "mesh_full_3d": _serialize_mesh(full, full_texture, level=full_level, limitations=full_limits),
-            "uv_texture_data_url": "data:image/png;base64," + _png_base64(full_texture)}
+            "mesh_full_3d": _serialize_mesh(full, full_texture, level=full_level, limitations=full_limits, extra=full_extra),
+            "uv_texture_data_url": "data:image/png;base64," + _png_base64(full_texture),
+            "texture_size": [int(full_texture.shape[1]), int(full_texture.shape[0])],
+            "texture_channels": int(full_texture.shape[2]) if full_texture.ndim == 3 else 1,
+            **({"faceset_samples": (lambda s: {key: s[key] for key in ("samples", "pose_matrix_3x3_roll", "landmark_models",
+                                                                       "notes", "sphere_grid")})(loaded.summary())}
+               if loaded is not None else {})}

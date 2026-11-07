@@ -93,9 +93,11 @@ def test_template_contract():
     front = t.vertices[t.faces].mean(axis=1)[:, 2] > t.vertices[:, 2].max() - 0.03
     assert (t.compute_face_normals()[front, 2] > 0).mean() > 0.75
     assert mt.template_hash() == mt.template_hash()
-    with pytest.raises(DomainError) as err:
-        template_landmarks(LAYOUT_68, t)
-    assert err.value.code == "TEMPLATE_LAYOUT_UNSUPPORTED"
+    lm68 = template_landmarks(LAYOUT_68, t)           # derived correspondence (makehuman_landmarks)
+    assert lm68.shape == (68, 3)
+    assert lm68[36:42, 1].mean() < lm68[48:60, 1].mean()                     # eyes above the mouth (+y down)
+    assert lm68[36:42, 0].mean() < lm68[42:48, 0].mean()                     # image-left eye has the smaller x
+    assert len(set(t.landmark_vertices["68pt"].tolist())) > 55                # mostly distinct vertices
 
 
 def test_island_repack_is_deterministic_and_disjoint():
@@ -141,11 +143,11 @@ def test_manifest_is_honest_about_what_was_measured(asset):
     assert texture.shape[0] == W.ATLAS and (asset.texel_state == UNSEEN).mean() > 0.2, "the unseen back/neck stays unseen, not invented"
 
 
-def test_dense_landmarks_are_ignored_with_a_note():
+def test_dense_landmarks_use_the_derived_68_point_correspondence():
     s68 = W.make_subject("mh68", W.LAYOUT_68, 93)
     built = build_identity_asset(W.full_set(s68, (0, -40, 40)), MH)
-    assert built.manifest.landmark_layout == "5pt"
-    assert any("no 68-point correspondence" in lim for lim in built.manifest.limitations)
+    assert built.manifest.landmark_layout == "68pt"
+    assert any("derived from the anthropometric model" in lim for lim in built.manifest.limitations)
 
 
 def test_build_is_deterministic(doc, asset):
