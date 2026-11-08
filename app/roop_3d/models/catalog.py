@@ -25,7 +25,7 @@ def render_dependencies(catalog) -> dict[str, str]:
     These are dependency identities, not a claim that every candidate ran. Actual activation
     still verifies bytes and reports providers through the existing inference adapters.
     """
-    names = {"inswapper_128.onnx", "inswapper_128.batch.onnx", "2d106det.onnx",
+    names = {"inswapper_128.onnx", "inswapper_128.batch.onnx", "2d106det.onnx", "1k3d68.onnx",
              "liveportrait_landmark.onnx", "liveportrait_appearance_feature_extractor.onnx",
              "liveportrait_motion_extractor.onnx", "liveportrait_warping_spade.onnx",
              "liveportrait_stitching.onnx", "liveportrait_stitching_eye.onnx",

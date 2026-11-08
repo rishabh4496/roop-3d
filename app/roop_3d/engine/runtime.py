@@ -119,7 +119,9 @@ class OrtModel:
         if config.provider in ("CUDAExecutionProvider", "TensorrtExecutionProvider") and name == "liveportrait_warping_spade.onnx":
             try:
                 from roop_3d.models.stage16 import prepare_generator
-                self.path = prepare_generator(catalog)[0]
+                prepared = (prepare_generator(catalog, batch_one=True) if config.provider == 'TensorrtExecutionProvider'
+                            else prepare_generator(catalog))
+                self.path = prepared[0]
             except Exception:
                 pass
         self._identity = self._stat()
@@ -129,7 +131,7 @@ class OrtModel:
         options.log_severity_level = 3
         options.graph_optimization_level = (ort.GraphOptimizationLevel.ORT_ENABLE_EXTENDED
             if config.graph_optimization == "extended" else ort.GraphOptimizationLevel.ORT_ENABLE_ALL)
-        if config.provider in ("CUDAExecutionProvider", "TensorrtExecutionProvider"):
+        if config.provider == "TensorrtExecutionProvider":
             options.add_session_config_entry("session.disable_cpu_ep_fallback", "1")
         self.executions = 0
         self.provider = self.requested_provider = config.provider
@@ -183,6 +185,10 @@ class OrtModel:
                 cuda_opts["cudnn_conv_algo_search"] = "DEFAULT"
             else:
                 cuda_opts["cudnn_conv_algo_search"] = "HEURISTIC"
+            # Reference ONNX graphs include host shape/control operations. Allow
+            # those graph partitions while keeping CUDA first and disabling
+            # whole-session fallback below. Strict TRT builders retain their
+            # separate GPU-only graph/canary policy.
             providers = [(config.provider, cuda_opts), "CPUExecutionProvider"]
         if config.provider != "TensorrtExecutionProvider":
             retry_reason = None
@@ -325,6 +331,8 @@ class OrtModel:
         return {"model_id": self.record["model_id"], "sha256": self.record["sha256"],
                 "artifact_state": "VERIFIED_LOCAL", "inference_state": "VERIFIED_LOCAL" if self.executions else "UNKNOWN",
                 "provider": self.provider, "executions": self.executions,
+                "execution_providers": self.session.get_providers() if self.session is not None else [],
+                "cpu_graph_partitions_allowed": self.requested_provider == "CUDAExecutionProvider",
                 "requested_provider": self.requested_provider, "fallback_reason": self.fallback_reason,
                 "license_state": self.record["license_state"], "commercial_permission": self.record["commercial_permission"]}
 

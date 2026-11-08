@@ -85,6 +85,7 @@ export default function FacesetInspector3D({ sources }: { sources: Pick<FaceSet,
               </div>}
         </div>
         <div className="fsz-inspector-radar">
+          {views.value?.some(view => view.is_synthetic) && <small className="identity-warn">Includes generated pose references. Hidden detail and low-confidence profile identities are inferred.</small>}
           {views.state === 'error' ? <div className="error-retry" role="status"><span>{views.error}</span><button type="button" className="button small" onClick={views.reload}>Retry</button></div>
             : <AngularCoverageRadar coverage={views.state === 'ready' ? coverage : null} name={sources.find(item => item.faceset_id === id)?.name} />}
         </div>

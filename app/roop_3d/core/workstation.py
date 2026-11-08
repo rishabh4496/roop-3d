@@ -2,9 +2,12 @@
 from typing import Literal
 from pydantic import Field, model_serializer
 from roop_3d.core.settings import Contract
+from roop_3d.core.face_editor import FaceExpressionOverrides
 
 
 class WorkstationParameters(Contract):
+    expression_restore_factor: float = Field(default=0, ge=0, le=1)
+    face_expression_overrides: FaceExpressionOverrides = Field(default_factory=dict, max_length=64)
     color_method: Literal['lab', 'reinhard_lab', 'histogram'] = 'lab'
     restorer_model: Literal['auto', 'gpen', 'codeformer', 'gfpgan', 'ultramax'] = 'auto'
     identity_blend_t: float | None = Field(default=None, ge=0, le=1)
@@ -49,6 +52,9 @@ class WorkstationParameters(Contract):
     @model_serializer(mode='wrap')
     def compatible_serialization(self, handler):
         value = handler(self)
+        for field in ('expression_restore_factor', 'face_expression_overrides'):
+            if field not in self.model_fields_set:
+                value.pop(field, None)
         for field in ('color_method', 'restorer_model', 'identity_blend_t', 'fidelity_weight', 'swap_weight', 'erosion_px', 'pose_mode', 'pose_frontalization', 'tps_expression_weight', 'render_mode', 'occlusion_mode', 'linear_light', 'blend_transfer', 'ultramax_small_face_mode', 'ultramax_min_native_pixels', 'ambient_fill', 'hairline_offset_px'):
             if field not in self.model_fields_set:
                 value.pop(field, None)
@@ -87,6 +93,8 @@ class WorkstationParameters(Contract):
         # Unresolved 'auto' falls back to sRGB, the pre-Stage-15 curve; callers with media context resolve it first.
         blend = 'srgb' if self.blend_transfer == 'auto' else self.blend_transfer
         return CompositeOptions(color_method=self.color_method, fidelity_weight=self.fidelity_weight, restoration_blend=0 if 'restorer' in self.bypass else self.restoration_blend,
+                                expression_restore_factor=self.expression_restore_factor,
+                                face_expression_overrides=self.face_expression_overrides,
                                 feather_px=self.feather_px,
                                 swap_weight=self.swap_weight, erosion_px=self.erosion_px,
                                 occlusion_mode=self.occlusion_mode,

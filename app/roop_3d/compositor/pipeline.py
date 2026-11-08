@@ -70,6 +70,8 @@ class RobustOptions:
 
 @dataclass(frozen=True)
 class CompositeOptions:
+    expression_restore_factor: float = 0.0
+    face_expression_overrides: Mapping = field(default_factory=dict)
     mode: BlendMode = BlendMode.FEATHER
     restoration_blend: float = 0.0
     fidelity_weight: float = 0.5
@@ -104,6 +106,8 @@ class CompositeOptions:
     blend_transfer: str = "srgb"
 
     def __post_init__(self) -> None:
+        if not np.isfinite(self.expression_restore_factor) or not 0 <= self.expression_restore_factor <= 1:
+            raise ValueError('expression_restore_factor must be within 0..1')
         if self.photometric_identity_floor != 0 and not .78 < self.photometric_identity_floor < 1:
             raise ValueError('Photometric identity floor must be 0 or in (.78, 1)')
         if not np.isfinite(self.fidelity_weight) or not 0 <= self.fidelity_weight <= 1:
@@ -161,6 +165,10 @@ class FrameCompositor:
         self._parser_injected = parser is not None
         self.parser = parser if parser is not None else BisenetFaceParser(catalog, config)
         self.restorer = restorer
+        self.expression_restorer = None
+        self.expression_portrait = None
+        self.expression_reports = {}
+        self.track_labels = {}
         self.temporal = temporal or TemporalSmoother()
         self.mask_ema = TemporalMaskEMA(alpha=.65, max_tracks=32)
         # Alpha is the current-detail coefficient; its complementary history weight is
@@ -293,6 +301,23 @@ class FrameCompositor:
         """
         restorer_seconds = 0.0
         self.last_relighting.pop(replacement.track_id,None)
+        from roop_3d.core.face_editor import FaceEditor
+        label = self.track_labels.get(replacement.track_id, f'track_{replacement.track_id:04d}')
+        edit = FaceEditor.model_validate(options.face_expression_overrides.get(label, {}))
+        expression_active = options.expression_restore_factor > 0 or edit.active()
+        if expression_active:
+            from roop_3d.expression_restorer import ExpressionRestorer
+            if self.expression_restorer is None:
+                shared = self.expression_portrait if getattr(self.expression_portrait, 'available', False) else None
+                self.expression_restorer = ExpressionRestorer(self.catalog, self.config, portrait=shared)
+            began = time.perf_counter()
+            crop = self.expression_restorer.restore(crop, target_crop, factor=options.expression_restore_factor, edit=edit)
+            self.expression_reports[replacement.track_id] = dict(self.expression_restorer.last_report)
+            restorer_seconds += time.perf_counter()-began
+            if observer is not None:
+                observer('expression', crop, replacement.inverse, alpha)
+        else:
+            self.expression_reports.pop(replacement.track_id, None)
         enhanced = crop
         side = crop.shape[0]
         current_alpha, current_target, current_skin, current_protect, current_mouth = alpha, target_crop, skin, protect, mouth_mask
@@ -406,8 +431,12 @@ class FrameCompositor:
         validity = self._resize_plane(valid_mask, height)
         if protect is not None:
             validity *= 1.0 - self._resize_plane(np.asarray(protect, np.float32), height)
-        return self.detail_temporal.update(track_id, enhanced, base, guide, valid_mask=validity,
-                                           frame_index=frame_index, scene_cut=scene_cut)
+        result, report = self.detail_temporal.update(track_id, enhanced, base, guide, valid_mask=validity,
+                                                    frame_index=frame_index, scene_cut=scene_cut)
+        if track_id in self.expression_reports and self.expression_restorer is not None:
+            self.expression_restorer.last_report = self.expression_reports[track_id]
+            result = self.expression_restorer.enforce(result)
+        return result, report
 
     @staticmethod
     def _apply_recovered_alpha(recovered, swap_weight, coverage=None):
@@ -440,6 +469,7 @@ class FrameCompositor:
         mask_temporal_context = mask_temporal_context or {}
         lip_sync_results = lip_sync_results or {}
         active_tracks = set(landmarks_by_track) | {item.track_id for item in replacements}
+        self.expression_reports = {key: value for key, value in self.expression_reports.items() if key in active_tracks}
         self.last_relighting = {key:value for key,value in self.last_relighting.items() if key in active_tracks}
         self.temporal.begin_frame(frame_index, active_track_ids=active_tracks, scene_cut=scene_cut)
         self.mask_ema.retain(active_tracks)
@@ -887,6 +917,8 @@ class FrameCompositor:
         restorer = self.restorer.capability() if self.restorer is not None else {
             "weights": "NOT_CONFIGURED", "inference": "UNKNOWN"}
         result = {"state": "AVAILABLE", "parser": parser, "restorer": restorer,
+                  "expression_restorer": {"reports": dict(self.expression_reports),
+                      "models": self.expression_restorer.portrait.capability() if self.expression_restorer and self.expression_restorer.portrait else None},
                   "temporal_tracks": self.temporal.track_count,
                   "temporal_cache_bytes": self.temporal.cache_bytes,
                   "temporal_cache_limit_bytes": self.temporal.max_cache_bytes,
@@ -900,6 +932,10 @@ class FrameCompositor:
         return result
 
     def release(self) -> None:
+        if self.expression_restorer is not None:
+            self.expression_restorer.release()
+            self.expression_restorer = None
+        self.expression_reports.clear()
         from roop_3d.reconstruction.photometric_gpu import release_renderer
         release_renderer()
         if self._relight_recognizer is not None:

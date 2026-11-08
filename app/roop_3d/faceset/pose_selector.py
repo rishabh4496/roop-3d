@@ -61,7 +61,7 @@ class PoseSelector:
         target_roll: float = 0.0,
         target_expression: float | dict[str, float] | None = None,
     ) -> ReferenceMatch:
-        """Query the best matching real observed source view for conditioning.
+        """Query the best stored source view, retaining generated-view provenance.
 
         Args:
             target_yaw: Target head yaw in degrees [-90, +90], **or** a whole pose (2-/3-tuple, array, dict or
@@ -152,5 +152,5 @@ class PoseSelector:
             expression=dict(best_view.expression),
             quality_score=round(best_view.quality.score, 4),
             pose_bin=best_view.pose_bin,
-            is_synthetic=False,
+            is_synthetic=best_view.is_synthetic,
         )

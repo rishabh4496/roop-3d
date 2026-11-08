@@ -26,7 +26,7 @@ class FacesetBuilder:
 
     def start(self, paths, *, faceset_id=None, max_frames=300, frame_stride=5):
         with self.lock:
-            if any(j['status'] == 'extracting' for j in self.jobs.values()):
+            if any(j['status'] in ('extracting', 'synthesizing') for j in self.jobs.values()):
                 raise DomainError('BUILDER_BUSY', 'An extraction is already running', 409)
             # Drafts retain only two samples per identity/bin and at most four sessions.
             if len(self.jobs) >= 4:
@@ -241,26 +241,41 @@ class FacesetBuilder:
         fid = faceset_id or 'faceset_' + uuid.uuid4().hex[:16]
         document = self.state.face_extract._document(fid, name, views, {'created_via': 'stage7_builder'})
         reconstruction = reconstruct_faceset(document)
+        return self.publish(document, reconstruction, extras, replace_id=faceset_id)
+
+    def publish(self, document, reconstruction, extras, *, replace_id=None, extra_entries=None):
+        """Verify all archive entries before activating the exact published bytes."""
+        fid, name = document.faceset_id, document.name
         final = self.state.root / 'facesets' / (fid + '.fsz')
         final.parent.mkdir(parents=True, exist_ok=True)
         temp = final.with_name('.' + uuid.uuid4().hex + '.fsz')
+        compatibility = self.state.root / 'roop_3d/outputs/facesets' / (fid + '.fsz')
+        compatibility.parent.mkdir(parents=True, exist_ok=True)
+        copy_temp = compatibility.with_name('.' + uuid.uuid4().hex + '.new.fsz')
+        if not replace_id and (final.exists() or compatibility.exists()):
+            raise DomainError('FACESET_EXISTS', 'A FaceSet with this id already exists', 409)
         try:
             export_v2(document, temp, app_root=self.state.root)
             with zipfile.ZipFile(temp, 'a', compression=zipfile.ZIP_STORED) as archive:
                 archive.writestr('sphere_coverage.json', json.dumps(reconstruction['observed_pose_points']))
                 archive.writestr('curation.json', json.dumps(extras))
                 archive.writestr('uv_albedo.png', base64.b64decode(reconstruction['mesh_full_3d']['texture_base64']))
+                for entry, data in (extra_entries or {}).items():
+                    archive.writestr(entry, data)
             # Verify the complete archive before publication.
             reloaded = FaceSetReader(self.state.models).read(temp, fid)
-            self.state.face_extract._write_faceset(reloaded, replace=bool(faceset_id))
             # Publish identical bytes to the compatibility path used by render workers.
-            compatibility = self.state.root / 'roop_3d/outputs/facesets' / (fid + '.fsz')
-            copy_temp = compatibility.with_suffix('.new.fsz')
             copy_temp.write_bytes(temp.read_bytes())
             os.replace(copy_temp, compatibility)
             os.replace(temp, final)
+            from roop_3d.core.storage import atomic_json
+            from roop_3d.server.workstation import coverage
+            atomic_json(self.state.root, f'roop_3d/.runtime/coverage/{fid}.json', coverage(reloaded))
+            atomic_json(self.state.root, f'roop_3d/.runtime/facesets/{fid}.json',
+                {'faceset_id': fid, 'name': name[:128], 'item_count': len(reloaded.views), 'schema_version': 1})
         finally:
             temp.unlink(missing_ok=True)
+            copy_temp.unlink(missing_ok=True)
         from roop_3d.faceset import pose_matrix
         pose_matrix.invalidate(fid)
         cache = getattr(self.state, 'faceset_3d_state', None)

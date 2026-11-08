@@ -26,7 +26,7 @@ STAGE16_IDS = (
 )
 
 
-def prepare_generator(catalog: ModelCatalog | None = None) -> tuple[Path, str, int]:
+def prepare_generator(catalog: ModelCatalog | None = None, *, batch_one: bool = False) -> tuple[Path, str, int]:
     """Content-address an owned derivative of the preserved reference generator."""
     import hashlib
     from roop_3d.core.storage import atomic_json, exclusive
@@ -37,7 +37,8 @@ def prepare_generator(catalog: ModelCatalog | None = None) -> tuple[Path, str, i
     if record is None:
         raise RuntimeError("No inspected reference LivePortrait generator is registered")
     source = catalog.resolve_for_inference(record.model_id)
-    relative = f"roop_3d/.runtime/stage16/generator_{record.expected_sha256}_4d_v1.onnx"
+    conversion = '4d_b1_shapes_v2' if batch_one else '4d_v1'
+    relative = f"roop_3d/.runtime/stage16/generator_{record.expected_sha256}_{conversion}.onnx"
     path = owned_path(application_root() / relative)
     evidence_relative = relative + ".json"
     evidence = owned_path(application_root() / evidence_relative)
@@ -46,15 +47,34 @@ def prepare_generator(catalog: ModelCatalog | None = None) -> tuple[Path, str, i
             if not (path.is_file() and evidence.is_file()):
                 raise RuntimeError("Incomplete derivative; preserve it for inspection and select a new conversion version")
             metadata = json.loads(evidence.read_text("utf-8"))
-            if metadata.get("source_sha256") != record.expected_sha256 or metadata.get("conversion") != "4d_v1":
+            if metadata.get("source_sha256") != record.expected_sha256 or metadata.get("conversion") != conversion:
                 raise RuntimeError("Derivative provenance does not match the preserved source")
             verify_file(path, metadata["sha256"], metadata["size"])
             return path, metadata["sha256"], metadata["size"]
         changed = convert_grid_sample(source, path)
+        if batch_one:
+            # App portrait inference is batch one. TensorRT's subgraph parser
+            # needs ranks for the newly lowered GridSample intermediates, not
+            # just the pre-conversion graph's stale symbolic value_info.
+            import onnx
+            try:
+                model = onnx.load(str(path), load_external_data=False)
+                for value in (*model.graph.input, *model.graph.output):
+                    dims = value.type.tensor_type.shape.dim
+                    if dims:
+                        dims[0].ClearField('dim_param')
+                        dims[0].dim_value = 1
+                del model.graph.value_info[:]
+                model = onnx.shape_inference.infer_shapes(model, strict_mode=True, data_prop=True)
+                onnx.checker.check_model(model)
+                onnx.save(model, str(path))
+            except Exception:
+                path.unlink(missing_ok=True)
+                raise
         digest = hashlib.sha256(path.read_bytes()).hexdigest()
         size = path.stat().st_size
         atomic_json(application_root(), evidence_relative, {"source_sha256": record.expected_sha256,
-                    "sha256": digest, "size": size, "conversion": "4d_v1", "replaced": changed,
+                    "sha256": digest, "size": size, "conversion": conversion, "replaced": changed,
                     "provider_evidence": "UNVERIFIED"})
         return path, digest, size
 

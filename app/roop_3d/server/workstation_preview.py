@@ -214,6 +214,8 @@ class PreviewService:
                                     retarget='off' if value.effective_parameters.uses_mesh_projection() else 'auto',
                                     **value.effective_parameters.session_options(),
                                     **tracking)
+            if getattr(session, 'compositor', None) is not None:
+                session.compositor.track_labels = {number: label for label, number in labels_to_ids.items()}
             if identity_guard is not None:
                 session.set_identity_guard(identity_guard)
             if hasattr(session, 'configure_temporal'):

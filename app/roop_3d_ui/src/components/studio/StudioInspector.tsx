@@ -13,6 +13,7 @@ import HardwareExplainer from '../guide/HardwareExplainer';
 import CoverageRadarPanel from '../three/CoverageRadarPanel';
 import IdentityMorphPanel from '../three/IdentityMorphPanel';
 import { viewerLighting, viewerMorph } from '../three/viewerRigs';
+import FaceExpressionEditor from './FaceExpressionEditor';
 
 const PoseGeometryViewer = lazy(() => import('../../ThreeViewport').then(module => ({ default: module.PoseGeometryViewer })));
 const LightProbeSphere = lazy(() => import('../../ThreeViewport').then(module => ({ default: module.LightProbeSphere })));
@@ -112,6 +113,7 @@ export default function StudioInspector({ caps, config, onSaveConfig, track, she
             <Suspense fallback={<div className="skeleton-tile wide" aria-label="Loading 3D viewer" />}><PoseGeometryViewer coverage={coverage} track={track} mesh={mesh} renderMode={renderMode} reconstruction={reconstruction} creator={facesetCreator} lighting={lighting} morph={morph} /></Suspense>
           </div>
           {reconstructionPicker}
+          <FaceExpressionEditor parameters={parameters} setParameters={setParameters} trackId={track?.track_id ?? null} />
           <details className="inspector-subsection" data-testid="coverage-section" open>
             <summary>Angular coverage<small>{coverage ? 'which head angles this FaceSet has' : 'load a FaceSet'}</small></summary>
             <CoverageRadarPanel coverage={coverage} track={track} compact />

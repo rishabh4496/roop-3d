@@ -28,8 +28,9 @@ class FaceView(Contract):
     expression: dict[str, float] = Field(default_factory=dict)
     quality: QualityMetrics
     pose_bin: str = Field(min_length=1, max_length=32)
-    is_synthetic: Literal[False] = False
+    is_synthetic: bool = False
     uv_map_path: str | None = None
+    uv_map_bytes: bytes | None = None
     # Stage 3: optional dense (68-point) landmarks and an honesty flag. `landmarks` (5 points) stays the
     # contract every existing consumer uses; `landmarks_trusted=False` marks fabricated stand-in landmarks
     # (no detector result / archive without geometry) that a 3D reconstruction must never treat as observations.
@@ -96,4 +97,4 @@ class ReferenceMatch(Contract):
     expression: dict[str, float] = Field(default_factory=dict)
     quality_score: float = Field(ge=0.0, le=1.0)
     pose_bin: str
-    is_synthetic: Literal[False] = False
+    is_synthetic: bool = False

@@ -770,7 +770,7 @@ export default function PoseGeometryViewer({
 
   // Observed pose points -> counts per cell of the exact backend 12x8 grid.
   const baseLattice = useMemo(() => generatePoseGrid(SPHERE_RADIUS), []);
-  const observations = useMemo(() => (Array.isArray(coverage?.observed_pose_points) ? coverage.observed_pose_points.filter(point => Array.isArray(point?.position_xyz)) : []), [coverage]);
+  const observations = useMemo(() => [...(coverage?.observed_pose_points ?? []), ...(coverage?.generated_pose_points ?? [])].filter(point => Array.isArray(point?.position_xyz)), [coverage]);
   const lattice = useMemo(() => {
     const counts = new Array(96).fill(0);
     if (observations.length) {
@@ -940,6 +940,7 @@ export default function PoseGeometryViewer({
         <div className="status-metric">
           <span className="status-label">Observed Views</span>
           <strong>{stats.totalSamples}</strong>
+          {!!coverage?.generated_views && <small>{coverage.generated_views} generated references</small>}
         </div>
         <div className="status-divider" />
         <div className="status-metric">

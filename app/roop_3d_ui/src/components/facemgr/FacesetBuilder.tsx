@@ -7,19 +7,24 @@ import './FacesetBuilder.css';
 
 type Sample = { sample_id: string; bin_index: number; yaw: number; pitch: number; roll: number; score: number; thumbnail_base64: string; occlusion_tier: string; eligible?: boolean };
 type Cluster = { rank: number; detections: number; coverage: number; samples: Sample[]; selected_ids: string[] };
-type Draft = { job_id: string; status: string; progress: number; scanned: number; error: string | null; clusters: Cluster[] };
+type Draft = { job_id: string; status: string; progress: number; scanned: number; phase?: string; error: string | null; clusters: Cluster[]; result?: { faceset_id: string; view_count: number } };
 export default function FacesetBuilder({ sourceId, onSaved, label = 'Build / Edit .fsz Faceset', className = 'button small' }: { sourceId?: string; onSaved: (id: string) => void | Promise<void>; label?: string; className?: string }) {
   const [open, setOpen] = useState(false), [draft, setDraft] = useState<Draft | null>(null);
+  const [synthesis, setSynthesis] = useState<Draft | null>(null);
   const [rank, setRank] = useState(0), [selected, setSelected] = useState<string[]>([]);
   const [name, setName] = useState('New multi-angle faceset'), [path, setPath] = useState('');
   const [editing, setEditing] = useState(false), [busy, setBusy] = useState(false), [error, setError] = useState('');
   const [bin, setBin] = useState<number | null>(null), [uploadProgress, setUploadProgress] = useState(0);
   const input = useRef<HTMLInputElement>(null);
+  const saved = useRef(onSaved);
+  useEffect(() => { saved.current = onSaved; }, [onSaved]);
   const cluster = draft?.clusters.find(c => c.rank === rank);
-  const running = draft?.status === 'extracting';
+  const extracting = draft?.status === 'extracting';
+  const synthesizing = synthesis?.status === 'synthesizing';
+  const running = extracting || synthesizing;
   const jobId = draft?.job_id;
   useEffect(() => {
-    if (!running || !jobId) return;
+    if (!extracting || !jobId) return;
     let active = true;
     const timer = setInterval(() => { void api<Draft>(`/faceset/extraction/${jobId}`).then(value => {
       if (!active) return;
@@ -27,7 +32,31 @@ export default function FacesetBuilder({ sourceId, onSaved, label = 'Build / Edi
       if (value.status === 'ready') { const first = value.clusters[0]; setRank(first?.rank ?? 0); setSelected(first?.selected_ids ?? []); }
     }).catch(e => { if (active) { setError(e.message); setDraft(previous => previous ? { ...previous, status: "error" } : previous); clearInterval(timer); } }); }, 700);
     return () => { active = false; clearInterval(timer); };
-  }, [running, jobId]);
+  }, [extracting, jobId]);
+  const synthesisId = synthesis?.job_id;
+  useEffect(() => {
+    if (!synthesizing || !synthesisId) return;
+    let active = true, polling = false;
+    const timer = setInterval(() => {
+      if (polling) return;
+      polling = true;
+      void api<Draft>(`/faceset/extraction/${synthesisId}`).then(async value => {
+        if (!active) return;
+        if (value.status === 'ready' && value.result) {
+          await saved.current(value.result.faceset_id);
+          if (active) { setSynthesis(value); setOpen(false); setDraft(null); }
+        } else setSynthesis(value);
+      }).catch(e => { if (active) { setError(e.message); setSynthesis(previous => previous ? { ...previous, status: 'error' } : null); } })
+        .finally(() => { polling = false; });
+    }, 700);
+    return () => { active = false; clearInterval(timer); };
+  }, [synthesizing, synthesisId]);
+  async function synthesize() {
+    setBusy(true); setError('');
+    try {
+      setSynthesis(await post<Draft>('/faceset/synthesize-36', { job_id: draft?.job_id, cluster_rank: rank, selected_ids: selected, name }));
+    } catch (e) { setError((e as Error).message); } finally { setBusy(false); }
+  }
   async function extract(paths: string[], edit = editing) {
     setError(''); setBusy(true);
     try {
@@ -57,8 +86,8 @@ export default function FacesetBuilder({ sourceId, onSaved, label = 'Build / Edi
   }
   const toggle = (sample: Sample) => setSelected(previous => previous.includes(sample.sample_id) ? previous.filter(id => id !== sample.sample_id) : [...previous.filter(id => cluster?.samples.find(s => s.sample_id === id)?.bin_index !== sample.bin_index), sample.sample_id]);
   const covered = new Set(cluster?.samples.filter(s => selected.includes(s.sample_id)).map(s => s.bin_index));
-  return <><button type="button" className={className} onClick={() => setOpen(true)}>{label}</button>{open && <div className="fsb-backdrop"><DialogPanel label="Multi-angle Faceset Builder" className="fsb-panel" onClose={() => { if (!busy) setOpen(false); }}>
-    <header><h2>Multi-angle .fsz Faceset Builder</h2><button className="button" disabled={busy} onClick={() => setOpen(false)}>Close</button></header>
+  return <><button type="button" className={className} onClick={() => setOpen(true)}>{label}</button>{open && <div className="fsb-backdrop"><DialogPanel label="Multi-angle Faceset Builder" className="fsb-panel" onClose={() => { if (!busy && !running) setOpen(false); }}>
+    <header><h2>Multi-angle .fsz Faceset Builder</h2><button className="button" disabled={busy || running} onClick={() => setOpen(false)}>Close</button></header>
     <label>Faceset name<input value={name} onChange={e => setName(e.target.value)} /></label>
     <div className="fsb-drop" onDragOver={e => e.preventDefault()} onDrop={e => { e.preventDefault(); if (!busy && !running) void files(Array.from(e.dataTransfer.files)); }}>
       <p>Drop a reference video or photo batch to extract head angles</p><button className="button" disabled={busy || running} onClick={() => input.current?.click()}>Choose video / photos</button>
@@ -67,7 +96,8 @@ export default function FacesetBuilder({ sourceId, onSaved, label = 'Build / Edi
     <label>Local video or image directory inside this checkout<input value={path} onChange={e => setPath(e.target.value)} placeholder="roop_3d/.runtime/media/reference.mp4" /></label>
     <button className="button" disabled={busy || running || !path} onClick={() => void extract([path])}>Extract local media</button>
     {sourceId && <button className="button" disabled={busy || running} onClick={() => void extract([], true)}>Edit active faceset / add angles</button>}
-    {(busy || running) && <div role="status"><progress max={1} value={running ? draft.progress : uploadProgress}/><span>{running ? `Scanning: ${draft.scanned} sampled frames` : 'Uploading / saving faceset…'}</span></div>}
+    {(busy || running) && <div role="status"><progress max={1} value={synthesizing ? synthesis.progress : extracting ? draft.progress : uploadProgress}/><span>{synthesizing ? `${synthesis.phase ?? 'Synthesizing'}: ${synthesis.scanned} / 36 angles` : extracting ? `Scanning: ${draft.scanned} sampled frames` : 'Uploading / saving faceset…'}</span></div>}
+    {synthesis?.error && <p role="alert">{synthesis.error}</p>}
     {(error || draft?.error) && <p role="alert">{error || draft?.error}</p>}
     {!!draft?.clusters.length && <><label>Person cluster<select value={rank} disabled={running} onChange={e => { const r = Number(e.target.value); setRank(r); setSelected(draft.clusters.find(c => c.rank === r)?.selected_ids ?? []); }}>
       {draft.clusters.map(c => <option key={c.rank} value={c.rank}>Person {c.rank + 1} · {c.detections} detections · {c.coverage}/96 angles</option>)}
@@ -79,5 +109,9 @@ export default function FacesetBuilder({ sourceId, onSaved, label = 'Build / Edi
       return <section key={group}><h4>{group} ({samples.length})</h4><div className="fsb-gallery">{samples.map(s => <button key={s.sample_id} disabled={running || busy} aria-pressed={selected.includes(s.sample_id)} onClick={() => toggle(s)}><img src={`data:image/jpeg;base64,${s.thumbnail_base64}`} alt={`${group} crop`}/><span>{s.yaw.toFixed(0)}° / {s.pitch.toFixed(0)}° · quality {s.score.toFixed(2)}</span><small>{s.occlusion_tier}{s.eligible === false ? ' · review occlusion' : ''}</small><strong>{selected.includes(s.sample_id) ? 'Selected — remove' : 'Add angle'}</strong></button>)}</div></section>;
     })}
     <button className="button primary" disabled={busy || running || !selected.length || !name.trim()} onClick={() => void save()}>Save &amp; Activate .fsz Faceset</button></>}
+    {!!cluster && selected.length >= 1 && selected.length <= 3 && cluster.detections <= 3 && <section aria-label="Single photo 3D synthesis">
+      <button className="button primary" disabled={busy || running || !name.trim()} onClick={() => void synthesize()}>Synthesize Full 36-Angle 3D Faceset (.fsz)</button>
+      <p>Creates 33 views at yaw −75° to +75° in 15° steps and pitch −30° / 0° / +30°, plus three frontal views at (yaw, pitch): (0°, −15°), (0°, +15°), (+7.5°, 0°). UltraMax enhances every angle; ArcFace scores and UV textures are stored. Extreme-angle identity confidence may be low. Hidden detail is generated and labelled synthetic.</p>
+    </section>}
   </DialogPanel></div>}</>;
 }

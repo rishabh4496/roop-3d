@@ -293,7 +293,8 @@ def faceset_views(faceset_id: str, request: Request):
     if archive is None:
         raise DomainError('FACESET_ARCHIVE_NOT_FOUND', 'FaceSet archive is missing', 404)
     document = FaceSetReader(request.app.state.models, cache_root=root / 'roop_3d/.runtime/cache').read(archive, faceset_id=faceset_id)
-    return [{'index': view.index, 'yaw': view.yaw, 'pitch': view.pitch, 'roll': view.roll} for view in document.views[:500]]
+    return [{'index': view.index, 'yaw': view.yaw, 'pitch': view.pitch, 'roll': view.roll,
+             **({'is_synthetic': True} if view.is_synthetic else {})} for view in document.views[:500]]
 
 
 class FaceBuildView(Contract):

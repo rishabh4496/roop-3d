@@ -232,6 +232,7 @@ def compute_build_key(document: FaceSetDocument, settings: IdentityAssetSettings
             "trusted": v.landmarks_trusted, "bbox": [round(x, 2) for x in v.bbox],
             "pose": [round(v.yaw, 3), round(v.pitch, 3), round(v.roll, 3)],
             "quality": [round(v.quality.score, 4), round(v.quality.sharpness, 4)],
+            **({'is_synthetic': True} if v.is_synthetic else {}),
         })
     masks = {str(i): hashlib.sha256(np.ascontiguousarray(m).tobytes()).hexdigest() for i, m in sorted((occlusion_masks or {}).items())}
     payload = {"schema": SCHEMA, "algorithm": ALGORITHM_VERSION + ("+mh-rbf-mb1" if settings.template == "makehuman" else ""), "settings": _key_settings(settings), "views": views,
@@ -435,6 +436,25 @@ def build_identity_asset(
             if m[name] is not None:
                 matrix[r, c] = m[name]
 
+    # Generated reference views may fill pose-bank textures, but their apparent
+    # multiview support cannot establish observed depth or observed UV detail.
+    generated_ids = {v.index for v in document.views if v.is_synthetic}
+    if generated_ids:
+        generated_texels = np.isin(atlas.dominant_view, list(generated_ids))
+        mask = atlas.confidence_mask.copy()
+        mask[generated_texels & (mask == int(ConfidenceState.OBSERVED))] = int(ConfidenceState.INTERPOLATED)
+        confidence = atlas.confidence_score.copy()
+        confidence[generated_texels] = np.minimum(confidence[generated_texels], .35)
+        # Geometry was fitted jointly, so synthetic constraints cannot establish
+        # observed vertices even at a UV edge filled by the visibility dilation.
+        vertex_state[vertex_state == int(ConfidenceState.OBSERVED)] = int(ConfidenceState.INTERPOLATED)
+        vertex_conf = np.minimum(vertex_conf, .35)
+        footprint = synth.face_texel_mask > 0
+        denominator = max(int(np.count_nonzero(footprint)), 1)
+        atlas = atlas.model_copy(update={'confidence_mask': mask, 'confidence_score': confidence,
+            'observed_ratio': float(np.count_nonzero((mask == int(ConfidenceState.OBSERVED)) & footprint)/denominator),
+            'interpolated_ratio': float(np.count_nonzero((mask == int(ConfidenceState.INTERPOLATED)) & footprint)/denominator)})
+
     # ---- honesty bookkeeping
     states = atlas.confidence_mask
     res = asset_statistics(atlas, vertex_state)
@@ -460,6 +480,8 @@ def build_identity_asset(
         "Expression is stored as image-space measurements, not FLAME coefficients.",
         "Texture lighting is only gain-compensated per view; shading/specular are baked into OBSERVED texels.",
     ]
+    if generated_ids:
+        limitations.append('Synthetic pose references contribute generated appearance priors; they do not prove observed depth or hidden source detail.')
     if not flame["used"]:
         limitations.append(f"FLAME not used: {flame['reason']}.")
     if settings.template == "makehuman" and any(v.landmarks_68 is not None for v in document.views) and fit.layout != "68pt":
@@ -512,19 +534,19 @@ def build_identity_asset(
             reasons.append("NOT_SELECTED_MAX_VIEWS")
         sources.append(SourceReference(
             index=v.index, image_sha256=hashlib.sha256(v.image_bytes).hexdigest(), used=v.index in chosen,
-            exclusion_reasons=reasons, warnings=list(q.warnings), identity_distance=q.identity_distance,
+            exclusion_reasons=reasons, warnings=list(q.warnings) + (['GENERATED_REFERENCE'] if v.is_synthetic else []), identity_distance=q.identity_distance,
             refined_yaw=vf.yaw if vf else None, refined_pitch=vf.pitch if vf else None, refined_roll=vf.roll if vf else None,
             reprojection_rms_mm=vf.rms_mm if vf else None, holdout_error_mm=vf.holdout_mm if vf else None))
 
-    depth_ok = fit.level != "single_view_prior" and fit.depth_observed_fraction >= 0.5
+    depth_ok = fit.level != "single_view_prior" and fit.depth_observed_fraction >= 0.5 and not generated_ids
     manifest = IdentityAssetManifest(
         build_key=compute_build_key(document, settings, occlusion_masks),
         created_at=datetime.datetime.now(datetime.timezone.utc).isoformat(),
         faceset_id=document.faceset_id, faceset_source_sha256=document.source_sha256,
-        reconstruction_level=fit.level, landmark_layout=fit.layout,
+        reconstruction_level='generated_view_prior' if generated_ids else fit.level, landmark_layout=fit.layout,
         claims={"complete_3d_recovery": False, "back_of_head_recovered": False, "full_head_geometry": False,
                 "identity_specific_landmarks": bool(np.any(fit.confidence_xy >= 0.5)), "depth_triangulated": bool(depth_ok),
-                "texture_from_observations_only": True},
+                "texture_from_observations_only": not bool(generated_ids)},
         missing_information=missing, limitations=limitations, sources=sources, settings=settings.model_dump(),
         model_version={"asset_schema": SCHEMA, "algorithm": ALGORITHM_VERSION, "template": _template_version(settings),
                        "landmark_fit": "weak-perspective MAP bundle adjustment", "texture": "z-buffer visibility-weighted blend",

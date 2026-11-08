@@ -15,6 +15,7 @@ import AngularCoverageRadar from '../three/AngularCoverageRadar';
 import FacesetInspector3D from './FacesetInspector3D';
 import { api, post } from '../../api';
 import FacesetLibrary from './FacesetLibrary';
+import PhotoSynthesisAction from './PhotoSynthesisAction';
 
 /** The 3x3 pose matrix as ARIA rows of three cells, so `role=grid` has the `row` children it requires. */
 const poseRows = cells => Array.from({ length: Math.ceil(cells.length / 3) }, (_, row) => cells.slice(row * 3, row * 3 + 3));
@@ -401,6 +402,10 @@ export default function FaceManager({
           >
             Save to FaceSet Library ↗
           </button>
+          {activePerson && !(bankReady && !activePerson.local) && <PhotoSynthesisAction
+            images={activePerson.faces.filter(face => !face.trackId && face.thumbnailUrl?.includes('base64,')).map(face => face.thumbnailUrl)}
+            name={personNames[activePerson.id] || activePerson.name || 'Synthesized 3D Faceset'}
+            onSaved={async id => { await onRefreshSources?.(); setAssignedSource(id); setStatusNotice('Synthesized 36-angle faceset saved and activated.'); }} />}
         </div>
       </header>
 

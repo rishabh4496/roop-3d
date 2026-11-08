@@ -108,7 +108,7 @@ export interface IdentitySheet { inspection_id: string; target_sha256: string; t
 export interface IdentityLock { lock_id: string; revision: number; digest: string; target_path: string; target_sha256: string; inspection_id: string; assignments: { track_id: string; faceset_id: string; faceset_sha256: string }[]; excluded_tracks: string[]; status: { valid: boolean; reasons: { code: string; detail: string; track_id?: string; faceset_id?: string }[] } }
 export interface FaceSet { faceset_id: string; name: string; item_count: number }
 /** `GET /facesets/{id}/views`: stored view poses (legacy pitch frame, + = looking down). */
-export interface FaceSetView { index: number; yaw: number; pitch: number; roll: number }
+export interface FaceSetView { index: number; yaw: number; pitch: number; roll: number; is_synthetic?: boolean }
 /** `GET|POST /facesets/{id}/identity-asset` (Stage 7 server/identity_assets.py). GET never builds. */
 export interface IdentityAssetStatus {
   faceset_id: string; name: string; state: 'built' | 'not_built'; build_key: string; reused?: boolean; note: string;
@@ -123,9 +123,11 @@ export interface ReconstructedMesh { vertices: number[][]; uvs: number[][]; indi
 export interface MeshDeformation { template: string; landmark_layout: string; reconstruction_level: string; method: string; vertex_count: number; deviation_from_neutral_mm: { mean: number; p95: number; max: number }; landmark_fit_rms_mm: number; yaw_span_deg: number; deformation_strength: number }
 export interface TextureCompletion { method: string; observed_ratio: number; symmetry_ratio: number; harmonic_ratio: number; note: string }
 export interface ObservedPosePoint { view_index: number; yaw: number; pitch: number; roll: number; bin_index: number; position_xyz: [number, number, number]; reprojection_error_px: number }
+export type GeneratedPosePoint = Omit<ObservedPosePoint, 'reprojection_error_px'> & { is_synthetic: true; pose_method?: string; arcface_similarity?: number; identity_status?: string };
 export interface Coverage {
   faceset_id: string; views: { yaw: number; pitch: number; roll: number; pose_bin: string }[]; bins: Record<string, number>;
   status?: string; observed_views?: number; sphere_coverage_count?: number; sphere_coverage_total?: number; sphere_coverage_pct?: number;
+  generated_views?: number; generated_pose_points?: GeneratedPosePoint[];
   live_pose?: { yaw: number; pitch: number; roll: number }; observed_pose_points?: ObservedPosePoint[];
   mesh_2_5d?: ReconstructedMesh; mesh_full_3d?: ReconstructedMesh; uv_texture_data_url?: string;
 }

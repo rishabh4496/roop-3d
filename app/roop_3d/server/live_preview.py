@@ -43,6 +43,7 @@ from roop_3d.core.animation import FaceSegment, ParameterCurves
 from roop_3d.core.errors import DomainError
 from roop_3d.core.settings import Contract
 from roop_3d.core.workstation import WorkstationParameters
+from roop_3d.core.face_editor import FaceExpressionOverrides
 from roop_3d.faceset.identity_blend import IdentityBlendSpec
 from roop_3d.jobs.schema import JobRequest
 from roop_3d.media.finishing import ExportOptions
@@ -54,7 +55,7 @@ from roop_3d.server.workstation_preview import PreviewRequest
 router = APIRouter(prefix="/api/v1")
 
 RETRY_AFTER_MS = 1000
-SoloNode = Literal["final", "detector", "pose", "swapper", "matte", "restorer", "color", "source", "normal_map", "sh_lighting"]
+SoloNode = Literal["final", "detector", "pose", "swapper", "expression", "matte", "restorer", "color", "source", "normal_map", "sh_lighting"]
 RestorerName = Literal["off", "gpen", "codeformer", "gfpgan", "ultramax"]
 _FACESET = r"^[A-Za-z0-9_-]{1,64}$"
 _TRACK = r"^track_[0-9]{4}$"
@@ -85,6 +86,8 @@ class OcclusionSettings(Contract):
 
 
 class LivePreviewPayload(Contract):
+    expression_restore_factor: float | None = Field(default=None, ge=0, le=1)
+    face_expression_overrides: FaceExpressionOverrides = Field(default_factory=dict, max_length=64)
     engine_id: str = Field(default="reference_onnx", pattern=r"^[a-z0-9][a-z0-9_]{0,95}$")
     # media + frame
     target_path: str = Field(min_length=1, max_length=1024)
@@ -519,6 +522,10 @@ class LivePreviewService:
             values["pose_frontalization"] = payload.pose_frontalization
         if payload.tps_expression_weight is not None:
             values["tps_expression_weight"] = payload.tps_expression_weight
+        if payload.expression_restore_factor is not None:
+            values['expression_restore_factor'] = payload.expression_restore_factor
+        if payload.face_expression_overrides:
+            values['face_expression_overrides'] = payload.face_expression_overrides
         if payload.restorer == 'codeformer':
             values.update(restorer_model='codeformer', fidelity_weight=payload.fidelity_weight)
         elif payload.restorer == 'ultramax':
@@ -602,6 +609,10 @@ class LivePreviewService:
             applied.append("pose_frontalization")
         if payload.tps_expression_weight:
             applied.append("tps_expression_weight")
+        if payload.expression_restore_factor:
+            applied.append('expression_restore_factor')
+        if payload.face_expression_overrides:
+            applied.append('face_expression_overrides')
         if payload.restorer in ("gpen", "codeformer", "gfpgan", "ultramax"):
             applied.append("restorer:" + payload.restorer)
         if payload.restorer in ("codeformer", "ultramax"):

@@ -2,6 +2,8 @@ export type RestorerModel = 'gpen' | 'codeformer' | 'ultramax' | 'gfpgan';
 /** Weight file each enhancer needs. UltraMax is CodeFormer weights + Laplacian detail fusion, so it shares CodeFormer's file. */
 export const restorerWeights = (model: RestorerModel | undefined): string => (model === 'codeformer' || model === 'ultramax' ? 'CodeFormerv0.1.onnx' : model === 'gfpgan' ? 'GFPGANv1.4.onnx' : 'gpen_bfr_512.onnx');
 export type WorkstationParameters = {
+  expression_restore_factor?: number;
+  face_expression_overrides?: Record<string, FaceEditor>;
   color_method?: 'lab' | 'reinhard_lab' | 'histogram';
   restorer_model?: RestorerModel; fidelity_weight?: number; identity_blend_t?: number;
   restoration_blend: number; feather_px: number; color_strength: number; pose_strength: number; pose_mode?: 'retarget' | 'mesh_blend';
@@ -29,6 +31,7 @@ export type WorkstationParameters = {
   /** Forehead / hairline boundary offset in px (+ grows the swapped region upward, - pulls it down), -32..32. Omitted until touched. */
   hairline_offset_px?: number;
 };
+export type FaceEditor = Partial<Record<'head_pitch' | 'head_yaw' | 'head_roll' | 'gaze_x' | 'gaze_y' | 'blink_left' | 'blink_right' | 'eyebrow_tilt' | 'eyebrow_raise' | 'mouth_smile' | 'mouth_pout' | 'mouth_open' | 'jaw_width' | 'chin_length', number>>;
 export const DEFAULT_PARAMETERS: WorkstationParameters = {
   restoration_blend: 0,
   feather_px: 5,
@@ -65,6 +68,7 @@ export const PIPELINE_NODES: PipelineNode[] = [
 ];
 /** Secondary buffers reached from a chip on their parent stage; they are not stages of their own (and have no hotkey). */
 export const PIPELINE_ALT_NODES: (PipelineNode & { parent: string })[] = [
+  { id: 'expression', parent: 'swap', label: 'Stage 2.5 Micro-Expression Restorer', short: 'Expression', buffer: 'expression', optional: true, note: 'Target expression residual and per-face 3D edits, before UltraMax' },
   { id: 'normal', parent: 'lighting', label: '3D Normal Map', short: 'Normals', buffer: 'normal_map', note: 'RGB-encoded 3D Surface Normal map (nx, ny, nz)' },
 ];
 export const pipelineNode = (id: string | null): PipelineNode | undefined => PIPELINE_NODES.find(node => node.id === id) ?? PIPELINE_ALT_NODES.find(node => node.id === id);

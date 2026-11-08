@@ -63,6 +63,14 @@ class FaceSetReader:
             self._recognizer = Recognizer(self.catalog)
         return self._recognizer
 
+    def release(self) -> None:
+        """Drop the lazily created detector / recognizer sessions (the reader recreates them on next use)."""
+        for owner in (self._detector, self._recognizer):
+            release = getattr(owner, "release_for_build", None)
+            if callable(release):
+                release()
+        self._detector = self._recognizer = None
+
     def read(self, path: Path | str, faceset_id: str | None = None) -> FaceSetDocument:
         """Read a .fsz archive or image directory in strictly read-only mode."""
         archive_path = Path(path)
@@ -204,6 +212,9 @@ class FaceSetReader:
             if not isinstance(expression, dict):
                 expression = {}
 
+            uv_path = src.get('uv_map_path')
+            if src.get('is_synthetic') is True and uv_path and uv_path not in archive.namelist():
+                raise DomainError('FACESET_UV_MISSING', 'Generated view references a missing UV texture', 422)
             view = FaceView(
                 index=idx,
                 image_bytes=img_bytes,
@@ -216,8 +227,9 @@ class FaceSetReader:
                 expression={str(k): float(v) for k, v in expression.items() if isinstance(v, (int, float))},
                 quality=quality,
                 pose_bin=pose_bin,
-                is_synthetic=False,
+                is_synthetic=src.get('is_synthetic') is True,
                 uv_map_path=src.get("uv_map_path"),
+                uv_map_bytes=archive.read(uv_path) if uv_path and uv_path in archive.namelist() else None,
                 landmarks_68=landmarks_68,
                 landmarks_106=geom.get("landmarks_106"),
                 landmarks_468=geom.get("landmarks_468"),
@@ -496,7 +508,7 @@ class FaceSetReader:
                         "expression": v.expression,
                         "quality": v.quality.model_dump(),
                         "pose_bin": v.pose_bin,
-                        "is_synthetic": False,
+                        "is_synthetic": v.is_synthetic,
                         "landmarks_trusted": v.landmarks_trusted,
                     }
                     for v in doc.views
@@ -547,7 +559,7 @@ class FaceSetReader:
                 expression=item.get("expression", {}),
                 quality=QualityMetrics(**item["quality"]),
                 pose_bin=item["pose_bin"],
-                is_synthetic=False,
+                is_synthetic=item.get('is_synthetic') is True,
                 landmarks_trusted=bool(item.get("landmarks_trusted", True)),
             )
             views.append(view)
@@ -604,6 +616,8 @@ def export_v2(
     # Create destination directory if needed
     target_path.parent.mkdir(parents=True, exist_ok=True)
 
+    provenance = document.metadata.get('provenance')
+    synthesis = document.metadata.get('synthesis') or (provenance.get('synthesis') if isinstance(provenance, dict) else None)
     # Construct V2 Manifest
     manifest = FaceSetV2Manifest(
         schema_version=2,
@@ -649,7 +663,7 @@ def export_v2(
                 "quality": v.quality.model_dump(),
                 "expression": v.expression,
                 "pose_bin": v.pose_bin,
-                "is_synthetic": False,
+                "is_synthetic": v.is_synthetic,
                 "uv_map_path": v.uv_map_path,
             }
             for v in document.views
@@ -659,6 +673,7 @@ def export_v2(
             "source_archive_sha256": document.source_sha256,
             "archive_format": document.archive_format,
             "pose_convention": "legacy: pitch positive = looking down",
+            **({'synthesis': synthesis} if synthesis else {}),
         },
         pose_matrix={
             "schema": "roop.pose_matrix.v1",
@@ -680,12 +695,24 @@ def export_v2(
             # Compact: pretty-printed per-view geometry is so repetitive that ~35+ views trip the archive validator's
             # zip-bomb compression-ratio check when this project's own archive is read back.
             meta_json = json.dumps(manifest.model_dump(by_alias=True), separators=(",", ":")).encode("utf-8")
-            zf.writestr("metadata.json", meta_json)
+            zf.writestr("metadata.json", meta_json,
+                        compress_type=zipfile.ZIP_STORED if any(v.is_synthetic for v in document.views) else zipfile.ZIP_DEFLATED)
 
             # 2. Write images, and each view's embedding as its own small entry (see the reader)
+            written_uvs = {}
             for view in document.views:
                 zf.writestr(f"{view.index}.png", view.image_bytes)
                 zf.writestr(f"{view.index}.embedding.json", json.dumps([float(x) for x in view.embedding], separators=(",", ":")))
+                if view.uv_map_path and view.uv_map_bytes is not None:
+                    ArchiveValidator._check_path_safety(view.uv_map_path)
+                    if view.uv_map_path in written_uvs:
+                        if written_uvs[view.uv_map_path] != view.uv_map_bytes:
+                            raise DomainError('FACESET_UV_INVALID', 'Shared UV texture paths contain different bytes', 422)
+                        continue
+                    if view.uv_map_path in zf.namelist():
+                        raise DomainError('FACESET_UV_INVALID', 'UV texture path collides with another archive entry', 422)
+                    zf.writestr(view.uv_map_path, view.uv_map_bytes)
+                    written_uvs[view.uv_map_path] = view.uv_map_bytes
 
         # Atomic replace
         tmp_path.replace(target_path)

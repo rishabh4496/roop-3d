@@ -23,6 +23,8 @@ TOTAL_BINS = YAW_BINS * PITCH_BINS
 
 def _pose(view: FaceView) -> tuple[float, float, float, float]:
     """Return PnP pose and reprojection RMS; use the stored measured pose on degeneracy."""
+    if view.is_synthetic:
+        return view.yaw, view.pitch, view.roll, 0.0
     image = cv2.imdecode(np.frombuffer(view.image_bytes, np.uint8), cv2.IMREAD_COLOR)
     points = np.asarray(view.landmarks_68 if view.landmarks_68 is not None else view.landmarks, np.float64)
     if points.shape[0] == 68:
@@ -67,6 +69,10 @@ def observe_poses(document: FaceSetDocument) -> list[dict[str, Any]]:
                        "roll": round(roll, 3), "bin_index": index,
                        "position_xyz": [round(v, 7) for v in sphere_position(yaw, pitch)],
                        "reprojection_error_px": round(reprojection, 3)})
+        if view.is_synthetic:
+            output[-1]['is_synthetic'] = True
+            output[-1]['pose_method'] = 'generator_command'
+            output[-1].pop('reprojection_error_px', None)
     return output
 
 
@@ -193,12 +199,14 @@ def reconstruct_faceset(document: FaceSetDocument, *, live_pose: dict[str, float
     bins = {f"bin_{index}": sum(item["bin_index"] == index for item in observations)
             for index in range(TOTAL_BINS) if index in populated}
     return {"status": "ready", "faceset_id": document.faceset_id, "views": compatibility_views, "bins": bins,
-            "observed_views": len(observations), "sphere_coverage_count": count,
+            "observed_views": sum(not v.is_synthetic for v in document.views), "sphere_coverage_count": count,
             "sphere_coverage_total": TOTAL_BINS, "sphere_coverage_pct": round(count / TOTAL_BINS * 100.0, 2),
             "live_pose": ({"yaw": float(live_pose["yaw"]), "pitch": float(live_pose["pitch"]),
                            "roll": float(live_pose.get("roll", 0.0))} if live_pose else
                           {"yaw": primary_pose["yaw"], "pitch": primary_pose["pitch"], "roll": primary_pose["roll"]}),
-            "observed_pose_points": observations,
+            "observed_pose_points": [point for point in observations if not point.get('is_synthetic')],
+            **({'generated_views': sum(v.is_synthetic for v in document.views),
+                'generated_pose_points': [point for point in observations if point.get('is_synthetic')]} if any(v.is_synthetic for v in document.views) else {}),
             "mesh_2_5d": _serialize_mesh(estimated, face_texture, level=estimated_level, limitations=estimated_limits),
             "mesh_full_3d": _serialize_mesh(full, full_texture, level=full_level, limitations=full_limits, extra=full_extra),
             "uv_texture_data_url": "data:image/png;base64," + _png_base64(full_texture),

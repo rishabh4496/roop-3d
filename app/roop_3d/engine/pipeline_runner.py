@@ -572,6 +572,8 @@ class MasterPipelineRunner:
                                     retarget='off' if record.request.parameters_at(0).uses_mesh_projection() else 'auto',
                                     **record.request.parameters_at(0).session_options(),
                                     **(prepared.tracking or {}))
+            if getattr(session, 'compositor', None) is not None:
+                session.compositor.track_labels = {number: label for label, number in labels_to_ids.items()}
             assets = session.capability().get("render_modes", {}).get("identity_assets", {})
             asset_keys = {key: value.get("build_key") if value.get("available") else None for key, value in assets.items()}
             if checkpoint.completed_frame >= 0 and checkpoint.identity_assets != asset_keys:

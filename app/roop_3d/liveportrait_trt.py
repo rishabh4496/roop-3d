@@ -66,7 +66,8 @@ class LivePortraitTRT:
         from roop_3d.models.catalog import ModelCatalog
         from roop_3d.models.stage16 import CheckedSession, prepare_generator
         catalog = catalog or ModelCatalog()
-        generator, digest, size = prepare_generator(catalog)
+        generator, digest, size = (prepare_generator(catalog, batch_one=True) if provider == 'TensorrtExecutionProvider'
+                                   else prepare_generator(catalog))
         sessions = {}
         for role, filename in (("appearance", "liveportrait_appearance_feature_extractor.onnx"),
                                ("motion", "liveportrait_motion_extractor.onnx"),

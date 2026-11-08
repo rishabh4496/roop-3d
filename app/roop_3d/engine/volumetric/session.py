@@ -146,6 +146,7 @@ class ReferencePipeline:
         # The compositor and its parser/restorer adapters are lazy; session creation
         # does not activate any additional inference model.
         self.compositor = FrameCompositor(self.catalog, config)
+        self.compositor.expression_portrait = self.portrait
         self.lip_sync = LipSyncAdapter(self.catalog)
         self.selected_ids: frozenset[int] | None = None
         self.sources_by_track: dict[int, FaceSetDocument] = {}

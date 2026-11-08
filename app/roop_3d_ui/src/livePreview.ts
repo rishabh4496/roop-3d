@@ -32,6 +32,8 @@ export function buildLivePayload({ request, time, fps, parameters, maskBase64, r
     frontalization_weight: parameters.pose_mode === 'mesh_blend' ? parameters.pose_strength : undefined,
     pose_frontalization: parameters.pose_frontalization || undefined,
     tps_expression_weight: parameters.tps_expression_weight || undefined,
+    expression_restore_factor: parameters.expression_restore_factor,
+    face_expression_overrides: parameters.face_expression_overrides,
     pose_strength: parameters.pose_strength,
     solo_node: solo || undefined,
     occlusion: { erosion_px: parameters.erosion_px ?? 0, feather_px: parameters.feather_px },

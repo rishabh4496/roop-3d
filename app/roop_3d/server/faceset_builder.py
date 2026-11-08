@@ -28,6 +28,30 @@ class SaveFaceset(Contract):
     faceset_id: str | None = Field(default=None, pattern=r'^[A-Za-z0-9_-]{1,64}$')
 
 
+class SynthesizeFaceset(Contract):
+    job_id: str = Field(pattern=r'^[a-f0-9]{32}$')
+    cluster_rank: int = Field(ge=0, le=15)
+    selected_ids: list[str] = Field(min_length=1, max_length=3)
+    name: str = Field(min_length=1, max_length=128)
+
+
+class SynthesizePhotos(Contract):
+    images: list[str] = Field(min_length=1, max_length=3)
+    name: str = Field(min_length=1, max_length=128)
+
+
+@router.post('/synthesize-photos')
+def synthesize_photos(value: SynthesizePhotos, request: Request):
+    from roop_3d.faceset_synthesizer import start_photo_synthesis
+    return start_photo_synthesis(service(request), value.images, value.name)
+
+
+@router.post('/synthesize-36')
+def synthesize(value: SynthesizeFaceset, request: Request):
+    from roop_3d.faceset_synthesizer import start_synthesis
+    return start_synthesis(service(request), value.job_id, value.cluster_rank, value.selected_ids, value.name)
+
+
 def service(request):
     return request.app.state.faceset_builder
 

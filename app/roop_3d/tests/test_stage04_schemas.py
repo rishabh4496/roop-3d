@@ -81,13 +81,14 @@ def test_angle_bounds():
 
 
 def test_is_synthetic_honest_provenance():
-    # is_synthetic must be strictly False
-    with pytest.raises(Exception):
-        FaceView(
+    # Real and generated references retain their provenance through the contract.
+    for generated in (False, True):
+        view = FaceView(
             index=0, image_bytes=b"1", embedding=tuple([1.0] + [0.0] * 511),
             landmarks=(), bbox=(0, 0, 1, 1), yaw=0.0, pitch=0.0, roll=0.0,
-            quality=QualityMetrics(), pose_bin="center_center", is_synthetic=True,  # type: ignore
+            quality=QualityMetrics(), pose_bin="center_center", is_synthetic=generated,
         )
+        assert view.is_synthetic is generated
 
 
 def test_manifest_v2_serialization():
