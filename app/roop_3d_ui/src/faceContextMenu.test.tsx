@@ -7,6 +7,7 @@ import { DEFAULT_PARAMETERS } from './components/workstation/pipeline';
 import type { JobRequest } from './contracts';
 import FaceContextMenu from './components/canvas/FaceContextMenu';
 import { useFaceExtraction } from './components/canvas/useFaceExtraction';
+import { faceFlags } from './components/canvas/faceFlags';
 
 // The overlay and tray are replaced by probes that call the real callbacks VideoViewport hands them.
 vi.mock('./components/canvas/FaceOverlayCanvas', () => ({
@@ -49,6 +50,7 @@ describe('"Use Face From Frame" on-canvas context menu', () => {
   const choose = (text: string) => act(async () => { menuItems().find(item => item.textContent!.includes(text))!.click(); await vi.advanceTimersByTimeAsync(0); });
 
   beforeEach(() => {
+    faceFlags.reset();
     (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
     vi.useFakeTimers();
     vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
@@ -77,9 +79,60 @@ describe('"Use Face From Frame" on-canvas context menu', () => {
       'Add This Angle to Target Reference BankLock a primary target first',
       'Bind Specific Source / .fsz to This Person',
       'Exclude / Ignore This Face in Current Segment',
+      'Bind “Alice”',
     ]);
     expect(items.filter(item => item.disabled).map(item => item.textContent)).toEqual([expect.stringContaining('Add This Angle')]);   // needs a lock first
     expect(host.ownerDocument.querySelector('.face-menu-title')!.textContent).toContain('Face 2');
+  });
+
+  const toggles = () => [...host.ownerDocument.querySelectorAll<HTMLButtonElement>('.face-context-menu [role="menuitemcheckbox"]')];
+  const toggle = (text: string) => act(async () => { toggles().find(item => item.textContent!.includes(text))!.click(); await vi.advanceTimersByTimeAsync(0); });
+
+  it('offers per-face canvas toggles (UltraMax, 6DoF pose filter lock, solo mask) as checkable items with their current state', async () => {
+    await mount({ activeSourceId: 'alice', sources: [{ faceset_id: 'alice', name: 'Alice', item_count: 3 }] });
+    await rightClickFace();
+    expect(toggles().map(item => [item.textContent!.replace(/\s+/g, ' ').replace(/^\S+ /, '').trim(), item.getAttribute('aria-checked')])).toEqual([
+      ['UltraMax enhancer offapplies to all swapped faces', 'false'],
+      ['Lock 6DoF pose filtercanvas overlay', 'false'],
+      ['Solo this face mask', 'false'],
+    ]);
+  });
+
+  it('locks the 6DoF pose of that face (and unlocks it again), keyed to the face rather than the frame', async () => {
+    await mount();
+    await rightClickFace();
+    await toggle('Lock 6DoF pose filter');
+    expect(faceFlags.get().locks).toEqual({ 'rank:0': { yaw: 28, pitch: -16, roll: 0 } });
+    expect(menuItems()).toHaveLength(0);                                          // the menu closes
+    await rightClickFace();
+    expect(toggles()[1].getAttribute('aria-checked')).toBe('true');
+    expect(toggles()[1].textContent).toContain('Unlock 6DoF pose filter');
+    await toggle('Unlock 6DoF pose filter');
+    expect(faceFlags.get().locks).toEqual({});
+  });
+
+  it('solos one face mask and opens the matte view for it', async () => {
+    await mount();
+    await rightClickFace();
+    await toggle('Solo this face mask');
+    expect(faceFlags.get().soloKey).toBe('rank:0');
+    await act(async () => { await vi.advanceTimersByTimeAsync(300); });
+    const bodies = fetchMock.mock.calls.filter(([url]) => url === '/api/preview').map(([, init]) => JSON.parse(init.body));
+    expect(bodies.at(-1)).toMatchObject({ solo_node: 'matte' });                  // the compare canvas asks the server for the matte buffer
+  });
+
+  it('turns UltraMax on for the swap through the one global enhancer, and off again', async () => {
+    const setParameters = vi.fn();
+    await mount({ setParameters });
+    await rightClickFace();
+    await toggle('UltraMax enhancer off');
+    expect(setParameters).toHaveBeenLastCalledWith(expect.objectContaining({ restorer_model: 'ultramax', restoration_blend: 0.7 }));
+    setParameters.mockClear();
+    await mount({ setParameters, parameters: { ...DEFAULT_PARAMETERS, restorer_model: 'ultramax', restoration_blend: 0.5 } });
+    await rightClickFace();
+    expect(toggles()[0].getAttribute('aria-checked')).toBe('true');
+    await toggle('UltraMax enhancer on');
+    expect(setParameters).toHaveBeenLastCalledWith(expect.objectContaining({ restoration_blend: 0 }));
   });
 
   it('"Use as Active Source Face" dispatches the POST, updates the source gallery and refreshes the swapped preview', async () => {
@@ -130,7 +183,7 @@ describe('"Use Face From Frame" on-canvas context menu', () => {
   it('the Target Faces bar action opens the same menu', async () => {
     await mount({ activeSourceId: 'alice', sources: [{ faceset_id: 'alice', name: 'Alice', item_count: 3 }] });
     await act(async () => (host.querySelector('[data-testid="tray-action"]') as HTMLButtonElement).click());
-    expect(menuItems()).toHaveLength(7);
+    expect(menuItems()).toHaveLength(8);
     const style = (host.ownerDocument.querySelector('.face-context-menu') as HTMLElement).style;
     expect([style.left, style.top]).toEqual(['40px', '60px']);             // anchored at the button
   });

@@ -200,7 +200,7 @@ test('audit: solo buffer selection requests intermediate pipeline buffer', async
 
   // The pipeline flow bar lives in the collapsible "Pipeline & snapshots" section: open it, then solo the swapper.
   await page.getByTestId('preview-tools').locator('summary').click();
-  const swapperBtn = page.getByRole('button', { name: 'Solo Raw Swap' });
+  const swapperBtn = page.getByRole('button', { name: 'Solo Base 3D Swap' });
   await swapperBtn.click();
 
   // Next preview request should request solo_node: "swapper"

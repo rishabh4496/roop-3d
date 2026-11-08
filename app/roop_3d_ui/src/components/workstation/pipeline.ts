@@ -24,6 +24,10 @@ export type WorkstationParameters = {
   lighting_mode?: 'auto' | 'manual';
   manual_light_yaw?: number;
   manual_light_pitch?: number;
+  /** Ambient fill (the SH band-0 term) of the manual / scene light, 0..1. Omitted until the user touches it. */
+  ambient_fill?: number;
+  /** Forehead / hairline boundary offset in px (+ grows the swapped region upward, - pulls it down), -32..32. Omitted until touched. */
+  hairline_offset_px?: number;
 };
 export const DEFAULT_PARAMETERS: WorkstationParameters = {
   restoration_blend: 0,
@@ -42,18 +46,44 @@ export const DEFAULT_PARAMETERS: WorkstationParameters = {
   manual_light_pitch: 25,
 };
 
-/** `buffer` is the `solo_node` that `POST /api/preview` returns for this stage. */
-export type PipelineNode = { id: string; label: string; buffer: string; note?: string; optional?: boolean; unavailable?: string };
+/** `buffer` is the `solo_node` that `POST /api/preview` returns for this stage. `latencyKeys` are the measured fields of the preview's `latency` object that make up this stage's time. */
+export type PipelineNode = { id: string; label: string; buffer: string; note?: string; optional?: boolean; unavailable?: string; latencyKeys?: string[]; short?: string };
+/**
+ * The eight inspectable stages, in execution order. Hotkeys `1`–`8` solo them in this order (`buffer1`…`buffer8`).
+ * Every stage maps to a buffer the server really returns; where the engine has no buffer of exactly that name the note says
+ * which real buffer stands in for it.
+ */
 export const PIPELINE_NODES: PipelineNode[] = [
-  { id: 'input', label: 'Input', buffer: 'detector', note: 'Target frame with the detector\'s face boxes' },
-  { id: 'pose', label: '3D Pose & TPS Grid', buffer: 'pose', note: 'Landmarks, yaw/pitch/roll and the fitted 3D proxy / TPS warp mesh' },
-  { id: 'normal', label: '3D Normal Map', buffer: 'normal_map', note: 'RGB-encoded 3D Surface Normal map (nx, ny, nz)' },
-  { id: 'lighting', label: '3D Relighting (SH)', buffer: 'sh_lighting', note: 'Spherical Harmonics scene illumination transfer and shadow mask' },
-  { id: 'swap', label: 'Raw Swap', buffer: 'swapper', note: 'The swapped face before masking, restoring or grading' },
-  { id: 'matte', label: 'Occlusion & Seam Mask', buffer: 'matte', note: 'Black-and-white blend mask (reference BiSeNet / landmark hull; XSeg unavailable)' },
-  { id: 'restorer', label: 'Restorer', buffer: 'restorer', optional: true, note: 'Local GPEN adapter; CodeFormer / UltraMax unavailable' },
-  { id: 'final', label: 'Final Output', buffer: 'final', note: 'The composite exactly as a render would write it' },
+  { id: 'input', label: 'Raw Target', short: 'Raw Target', buffer: 'detector', latencyKeys: ['detection_ms'], note: 'Target frame with the detector\'s face boxes' },
+  { id: 'pose', label: '6DoF 3D Mesh & Pose', short: '6DoF Mesh & Pose', buffer: 'pose', latencyKeys: ['retarget_ms'], note: 'Landmarks, yaw/pitch/roll and the fitted 3D proxy / TPS warp mesh' },
+  { id: 'uv', label: 'Canonical UV Projection', short: 'UV Projection', buffer: 'source', latencyKeys: ['projection_ms'], note: 'The pose-matched canonical source view the identity is projected from (the engine exports this view, not the raw UV atlas)' },
+  { id: 'lighting', label: 'SH 3D Relighting & Normals', short: 'SH Relight & Normals', buffer: 'sh_lighting', note: 'Spherical Harmonics scene illumination transfer and shadow mask. Use the Normals chip for the RGB surface-normal map' },
+  { id: 'swap', label: 'Base 3D Swap', short: 'Base Swap', buffer: 'swapper', latencyKeys: ['swap_ms'], note: 'The swapped face before masking, restoring or grading' },
+  { id: 'restorer', label: 'UltraMax High-Res', short: 'UltraMax', buffer: 'restorer', optional: true, note: 'The selected enhancer\'s output (GPEN, CodeFormer or UltraMax) at its native resolution' },
+  { id: 'matte', label: 'XSeg + Hair Occlusion Matte', short: 'XSeg + Hair Matte', buffer: 'matte', note: 'Black-and-white blend mask. XSeg and the hair/occluder matte are in it when Occlusion handling is set to Robust' },
+  { id: 'final', label: 'Final Composite', short: 'Final Composite', buffer: 'final', latencyKeys: ['total_ms'], note: 'The composite exactly as a render would write it' },
 ];
-export const nodeBuffer = (id: string | null): string | null => PIPELINE_NODES.find(node => node.id === id)?.buffer ?? null;
+/** Secondary buffers reached from a chip on their parent stage; they are not stages of their own (and have no hotkey). */
+export const PIPELINE_ALT_NODES: (PipelineNode & { parent: string })[] = [
+  { id: 'normal', parent: 'lighting', label: '3D Normal Map', short: 'Normals', buffer: 'normal_map', note: 'RGB-encoded 3D Surface Normal map (nx, ny, nz)' },
+];
+export const pipelineNode = (id: string | null): PipelineNode | undefined => PIPELINE_NODES.find(node => node.id === id) ?? PIPELINE_ALT_NODES.find(node => node.id === id);
+export const nodeBuffer = (id: string | null): string | null => pipelineNode(id)?.buffer ?? null;
+
+/**
+ * Measured milliseconds for one stage from a preview's `latency` object, or null when the engine did not time that stage.
+ * Nothing is estimated: the preview times detection, retarget, projection, swap and the total only.
+ */
+export function stageLatency(node: PipelineNode, latency: Record<string, number> | null | undefined): number | null {
+  if (!latency || !node.latencyKeys?.length) return null;
+  let total = 0;
+  for (const key of node.latencyKeys) {
+    const value = latency[key];
+    if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) return null;
+    total += value;
+  }
+  return total;
+}
+export const formatMs = (value: number | null): string => value === null ? '—' : value < 10 ? `${value.toFixed(1)} ms` : `${Math.round(value)} ms`;
 
 export type PreviewResult = { frame_index: number; timestamp: number; notes: string[]; buffers: Record<string, string>; latency?: Record<string, number>; parameters: WorkstationParameters };

@@ -33,6 +33,12 @@ export const isAssetStatus = (value: unknown): boolean => {
   return !!item && typeof item === 'object' && (item.state === 'built' || item.state === 'not_built') && !!item.coverage && typeof item.coverage.readiness === 'string'
     && Array.isArray(item.coverage.requests) && (item.state === 'not_built' || (!!item.asset && Number.isFinite(item.asset.vertex_count)));
 };
+
+/** Which head the 3D identity asset is built on. `canonical` is what pose_3d / reenactment_3d renders reuse; `makehuman` is the open CC0 head+neck template (inspection / export). */
+export type HeadTemplate = 'canonical' | 'makehuman';
+const TEMPLATE_KEY = 'roop3d-head-template';
+export const readTemplate = (): HeadTemplate => { try { return localStorage.getItem(TEMPLATE_KEY) === 'makehuman' ? 'makehuman' : 'canonical'; } catch { return 'canonical'; } };
+export const writeTemplate = (value: HeadTemplate) => { try { localStorage.setItem(TEMPLATE_KEY, value); } catch { /* the choice just is not remembered */ } };
 type Load<T> = { state: 'idle' | 'loading' | 'ready' | 'error'; value: T | null; error: string };
 const IDLE = { state: 'idle', value: null, error: '' } as const;
 
@@ -80,7 +86,9 @@ export default function FaceSetDetail({ faceset, selectedTrackLabel, assignedHer
   const id = faceset.faceset_id;
   const [views, retryViews] = useResource<FaceSetView[]>(`/facesets/${id}/views`, isViewList);
   const [assetRevision, setAssetRevision] = useState(0);
-  const [status, retryStatus] = useResource<IdentityAssetStatus>(`/facesets/${id}/identity-asset`, isAssetStatus, assetRevision);
+  const [template, setTemplateState] = useState<HeadTemplate>(readTemplate);
+  const query = template === 'makehuman' ? '?template=makehuman' : '';
+  const [status, retryStatus] = useResource<IdentityAssetStatus>(`/facesets/${id}/identity-asset${query}`, isAssetStatus, assetRevision);
   const [build, setBuild] = useState<{ busy: boolean; started: number; error: string }>({ busy: false, started: 0, error: '' });
   const [elapsed, setElapsed] = useState(0);
   const [meshBusy, setMeshBusy] = useState(false);
@@ -97,7 +105,7 @@ export default function FaceSetDetail({ faceset, selectedTrackLabel, assignedHer
     const forId = id;
     setElapsed(0); setBuild({ busy: true, started: Date.now(), error: '' });
     try {
-      await post<IdentityAssetStatus>(`/facesets/${forId}/identity-asset`, {});
+      await post<IdentityAssetStatus>(`/facesets/${forId}/identity-asset${query}`, {});
       if (live.current !== forId) return;
       setBuild({ busy: false, started: 0, error: '' }); setAssetRevision(value => value + 1);
     } catch (error) {
@@ -108,7 +116,7 @@ export default function FaceSetDetail({ faceset, selectedTrackLabel, assignedHer
     if (meshShown) { onShowMesh(null); return; }
     const forId = id; setMeshBusy(true);
     try {
-      const mesh = await api<Reconstruction>(`/facesets/${forId}/identity-asset/mesh`);
+      const mesh = await api<Reconstruction>(`/facesets/${forId}/identity-asset/mesh${query}`);
       if (live.current === forId) onShowMesh(mesh);
     } catch (error) {
       if (live.current === forId) setBuild(value => ({ ...value, error: (error as Error).message }));
@@ -171,6 +179,12 @@ export default function FaceSetDetail({ faceset, selectedTrackLabel, assignedHer
         : <p className="muted fs-empty">This FaceSet has no readable views.</p>)}
 
       <div className="fs-subhead"><span>3D IDENTITY ASSET</span>{asset && <span className="status-chip ok">BUILT</span>}{status.value?.state === 'not_built' && <span className="status-chip">NOT BUILT</span>}</div>
+      <div className="head-template" role="radiogroup" aria-label="Head model">
+        {([['canonical', 'Canonical head', 'The built-in template that 3D render modes reuse'], ['makehuman', 'MakeHuman CC0 head', 'Open CC0 head + neck, textured with this .fsz\'s stitched UV albedo. For inspection and export.']] as const).map(([value, label, hint]) => (
+          <button key={value} type="button" role="radio" aria-checked={template === value} className={`head-template-btn ${template === value ? 'active' : ''}`} title={hint}
+            onClick={() => { if (template === value) return; writeTemplate(value); setTemplateState(value); if (meshShown) onShowMesh(null); setBuild({ busy: false, started: 0, error: '' }); }}>{label}</button>
+        ))}
+      </div>
       {status.state === 'loading' && <Skeleton rows={3} />}
       {status.state === 'error' && <ErrorRetry message={status.error} onRetry={retryStatus} />}
       {status.value && (

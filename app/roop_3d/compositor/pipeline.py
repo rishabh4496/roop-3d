@@ -23,6 +23,7 @@ import numpy as np
 
 from roop_3d.compositor.boundary_fusion import BlendMode, fuse_crop
 from roop_3d.compositor.color_match import ColorStats, apply_lab_stats, estimate_lab_stats, masked_histogram_match
+from roop_3d.compositor.hairline import offset_hairline
 from roop_3d.compositor.lighting import relight_spherical_harmonics
 from roop_3d.compositor.matte import border_fade
 from roop_3d.compositor.masks import BisenetFaceParser, FaceParser, build_face_mask, landmark_hull_mask
@@ -87,11 +88,15 @@ class CompositeOptions:
     lighting_mode: str = "auto"
     manual_light_yaw: float = 35.0
     manual_light_pitch: float = 25.0
+    # Ambient (SH band-0) fill of the manual virtual key light; the auto light is estimated from the target instead.
+    ambient_fill: float = 0.3
     semantic_confidence_threshold: float = 0.55
     feather_px: float = 5.0
     pyramid_levels: int = 4
     swap_weight: float = 1.0
     erosion_px: float = 0.0
+    # Moves only the forehead / hairline band of the matte (see compositor/hairline.py), in 512-class crop pixels.
+    hairline_offset_px: float = 0.0
     occlusion_mode: str = "standard"
     robust: RobustOptions = field(default_factory=RobustOptions)
     # Stage 15: blend arithmetic in linear light, with the display transfer named explicitly (never assumed sRGB).
@@ -107,6 +112,10 @@ class CompositeOptions:
             raise ValueError("Blend ratios must be within 0..1")
         if not np.isfinite(self.swap_weight) or not 0 <= self.swap_weight <= 1 or not np.isfinite(self.erosion_px) or not -32 <= self.erosion_px <= 32:
             raise ValueError('Swap weight or erosion is outside its bounds')
+        if not np.isfinite(self.ambient_fill) or not 0 <= self.ambient_fill <= 1:
+            raise ValueError('Ambient fill must be within 0..1')
+        if not np.isfinite(self.hairline_offset_px) or not -32 <= self.hairline_offset_px <= 32:
+            raise ValueError('Hairline offset is outside its bounds')
         if self.color_method not in {"lab", "reinhard_lab", "histogram"}:
             raise ValueError("color_method must be 'lab', 'reinhard_lab', or 'histogram'")
         if self.ultramax_small_face_mode not in {"bypass", "adaptive", "off"} or not 64 <= self.ultramax_min_native_pixels <= 1024:
@@ -361,7 +370,8 @@ class FrameCompositor:
                 shadow_preservation=getattr(options, "shadow_preservation", 0.85),
                 lighting_mode=getattr(options, "lighting_mode", "auto"),
                 manual_light_yaw=getattr(options, "manual_light_yaw", 35.0),
-                manual_light_pitch=getattr(options, "manual_light_pitch", 25.0))
+                manual_light_pitch=getattr(options, "manual_light_pitch", 25.0),
+                ambient_fill=getattr(options, "ambient_fill", 0.3))
             harmonized = relit_crop
             if observer is not None:
                 observer('normal_map', normal_vis, current_inverse, current_alpha)
@@ -490,6 +500,8 @@ class FrameCompositor:
                 radius = max(1, round(abs(options.erosion_px)))
                 kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (radius * 2 + 1, radius * 2 + 1))
                 alpha = cv2.erode(alpha, kernel) if options.erosion_px > 0 else cv2.dilate(alpha, kernel)
+            if options.hairline_offset_px:
+                alpha = offset_hairline(alpha, options.hairline_offset_px)
             alpha = alpha * options.swap_weight
             coverage = getattr(replacement, 'coverage', None)
             if coverage is not None:
@@ -713,6 +725,8 @@ class FrameCompositor:
                 radius = max(1, round(abs(options.erosion_px) * scale))
                 kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (radius * 2 + 1, radius * 2 + 1))
                 face_alpha = cv2.erode(face_alpha, kernel) if options.erosion_px > 0 else cv2.dilate(face_alpha, kernel)
+            if options.hairline_offset_px:
+                face_alpha = offset_hairline(face_alpha, options.hairline_offset_px, scale)
             coverage = getattr(replacement, 'coverage', None)
             if coverage is not None:
                 coverage = np.asarray(coverage, np.float32)

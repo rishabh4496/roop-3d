@@ -41,11 +41,15 @@ class WorkstationParameters(Contract):
     lighting_mode: Literal['auto', 'manual'] = 'auto'
     manual_light_yaw: float = Field(default=35.0, ge=-180.0, le=180.0)
     manual_light_pitch: float = Field(default=25.0, ge=-90.0, le=90.0)
+    # Ambient fill of the manual virtual key light, and a forehead / hairline matte offset. Both are opt-in: omitted from a request until set,
+    # so earlier requests keep their exact serialisation and idempotency fingerprint.
+    ambient_fill: float = Field(default=0.3, ge=0, le=1)
+    hairline_offset_px: float = Field(default=0, ge=-32, le=32)
 
     @model_serializer(mode='wrap')
     def compatible_serialization(self, handler):
         value = handler(self)
-        for field in ('color_method', 'restorer_model', 'identity_blend_t', 'fidelity_weight', 'swap_weight', 'erosion_px', 'pose_mode', 'pose_frontalization', 'tps_expression_weight', 'render_mode', 'occlusion_mode', 'linear_light', 'blend_transfer', 'ultramax_small_face_mode', 'ultramax_min_native_pixels'):
+        for field in ('color_method', 'restorer_model', 'identity_blend_t', 'fidelity_weight', 'swap_weight', 'erosion_px', 'pose_mode', 'pose_frontalization', 'tps_expression_weight', 'render_mode', 'occlusion_mode', 'linear_light', 'blend_transfer', 'ultramax_small_face_mode', 'ultramax_min_native_pixels', 'ambient_fill', 'hairline_offset_px'):
             if field not in self.model_fields_set:
                 value.pop(field, None)
         return value
@@ -94,6 +98,8 @@ class WorkstationParameters(Contract):
                                 lighting_mode=self.lighting_mode,
                                 manual_light_yaw=self.manual_light_yaw,
                                 manual_light_pitch=self.manual_light_pitch,
+                                ambient_fill=self.ambient_fill,
+                                hairline_offset_px=self.hairline_offset_px,
                                 ultramax_small_face_mode=self.ultramax_small_face_mode,
                                 ultramax_min_native_pixels=self.ultramax_min_native_pixels,
                                 linear_light=self.linear_light, blend_transfer=blend)

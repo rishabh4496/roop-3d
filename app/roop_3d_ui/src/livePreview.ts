@@ -46,6 +46,8 @@ export function buildLivePayload({ request, time, fps, parameters, maskBase64, r
     ultramax_small_face_mode: parameters.ultramax_small_face_mode,
     ultramax_min_native_pixels: parameters.ultramax_min_native_pixels,
     swap_weight: parameters.swap_weight ?? 1,
+    // Opt-in controls: only sent once touched, so earlier previews keep their cache keys.
+    hairline_offset_px: parameters.hairline_offset_px || undefined,
     bypass: parameters.bypass,
     // Stage 7: preview what Start would render. Omitted at their defaults so earlier preview cache keys are unchanged.
     render_mode: parameters.render_mode && parameters.render_mode !== 'standard' ? parameters.render_mode : undefined,
@@ -53,6 +55,7 @@ export function buildLivePayload({ request, time, fps, parameters, maskBase64, r
     ...(parameters.relight ? {
       relight: true, relight_strength: parameters.relight_strength, specular_sheen: parameters.specular_sheen, shadow_preservation: parameters.shadow_preservation,
       lighting_mode: parameters.lighting_mode, manual_light_yaw: parameters.manual_light_yaw, manual_light_pitch: parameters.manual_light_pitch,
+      ambient_fill: parameters.ambient_fill,
     } : {}),
     face_segments: request.face_segments ?? undefined,
     parameter_curves: request.parameter_curves ?? undefined,

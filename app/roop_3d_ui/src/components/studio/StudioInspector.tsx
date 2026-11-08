@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useState, type ReactNode, type Ref } from 'react';
+import { lazy, Suspense, useEffect, useMemo, useState, type ReactNode, type Ref } from 'react';
 import { api } from '../../api';
 import type { Capabilities, Coverage, FaceSet, IdentitySheet, Reconstruction, ReconstructionStatus, Track } from '../../contracts';
 import { PREVIEW_TAB_LABEL, RENDER_MODES, renderModeInfo } from '../workstation/renderModes';
@@ -9,6 +9,9 @@ import { ErrorRetry } from './FaceSetDetail';
 import { formatClock, trackLabel } from './TargetPanel';
 import EngineExplainer from '../guide/EngineExplainer';
 import HardwareExplainer from '../guide/HardwareExplainer';
+import CoverageRadarPanel from '../three/CoverageRadarPanel';
+import IdentityMorphPanel from '../three/IdentityMorphPanel';
+import { viewerLighting, viewerMorph } from '../three/viewerRigs';
 
 const PoseGeometryViewer = lazy(() => import('../../ThreeViewport').then(module => ({ default: module.PoseGeometryViewer })));
 const LightProbeSphere = lazy(() => import('../../ThreeViewport').then(module => ({ default: module.LightProbeSphere })));
@@ -85,6 +88,9 @@ export default function StudioInspector({ caps, track, sheet, sources, assignedI
     set({ restorer_model: value, restoration_blend: parameters.restoration_blend > 0 ? parameters.restoration_blend : 0.7 });
   };
   const info = renderModeInfo(renderMode);
+  const [morphPreview, setMorphPreview] = useState(false);
+  const lighting = useMemo(() => viewerLighting(parameters), [parameters]);
+  const morph = useMemo(() => viewerMorph(parameters, morphPreview), [parameters, morphPreview]);
 
   return (
     <div className="studio-inspector workflow-inspector">
@@ -100,9 +106,17 @@ export default function StudioInspector({ caps, track, sheet, sources, assignedI
           <small className="muted" data-testid="render-mode-hint">{info.hint}</small>
           <small className="render-mode-preview">Viewer tab for this mode: <b>{PREVIEW_TAB_LABEL[info.preview]}</b></small>
           <div className="inspector-viewer">
-            <Suspense fallback={<div className="skeleton-tile wide" aria-label="Loading 3D viewer" />}><PoseGeometryViewer coverage={coverage} track={track} mesh={mesh} renderMode={renderMode} reconstruction={reconstruction} creator={facesetCreator} /></Suspense>
+            <Suspense fallback={<div className="skeleton-tile wide" aria-label="Loading 3D viewer" />}><PoseGeometryViewer coverage={coverage} track={track} mesh={mesh} renderMode={renderMode} reconstruction={reconstruction} creator={facesetCreator} lighting={lighting} morph={morph} /></Suspense>
           </div>
           {reconstructionPicker}
+          <details className="inspector-subsection" data-testid="coverage-section" open>
+            <summary>Angular coverage<small>{coverage ? 'which head angles this FaceSet has' : 'load a FaceSet'}</small></summary>
+            <CoverageRadarPanel coverage={coverage} track={track} compact />
+          </details>
+          <details className="inspector-subsection" data-testid="morph-section">
+            <summary>Identity morph &amp; alignment<small>jaw / cranial blend · hairline offset</small></summary>
+            <IdentityMorphPanel parameters={parameters} setParameters={setParameters} preview={morphPreview} onPreview={setMorphPreview} />
+          </details>
         </section>
 
         <section className="workflow-step" aria-labelledby="step-mask" data-testid="step-mask">

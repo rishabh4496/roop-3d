@@ -17,13 +17,15 @@ import PipelineNodeFlowBar from './components/workstation/PipelineNodeFlowBar';
 import ContactSheetModal, { type Patch } from './components/workstation/ContactSheetModal';
 import SettingControl from './components/controls/SettingControl';
 import { PANELS, settingValue, settingsOf, type PanelId } from './components/controls/settingsRegistry';
-import FaceContextMenu, { type FaceMenuTarget, type TargetAction } from './components/canvas/FaceContextMenu';
+import FaceContextMenu, { type FaceMenuTarget, type TargetAction, type TargetActionExtra } from './components/canvas/FaceContextMenu';
 import { useTargetLock } from './components/canvas/useTargetLock';
 import { useFaceExtraction } from './components/canvas/useFaceExtraction';
+import { useHeadMesh } from './components/canvas/useHeadMesh';
+import { faceFlags, faceKey, togglePoseLock, toggleSoloFace } from './components/canvas/faceFlags';
 import { facePose } from './components/canvas/poseHud';
 import { calculateLetterbox, mapBoxToPixels } from './utils/letterbox';
 import { leftToRightRank } from './utils/poseCells';
-import { DEFAULT_PARAMETERS, PIPELINE_NODES, nodeBuffer, type WorkstationParameters } from './components/workstation/pipeline';
+import { DEFAULT_PARAMETERS, PIPELINE_NODES, nodeBuffer, pipelineNode, type WorkstationParameters } from './components/workstation/pipeline';
 import { DockArea, DockPanel, LayoutToolbar } from './components/workstation/WorkspaceLayouts';
 import { FloatingPreviewMedia, pipStore, useFloatingPreview } from './components/workstation/FloatingPreview';
 import { LiveTime } from './components/workstation/LiveTime';
@@ -239,7 +241,7 @@ export function VideoViewport({
   }, [editFingerprint, active, previewRequest]);
   const latencyCallback = useRef(onPreviewLatency); latencyCallback.current = onPreviewLatency;
   useEffect(() => { if (!active) { setPlaying(false); setSweepPanel(null); original.current?.pause(); processed.current?.pause(); } }, [active]);
-  const selectSolo = (node: string) => { if (PIPELINE_NODES.find(item => item.id === node)?.unavailable || !previewRequest) return; history.live(); setSolo(previous => previous === node ? null : node); setIsMaskEditing(false); };
+  const selectSolo = (node: string) => { if (pipelineNode(node)?.unavailable || !previewRequest) return; history.live(); setSolo(previous => previous === node ? null : node); setIsMaskEditing(false); };
   const bypassNode = (node: string) => { if (node !== 'restorer') return; setParameters({ ...parameters, bypass: parameters.bypass.includes(node) ? parameters.bypass.filter(item => item !== node) : [...parameters.bypass, node] }); setSolo('final'); setIsMaskEditing(false); };
 
   const [showFaceOverlays, setShowFaceOverlays] = preference('show_overlays');
@@ -264,12 +266,18 @@ export function VideoViewport({
    * a target is just selected. A new one goes through `/media/detect-frame-faces`, which records its track in the inspection so
    * it can be rendered; it is then selected (the 3D viewer's Live Pose follows it) and, when a source FaceSet is active, mapped to it.
    */
-  const lockFrameFace = useCallback(async (match?: MatchedFrameFace) => {
+  const lockFrameFace = useCallback(async (match?: MatchedFrameFace, sourceOverrideId?: string) => {
     const meta = scrub.meta;
     if (!match || !meta || lockingId) return;
     const store = useFaceSelectionStore.getState();
     // Selecting an existing track must not create a second persistent target lock.
-    if (match.stored) { store.setActiveSelection(match.stored.id); return; }
+    if (match.stored) {
+      store.setActiveSelection(match.stored.id);
+      // "Bind .fsz identity" on a face that is already a target: map its track to the chosen FaceSet.
+      const chosen = sourceOverrideId ? sources.find(item => item.faceset_id === sourceOverrideId) : undefined;
+      if (chosen && match.clusterId) { store.assignSource(match.clusterId, chosen.faceset_id); onAssignSource?.(match.clusterId, chosen.faceset_id); noticeLater(`Face #${match.face.face_index + 1} is now mapped to ${chosen.name}.`); }
+      return;
+    }
     void targetLock.lockFace(match.face.face_index);        // Stage 12: a new candidate also locks the PERSON (reference bank + cluster id)
     setLockingId(match.id);
     try {
@@ -280,15 +288,38 @@ export function VideoViewport({
       store.addFrameDetectedFaces(result.faces, false);
       store.setActiveSelection(server.id);
       if (result.inspection) onInspectionUpdate?.(result.inspection);
-      const source = sources.find(item => item.faceset_id === activeSourceId);
+      const source = sources.find(item => item.faceset_id === (sourceOverrideId ?? activeSourceId));
       if (source && server.track_id) { store.assignSource(server.track_id, source.faceset_id); onAssignSource?.(server.track_id, source.faceset_id); }
       noticeLater(source ? `Face #${match.face.face_index + 1} locked and mapped to ${source.name}.` : `Face #${match.face.face_index + 1} locked as a target. Choose a source FaceSet to swap it.`);
     } catch (error) { noticeLater((error as Error).message || 'Locking the face failed.'); }
     finally { setLockingId(null); }
   }, [scrub.meta, lockingId, target, sources, activeSourceId, onAssignSource, onInspectionUpdate, noticeLater, targetLock]);
   /** Right-click menu: lock as primary target / add this angle / bind the active source / exclude, for the face with this left-to-right rank. */
-  const onTargetAction = useCallback(async (action: TargetAction, menu: FaceMenuTarget) => {
+  const showMatteRef = useRef<() => void>(() => {});
+  const onTargetAction = useCallback(async (action: TargetAction, menu: FaceMenuTarget, extra?: TargetActionExtra) => {
     const match = frameFaces?.find(item => item.face.face_index === menu.faceRank);
+    // Per-face canvas toggles: view state only (pose lock, mask solo) or the one global enhancer (UltraMax).
+    if (action === 'toggle_pose_lock') { if (menu.faceKey) togglePoseLock(menu.faceKey, menu.pose); return; }
+    if (action === 'solo_mask') {
+      if (!menu.faceKey) return;
+      const soloing = faceFlags.get().soloKey !== menu.faceKey;
+      toggleSoloFace(menu.faceKey);
+      if (soloing && previewRequest) showMatteRef.current();          // show the matte for the soloed face
+      noticeLater(soloing ? `Face #${menu.faceRank + 1}: only its mask is highlighted; the other faces are dimmed.` : 'All face masks shown.');
+      return;
+    }
+    if (action === 'toggle_ultramax') {
+      const on = parameters.restoration_blend > 0 && parameters.restorer_model === 'ultramax';
+      setParameters(on ? { ...parameters, restoration_blend: 0 }
+        : { ...parameters, restorer_model: 'ultramax', restoration_blend: parameters.restoration_blend > 0 ? parameters.restoration_blend : 0.7, bypass: parameters.bypass.filter(item => item !== 'restorer') });
+      noticeLater(on ? 'UltraMax is off.' : 'UltraMax is on for every swapped face: the render engine uses one enhancer for the whole swap.');
+      return;
+    }
+    if (action === 'bind_specific') {
+      if (!match) { noticeLater('Pause on a frame with detected faces first.'); return; }
+      if (extra?.facesetId) await lockFrameFace(match, extra.facesetId);
+      return;
+    }
     if (action === 'add_angle') { await targetLock.addAngle(menu.faceRank); return; }
     if (action === 'lock_primary') { if (match) await lockFrameFace(match); else await targetLock.lockFace(menu.faceRank); return; }
     if (!match) { noticeLater('Pause on a frame with detected faces first.'); return; }
@@ -296,7 +327,7 @@ export function VideoViewport({
     await lockFrameFace(match);
     const store = useFaceSelectionStore.getState(), face = store.detectedFaces.find(item => item.id === store.activeSelection);
     if (face?.clusterId) { store.setClusterMode(face.clusterId, 'exclude'); noticeLater(`Face #${menu.faceRank + 1} is excluded from the swap.`); }
-  }, [frameFaces, lockFrameFace, targetLock, noticeLater]);
+  }, [frameFaces, lockFrameFace, targetLock, noticeLater, parameters, setParameters, previewRequest]);
   // The locked face's pose follows the frame under the playhead (the stored track keeps one pose for all its frames).
   const activeFaceId = useFaceSelectionStore(state => state.activeSelection);
   useEffect(() => {
@@ -325,15 +356,20 @@ export function VideoViewport({
   const liveFresh = !!live.url && (live.meta?.solo_node ?? 'final') === requestedBuffer;
   const liveUrl = liveFresh ? live.url : null, liveBlob = liveFresh ? live.blob : null;
   const [viewMode, setViewMode] = preference('view_mode');
+  showMatteRef.current = () => { setViewMode('compare'); setCompMode('matte'); setSolo(null); setIsMaskEditing(false); };
   const [showLandmarks, setShowLandmarks] = preference('show_landmarks'), [showPose, setShowPose] = preference('show_pose');
+  // 6DoF head-mesh layer (view-only toggles, deliberately not saved in the project): dense wireframe + gimbal, and head-gaze arrows.
+  const [showMesh, setShowMesh] = useState(false), [showGaze, setShowGaze] = useState(false);
+  const headMesh = useHeadMesh(activeSourceId || null, showMesh);
+  const faceState = useStoreSelector(faceFlags, state => state);
   const [faceMenu, setFaceMenu] = useState<FaceMenuTarget | null>(null);
   const extraction = useFaceExtraction({ target, frameIndex: currentFrame, activeSourceId: activeSourceId || null, onSourceExtracted, onRefreshPreview: live.retry });
   const activeSourceName = sources.find(item => item.faceset_id === activeSourceId)?.name ?? null;
-  const openFaceMenu = useCallback((menu: { faceRank: number; pose: FaceMenuTarget['pose']; x: number; y: number; face?: any; norm_cx?: number; norm_cy?: number }) => {
+  const openFaceMenu = useCallback((menu: { faceRank: number; pose: FaceMenuTarget['pose']; x: number; y: number; face?: any; faceKey?: string; norm_cx?: number; norm_cy?: number }) => {
     const bbox = menu.face?.bbox;
     const norm_cx = menu.norm_cx ?? (bbox ? (bbox[0] + bbox[2]) / 2 : undefined);
     const norm_cy = menu.norm_cy ?? (bbox ? (bbox[1] + bbox[3]) / 2 : undefined);
-    setFaceMenu({ x: menu.x, y: menu.y, faceRank: menu.faceRank, pose: menu.pose, norm_cx, norm_cy });
+    setFaceMenu({ x: menu.x, y: menu.y, faceRank: menu.faceRank, pose: menu.pose, norm_cx, norm_cy, faceKey: menu.faceKey ?? (menu.face ? faceKey(menu.face) : undefined) });
   }, []);
   const openMenuFromBar = useCallback((anchor: { x: number; y: number }) => {
     const store = useFaceSelectionStore.getState(), faces = store.getFacesAtTimestamp(time, fps);
@@ -341,7 +377,7 @@ export function VideoViewport({
     const bbox = face?.bbox;
     const norm_cx = bbox ? (bbox[0] + bbox[2]) / 2 : undefined;
     const norm_cy = bbox ? (bbox[1] + bbox[3]) / 2 : undefined;
-    setFaceMenu({ ...anchor, faceRank: face ? leftToRightRank(faces, face) : 0, pose: face ? facePose(face) : null, norm_cx, norm_cy });
+    setFaceMenu({ ...anchor, faceRank: face ? leftToRightRank(faces, face) : 0, pose: face ? facePose(face) : null, norm_cx, norm_cy, faceKey: face ? faceKey(face) : undefined });
   }, [time, fps]);
   const floatingImage = history.previewSlot ? history.slots[history.previewSlot]?.image : liveUrl || outputPreview.source || sourcePreview.source;
   const floating = useFloatingPreview(<FloatingPreviewMedia image={floatingImage} path={solo ? '' : output || target} time={time} playing={playing && !solo} label={solo ? `SOLO · ${solo}` : output ? 'OUTPUT' : 'SOURCE'}/>);
@@ -639,6 +675,9 @@ export function VideoViewport({
                 showLandmarks={showLandmarks}
                 showPose={showPose}
                 onFaceContextMenu={openFaceMenu}
+                showMesh={showMesh}
+                showGaze={showGaze}
+                headMesh={headMesh.head}
                 frameFaces={frameFaces}
                 frameMeta={scrub.meta}
                 onLockFace={lockFrameFace}
@@ -684,11 +723,12 @@ export function VideoViewport({
   return (
     <section className={`viewport-section ${isFullscreen ? 'is-fullscreen' : ''}`}>
       {!studio && <LayoutToolbar onFloat={floating.openWindow}/>}
+      <PipelineNodeFlowBar selected={selectedNode} solo={solo} bypass={parameters.bypass} onSelect={setSelectedNode} onSolo={selectSolo} onBypass={bypassNode} busy={false} available={!!previewRequest}
+        latency={live.meta?.latency ?? null} frame={live.meta?.frame_index ?? null} loading={live.status === 'loading'}/>
       <details className="preview-tools" data-testid="preview-tools">
-      <summary><span>Pipeline &amp; snapshots</span><small>Solo or bypass a stage · compare A/B/C/D snapshots</small></summary>
+      <summary><span>Snapshots</span><small>Compare A/B/C/D snapshots</small></summary>
       <SnapshotSlots onCapture={(slot: string) => void captureSlot(slot)} onRestore={restoreWorkspace} busy={captureBusy} captureAvailable={!!previewRequest}/>
       {captureError && <p role="alert" className="inline-warning">{captureError}</p>}
-      <PipelineNodeFlowBar selected={selectedNode} solo={solo} bypass={parameters.bypass} onSelect={setSelectedNode} onSolo={selectSolo} onBypass={bypassNode} busy={false} available={!!previewRequest}/>
       </details>
       <div className="viewport-toolbar">
         <span className="eyebrow">WORKSTATION MEDIA INSPECTOR</span>
@@ -873,6 +913,10 @@ export function VideoViewport({
             title="5-point ArcFace landmarks on every detected face"><span>⁙</span> Landmarks</button>
           <button type="button" className={`hud-btn ${showPose ? 'active' : ''}`} aria-pressed={showPose} onClick={() => setShowPose(value => !value)}
             title="Live yaw / pitch / roll in degrees (pitch + = looking up) on every detected face"><span>↻</span> Pose</button>
+          <button type="button" className={`hud-btn ${showMesh ? 'active' : ''}`} aria-pressed={showMesh} onClick={() => setShowMesh(value => !value)}
+            title={showMesh && headMesh.note ? headMesh.note : `6DoF wireframe of the head topology with a yaw / pitch / roll gimbal on every detected face${headMesh.kind === 'makehuman' ? ' (MakeHuman CC0 topology)' : ''}. Registered to the nose tip: an orientation overlay, not a per-vertex fit.`}><span>⌗</span> Mesh{showMesh && headMesh.loading ? '…' : ''}</button>
+          <button type="button" className={`hud-btn ${showGaze ? 'active' : ''}`} aria-pressed={showGaze} onClick={() => setShowGaze(value => !value)}
+            title="Head-gaze arrows from each eye along the direction the head faces (head pose, not iris tracking)"><span>➚</span> Gaze</button>
           <button type="button" className={`hud-btn compare-toggle ${viewMode === 'compare' ? 'active' : ''}`} aria-pressed={viewMode === 'compare'} disabled={playing}
             onClick={() => setViewMode(mode => (mode === 'compare' ? 'side' : 'compare'))}
             title="Full-bleed comparison canvas: wipe, crossfade, alpha blend, diff map and 3.5x loupe"><span>◫</span> Compare</button>
@@ -937,7 +981,7 @@ export function VideoViewport({
         <SnapshotViewport/>
         {solo && <div className="solo-viewport" role="region" aria-label={`${solo} intermediate buffer`}>
           {liveUrl ? <img src={liveUrl} className={live.stale ? 'stale' : ''} alt={`${solo} stage output at frame ${live.meta?.frame_index ?? currentFrame}`}/> : <p role="status">{live.error || (live.status === 'busy' ? `GPU busy (${live.stage}); retrying` : live.status === 'loading' ? 'Rendering this stage…' : 'No buffer is available at this frame')}</p>}
-          <span className="pane-label">SOLO · {PIPELINE_NODES.find(node => node.id === solo)?.label ?? solo} · frame {live.meta?.frame_index ?? currentFrame}</span>
+          <span className="pane-label">SOLO · {pipelineNode(solo)?.label ?? solo} · frame {live.meta?.frame_index ?? currentFrame}</span>
         </div>}
 
         <div
@@ -1006,7 +1050,10 @@ export function VideoViewport({
       {floating.portal}
       {historyOpen && <HistoryDrawer onClose={() => setHistoryOpen(false)}/>}
       {faceMenu && <FaceContextMenu target={faceMenu} activeSourceName={activeSourceName} busy={extraction.busy || targetLock.busy} onClose={() => setFaceMenu(null)}
-        targetLabel={targetLock.lock?.label ?? null} onTargetAction={(action, menu) => { setFaceMenu(null); void onTargetAction(action, menu); }}
+        targetLabel={targetLock.lock?.label ?? null} onTargetAction={(action, menu, extra) => { setFaceMenu(null); void onTargetAction(action, menu, extra); }}
+        bindSources={sources.map(item => ({ id: item.faceset_id, name: item.name }))}
+        ultramaxOn={parameters.restoration_blend > 0 && parameters.restorer_model === 'ultramax'}
+        poseLocked={!!faceMenu.faceKey && !!faceState.locks[faceMenu.faceKey]} maskSolo={!!faceMenu.faceKey && faceState.soloKey === faceMenu.faceKey}
         onChoose={(destination, menu) => { setFaceMenu(null); void extraction.run(destination, menu); }}/>}
       {sweepPanel && <ContactSheetModal panel={sweepPanel} parameters={parameters} frameLabel={`Frame ${currentFrame} · ${time.toFixed(3)} s`}
         payloadFor={(patch: Patch) => {

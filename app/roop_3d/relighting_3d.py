@@ -332,7 +332,8 @@ class NeuralRelighter3D:
                 shadow_preservation: float = 0.85,
                 lighting_mode: str = "auto",
                 manual_light_yaw: float = 35.0,
-                manual_light_pitch: float = 25.0) -> tuple[np.ndarray, np.ndarray, np.ndarray, dict[str, Any]]:
+                manual_light_pitch: float = 25.0,
+                ambient_fill: float = 0.3) -> tuple[np.ndarray, np.ndarray, np.ndarray, dict[str, Any]]:
         """Executes full 3D relighting transfer.
 
         Returns:
@@ -356,7 +357,7 @@ class NeuralRelighter3D:
             dir_y = -math.sin(pitch_rad)  # in CV: +Y is down
             dir_z = math.cos(yaw_rad) * math.cos(pitch_rad)
             manual_dir = np.array([dir_x, dir_y, dir_z], dtype=np.float32)
-            target_sh = self.sh_lighting.create_directional_lighting(manual_dir, ambient=0.3, intensity=0.7)
+            target_sh = self.sh_lighting.create_directional_lighting(manual_dir, ambient=ambient_fill, intensity=0.7)
             key_light_dir = manual_dir / np.linalg.norm(manual_dir)
             cct = 5500.0
         else:

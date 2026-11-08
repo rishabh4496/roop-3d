@@ -361,6 +361,47 @@ export function poseQuaternion(pose, out = new THREE.Quaternion()) {
   return out.setFromEuler(euler);
 }
 
+/**
+ * Unit vector from the head toward a light placed at `yawDeg` (+ = image right) and `pitchDeg` (+ = above), in the viewer frame
+ * (+x right, +y up, +z toward the viewer). yaw 0 / pitch 0 is a light at the camera.
+ * @returns {[number, number, number]}
+ */
+export function lightDirection(yawDeg, pitchDeg) {
+  const yaw = (yawDeg * Math.PI) / 180, pitch = (pitchDeg * Math.PI) / 180;
+  return [Math.sin(yaw) * Math.cos(pitch), Math.sin(pitch), Math.cos(yaw) * Math.cos(pitch)];
+}
+
+const clamp01 = value => (Number.isFinite(value) ? Math.min(1, Math.max(0, value)) : 0);
+
+/**
+ * The 3D light rig for the head viewer from the relighting controls. `strength` scales the key light, `ambient` is the ambient fill
+ * (the SH band-0 term), `specular` is the skin sheen (lower roughness + a stronger specular lobe).
+ * @param {{ yaw?: number; pitch?: number; strength?: number; ambient?: number; specular?: number } | null | undefined} lighting
+ */
+export function lightingRig(lighting) {
+  const key = lightDirection(lighting?.yaw ?? 35, lighting?.pitch ?? 25);
+  const specular = clamp01(lighting?.specular ?? 0.25);
+  return {
+    keyPosition: key.map(value => value * 5),
+    keyIntensity: 0.4 + 2.6 * clamp01(lighting?.strength ?? 0.8),
+    ambientIntensity: 0.1 + 1.1 * clamp01(lighting?.ambient ?? 0.3),
+    roughness: 0.85 - 0.5 * specular,
+    specularIntensity: 0.2 + 1.6 * specular,
+  };
+}
+
+/**
+ * How the geometry morph controls show in the viewer: `blend` is the source-mesh weight 0..1 (0 = the target-like estimated 2.5D proxy,
+ * 1 = the source's 3D mesh) and the target proxy ghost fades out as it rises; `hairline` (-1..1 of the head height) moves the
+ * forehead / hairline boundary ring (as a fraction of 8% of the head height).
+ * @param {{ blend?: number; hairline?: number } | null | undefined} morph
+ */
+export function morphRig(morph) {
+  const blend = clamp01(morph?.blend ?? 1);
+  const hairline = Number.isFinite(morph?.hairline) ? Math.min(1, Math.max(-1, morph.hairline)) : 0;
+  return { blend, targetGhostOpacity: (1 - blend) * 0.7, hairlineShift: hairline };
+}
+
 /** Releases GPU resources R3F does not own. */
 function useDisposable(resource) {
   useEffect(() => () => { resource?.dispose?.(); }, [resource]);
@@ -408,8 +449,22 @@ function ReferenceHead() {
  * The reconstructed head. It follows the target's pose (slerped) so the swap geometry is shown exactly as the pipeline
  * will pose it; the orbit camera moves independently around it.
  */
-function ReconstructedHead({ pose, assets, texture, volumetric, wireframe, landmarks }) {
+function ReconstructedHead({ pose, assets, texture, volumetric, wireframe, landmarks, lighting = null, morph = null, targetAssets = null }) {
   const group = useRef(null);
+  const rig = useMemo(() => (lighting ? lightingRig(lighting) : null), [lighting]);
+  const shape = useMemo(() => (morph ? morphRig(morph) : null), [morph]);
+  // Forehead / hairline boundary ring: an ellipse around the head at ~22% below the crown, shifted by the offset control.
+  const hairline = useMemo(() => {
+    if (!shape) return null;
+    const box = assets.geometry.boundingBox;
+    if (!box) return null;
+    const height = box.max.y - box.min.y, y = box.max.y - 0.22 * height + shape.hairlineShift * 0.08 * height;
+    const rx = Math.max(0.05, (box.max.x - box.min.x) / 2), rz = Math.max(0.05, (box.max.z - box.min.z) / 2);
+    const fall = Math.max(0.2, 1 - Math.abs((y - (box.max.y + box.min.y) / 2) / (height / 2)) ** 2);   // narrower toward the crown
+    const points = Array.from({ length: 65 }, (_, i) => { const angle = (i / 64) * Math.PI * 2; return new THREE.Vector3(Math.sin(angle) * rx * Math.sqrt(fall), y, Math.cos(angle) * rz * Math.sqrt(fall)); });
+    return new THREE.BufferGeometry().setFromPoints(points);
+  }, [assets, shape]);
+  useDisposable(hairline);
   const current = useRef(new THREE.Quaternion());
   const target = useMemo(() => new THREE.Quaternion(), []);
 
@@ -432,15 +487,37 @@ function ReconstructedHead({ pose, assets, texture, volumetric, wireframe, landm
   return (
     <group ref={group}>
       <mesh geometry={assets.geometry}>
-        <meshStandardMaterial
-          key={texture ? 'textured' : 'flat'}
-          map={texture}
-          color={texture ? '#ffffff' : '#9fd8c8'}
-          roughness={volumetric ? 0.62 : 0.7}
-          metalness={0}
-          side={THREE.DoubleSide}
-        />
+        {rig ? (
+          <meshPhysicalMaterial
+            key={texture ? 'textured-lit' : 'flat-lit'}
+            map={texture}
+            color={texture ? '#ffffff' : '#9fd8c8'}
+            roughness={rig.roughness}
+            metalness={0}
+            specularIntensity={rig.specularIntensity}
+            side={THREE.DoubleSide}
+          />
+        ) : (
+          <meshStandardMaterial
+            key={texture ? 'textured' : 'flat'}
+            map={texture}
+            color={texture ? '#ffffff' : '#9fd8c8'}
+            roughness={volumetric ? 0.62 : 0.7}
+            metalness={0}
+            side={THREE.DoubleSide}
+          />
+        )}
       </mesh>
+      {targetAssets && shape && shape.targetGhostOpacity > 0.01 && (
+        <mesh geometry={targetAssets.geometry} name="target-geometry-ghost">
+          <meshBasicMaterial color="#fbbf24" wireframe transparent opacity={shape.targetGhostOpacity} depthWrite={false} />
+        </mesh>
+      )}
+      {hairline && (
+        <lineLoop geometry={hairline} name="hairline-boundary">
+          <lineBasicMaterial color="#fbbf24" transparent opacity={0.9} depthTest={false} />
+        </lineLoop>
+      )}
       {wireframe && (
         <mesh geometry={assets.geometry}>
           <meshBasicMaterial color={CYAN} wireframe transparent opacity={0.22} depthWrite={false}
@@ -454,6 +531,16 @@ function ReconstructedHead({ pose, assets, texture, volumetric, wireframe, landm
       ))}
     </group>
   );
+}
+
+/** An arrow from the key light toward the head: the in-viewer light gizmo (amber while the light is manually overridden). */
+function LightArrow({ position, manual }) {
+  const arrow = useMemo(() => {
+    const from = new THREE.Vector3(...position).normalize().multiplyScalar(1.9);
+    return new THREE.ArrowHelper(from.clone().negate().normalize(), from, 0.85, manual ? 0xf59e0b : 0x38bdf8, 0.22, 0.12);
+  }, [position, manual]);
+  useEffect(() => () => { arrow.dispose(); }, [arrow]);
+  return <primitive object={arrow} name="key-light-arrow" />;
 }
 
 const ringPoints = (radius, y, segments = 96) => {
@@ -622,6 +709,8 @@ export default function PoseGeometryViewer({
   renderMode,
   reconstruction = null,
   creator = null,
+  lighting = null,
+  morph = null,
 }) {
   const hostRef = useRef(null);
   const controlsRef = useRef(null);
@@ -663,6 +752,11 @@ export default function PoseGeometryViewer({
   const assets = useMemo(() => buildMeshAssets(displayedMesh, { landmarkCount: viewMode === 'estimated_2_5d' && displayedMesh === estimatedMesh ? TEMPLATE_LANDMARK_COUNT : 0 }),
     [displayedMesh, viewMode, estimatedMesh]);
   useDisposable(assets?.geometry);
+  // Live relighting preview: key light direction, ambient fill and specular sheen drive the viewer's lights and skin material.
+  const lightRig = useMemo(() => (lighting ? lightingRig(lighting) : null), [lighting]);
+  // The target-like (estimated 2.5D) proxy, shown as a ghost while the geometry blend is below 100% source mesh.
+  const targetAssets = useMemo(() => (morph && estimatedMesh ? buildMeshAssets(estimatedMesh) : null), [morph, estimatedMesh]);
+  useDisposable(targetAssets?.geometry);
   const texture = useDataTexture(assets && typeof displayedMesh?.texture === 'string' && assets.geometry.getAttribute('uv') ? displayedMesh.texture : null);
 
   // Render mode picks the tab (and so does a newly supplied explicit mesh, or a new source arriving).
@@ -778,14 +872,25 @@ export default function PoseGeometryViewer({
           }}
         >
           {/* Lighting */}
-          <ambientLight intensity={0.7} />
-          <directionalLight position={[4, 5, 5]} intensity={1.8} />
-          <directionalLight position={[-4, -2, -3]} intensity={0.5} color="#38bdf8" />
-          <pointLight position={[0, 3, 2]} intensity={0.8} />
+          {lightRig ? (
+            <>
+              <ambientLight intensity={lightRig.ambientIntensity} name="ambient-fill" />
+              <directionalLight position={lightRig.keyPosition} intensity={lightRig.keyIntensity} name="key-light" />
+              <LightArrow position={lightRig.keyPosition} manual={lighting.manual} />
+            </>
+          ) : (
+            <>
+              <ambientLight intensity={0.7} />
+              <directionalLight position={[4, 5, 5]} intensity={1.8} />
+              <directionalLight position={[-4, -2, -3]} intensity={0.5} color="#38bdf8" />
+              <pointLight position={[0, 3, 2]} intensity={0.8} />
+            </>
+          )}
 
           {assets ? (
             <ReconstructedHead pose={targetPose} assets={assets} texture={texture} volumetric={volumetric}
-              wireframe={wireframe} landmarks={showLandmarks && viewMode === 'estimated_2_5d'} />
+              wireframe={wireframe} landmarks={showLandmarks && viewMode === 'estimated_2_5d'}
+              lighting={lighting} morph={morph} targetAssets={morph && displayedMesh !== estimatedMesh ? targetAssets : null} />
           ) : !sourceLoaded ? (
             // Empty-state hint only: once a source exists (loading, error or ready) the crystal is never drawn.
             <ReferenceHead />

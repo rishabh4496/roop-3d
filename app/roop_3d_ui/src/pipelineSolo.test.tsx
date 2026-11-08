@@ -35,17 +35,17 @@ it('solos a pipeline node through POST /api/preview solo_node, returns to the co
     await act(async () => root.render(<VideoViewport {...props} time={1}/>));
     await act(async () => { await vi.advanceTimersByTimeAsync(200); });
     expect(previewBodies(fetch)[0].solo_node).toBe('final');          // explicit final buffer is the composite, not an intermediate solo
-    await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Solo Occlusion & Seam Mask"]')!.click());
+    await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Solo XSeg + Hair Occlusion Matte"]')!.click());
     await act(async () => { await vi.advanceTimersByTimeAsync(200); });
     expect(previewBodies(fetch).at(-1)).toMatchObject({ solo_node: 'matte', timestamp: 1 });
     await act(async () => { replies.at(-1)!.resolve(previewReply(25, 'matte')); await vi.advanceTimersByTimeAsync(0); });
     expect(host.querySelector('.solo-viewport img')?.getAttribute('src')).toMatch(/^blob:solo-/);
-    expect(host.querySelector('.solo-viewport .pane-label')?.textContent).toContain('Occlusion & Seam Mask');
+    expect(host.querySelector('.solo-viewport .pane-label')?.textContent).toContain('XSeg + Hair Occlusion Matte');
     expect(host.textContent).toContain('Matte uses the reference BiSeNet parser.');
-    await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Solo Occlusion & Seam Mask"]')!.click());
+    await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Solo XSeg + Hair Occlusion Matte"]')!.click());
     expect(host.querySelector('.solo-viewport')).toBeNull();
     await act(async () => root.render(<VideoViewport {...props} time={2}/>));
-    await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Solo Raw Swap"]')!.click());
+    await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Solo Base 3D Swap"]')!.click());
     await act(async () => { await vi.advanceTimersByTimeAsync(200); });
     const stale = replies.at(-1)!;
     expect(previewBodies(fetch).at(-1)).toMatchObject({ solo_node: 'swapper' });
@@ -56,15 +56,16 @@ it('solos a pipeline node through POST /api/preview solo_node, returns to the co
   } finally { await act(async () => root.unmount()); host.remove(); vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks(); }
 });
 
-it('offers exactly the six pipeline stages and maps each to its server buffer', async () => {
+it('offers exactly the eight pipeline stages and maps each to its server buffer', async () => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
   vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
   const host = document.createElement('div'); document.body.append(host); const root = createRoot(host);
   try {
     await act(async () => root.render(<VideoViewport target="" output="" time={0} setTime={() => {}} duration={0} enabled={false} keys={[]} previewRequest={REQUEST}/>));
-    const names = [...host.querySelectorAll('.pipeline-node .node-select')].map(node => node.textContent?.replace(/^\d{2}/, ''));
-    expect(names).toEqual(['Input', '3D Pose & TPS Grid', '3D Normal Map', '3D Relighting (SH)', 'Raw Swap', 'Occlusion & Seam Mask', 'Restorer', 'Final Output']);
-    expect(PIPELINE_NODES.map(node => node.buffer)).toEqual(['detector', 'pose', 'normal_map', 'sh_lighting', 'swapper', 'matte', 'restorer', 'final']);
+    const names = [...host.querySelectorAll('.pipeline-node .node-select')].map(node => node.getAttribute('aria-label'));
+    expect(names).toEqual(['Solo Raw Target', 'Solo 6DoF 3D Mesh & Pose', 'Solo Canonical UV Projection', 'Solo SH 3D Relighting & Normals', 'Solo Base 3D Swap', 'Solo UltraMax High-Res', 'Solo XSeg + Hair Occlusion Matte', 'Solo Final Composite']);
+    expect([...host.querySelectorAll('.pipeline-node .node-index')].map(node => node.textContent)).toEqual(['1', '2', '3', '4', '5', '6', '7', '8']);
+    expect(PIPELINE_NODES.map(node => node.buffer)).toEqual(['detector', 'pose', 'source', 'sh_lighting', 'swapper', 'restorer', 'matte', 'final']);
   } finally { await act(async () => root.unmount()); host.remove(); vi.unstubAllGlobals(); }
 });
 
@@ -134,7 +135,7 @@ it('solos 3D Normal Map and 3D Relighting nodes through POST /api/preview', asyn
     await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Solo 3D Normal Map"]')!.click());
     await act(async () => { await vi.advanceTimersByTimeAsync(200); });
     expect(previewBodies(fetch).at(-1)).toMatchObject({ solo_node: 'normal_map' });
-    await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Solo 3D Relighting (SH)"]')!.click());
+    await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Solo SH 3D Relighting & Normals"]')!.click());
     await act(async () => { await vi.advanceTimersByTimeAsync(200); });
     expect(previewBodies(fetch).at(-1)).toMatchObject({ solo_node: 'sh_lighting' });
   } finally { await act(async () => root.unmount()); host.remove(); vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks(); }

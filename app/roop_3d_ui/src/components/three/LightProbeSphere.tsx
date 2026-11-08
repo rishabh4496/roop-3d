@@ -1,6 +1,7 @@
-import React, { useRef, useState, useCallback, useMemo } from 'react';
+import React, { useId, useRef, useState, useCallback, useMemo } from 'react';
 import type { WorkstationParameters } from '../workstation/pipeline';
 import { kelvinToRgb } from '../../utils/kelvinToRgb';
+import { DEFAULT_AMBIENT_FILL } from './viewerRigs';
 
 interface LightProbeSphereProps {
   parameters?: WorkstationParameters;
@@ -22,6 +23,8 @@ export default function LightProbeSphere({
   const relightStrength = parameters?.relight_strength ?? 0.8;
   const specularSheen = parameters?.specular_sheen ?? 0.25;
   const shadowPreservation = parameters?.shadow_preservation ?? 0.85;
+  const ambientFill = parameters?.ambient_fill ?? DEFAULT_AMBIENT_FILL;
+  const gradientId = useId().replace(/[^a-zA-Z0-9_-]/g, '');
   const manualYaw = parameters?.manual_light_yaw ?? 35.0;
   const manualPitch = parameters?.manual_light_pitch ?? 25.0;
 
@@ -144,12 +147,14 @@ export default function LightProbeSphere({
           aria-label="Interactive 3D Light Direction Sphere"
         >
           <defs>
-            <radialGradient id="probeGradient" cx="35%" cy="35%" r="65%">
-              <stop offset="0%" stopColor="#38bdf8" stopOpacity="0.8" />
-              <stop offset="40%" stopColor="#1e293b" stopOpacity="0.9" />
-              <stop offset="100%" stopColor="#0f172a" stopOpacity="1" />
+            {/* The sphere is shaded by the controls themselves: the highlight sits where the key light is, its strength follows Relight
+                Strength, and Ambient Fill lifts the unlit side. */}
+            <radialGradient id={`${gradientId}-sphere`} cx="50%" cy="50%" r="78%" fx={`${50 + lightMarkerPos.x * 38}%`} fy={`${50 + lightMarkerPos.y * 38}%`}>
+              <stop offset="0%" stopColor={tempColor} stopOpacity={0.3 + 0.6 * relightStrength} />
+              <stop offset="45%" stopColor={`rgb(${30 + Math.round(ambientFill * 70)}, ${41 + Math.round(ambientFill * 70)}, ${59 + Math.round(ambientFill * 70)})`} stopOpacity="0.95" />
+              <stop offset="100%" stopColor={`rgb(${15 + Math.round(ambientFill * 55)}, ${23 + Math.round(ambientFill * 55)}, ${42 + Math.round(ambientFill * 55)})`} stopOpacity="1" />
             </radialGradient>
-            <filter id="glow">
+            <filter id={`${gradientId}-glow`}>
               <feGaussianBlur stdDeviation="3" result="coloredBlur" />
               <feMerge>
                 <feMergeNode in="coloredBlur" />
@@ -159,7 +164,7 @@ export default function LightProbeSphere({
           </defs>
 
           {/* Base sphere */}
-          <circle cx="0" cy="0" r="85" fill="url(#probeGradient)" stroke="#334155" strokeWidth="2" />
+          <circle cx="0" cy="0" r="85" fill={`url(#${gradientId}-sphere)`} stroke="#334155" strokeWidth="2" />
 
           {/* Latitude & longitude guide rings */}
           <ellipse cx="0" cy="0" rx="85" ry="32" fill="none" stroke="#475569" strokeWidth="1" strokeDasharray="3 3" opacity="0.6" />
@@ -167,8 +172,12 @@ export default function LightProbeSphere({
           <line x1="-85" y1="0" x2="85" y2="0" stroke="#334155" strokeWidth="1" opacity="0.5" />
           <line x1="0" y1="-85" x2="0" y2="85" stroke="#334155" strokeWidth="1" opacity="0.5" />
 
+          {/* Specular skin sheen: a small hot spot under the key light, as bright as the Specular Skin Sheen slider says. */}
+          <ellipse cx={lightMarkerPos.x * 62} cy={lightMarkerPos.y * 62} rx={9 + 12 * specularSheen} ry={6 + 8 * specularSheen} fill="#ffffff"
+            opacity={0.08 + 0.55 * specularSheen} data-testid="probe-sheen" pointerEvents="none" />
+
           {/* Light marker position */}
-          <g transform={`translate(${lightMarkerPos.x * 85}, ${lightMarkerPos.y * 85})`} filter="url(#glow)">
+          <g transform={`translate(${lightMarkerPos.x * 85}, ${lightMarkerPos.y * 85})`} filter={`url(#${gradientId}-glow)`}>
             <circle cx="0" cy="0" r="9" fill={mode === 'manual' ? '#f59e0b' : '#38bdf8'} stroke="#ffffff" strokeWidth="2" />
             <circle cx="0" cy="0" r="16" fill="none" stroke={mode === 'manual' ? '#f59e0b' : '#38bdf8'} strokeWidth="1.5" opacity="0.5" />
           </g>
@@ -213,6 +222,21 @@ export default function LightProbeSphere({
             aria-label="Specular Skin Sheen (0.0–1.0)"
             value={specularSheen}
             onChange={e => updateParam('specular_sheen', parseFloat(e.target.value))}
+          />
+        </label>
+
+        <label className="probe-slider-label">
+          <span>Ambient Fill ({ambientFill.toFixed(2)})</span>
+          <input
+            type="range"
+            min="0"
+            max="1"
+            step="0.01"
+            aria-label="Ambient Fill (0.0–1.0)"
+            disabled={mode !== 'manual'}
+            title={mode === 'manual' ? 'Ambient (SH band-0) fill of the virtual key light' : 'Applies to the manual virtual key light; the auto light is estimated from the target frame'}
+            value={ambientFill}
+            onChange={e => updateParam('ambient_fill', parseFloat(e.target.value))}
           />
         </label>
 

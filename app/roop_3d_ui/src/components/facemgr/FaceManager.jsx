@@ -11,6 +11,8 @@ import {
   classifyPoseBucket,
 } from './fszBuilder';
 import { generateFibonacciSphere, projectViewsToLattice, FaceSetOrientationSphere } from '../three/PoseGeometryViewer';
+import AngularCoverageRadar from '../three/AngularCoverageRadar';
+import FacesetInspector3D from './FacesetInspector3D';
 import { api, post } from '../../api';
 import FacesetLibrary from './FacesetLibrary';
 
@@ -204,6 +206,9 @@ export default function FaceManager({
     }));
     return projectViewsToLattice(baseLattice, views);
   }, [activePerson]);
+
+  // The same person's views on the exact 12 x 8 yaw/pitch grid, for the angular coverage radar.
+  const radarCoverage = useMemo(() => ({ views: (activePerson?.faces || []).map(f => ({ yaw: f.yaw || 0, pitch: f.pitch || 0 })) }), [activePerson]);
 
   // Coverage metric
   const coverageStats = useMemo(() => {
@@ -423,6 +428,7 @@ export default function FaceManager({
             onSelectSource={onAssignSource ? (id) => onAssignSource('primary', id) : undefined}
             notify={msg => setStatusNotice(msg)}
           />
+          <FacesetInspector3D sources={sources} />
         </div>
       ) : (
         /* 2. Main Workstation Body: 3-Column Split */
@@ -639,6 +645,8 @@ export default function FaceManager({
               <OrbitControls enablePan={false} minDistance={1.8} maxDistance={6} />
             </Canvas>
           </div>
+
+          <AngularCoverageRadar coverage={radarCoverage} name={activePerson?.name} />
 
           {/* Sphere Readouts & Legend */}
           <div className="sphere-stats-box">

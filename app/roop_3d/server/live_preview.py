@@ -133,6 +133,8 @@ class LivePreviewPayload(Contract):
     lighting_mode: Literal['auto', 'manual'] | None = None
     manual_light_yaw: float | None = Field(default=None, ge=-180, le=180)
     manual_light_pitch: float | None = Field(default=None, ge=-90, le=90)
+    ambient_fill: float | None = Field(default=None, ge=0, le=1)
+    hairline_offset_px: float | None = Field(default=None, ge=-32, le=32)
     # job-request pass-through so the preview matches what Start would render
     face_segments: tuple[FaceSegment, ...] | None = Field(default=None, max_length=256)
     parameter_curves: ParameterCurves | None = None
@@ -190,7 +192,7 @@ class LivePreviewPayload(Contract):
     def config_digest(self) -> dict[str, Any]:
         """Everything that changes the pixels, nothing that selects the frame."""
         value = self.model_dump(mode="json", exclude={"frame_index", "timestamp"})
-        for key in ("identity_lock_id", "pose_strength"):
+        for key in ("identity_lock_id", "pose_strength", "ambient_fill", "hairline_offset_px"):
             if value[key] is None:
                 value.pop(key)
         if value.get("mask_base64"):
@@ -545,6 +547,10 @@ class LivePreviewService:
             values['manual_light_yaw'] = payload.manual_light_yaw
         if payload.manual_light_pitch is not None:
             values['manual_light_pitch'] = payload.manual_light_pitch
+        if payload.ambient_fill is not None:
+            values['ambient_fill'] = payload.ambient_fill
+        if payload.hairline_offset_px is not None:
+            values['hairline_offset_px'] = payload.hairline_offset_px
         if payload.render_mode is not None:
             values['render_mode'] = payload.render_mode
         if payload.occlusion_mode is not None:

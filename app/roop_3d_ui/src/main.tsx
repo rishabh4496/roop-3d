@@ -6,7 +6,8 @@ import { WorkspaceLayoutProvider } from './components/workstation/WorkspaceLayou
 import '@fontsource-variable/inter'; // self-hosted: bundled into dist, no font CDN
 import './styles.css';
 import './stage19.css';
-import './shell/shell.css'; // redesign layer: must stay last so it layers over the older stylesheets
+import './shell/shell.css'; // redesign layer: layers over the older stylesheets
+import './workstation3d.css'; // 3D workstation layer (flow bar, coverage radar, morph/light controls, mesh overlay): must stay last
 import { installResourceLedgerIfRequested } from './utils/resourceLedger';
 installResourceLedgerIfRequested(); // Stage 18: opt-in (?r3d-diag=1) object-URL / WebSocket / WebGL-context accounting
 createRoot(document.getElementById('root')!).render(<StrictMode><HotkeyProvider><WorkspaceLayoutProvider><App /></WorkspaceLayoutProvider></HotkeyProvider></StrictMode>);

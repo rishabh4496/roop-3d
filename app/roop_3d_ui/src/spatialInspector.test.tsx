@@ -128,15 +128,18 @@ describe('SpatialInspector Single-Context 3D Studio', () => {
     expect(host.textContent).toContain('FLAME 3D MESH');
 
     const tabs = [...host.querySelectorAll<HTMLButtonElement>('.spatial-nav-btn')];
-    expect(tabs.length).toBe(3);
-    expect(tabs.map(t => t.textContent)).toEqual(['Head Pose', 'Light Probe', 'FLAME Mesh']);
+    expect(tabs.length).toBe(5);
+    expect(tabs.map(t => t.textContent)).toEqual(['Head Pose', 'Coverage', 'Morph', 'Light Probe', 'FLAME Mesh']);
 
     // Head Pose tab is active
     expect(tabs[0].classList.contains('active')).toBe(true);
     const posePanel = host.querySelector('#spatial-panel-pose')!;
     expect(posePanel.hasAttribute('hidden')).toBe(false);
 
-    // Light Probe & FLAME panels are hidden but mounted in DOM (preserving WebGL context)
+    // Coverage, Morph, Light Probe & FLAME panels are hidden but mounted in DOM (preserving WebGL context)
+    expect(host.querySelector('#spatial-panel-coverage')!.hasAttribute('hidden')).toBe(true);
+    expect(host.querySelector('[data-testid="coverage-radar"]')).toBeTruthy();
+    expect(host.querySelector('#spatial-panel-morph')!.hasAttribute('hidden')).toBe(true);
     const lightingPanel = host.querySelector('#spatial-panel-lighting')!;
     expect(lightingPanel.hasAttribute('hidden')).toBe(true);
     const flamePanel = host.querySelector('#spatial-panel-flame')!;

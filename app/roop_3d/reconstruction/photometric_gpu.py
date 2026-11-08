@@ -248,7 +248,7 @@ def relight_head(photo, image, target, skin, alpha, options):
     if options.lighting_mode == 'manual':
         yaw, pitch = np.radians([options.manual_light_yaw, options.manual_light_pitch])
         direction = np.array([np.sin(yaw)*np.cos(pitch), -np.sin(pitch), np.cos(yaw)*np.cos(pitch)])
-        sh = SphericalHarmonicsLighting().create_directional_lighting(direction, ambient=.3, intensity=.7)
+        sh = SphericalHarmonicsLighting().create_directional_lighting(direction, ambient=getattr(options, 'ambient_fill', .3), intensity=.7)
     result, lighting = renderer().render(photo, image, target, photo.lighting_mask(alpha), sh,
         strength=options.relight_strength, specular=options.specular_sheen, shadows=options.shadow_preservation)
     normal_vis = cv2.resize(((photo.normals[..., ::-1] + 1) * 127.5).clip(0, 255).astype(np.uint8),

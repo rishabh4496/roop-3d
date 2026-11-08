@@ -2,6 +2,7 @@
 import React, { useRef, useState, useEffect, useCallback, useMemo } from 'react';
 import { calculateLetterbox } from './FaceOverlayCanvas';
 import { useFaceSelectionStore } from '../../useFaceSelectionStore';
+import useHistoryStore from '../../stores/useHistoryStore';
 
 /**
  * Manual & Occlusion Mask Editor.
@@ -28,6 +29,7 @@ export default function MaskBrushOverlay({
   onClose,
   initialMask = null,
 }) {
+  const history = useHistoryStore();   // brush strokes are workspace commands: this is the undo / redo stack
   const visibleCanvasRef = useRef(null);
   const exportCanvasRef = useRef(null);
   const includeCanvasRef = useRef(null);
@@ -512,6 +514,14 @@ export default function MaskBrushOverlay({
 
         {/* Action buttons */}
         <div className="toolbar-section actions">
+          <button type="button" className="mask-action-btn undo" disabled={!history.past.length} onClick={history.undo}
+            title={`Undo the last edit (Ctrl+Z) · ${history.past.length} step${history.past.length === 1 ? '' : 's'} available`}>
+            ↶ Undo{history.past.length ? ` (${history.past.length})` : ''}
+          </button>
+          <button type="button" className="mask-action-btn redo" disabled={!history.future.length} onClick={history.redo}
+            title="Redo (Ctrl+Y)">
+            ↷ Redo
+          </button>
           <button
             type="button"
             className="mask-action-btn clear"

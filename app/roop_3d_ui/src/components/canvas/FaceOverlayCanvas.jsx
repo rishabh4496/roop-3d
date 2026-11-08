@@ -2,6 +2,9 @@ import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react'
 import { useFaceSelectionStore } from '../../useFaceSelectionStore';
 import { api } from '../../api';
 import { drawPoseHud, facePose, LANDMARK_COLORS } from './poseHud';
+import { drawHeadOverlay } from './headMesh';
+import { faceFlags, faceKey } from './faceFlags';
+import { useStoreSelector } from '../../stores/atomicStore';
 import { leftToRightRank } from '../../utils/poseCells';
 import { reducedMotion } from '../../utils/motionPrefs';
 export const FACE_ROLES = { swap: { label: 'Swap Target', color: '#91e6c9' }, ignore: { label: 'Reference Guide', color: '#60a5fa' }, exclude: { label: 'Exclude (Never Swap)', color: '#fb7185' } };
@@ -29,7 +32,9 @@ export { calculateLetterbox, mapBoxToPixels, mapPointToPixels };
  *   frameMeta?: import('../../frameScrub').FrameMeta | null;
  *   onLockFace?: (face: import('../../utils/frameFaces').MatchedFrameFace) => void;
  *   lockingId?: string | null;
- *   onFaceContextMenu?: (menu: { face: any; faceRank: number; pose: { yaw: number; pitch: number; roll: number } | null; x: number; y: number }) => void;
+ *   showMesh?: boolean; showGaze?: boolean;
+ *   headMesh?: any;
+ *   onFaceContextMenu?: (menu: { face: any; faceKey?: string; faceRank: number; pose: { yaw: number; pitch: number; roll: number } | null; x: number; y: number }) => void;
  * }} props
  */
 export default function FaceOverlayCanvas({
@@ -50,9 +55,14 @@ export default function FaceOverlayCanvas({
   frameMeta = null,
   onLockFace,
   lockingId = null,
+  showMesh = false,
+  showGaze = false,
+  headMesh = null,
 }) {
   const canvasRef = useRef(null);
   const containerRef = useRef(null);
+  const flags = useStoreSelector(faceFlags, state => state);
+  const poseFilters = useRef(new Map());
 
   const detectedFaces = useFaceSelectionStore(s => s.detectedFaces);
   const targetClusters = useFaceSelectionStore(s => s.targetClusters);
@@ -136,6 +146,20 @@ export default function FaceOverlayCanvas({
     ctx.save();
     ctx.scale(dpr, dpr);
     ctx.clearRect(0, 0, containerSize.width, containerSize.height);
+
+    // 6DoF head-mesh layer (wireframe, gimbal, gaze) under the boxes and badges.
+    if (showMesh || showGaze) {
+      drawHeadOverlay(ctx, frameMode ? overlayFaces : visibleFaces, {
+        head: showMesh ? headMesh : null,
+        mapBox: box => mapBoxToPixels(box, letterbox),
+        mapPoint: point => mapPointToPixels(point, letterbox),
+        poseOf: facePose,
+        keyOf: faceKey,
+        wireframe: showMesh, gimbal: showMesh, gaze: showGaze,
+        locked: flags.locks, soloKey: flags.soloKey, filters: poseFilters.current,
+        bounds: { left: letterbox.offsetX, right: letterbox.offsetX + letterbox.displayW },
+      });
+    }
 
     if (frameMode) {
       drawFrameFaces(ctx, overlayFaces, { letterbox, hoveredFaceId, lockingId, showLandmarks, showPose, bounds: containerSize });
@@ -316,6 +340,10 @@ export default function FaceOverlayCanvas({
     frameMode,
     overlayFaces,
     lockingId,
+    showMesh,
+    showGaze,
+    headMesh,
+    flags,
   ]);
 
   // Mouse move: Hit testing for hover
@@ -454,7 +482,7 @@ export default function FaceOverlayCanvas({
           if (hit && onFaceContextMenu) {
             setActiveSelection(hit.id);
             setPopover(null);
-            onFaceContextMenu({ face: hit, faceRank: leftToRightRank(interactiveFaces, hit), pose: facePose(hit), x: event.clientX, y: event.clientY });
+            onFaceContextMenu({ face: hit, faceRank: leftToRightRank(interactiveFaces, hit), pose: facePose(hit), faceKey: faceKey(hit), x: event.clientX, y: event.clientY });
           } else {
             handleClick(event);
           }

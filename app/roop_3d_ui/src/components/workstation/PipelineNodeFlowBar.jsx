@@ -1,15 +1,56 @@
 import React from 'react';
-import { PIPELINE_NODES } from './pipeline';
+import { PIPELINE_NODES, PIPELINE_ALT_NODES, formatMs, stageLatency } from './pipeline';
 import { useHotkeys } from '../controls/Hotkeys';
 
-/** @param {any} props */
-export default function PipelineNodeFlowBar({ selected, solo, bypass = [], onSelect, onSolo, onBypass, busy = false, available = true }) {
+/**
+ * Visual execution pipeline: eight stage cards in execution order, each a single click (or hotkey `1`-`8`) that solos that
+ * stage's real GPU/CPU buffer on the canvas; click it again to return to the composite. Each card shows the stage latency the
+ * preview measured, or an em dash when the engine does not time that stage (nothing is estimated).
+ *
+ * @param {{
+ *   selected?: string | null; solo?: string | null; bypass?: string[];
+ *   onSelect: (id: string) => void; onSolo: (id: string) => void; onBypass: (id: string) => void;
+ *   busy?: boolean; available?: boolean;
+ *   latency?: Record<string, number> | null; frame?: number | null; loading?: boolean;
+ * }} props
+ */
+export default function PipelineNodeFlowBar({ selected, solo, bypass = [], onSelect, onSolo, onBypass, busy = false, available = true, latency = null, frame = null, loading = false }) {
   const { keys } = useHotkeys();
-  return <div className="pipeline-flow" data-tour="pipeline-bar" role="region" aria-label="Visual execution pipeline">{PIPELINE_NODES.map((node, index) => <React.Fragment key={node.id}>
-    {index > 0 && <span className="pipeline-arrow" aria-hidden="true">→</span>}
-    <div className={`pipeline-node ${selected === node.id ? 'selected' : ''} ${solo === node.id ? 'solo' : ''} ${bypass.includes(node.id) ? 'bypassed' : ''}`}>
-      <button className="node-select" aria-pressed={selected === node.id} onClick={() => onSelect(node.id)} title={node.unavailable ?? node.note ?? node.label}><small>{String(index + 1).padStart(2, '0')}</small>{node.label}</button>
-      <div className="node-actions"><button className="button small" aria-label={`Solo ${node.label}`} aria-pressed={solo === node.id} disabled={!available || !!node.unavailable || busy} title={node.unavailable ?? `${node.note ?? 'Inspect real stage buffer'} · ${keys.solo}`} onClick={() => { onSelect(node.id); onSolo(node.id); }}>Solo ({keys.solo})</button>
-        {node.optional && <button className="button small" aria-label={`Bypass ${node.label}`} aria-pressed={bypass.includes(node.id)} disabled={!!node.unavailable || busy} title={node.unavailable ?? `Bypass · ${keys.bypass}`} onClick={() => { onSelect(node.id); onBypass(node.id); }}>B ({keys.bypass})</button>}</div>
-    </div></React.Fragment>)}</div>;
+  const timings = PIPELINE_NODES.map(node => stageLatency(node, latency));
+  // The bar under each card is relative to the slowest *stage* (the final card is the whole-frame total, so it is excluded).
+  const stageMax = Math.max(0, ...timings.filter((value, index) => value !== null && PIPELINE_NODES[index].id !== 'final'));
+  const total = timings[PIPELINE_NODES.length - 1];
+  return <div className="pipeline-flow" data-tour="pipeline-bar" role="region" aria-label="Visual execution pipeline" aria-busy={loading || undefined}>
+    <div className="pipeline-flow-track">
+    {PIPELINE_NODES.map((node, index) => {
+      const ms = timings[index], isFinal = node.id === 'final';
+      const disabled = !available || !!node.unavailable || busy;
+      const alts = PIPELINE_ALT_NODES.filter(alt => alt.parent === node.id);
+      const soloedHere = solo === node.id || alts.some(alt => alt.id === solo);
+      return <React.Fragment key={node.id}>
+        {index > 0 && <span className="pipeline-arrow" aria-hidden="true">→</span>}
+        <div className={`pipeline-node ${selected === node.id ? 'selected' : ''} ${soloedHere ? 'solo' : ''} ${bypass.includes(node.id) ? 'bypassed' : ''}`} data-node={node.id}>
+          <button type="button" className="node-select" aria-label={`Solo ${node.label}`} aria-pressed={solo === node.id} disabled={disabled}
+            aria-keyshortcuts={String(index + 1)}
+            title={node.unavailable ?? `${node.note ?? 'Inspect the real stage buffer'} · key ${keys[`buffer${index + 1}`] || index + 1}`}
+            onClick={() => { onSelect(node.id); onSolo(node.id); }}>
+            <small className="node-index">{index + 1}</small>
+            <span className="node-name">{node.short ?? node.label}</span>
+            <span className={`node-ms ${ms === null ? 'unmeasured' : ''}`} title={ms === null ? 'The preview does not time this stage' : isFinal ? 'Whole-frame time' : 'Measured stage time'}>{isFinal && ms !== null ? `Σ ${formatMs(ms)}` : formatMs(ms)}</span>
+            <span className="node-ms-bar" aria-hidden="true"><i style={{ width: ms !== null && !isFinal && stageMax > 0 ? `${Math.max(4, Math.round((ms / stageMax) * 100))}%` : '0%' }}/></span>
+          </button>
+          {(node.optional || alts.length > 0) && <div className="node-actions">
+            {alts.map(alt => <button key={alt.id} type="button" className="button small node-chip" aria-label={`Solo ${alt.label}`} aria-pressed={solo === alt.id} disabled={disabled}
+              title={alt.note} onClick={() => { onSelect(node.id); onSolo(alt.id); }}>{alt.short}</button>)}
+            {node.optional && <button type="button" className="button small node-chip" aria-label={`Bypass ${node.label}`} aria-pressed={bypass.includes(node.id)} disabled={!!node.unavailable || busy}
+              title={node.unavailable ?? `Bypass this stage · ${keys.bypass}`} onClick={() => { onSelect(node.id); onBypass(node.id); }}>Bypass</button>}
+          </div>}
+        </div>
+      </React.Fragment>;
+    })}
+    </div>
+    <p className="pipeline-flow-status" role="status" aria-live="polite">
+      {loading ? 'Rendering…' : latency ? `Frame ${frame ?? '—'} · total ${formatMs(total)}${solo ? ` · soloing ${PIPELINE_NODES.find(node => node.id === solo)?.short ?? PIPELINE_ALT_NODES.find(node => node.id === solo)?.short ?? solo}` : ''}` : 'Latencies appear after the first live preview'}
+    </p>
+  </div>;
 }
