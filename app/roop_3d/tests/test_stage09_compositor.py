@@ -193,11 +193,16 @@ def test_frame_compositor_temporal_detail_reduces_laplacian_flicker():
     points = np.array(((12, 12), (52, 12), (52, 52), (12, 52), (32, 10)), np.float32)
     options = CompositeOptions(feather_px=2, color_strength=0, restoration_blend=1)
 
-    def render(temporal_alpha):
+    def render(temporal_alpha=None):
         compositor = FrameCompositor(parser=_SyntheticParser(), restorer=_FrameRestorer(restored),
                                      temporal=TemporalSmoother())
-        compositor.detail_temporal = TemporalDetailStabilizer(
-            temporal_alpha=temporal_alpha, flow_side=64, max_side=64, use_cuda_flow=False)
+        if temporal_alpha is not None:
+            compositor.detail_temporal = TemporalDetailStabilizer(
+                temporal_alpha=temporal_alpha, flow_side=64, max_side=64, use_cuda_flow=False)
+        else:
+            compositor.detail_temporal._use_cuda_flow = False
+            compositor.detail_temporal._gpu_flow_checked = True
+        assert compositor.detail_temporal.temporal_alpha == (.25 if temporal_alpha is None else temporal_alpha)
         outputs = []
         for index in range(len(restored)):
             outputs.append(compositor.compose(target, (replacement,), {9: points},
@@ -205,7 +210,7 @@ def test_frame_compositor_temporal_detail_reduces_laplacian_flicker():
         assert compositor.last_reports[9]["temporal_detail"]["backend"] == "opencv_dis_cpu"
         return outputs
 
-    raw, stabilized = render(0), render(.25)
+    raw, stabilized = render(.95), render()
     region = np.s_[36:60, 36:60]
 
     def laplacian_flicker(sequence):
@@ -215,7 +220,7 @@ def test_frame_compositor_temporal_detail_reduces_laplacian_flicker():
 
     raw_flicker, stabilized_flicker = laplacian_flicker(raw), laplacian_flicker(stabilized)
     assert stabilized_flicker < raw_flicker
-    assert stabilized_flicker <= raw_flicker * .9
+    assert stabilized_flicker <= raw_flicker * .35
 
 
 def test_reference_pipeline_exposes_full_frame_compositing_hook():

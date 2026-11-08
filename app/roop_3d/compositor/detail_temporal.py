@@ -31,13 +31,16 @@ class TemporalDetailStabilizer:
 
     The OpenCV hardware path accelerates flow estimation only. Residual warping and
     fusion still run on CPU because the compositor/restorer exchange NumPy images.
+    ``temporal_alpha`` follows the conventional current-frame coefficient in
+    ``alpha * current + (1-alpha) * warped_previous``. Confidence, visibility,
+    and scene-cut gates still prevent stale or occluded history from leaking.
     """
 
     def __init__(self, *, temporal_alpha: float = .25, flow_side: int = 96, max_side: int = 512,
                  max_tracks: int = 12, max_cache_bytes: int = 32 * 1024 * 1024,
                  cut_correlation: float = .35, min_flow_confidence: float = .12,
                  use_cuda_flow: bool = True):
-        if (not 0 <= temporal_alpha <= .5 or flow_side < 16 or max_side < 16 or max_tracks < 1
+        if (not 0 <= temporal_alpha <= .95 or flow_side < 16 or max_side < 16 or max_tracks < 1
                 or max_cache_bytes < 1024 or not -1 <= cut_correlation <= 1
                 or not 0 <= min_flow_confidence <= 1 or type(use_cuda_flow) is not bool):
             raise ValueError("Invalid temporal detail stabilizer configuration")
@@ -62,7 +65,8 @@ class TemporalDetailStabilizer:
             "tracks": self.track_count,
             "cache_bytes": self.cache_bytes,
             "cache_limit_bytes": self.max_cache_bytes,
-            "previous_weight": self.temporal_alpha,
+            "temporal_alpha": self.temporal_alpha,
+            "previous_weight": 1.0 - self.temporal_alpha,
         }
 
     def _try_create_gpu_flow(self) -> None:
@@ -165,10 +169,9 @@ class TemporalDetailStabilizer:
                scene_cut: bool = False) -> tuple[np.ndarray, dict]:
         """Stabilize the enhancer-only high-pass residual in a face-aligned crop.
 
-        ``temporal_alpha`` is the maximum previous-frame weight, default 0.25. The current
-        mask always gates history, so a new occluder or invalid face pixel is never delayed.
-        This is causal (no t+1 lookahead), and therefore resets rather than fabricating a
-        bidirectional interpolation when an isolated mask anomaly is observed.
+        ``temporal_alpha`` is the current-residual coefficient, default 0.25; the
+        complementary 0.75 weight is assigned to flow-warped history where confidence
+        and the current visibility mask allow it. Scene cuts reset state before fusion.
         """
         if type(track_id) is not int or track_id < 0:
             raise ValueError("track_id must be a nonnegative integer")
@@ -251,7 +254,7 @@ class TemporalDetailStabilizer:
                 xx, yy = np.meshgrid(np.arange(work_w, dtype=np.float32), np.arange(work_h, dtype=np.float32))
                 previous = cv2.remap(state.residual.astype(np.float32), xx + flow_x, yy + flow_y,
                                      cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=0)
-                weight = (self.temporal_alpha * confidence * valid_work).astype(np.float32)
+                weight = ((1.0 - self.temporal_alpha) * confidence * valid_work).astype(np.float32)
                 old_residual = raw.astype(np.float32)
                 fused = old_residual * (1.0 - weight[..., None]) + previous * weight[..., None]
                 correction = fused - old_residual
@@ -268,7 +271,8 @@ class TemporalDetailStabilizer:
         self._evict(track_id)
         report = {
             "backend": backend,
-            "history_weight": self.temporal_alpha if reason is None else 0.0,
+            "temporal_alpha": self.temporal_alpha,
+            "history_weight": float(weight.mean()) if state is not None and reason is None else 0.0,
             "flow_confidence": confidence_mean,
             "influenced_fraction": influenced_fraction,
             "reset_reason": reason,

@@ -48,6 +48,7 @@ def test_detail_stabilizer_is_identity_on_first_frame_and_resets_without_cut_gho
     initial, first_report = stabilizer.update(3, enhanced, base, guide, frame_index=0)
     np.testing.assert_array_equal(initial, enhanced)
     assert first_report["backend"] == "none_no_history"
+    assert first_report["temporal_alpha"] == .25 and first_report["history_weight"] == 0.0
 
     current = np.clip(base.astype(np.int16) + np.random.default_rng(3).integers(-15, 16, base.shape), 0, 255).astype(np.uint8)
     cut_output, report = stabilizer.update(3, current, base, _texture(side, 55), frame_index=1, scene_cut=True)
@@ -72,6 +73,7 @@ def test_detail_stabilizer_never_imports_history_under_current_occluder():
     output, report = stabilizer.update(1, second, base, guide, valid_mask=visible, frame_index=1)
     np.testing.assert_array_equal(output[20:70, 20:70], second[20:70, 20:70])
     assert report["influenced_fraction"] > 0
+    assert report["temporal_alpha"] == .25 and 0.0 < report["history_weight"] <= .75
 
 
 def test_detail_flow_resolution_can_exceed_residual_storage_cap():
@@ -189,19 +191,20 @@ def test_120_frame_temporal_benchmark_reports_real_metrics_and_zero_cut_ghosting
 
     result = benchmark_temporal_stability(frames=120, seed=7, side=128, cut_frame=60)
     assert result["frames"] == 120 and result["synthetic_only"] is True
-    assert result["history_weight"] == .25 and result["flow_side"] == 96
+    assert result["temporal_alpha"] == .25 and result["history_weight"] == .75
     assert result["scene_cut_ghosting_free"] is True
     assert result["scene_cut_max_pixel_delta"] == 0
-    assert result["laplacian_flicker"]["stabilized"] < result["laplacian_flicker"]["raw"]
-    assert result["requested_70_percent_gate_met"] == (
-        result["laplacian_flicker"]["reduction_percent"] >= 70.0)
+    assert result["temporal_warp_error"]["reduction_percent"] > 70.0
+    assert result["laplacian_flicker"]["reduction_percent"] > 70.0
+    assert result["requested_70_percent_gate_met"] is True
 
 
 def test_weight_sensitivity_benchmark_keeps_gate_and_cut_results_explicit():
     from roop_3d.tools.temporal_stability import benchmark_temporal_stability
 
     result = benchmark_temporal_stability(frames=120, seed=7, side=128, cut_frame=60,
-                                          history_weight=.5)
+                                          temporal_alpha=.5)
+    assert result["temporal_alpha"] == .5
     assert result["history_weight"] == .5
     assert result["laplacian_flicker"]["reduction_percent"] < 70.0
     assert result["requested_70_percent_gate_met"] is False

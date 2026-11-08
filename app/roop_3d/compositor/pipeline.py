@@ -154,7 +154,9 @@ class FrameCompositor:
         self.restorer = restorer
         self.temporal = temporal or TemporalSmoother()
         self.mask_ema = TemporalMaskEMA(alpha=.65, max_tracks=32)
-        self.detail_temporal = TemporalDetailStabilizer()
+        # Alpha is the current-detail coefficient; its complementary history weight is
+        # flow/visibility gated and reset at scene cuts.
+        self.detail_temporal = TemporalDetailStabilizer(temporal_alpha=.25)
         from roop_3d.temporal_stabilizer import TemporalStabilizer
         self.histogram_stabilizer = TemporalStabilizer(min_cutoff=.15, beta=.04)
         self._analyzer = analyzer
