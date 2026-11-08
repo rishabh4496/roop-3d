@@ -100,7 +100,53 @@ class MaskSeamWatchdog:
         self.maximum = maximum
         self._baselines = {}
         self._edge_levels = {}
+        self._temporal_masks = {}
         self._lock = threading.Lock()
+
+    def observe_temporal(self, face_id: int, mask: np.ndarray, *, frame_index: int | None,
+                         scene_cut: bool = False) -> dict:
+        """Measure combined-mask continuity independently for this worker thread and face.
+
+        This is a watchdog, not a speculative mask repair: a real hand/hair onset may
+        legitimately change the matte, and the streaming compositor has no future-frame
+        lookahead with which to distinguish that from a transient segmentation dropout.
+        """
+        value = np.asarray(mask, np.float32)
+        if value.ndim != 2 or not np.isfinite(value).all() or np.any((value < 0) | (value > 1)):
+            raise ValueError("Invalid temporal seam watchdog mask")
+        small = cv2.resize(value, (128, 128), interpolation=cv2.INTER_AREA) if max(value.shape) > 128 else value
+        binary = small >= .5
+        gx = cv2.Sobel(small, cv2.CV_32F, 1, 0, ksize=3)
+        gy = cv2.Sobel(small, cv2.CV_32F, 0, 1, ksize=3)
+        edge = np.sqrt(gx * gx + gy * gy)
+        edge_level = float(np.percentile(edge[edge > .01], 95)) if np.any(edge > .01) else 0.0
+        key = (threading.get_ident(), face_id)
+        with self._lock:
+            previous = None if scene_cut else self._temporal_masks.get(key)
+            if previous is not None and previous[0].shape == binary.shape:
+                old_binary, old_area, old_edge, old_frame = previous
+                consecutive = frame_index is None or old_frame is None or 0 < frame_index - old_frame <= 2
+                if consecutive:
+                    intersection = float(np.logical_and(old_binary, binary).sum())
+                    union = float(np.logical_or(old_binary, binary).sum())
+                    iou = intersection / union if union else 1.0
+                    area_jump = abs(float(binary.mean()) - old_area)
+                    boundary_jump = abs(edge_level - old_edge)
+                    anomaly = bool(iou < .45 and area_jump > .12 and boundary_jump > .08)
+                    reset_reason = None
+                else:
+                    iou, area_jump, boundary_jump, anomaly = 1.0, 0.0, 0.0, False
+                    reset_reason = "FRAME_GAP"
+            else:
+                iou, area_jump, boundary_jump, anomaly = 1.0, 0.0, 0.0, False
+                reset_reason = ("SCENE_CUT" if scene_cut else
+                                "MASK_SHAPE_CHANGED" if previous is not None else "INITIAL")
+            if len(self._temporal_masks) >= self.maximum and key not in self._temporal_masks:
+                self._temporal_masks.pop(next(iter(self._temporal_masks)))
+            self._temporal_masks[key] = (binary.copy(), float(binary.mean()), edge_level, frame_index)
+        return {"iou": float(iou), "area_jump": float(area_jump), "boundary_gradient": edge_level,
+                "boundary_gradient_jump": float(boundary_jump), "anomaly": anomaly,
+                "reset_reason": reset_reason, "recovery": "not_attempted_no_lookahead" if anomaly else None}
 
     def observe(self, face_id: int, mask: np.ndarray, *, kind: str):
         if kind not in ("geometric", "occluder", "restoration", "composite"):
@@ -149,6 +195,7 @@ class MaskSeamWatchdog:
         with self._lock:
             self._baselines.clear()
             self._edge_levels.clear()
+            self._temporal_masks.clear()
 
 
 class OnnxFaceRestorer:

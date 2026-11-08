@@ -165,6 +165,8 @@ def test_frame_compositor_fuses_replacement_and_protects_explicit_foreground():
     assert result.shape == target.shape and result.dtype == np.uint8
     assert np.any(result != target)
     np.testing.assert_array_equal(result[42:50, 31:65], target[42:50, 31:65])
+    assert compositor.last_reports[3]["temporal_detail"]["backend"] == "opencv_dis_cpu"
+    assert compositor.last_reports[3]["mask_watchdog"]["reset_reason"] == "INITIAL"
 
 
 def test_reference_pipeline_exposes_full_frame_compositing_hook():

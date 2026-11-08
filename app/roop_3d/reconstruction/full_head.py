@@ -313,8 +313,9 @@ class FullHeadEngine:
             rv, tv = solve_dense_pose(model[stable], points[stable], k)
         else:
             raise DomainError("HEAD_VISIBLE_LANDMARKS_INSUFFICIENT", "Too few depth-visible dense landmarks for head pose", 422)
-        motion = self.temporal.filter(0, "pose", np.r_[rv.ravel(), tv.ravel()], timestamp)
-        pose = HeadPose(cv2.Rodrigues(motion[:3])[0], motion[3:], k)
+        rotation = self.temporal.filter_rotation_matrix(0, "camera_rotation", cv2.Rodrigues(rv)[0], timestamp)
+        translation = self.temporal.filter(0, "camera_translation", tv.ravel(), timestamp)
+        pose = HeadPose(rotation, translation, k)
         self.last_pose = pose
         from roop_3d.core.pose import euler_from_rotation
         reflection = np.diag([1., 1., -1.])

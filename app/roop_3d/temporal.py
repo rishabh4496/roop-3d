@@ -62,26 +62,130 @@ class _KalmanChannel:
     timestamp: float | None = None
 
 
-class TrackTemporalStabilizer:
-    """One-Euro filtered measurements with a constant-velocity Kalman predictor."""
+@dataclass
+class _RotationChannel:
+    raw: np.ndarray
+    value: np.ndarray
+    derivative: float
+    timestamp: float
 
-    def __init__(self, *, min_cutoff=.15, beta=.04, derivative_cutoff=1., process_noise=2., measurement_noise=4.):
+
+class TrackTemporalStabilizer:
+    """Track-local One-Euro/Kalman state with SO(3)-aware rotation filtering."""
+
+    def __init__(self, *, min_cutoff=.15, beta=.04, derivative_cutoff=1., process_noise=2., measurement_noise=4.,
+                 rotation_reset_speed=900.):
         if (not np.isfinite([process_noise, measurement_noise]).all()
                 or process_noise <= 0 or measurement_noise <= 0):
             raise ValueError("Kalman noise values must be positive and finite")
+        if not np.isfinite(rotation_reset_speed) or rotation_reset_speed <= 0:
+            raise ValueError("Rotation reset speed must be positive and finite")
         self.config = dict(min_cutoff=min_cutoff, beta=beta, derivative_cutoff=derivative_cutoff)
         self.process_noise, self.measurement_noise = float(process_noise), float(measurement_noise)
+        self.rotation_reset_speed = float(rotation_reset_speed)
         self.channels: dict[tuple[int, str], _KalmanChannel] = {}
+        self.rotations: dict[tuple[int, str], _RotationChannel] = {}
 
     def reset(self) -> None:
         self.channels.clear()
+        self.rotations.clear()
 
     def retain(self, active_ids) -> None:
         active = set(active_ids)
         self.channels = {key: value for key, value in self.channels.items() if key[0] in active}
+        self.rotations = {key: value for key, value in self.rotations.items() if key[0] in active}
 
     def forget_track(self, track_id: int) -> None:
         self.channels = {key: value for key, value in self.channels.items() if key[0] != track_id}
+        self.rotations = {key: value for key, value in self.rotations.items() if key[0] != track_id}
+
+    @staticmethod
+    def _matrix_to_quaternion(matrix: np.ndarray) -> np.ndarray:
+        """Convert a proper rotation matrix to a normalized ``(w, x, y, z)`` quaternion."""
+        m = np.asarray(matrix, dtype=np.float64)
+        if m.shape != (3, 3) or not np.isfinite(m).all():
+            raise ValueError("Rotation must be a finite 3x3 matrix")
+        if not np.allclose(m.T @ m, np.eye(3), atol=2e-3) or np.linalg.det(m) < 0.99:
+            raise ValueError("Rotation matrix must be orthonormal and right-handed")
+        trace = float(np.trace(m))
+        if trace > 0:
+            scale = math.sqrt(trace + 1.0) * 2.0
+            q = np.array((.25 * scale, (m[2, 1] - m[1, 2]) / scale,
+                          (m[0, 2] - m[2, 0]) / scale, (m[1, 0] - m[0, 1]) / scale))
+        else:
+            axis = int(np.argmax(np.diag(m)))
+            if axis == 0:
+                scale = math.sqrt(max(1e-12, 1.0 + m[0, 0] - m[1, 1] - m[2, 2])) * 2.0
+                q = np.array(((m[2, 1] - m[1, 2]) / scale, .25 * scale,
+                              (m[0, 1] + m[1, 0]) / scale, (m[0, 2] + m[2, 0]) / scale))
+            elif axis == 1:
+                scale = math.sqrt(max(1e-12, 1.0 + m[1, 1] - m[0, 0] - m[2, 2])) * 2.0
+                q = np.array(((m[0, 2] - m[2, 0]) / scale, (m[0, 1] + m[1, 0]) / scale,
+                              .25 * scale, (m[1, 2] + m[2, 1]) / scale))
+            else:
+                scale = math.sqrt(max(1e-12, 1.0 + m[2, 2] - m[0, 0] - m[1, 1])) * 2.0
+                q = np.array(((m[1, 0] - m[0, 1]) / scale, (m[0, 2] + m[2, 0]) / scale,
+                              (m[1, 2] + m[2, 1]) / scale, .25 * scale))
+        return q / max(float(np.linalg.norm(q)), 1e-12)
+
+    @staticmethod
+    def _quaternion_to_matrix(quaternion: np.ndarray) -> np.ndarray:
+        w, x, y, z = np.asarray(quaternion, dtype=np.float64)
+        return np.array(((1 - 2 * (y*y + z*z), 2 * (x*y - z*w), 2 * (x*z + y*w)),
+                         (2 * (x*y + z*w), 1 - 2 * (x*x + z*z), 2 * (y*z - x*w)),
+                         (2 * (x*z - y*w), 2 * (y*z + x*w), 1 - 2 * (x*x + y*y))), np.float64)
+
+    @staticmethod
+    def _slerp(a: np.ndarray, b: np.ndarray, amount: float) -> np.ndarray:
+        dot = float(np.dot(a, b))
+        if dot < 0.0:
+            b, dot = -b, -dot
+        dot = float(np.clip(dot, -1.0, 1.0))
+        if dot > .9995:
+            result = a + amount * (b - a)
+            return result / max(float(np.linalg.norm(result)), 1e-12)
+        angle = math.acos(dot)
+        sine = math.sin(angle)
+        result = (math.sin((1.0 - amount) * angle) * a + math.sin(amount * angle) * b) / sine
+        return result / max(float(np.linalg.norm(result)), 1e-12)
+
+    def filter_rotation_matrix(self, track_id: int, channel: str, matrix, timestamp: float) -> np.ndarray:
+        """Velocity-adaptive One-Euro filter on SO(3), interpolating with quaternion SLERP.
+
+        Non-monotonic timestamps, gaps over 500 ms, and shape/lifecycle resets take the
+        measurement immediately. Scene cuts are handled by ``reset`` at the tracker boundary.
+        """
+        if type(track_id) is not int or track_id < 0 or not channel or not np.isfinite(timestamp):
+            raise ValueError("A valid track, channel, and finite timestamp are required")
+        raw = self._matrix_to_quaternion(np.asarray(matrix, dtype=np.float64))
+        key = (track_id, channel)
+        state = self.rotations.get(key)
+        if state is None or timestamp <= state.timestamp or timestamp - state.timestamp > .5:
+            self.rotations[key] = _RotationChannel(raw.copy(), raw.copy(), 0.0, float(timestamp))
+            return self._quaternion_to_matrix(raw)
+        if np.dot(raw, state.raw) < 0:
+            raw = -raw
+        dt = float(timestamp - state.timestamp)
+        angular_speed = math.degrees(2.0 * math.acos(float(np.clip(abs(np.dot(raw, state.raw)), 0.0, 1.0))) / dt)
+        if angular_speed >= self.rotation_reset_speed:
+            self.rotations[key] = _RotationChannel(raw.copy(), raw.copy(), angular_speed, float(timestamp))
+            return self._quaternion_to_matrix(raw)
+        derivative_alpha = float(OneEuroFilter._alpha(self.config["derivative_cutoff"], dt))
+        derivative = derivative_alpha * angular_speed + (1.0 - derivative_alpha) * state.derivative
+        cutoff = self.config["min_cutoff"] + self.config["beta"] * derivative
+        amount = float(OneEuroFilter._alpha(cutoff, dt))
+        filtered = self._slerp(state.value, raw, amount)
+        self.rotations[key] = _RotationChannel(raw.copy(), filtered.copy(), derivative, float(timestamp))
+        return self._quaternion_to_matrix(filtered)
+
+    def filter_pose(self, track_id: int, channel: str, legacy_angles, timestamp: float) -> np.ndarray:
+        """Filter a legacy ``(yaw, pitch-down, roll)`` pose without Euler wrap artifacts."""
+        from roop_3d.core.pose import as_pose3d, euler_from_rotation, rotation_from_euler
+        pose = as_pose3d(legacy_angles, frame="legacy")
+        rotation = rotation_from_euler(pose.yaw, pose.pitch, pose.roll)
+        filtered = self.filter_rotation_matrix(track_id, channel, rotation, timestamp)
+        yaw, pitch, roll = euler_from_rotation(filtered)
+        return np.asarray((yaw, -pitch, roll), dtype=np.float64)
 
     def filter(self, track_id: int, channel: str, value, timestamp: float) -> np.ndarray:
         if type(track_id) is not int or track_id < 0 or not channel:

@@ -30,6 +30,7 @@ from roop_3d.compositor.mouth import composite_mouth_region, lower_face_soft_mas
 from roop_3d.compositor.occlusion import combine_occluders, semantic_occluder_mask, subtract_occluders
 from roop_3d.compositor.restoration import GpenRestorer, blend_restored_roi
 from roop_3d.compositor.temporal import TemporalSmoother
+from roop_3d.compositor.detail_temporal import TemporalDetailStabilizer
 from roop_3d.temporal import TemporalMaskEMA
 from roop_3d.core.errors import DomainError
 from roop_3d.engine.runtime import RuntimeConfig, image_bgr
@@ -153,6 +154,7 @@ class FrameCompositor:
         self.restorer = restorer
         self.temporal = temporal or TemporalSmoother()
         self.mask_ema = TemporalMaskEMA(alpha=.65, max_tracks=32)
+        self.detail_temporal = TemporalDetailStabilizer()
         from roop_3d.temporal_stabilizer import TemporalStabilizer
         self.histogram_stabilizer = TemporalStabilizer(min_cutoff=.15, beta=.04)
         self._analyzer = analyzer
@@ -381,6 +383,20 @@ class FrameCompositor:
                 effective_strength=options.relight_strength * constraint.applied_fraction)
         return harmonized, color_stats, restorer_seconds
 
+    def _stabilize_detail(self, track_id, enhanced, base, guide, valid_mask, *, frame_index, scene_cut,
+                          protect=None):
+        """Stabilize only the enhancer-added high-pass band, never the full face image."""
+        height, width = enhanced.shape[:2]
+        if base.shape[:2] != (height, width):
+            base = cv2.resize(base, (width, height), interpolation=cv2.INTER_CUBIC)
+        if guide.shape[:2] != (height, width):
+            guide = cv2.resize(guide, (width, height), interpolation=cv2.INTER_CUBIC)
+        validity = self._resize_plane(valid_mask, height)
+        if protect is not None:
+            validity *= 1.0 - self._resize_plane(np.asarray(protect, np.float32), height)
+        return self.detail_temporal.update(track_id, enhanced, base, guide, valid_mask=validity,
+                                           frame_index=frame_index, scene_cut=scene_cut)
+
     def compose(self, frame: np.ndarray, replacements, landmarks_by_track: Mapping[int, np.ndarray] | None = None,
                 *, scene_cut: bool = False, frame_index: int | None = None,
                 occluder_masks: Mapping[int, np.ndarray] | None = None,
@@ -397,10 +413,14 @@ class FrameCompositor:
         self.last_relighting = {key:value for key,value in self.last_relighting.items() if key in active_tracks}
         self.temporal.begin_frame(frame_index, active_track_ids=active_tracks, scene_cut=scene_cut)
         self.mask_ema.retain(active_tracks)
+        self.detail_temporal.retain(active_tracks)
         if scene_cut:
             self.mask_ema.clear()
+            self.detail_temporal.clear()
+            self.watchdog.clear()
         if scene_cut: self.histogram_stabilizer.reset()
         self.histogram_stabilizer.retain(active_tracks)
+        self.last_reports = {}
         if options.occlusion_mode == "robust":
             return self._compose_robust(frame, replacements, landmarks_by_track, active_tracks, scene_cut, frame_index,
                                         occluder_masks, lip_sync_results, options, observer)
@@ -457,10 +477,16 @@ class FrameCompositor:
                 if coverage.shape != alpha.shape or not np.isfinite(coverage).all() or np.any((coverage < 0) | (coverage > 1)):
                     raise DomainError('PROJECTION_COVERAGE_INVALID', 'Projected coverage must be finite crop-space values in 0..1', 422)
                 alpha *= coverage
+            mask_report = self.watchdog.observe_temporal(
+                replacement.track_id, alpha, frame_index=frame_index, scene_cut=scene_cut)
+            if mask_report["anomaly"]:
+                log.warning("Temporal mask anomaly track=%s frame=%s diagnostics=%s", replacement.track_id,
+                            frame_index, mask_report)
             if observer is not None:
                 observer('swapper', crop, replacement.inverse, alpha)
                 observer('matte', (alpha * 255).round().astype(np.uint8), replacement.inverse, alpha)
             if not alpha.any():
+                self.last_reports[replacement.track_id] = {"mask_watchdog": mask_report}
                 continue
 
             skin = face_mask.skin if getattr(face_mask, "source", "").startswith("bisenet") else alpha
@@ -469,6 +495,13 @@ class FrameCompositor:
                 observer=observer, lip_result=lip_sync_results.get(replacement.track_id), frame_index=frame_index,
                 frame=frame)
             restorer_seconds += spent
+            harmonized, detail_report = self._stabilize_detail(
+                replacement.track_id, harmonized, crop, target_crop, alpha,
+                frame_index=frame_index, scene_cut=scene_cut)
+            self.last_reports[replacement.track_id] = {
+                "temporal_detail": detail_report,
+                "mask_watchdog": mask_report,
+            }
             temporal = self.temporal.update(replacement.track_id, replacement.inverse, alpha / max(options.swap_weight, 1e-8), color_stats,
                                             frame_index=frame_index, scene_cut=False)
             if observer is not None:
@@ -657,6 +690,11 @@ class FrameCompositor:
                 visible_alpha *= (1.0 - front)
             if coverage is not None:
                 visible_alpha = visible_alpha * coverage
+            mask_report = self.watchdog.observe_temporal(
+                replacement.track_id, visible_alpha, frame_index=frame_index, scene_cut=scene_cut)
+            if mask_report["anomaly"]:
+                log.warning("Temporal mask anomaly track=%s frame=%s diagnostics=%s", replacement.track_id,
+                            frame_index, mask_report)
             alpha_native = cv2.resize(visible_alpha, (side, side), interpolation=cv2.INTER_AREA) if work != side else visible_alpha
             if observer is not None:
                 observer('occluder', cv2.resize(front, (side, side), interpolation=cv2.INTER_AREA) if front is not None else np.zeros((side, side), np.float32),
@@ -669,6 +707,7 @@ class FrameCompositor:
             self.last_reports[replacement.track_id] = context.report
             if not alpha_native.any():
                 context.report["skipped"] = "FACE_FULLY_OCCLUDED_OR_EMPTY"
+                context.report["mask_watchdog"] = mask_report
                 continue
 
             protect = None
@@ -685,6 +724,11 @@ class FrameCompositor:
                 lip_result=lip_sync_results.get(replacement.track_id), frame_index=frame_index, protect=protect,
                 mouth_mask=mouth, local_illumination=robust.local_illumination, frame=frame)
             restorer_seconds += spent
+            harmonized, detail_report = self._stabilize_detail(
+                replacement.track_id, harmonized, crop, context.target_crop, alpha_native,
+                frame_index=frame_index, scene_cut=scene_cut, protect=protect)
+            context.report["temporal_detail"] = detail_report
+            context.report["mask_watchdog"] = mask_report
             temporal = self.temporal.update(replacement.track_id, replacement.inverse, face_alpha, color_stats,
                                             frame_index=frame_index, scene_cut=False)
             if getattr(replacement, "full_head", False):
@@ -779,6 +823,12 @@ class FrameCompositor:
                   "temporal_tracks": self.temporal.track_count,
                   "temporal_cache_bytes": self.temporal.cache_bytes,
                   "temporal_cache_limit_bytes": self.temporal.max_cache_bytes,
+                  "temporal_detail": {"backend": "opencv_dis_cpu",
+                                      "tracks": self.detail_temporal.track_count,
+                                      "cache_bytes": self.detail_temporal.cache_bytes,
+                                      "cache_limit_bytes": self.detail_temporal.max_cache_bytes,
+                                      "previous_weight": self.detail_temporal.temporal_alpha},
+                  "temporal_diagnostics": dict(self.last_reports),
                   "frames_composited": self.frames_composited,
                   "photometric_identity": dict(self.last_relighting),
                   "occlusion_modes": {"default": "standard", "available": list(OCCLUSION_MODES)}}
@@ -804,6 +854,7 @@ class FrameCompositor:
         if self._occlusion_tracker is not None:
             self._occlusion_tracker.clear()
         self.temporal.clear()
+        self.detail_temporal.clear()
         self.mask_ema.clear()
         self.histogram_stabilizer.reset()
         self.watchdog.clear()

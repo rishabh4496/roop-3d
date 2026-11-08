@@ -232,14 +232,8 @@ class FaceTracker:
             def channel(name, value):
                 return None if value is None else self.stabilizer.filter(item.track_id, name, value, timestamp).astype(np.float32)
 
-            # Unwrap Euler angles against the last raw sample before filtering.
-            state = self.stabilizer.channels.get((item.track_id, 'pose'))
-            angles = np.asarray(face.pose)
-            if state is not None:
-                raw = state.euro.raw
-                if raw is not None:
-                    angles = raw + (angles - raw + 180) % 360 - 180
-            pose = self.stabilizer.filter(item.track_id, 'pose', angles, timestamp)
+            # Interpolate rotations on SO(3), not independently in wrapped Euler axes.
+            pose = self.stabilizer.filter_pose(item.track_id, 'pose', face.pose, timestamp)
             observation = replace(face, box=channel('bbox', face.box),
                 landmarks5=channel('landmarks5', face.landmarks5),
                 landmarks106=channel('landmarks106', face.landmarks106),
