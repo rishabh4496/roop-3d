@@ -413,7 +413,8 @@ def test_robust_compositor_keeps_the_hand_but_replaces_the_face_around_it():
     report = compositor.last_reports[1]
     assert report["tier"] == "full" and report["fusion"]["occluded_fraction"] > 0.05
     assert report["analysis_ms"]["total"] > 0
-    assert report["temporal_detail"]["backend"] == "opencv_dis_cpu"
+    assert report["temporal_detail"]["backend"] in {
+        "none_no_history", "opencv_dis_cpu", "opencv_nvidia_of_2_0_cpu_warp"}
     assert 0 <= report["mask_watchdog"]["iou"] <= 1
 
 

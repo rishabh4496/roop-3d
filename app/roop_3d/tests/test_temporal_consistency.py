@@ -44,10 +44,10 @@ def test_detail_stabilizer_is_identity_on_first_frame_and_resets_without_cut_gho
     base = np.full((side, side, 3), 128, np.uint8)
     guide = _texture(side)
     enhanced = np.clip(base.astype(np.int16) + np.random.default_rng(2).integers(-15, 16, base.shape), 0, 255).astype(np.uint8)
-    stabilizer = TemporalDetailStabilizer(flow_side=96, max_side=96)
+    stabilizer = TemporalDetailStabilizer(flow_side=96, max_side=96, use_cuda_flow=False)
     initial, first_report = stabilizer.update(3, enhanced, base, guide, frame_index=0)
     np.testing.assert_array_equal(initial, enhanced)
-    assert first_report["backend"] == "opencv_dis_cpu"
+    assert first_report["backend"] == "none_no_history"
 
     current = np.clip(base.astype(np.int16) + np.random.default_rng(3).integers(-15, 16, base.shape), 0, 255).astype(np.uint8)
     cut_output, report = stabilizer.update(3, current, base, _texture(side, 55), frame_index=1, scene_cut=True)
@@ -65,13 +65,97 @@ def test_detail_stabilizer_never_imports_history_under_current_occluder():
     rng = np.random.default_rng(22)
     first = np.clip(base.astype(np.int16) + rng.integers(-18, 19, base.shape), 0, 255).astype(np.uint8)
     second = np.clip(base.astype(np.int16) + rng.integers(-18, 19, base.shape), 0, 255).astype(np.uint8)
-    stabilizer = TemporalDetailStabilizer(flow_side=96, max_side=96)
+    stabilizer = TemporalDetailStabilizer(flow_side=96, max_side=96, use_cuda_flow=False)
     stabilizer.update(1, first, base, guide, frame_index=0)
     visible = np.ones((side, side), np.float32)
     visible[20:70, 20:70] = 0.0
     output, report = stabilizer.update(1, second, base, guide, valid_mask=visible, frame_index=1)
     np.testing.assert_array_equal(output[20:70, 20:70], second[20:70, 20:70])
     assert report["influenced_fraction"] > 0
+
+
+def test_cuda_flow_unavailable_falls_back_to_cpu_dis(monkeypatch):
+    try:
+        import torch
+    except ModuleNotFoundError:
+        expected_reason = "ModuleNotFoundError"
+    else:
+        monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+        expected_reason = "CUDA_RUNTIME_UNAVAILABLE"
+    side = 96
+    base = np.full((side, side, 3), 128, np.uint8)
+    guide = _texture(side, 19)
+    stabilizer = TemporalDetailStabilizer(flow_side=96, max_side=96)
+    stabilizer.update(2, base, base, guide, frame_index=0)
+    _, report = stabilizer.update(2, base, base, guide, frame_index=1)
+    assert report["backend"] == "opencv_dis_cpu"
+    assert report["gpu_fallback_reason"].startswith(expected_reason)
+
+
+def test_nvidia_flow_bridge_uses_gpu_pair_contract_and_releases(monkeypatch):
+    import sys
+    from types import SimpleNamespace
+
+    import roop_3d.optical_flow_tracker as flow_module
+
+    class FakeTensor:
+        def __init__(self, value):
+            self.value = np.asarray(value)
+
+        def to(self, _device):
+            return self
+
+        def __getitem__(self, index):
+            return FakeTensor(self.value[index])
+
+        def detach(self):
+            return self
+
+        def float(self):
+            return self
+
+        def cpu(self):
+            return self
+
+        def numpy(self):
+            return self.value
+
+    created = []
+
+    class FakeNvidiaFlow:
+        device = 0
+
+        def __init__(self, size, *, device):
+            assert size == (96, 96) and device == 0
+            self.closed = False
+            created.append(self)
+
+        def pair(self, previous, current):
+            assert isinstance(previous, FakeTensor) and isinstance(current, FakeTensor)
+            flow = FakeTensor(np.zeros((1, 96, 96, 2), np.float32))
+            return flow, flow
+
+        def close(self):
+            self.closed = True
+
+    fake_torch = SimpleNamespace(
+        cuda=SimpleNamespace(is_available=lambda: True),
+        from_numpy=lambda value: FakeTensor(value),
+    )
+    monkeypatch.setitem(sys.modules, "torch", fake_torch)
+    monkeypatch.setattr(flow_module, "NvidiaHardwareFlow", FakeNvidiaFlow)
+    side = 96
+    base = np.full((side, side, 3), 128, np.uint8)
+    guide = _texture(side, 21)
+    stabilizer = TemporalDetailStabilizer(flow_side=96, max_side=96)
+    stabilizer.update(8, base, base, guide, frame_index=0)
+    _, report = stabilizer.update(8, base, base, guide, frame_index=1)
+    assert report["backend"] == "opencv_nvidia_of_2_0_cpu_warp"
+    assert "gpu_fallback_reason" not in report
+    assert stabilizer.capability()["backend"] == report["backend"]
+    stabilizer.release()
+    assert created[0].closed is True
+    assert stabilizer.capability()["backend"] == "none_no_history"
 
 
 def test_mask_watchdog_reports_single_frame_drop_with_per_face_thread_isolation():

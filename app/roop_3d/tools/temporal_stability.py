@@ -36,7 +36,8 @@ def benchmark_temporal_stability(*, frames: int = 120, seed: int = 7, side: int 
     cut_guide_base = cv2.cvtColor(cv2.GaussianBlur(cut_guide_noise, (0, 0), 1.0), cv2.COLOR_GRAY2BGR)
     cut_pore_field = rng.normal(0, 8, (side, side, 3)).astype(np.float32)
     base = np.full((side, side, 3), 128, np.uint8)
-    stabilizer = TemporalDetailStabilizer(temporal_alpha=.25, flow_side=96, max_side=side)
+    stabilizer = TemporalDetailStabilizer(temporal_alpha=.25, flow_side=96, max_side=side,
+                                          use_cuda_flow=False)
     raw_residuals, filtered_residuals, outputs, inputs, reports = [], [], [], [], []
     for index in range(frames):
         # Keep a separate, persistent shot after the cut. Motion remains known exactly.
@@ -86,7 +87,8 @@ def benchmark_temporal_stability(*, frames: int = 120, seed: int = 7, side: int 
     return {
         "frames": frames,
         "synthetic_only": True,
-        "backend": "opencv_dis_cpu",
+        "backend": next((item["backend"] for item in reports
+                          if item["backend"] != "none_no_history"), "none"),
         "history_weight": .25,
         "cut_frame": cut_frame,
         "flow_confidence_mean": float(np.mean([item["flow_confidence"] for item in reports])),

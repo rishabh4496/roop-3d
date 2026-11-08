@@ -823,11 +823,7 @@ class FrameCompositor:
                   "temporal_tracks": self.temporal.track_count,
                   "temporal_cache_bytes": self.temporal.cache_bytes,
                   "temporal_cache_limit_bytes": self.temporal.max_cache_bytes,
-                  "temporal_detail": {"backend": "opencv_dis_cpu",
-                                      "tracks": self.detail_temporal.track_count,
-                                      "cache_bytes": self.detail_temporal.cache_bytes,
-                                      "cache_limit_bytes": self.detail_temporal.max_cache_bytes,
-                                      "previous_weight": self.detail_temporal.temporal_alpha},
+                  "temporal_detail": self.detail_temporal.capability(),
                   "temporal_diagnostics": dict(self.last_reports),
                   "frames_composited": self.frames_composited,
                   "photometric_identity": dict(self.last_relighting),
@@ -854,7 +850,7 @@ class FrameCompositor:
         if self._occlusion_tracker is not None:
             self._occlusion_tracker.clear()
         self.temporal.clear()
-        self.detail_temporal.clear()
+        self.detail_temporal.release()
         self.mask_ema.clear()
         self.histogram_stabilizer.reset()
         self.watchdog.clear()

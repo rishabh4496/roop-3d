@@ -1,9 +1,10 @@
 """Causal, confidence-gated stabilization of restoration-only high-frequency detail.
 
-The compositor currently exchanges NumPy/OpenCV images with the restorer, so this
-implementation is deliberately reported as a CPU path. It keeps bounded per-track
-state, uses forward/backward DIS flow consistency, and never carries detail across a
-scene cut, a frame gap, a shape change, or an occluded/invalid pixel.
+The compositor exchanges NumPy/OpenCV images with the restorer. NVIDIA OF 2.0 may
+accelerate flow estimation when the custom CUDA bindings and runtime are available,
+but flow vectors are downloaded and residual warping/fusion remain on CPU. DIS is the
+portable fallback. State is bounded per track and never carries detail across a scene
+cut, frame gap, shape change, or invalid/occluded pixel.
 """
 from __future__ import annotations
 
@@ -26,14 +27,19 @@ class _DetailState:
 
 
 class TemporalDetailStabilizer:
-    """Flow-warp and softly blend enhancement residuals, isolated per face track."""
+    """Flow-warp enhancement residuals, using CUDA OF when available and CPU DIS otherwise.
+
+    The OpenCV hardware path accelerates flow estimation only. Residual warping and
+    fusion still run on CPU because the compositor/restorer exchange NumPy images.
+    """
 
     def __init__(self, *, temporal_alpha: float = .25, flow_side: int = 96, max_side: int = 512,
                  max_tracks: int = 12, max_cache_bytes: int = 32 * 1024 * 1024,
-                 cut_correlation: float = .35, min_flow_confidence: float = .12):
+                 cut_correlation: float = .35, min_flow_confidence: float = .12,
+                 use_cuda_flow: bool = True):
         if (not 0 <= temporal_alpha <= .5 or flow_side < 16 or max_side < flow_side or max_tracks < 1
                 or max_cache_bytes < 1024 or not -1 <= cut_correlation <= 1
-                or not 0 <= min_flow_confidence <= 1):
+                or not 0 <= min_flow_confidence <= 1 or type(use_cuda_flow) is not bool):
             raise ValueError("Invalid temporal detail stabilizer configuration")
         self.temporal_alpha = float(temporal_alpha)
         self.flow_side, self.max_side = int(flow_side), int(max_side)
@@ -41,6 +47,66 @@ class TemporalDetailStabilizer:
         self.cut_correlation, self.min_flow_confidence = float(cut_correlation), float(min_flow_confidence)
         self._tracks: OrderedDict[int, _DetailState] = OrderedDict()
         self._flow = cv2.DISOpticalFlow_create(cv2.DISOPTICAL_FLOW_PRESET_MEDIUM)
+        self._gpu_flow = None
+        self._use_cuda_flow = use_cuda_flow
+        self._gpu_flow_checked = not bool(use_cuda_flow)
+        self._gpu_flow_error = None
+        self._last_backend = "none_no_history"
+        self._last_gpu_fallback_reason = None
+
+    def capability(self) -> dict:
+        return {
+            "backend": self._last_backend,
+            "backend_policy": "nvidia_of_2_0_if_available_else_cpu_dis" if self._use_cuda_flow else "cpu_dis_forced",
+            "gpu_fallback_reason": self._last_gpu_fallback_reason,
+            "tracks": self.track_count,
+            "cache_bytes": self.cache_bytes,
+            "cache_limit_bytes": self.max_cache_bytes,
+            "previous_weight": self.temporal_alpha,
+        }
+
+    def _try_create_gpu_flow(self) -> None:
+        """Lazily select the existing NVIDIA OF 2.0 bridge without making CUDA mandatory."""
+        if self._gpu_flow_checked:
+            return
+        self._gpu_flow_checked = True
+        try:
+            import torch
+            if not torch.cuda.is_available():
+                self._gpu_flow_error = "CUDA_RUNTIME_UNAVAILABLE"
+                return
+            from roop_3d.optical_flow_tracker import NvidiaHardwareFlow
+            self._gpu_flow = NvidiaHardwareFlow((self.flow_side, self.flow_side), device=0)
+        except (ImportError, AttributeError, OSError, RuntimeError, cv2.error) as error:
+            self._gpu_flow_error = f"{type(error).__name__}: {error}"
+
+    def _flow_pair(self, previous: np.ndarray, current: np.ndarray):
+        """Return previous->current and current->previous flow on host for CPU fusion."""
+        self._try_create_gpu_flow()
+        if self._gpu_flow is not None:
+            try:
+                import torch
+                device = f"cuda:{self._gpu_flow.device}"
+                previous_device = torch.from_numpy(np.ascontiguousarray(previous)).to(device)
+                current_device = torch.from_numpy(np.ascontiguousarray(current)).to(device)
+                forward_device, backward_device = self._gpu_flow.pair(previous_device, current_device)
+                forward = forward_device[0].detach().float().cpu().numpy()
+                backward = backward_device[0].detach().float().cpu().numpy()
+                expected = (self.flow_side, self.flow_side, 2)
+                if forward.shape != expected or backward.shape != expected:
+                    raise ValueError("NVIDIA OF returned flow with an unexpected shape")
+                return forward, backward, "opencv_nvidia_of_2_0_cpu_warp", None
+            except (ImportError, AttributeError, OSError, RuntimeError, ValueError, cv2.error) as error:
+                self._gpu_flow_error = f"{type(error).__name__}: {error}"
+                try:
+                    self._gpu_flow.close()
+                except Exception:
+                    pass
+                self._gpu_flow = None
+
+        forward = self._flow.calc(previous, current, None)
+        backward = self._flow.calc(current, previous, None)
+        return forward, backward, "opencv_dis_cpu", self._gpu_flow_error
 
     @property
     def cache_bytes(self) -> int:
@@ -52,6 +118,16 @@ class TemporalDetailStabilizer:
 
     def clear(self) -> None:
         self._tracks.clear()
+
+    def release(self) -> None:
+        self.clear()
+        if self._gpu_flow is not None:
+            self._gpu_flow.close()
+            self._gpu_flow = None
+        self._gpu_flow_checked = not self._use_cuda_flow
+        self._gpu_flow_error = None
+        self._last_backend = "none_no_history"
+        self._last_gpu_fallback_reason = None
 
     def retain(self, track_ids) -> None:
         keep = set(track_ids)
@@ -142,9 +218,9 @@ class TemporalDetailStabilizer:
 
         result = output.copy()
         confidence_mean, influenced_fraction = 0.0, 0.0
+        backend, backend_fallback = "none_no_history", self._gpu_flow_error
         if state is not None:
-            backward = self._flow.calc(guide_small, state.guide, None)
-            forward = self._flow.calc(state.guide, guide_small, None)
+            forward, backward, backend, backend_fallback = self._flow_pair(state.guide, guide_small)
             side = self.flow_side
             grid_x, grid_y = np.meshgrid(np.arange(side, dtype=np.float32), np.arange(side, dtype=np.float32))
             map_x, map_y = grid_x + backward[..., 0], grid_y + backward[..., 1]
@@ -190,10 +266,15 @@ class TemporalDetailStabilizer:
 
         self._tracks[track_id] = current
         self._evict(track_id)
-        return result, {
-            "backend": "opencv_dis_cpu",
+        report = {
+            "backend": backend,
             "history_weight": self.temporal_alpha if reason is None else 0.0,
             "flow_confidence": confidence_mean,
             "influenced_fraction": influenced_fraction,
             "reset_reason": reason,
         }
+        self._last_backend = backend
+        self._last_gpu_fallback_reason = backend_fallback
+        if backend_fallback:
+            report["gpu_fallback_reason"] = backend_fallback
+        return result, report
