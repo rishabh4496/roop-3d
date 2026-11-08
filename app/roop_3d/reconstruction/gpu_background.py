@@ -33,6 +33,7 @@ class GPUBackgroundPropagator:
                 vec2 p = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2);
                 gl_Position = vec4(p * 2.0 - 1.0, 0, 1);
             }'''
+        ctx.__enter__()
         try:
             program = keep(ctx.program(vertex_shader=vertex, fragment_shader='''#version 330
                 uniform sampler2D seeds; uniform int jump;
@@ -90,6 +91,7 @@ class GPUBackgroundPropagator:
         finally:
             for resource in reversed(resources):
                 resource.release()
+            ctx.__exit__(None, None, None)
 
     def release(self):
         self.renderer.release()

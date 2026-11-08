@@ -11,6 +11,10 @@ From this project app/ directory:
 External model source locations are read-only and separately hashed. No legacy
 application code or environment is imported.
 
+Full-head GPU SH relighting, optional iris tracking, oral detail and neck seam
+handling are documented in [Photometric head synthesis](../../docs/photometric-head.md),
+including local model setup and the real ArcFace acceptance fixture.
+
 
 ## Open head model (MakeHuman, CC0) - FLAME alternative
 

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import math
+import json
 import cv2
 import numpy as np
 
@@ -17,6 +18,47 @@ class DenseLandmarks:
         self.catalog, self.config = catalog, config
         self.model106: OrtModel | None = None
         self.model203: OrtModel | None = None
+        self.mesh478 = None
+        self._mesh_checked = False
+
+    def infer478(self, image, box):
+        """Optional verified local task, cropped per actor to prevent cross-track gaze.
+
+        Install app/models/face_landmarker.task plus a .task.json sidecar with
+        sha256 and size_bytes. Nothing is downloaded or borrowed from siblings.
+        A missing task returns None; a configured but broken task is an error.
+        """
+        if not self._mesh_checked:
+            path = self.catalog.root / 'models/face_landmarker.task'
+            sidecar = path.with_suffix('.task.json')
+            if path.is_file():
+                try:
+                    from roop_3d.flame_3d_engine import MediaPipe478Estimator
+                    metadata = json.loads(sidecar.read_text('utf-8'))
+                    self.mesh478 = MediaPipe478Estimator(path, metadata['sha256'], metadata['size_bytes'])
+                except (OSError, KeyError, ValueError) as error:
+                    raise DomainError('IRIS_TASK_INVALID', f'Local iris task needs a valid digest/size sidecar: {error}', 422) from error
+            self._mesh_checked = True
+        if self.mesh478 is None:
+            return None
+        h, w = image.shape[:2]
+        x1, y1, x2, y2 = np.asarray(box, np.float64)
+        margin = max(x2-x1, y2-y1) * .15
+        x1, y1 = max(0, int(x1-margin)), max(0, int(y1-margin))
+        x2, y2 = min(w, int(x2+margin)), min(h, int(y2+margin))
+        if x2-x1 < 2 or y2-y1 < 2:
+            return None
+        try:
+            mesh = self.mesh478.extract(np.ascontiguousarray(image[y1:y2, x1:x2, ::-1]))
+        except RuntimeError as error:
+            if str(error) == 'No single dense face mesh was detected':
+                return None
+            raise
+        mesh = mesh.copy()
+        mesh[:, 0] = mesh[:, 0] * (x2-x1) + x1
+        mesh[:, 1] = mesh[:, 1] * (y2-y1) + y1
+        mesh[:, 2] *= x2-x1
+        return mesh
 
     def infer106(self, image: np.ndarray, box: np.ndarray) -> np.ndarray:
         image_bgr(image)
@@ -51,6 +93,10 @@ class DenseLandmarks:
             if model is not None:
                 model.release()
         self.model106 = self.model203 = None
+        if self.mesh478 is not None:
+            self.mesh478.close()
+            self.mesh478 = None
+        self._mesh_checked = False
 
 
 def geometric_pose(points5: np.ndarray) -> tuple[float, float, float]:

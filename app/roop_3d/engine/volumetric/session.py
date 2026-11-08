@@ -71,6 +71,8 @@ class Replacement:
     full_head: bool = False
     target_silhouette: np.ndarray | None = None
     source_silhouette: np.ndarray | None = None
+    photometry: object = None
+    face_detail: object = None
 
 
 @dataclass(frozen=True)
@@ -608,7 +610,8 @@ class ReferencePipeline:
                         landmarks5=transform_points(face.landmarks5, cv2.invertAffineTransform(inverse)),
                         render_mode=face_mode, full_head=True,
                         target_silhouette=engine.target_silhouette,
-                        source_silhouette=engine.source_silhouette))
+                        source_silhouette=engine.source_silhouette,
+                        photometry=engine.photometry, face_detail=engine.detail))
                     continue
                 swap = self.swapper.infer_frame(image, face.landmarks5, pose=face.pose,
                                                 track_id=tracked.track_id, frontalization=frontalization,
@@ -794,6 +797,13 @@ class ReferencePipeline:
                               "silhouette_completion": "gpu_jump_flood_background_propagation",
                               "extreme_pose_policy": "auto_3d_above_30_yaw_or_25_pitch_no_affine_fallback",
                               "calibration": "estimated_intrinsics_unless_supplied"},
+                "photometric_detail": {"relighting": "gpu_mesh_normals_linear_rgb_sh_order_2",
+                    "albedo": "single_image_reflectance_prior_not_measured_intrinsics",
+                    "target_depth": "MakeHuman_prior_fitted_to_measured_landmark_xy",
+                    "shadows": "visible_geometry_screen_space_ao_and_key_rays",
+                    "gaze": "geometric_iris_vectors_when_verified_478_task_installed",
+                    "conditioning": "image_space_iris_lock_and_depth_preserving_mouth",
+                    "iris_task_active": bool(getattr(getattr(self.tracker, 'dense', None), 'mesh478', None))},
                 "pose_projection": {"state": "AVAILABLE", "geometry": "MAKEHUMAN_FULL_HEAD" if self.render_mode != "standard" else "ESTIMATED_CANONICAL_PROXY_68",
                                     "camera": "ESTIMATED_CROP_PINHOLE", "active": self.pose_projector is not None},
                 "full_frame_compositor": self.compositor.capability(),

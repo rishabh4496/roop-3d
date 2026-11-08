@@ -403,6 +403,7 @@ class UVSynthesizer:
         from roop_3d.reconstruction.full_head import GPUHeadRasterizer, head_roi
         class OrthographicPose:
             perspective = False
+            rotation = np.diag([1., 1., -1.]) @ np.asarray(camera.rotation) @ np.diag([1., 1., -1.])
             def project(self, points):
                 return camera.project(points)
             def camera_vertices(self, points):

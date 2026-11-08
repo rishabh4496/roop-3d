@@ -144,15 +144,20 @@ def test_dense_pnp_and_composite_modify_full_forehead_cheek_and_jaw(yaw, pitch):
         rendered, alpha, inverse = engine.process(frame, face,
             expected.project(rig.V0[rig.landmark_indices]), 0., animate=False, camera_matrix=k)
         np.testing.assert_allclose(engine.last_pose.projection_matrix, expected.projection_matrix, atol=.05)
-        np.testing.assert_array_equal(alpha, engine.source_silhouette)
-        assert np.all(rendered[alpha > .9] > 100)
+        # Source coverage now includes a soft 8 mm submental transition ribbon.
+        assert np.all(alpha <= engine.source_silhouette)
+        assert alpha.sum() > engine.source_silhouette.sum() * .85
+        # Measured oral apertures now retain the target's cavity shadows. This
+        # coverage gate measures skin, which must never reveal the old actor.
+        skin_alpha = alpha * (1 - engine.detail.mouth)
+        assert np.all(rendered[skin_alpha > .99] > 100)
         item = SimpleNamespace(track_id=0, image=rendered, inverse=inverse, coverage=alpha,
             source_silhouette=engine.source_silhouette, target_silhouette=engine.target_silhouette, full_head=True)
         options = CompositeOptions(color_strength=0, feather_px=0, robust=RobustOptions(
             analysis_size=256, refine_matte=False, edge_decontamination=False, sharpness_matching=False,
             texture_strength=0, local_illumination=0))
         result = compositor.compose(frame, [item], options=options)
-        support = cv2.warpAffine(alpha, inverse, (640, 640)) > .99
+        support = cv2.warpAffine(skin_alpha, inverse, (640, 640)) > .99
         yy, xx = np.where(support)
         # Bands span the actual projected skull, including pitch-dependent extrema.
         for lo, hi in ((0, .2), (.35, .65), (.8, 1.)):
@@ -315,7 +320,8 @@ def test_real_target_frames(yaw):
     engine = FullHeadEngine(rig)
     try:
         rendered, alpha, inverse = engine.process(image, face, dense, 0., animate=False)
-        np.testing.assert_array_equal(alpha, engine.source_silhouette)
+        assert np.all(alpha <= engine.source_silhouette)
+        assert alpha.sum() > engine.source_silhouette.sum() * .85
         target = cv2.warpAffine(image, cv2.invertAffineTransform(inverse), (512, 512))
         yy, _ = np.where(alpha > .9)
         for lo, hi in ((0, .2), (.35, .65), (.8, 1.)):

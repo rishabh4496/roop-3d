@@ -77,6 +77,8 @@ class CompositeOptions:
     relight_strength: float = 0.8
     specular_sheen: float = 0.25
     shadow_preservation: float = 0.85
+    # 0 is an explicit diagnostic bypass; production defaults exceed the .78 gate.
+    photometric_identity_floor: float = .8
     # UltraMax runs on every face by default. "bypass"/"adaptive" are explicit opt-ins judged on the face's
     # destination size in the target frame.
     ultramax_small_face_mode: str = "off"
@@ -96,6 +98,8 @@ class CompositeOptions:
     blend_transfer: str = "srgb"
 
     def __post_init__(self) -> None:
+        if self.photometric_identity_floor != 0 and not .78 < self.photometric_identity_floor < 1:
+            raise ValueError('Photometric identity floor must be 0 or in (.78, 1)')
         if not np.isfinite(self.fidelity_weight) or not 0 <= self.fidelity_weight <= 1:
             raise ValueError("CodeFormer fidelity must be within 0..1")
         if not 0 <= self.restoration_blend <= 1 or not 0 <= self.color_strength <= 1:
@@ -158,6 +162,8 @@ class FrameCompositor:
         self.last_timing: dict[str, float] = {}
         # Stage 5: per-track report of the last robust frame (tier, confidence, reasons, fusion metrics).
         self.last_reports: dict[int, dict] = {}
+        self.last_relighting: dict[int, dict] = {}
+        self._relight_recognizer = None
 
     # -- lazy Stage 5 components ----------------------------------------------------------------------
     @property
@@ -273,6 +279,7 @@ class FrameCompositor:
         matrix with ``scale_matrix_input(inverse, harmonized.shape[0] / crop.shape[0])``.
         """
         restorer_seconds = 0.0
+        self.last_relighting.pop(replacement.track_id,None)
         enhanced = crop
         side = crop.shape[0]
         current_alpha, current_target, current_skin, current_protect, current_mouth = alpha, target_crop, skin, protect, mouth_mask
@@ -323,15 +330,25 @@ class FrameCompositor:
             if np.count_nonzero(candidate > 0.15) >= 64:      # a real skin class; otherwise keep the whole-face basis
                 stats_mask = candidate
         harmonized, color_stats = self._color_process(
-            enhanced, current_target, current_alpha, options.color_method, options.color_strength,
+            enhanced, current_target, current_alpha, options.color_method,
+            0. if options.relight and getattr(replacement,'photometry',None) is not None else options.color_strength,
             lambda histogram: self.histogram_stabilizer.filter(
                 replacement.track_id, "histogram", histogram,
                 getattr(self, "timestamp_seconds", (frame_index if frame_index is not None else self.frames_composited) / 30.0)),
             stats_mask=stats_mask)
-        if local_illumination > 0:
+        photo = getattr(replacement, 'photometry', None)
+        if local_illumination > 0 and not (options.relight and photo is not None):
             from roop_3d.compositor.quality import local_illumination_match
             harmonized = local_illumination_match(harmonized, current_target, current_alpha, strength=local_illumination)
-        if options.relight:
+        if options.relight and photo is not None:
+            # Enhanced pixels remain at their native resolution through the
+            # GPU normal-ratio shader and Stage 4's single inverse warp.
+            harmonized, normal_vis, sh_vis = photo.apply(
+                enhanced, current_target, current_skin, current_alpha, options)
+            if observer is not None:
+                observer('normal_map', normal_vis, current_inverse, current_alpha)
+                observer('sh_lighting', sh_vis, current_inverse, current_alpha)
+        elif options.relight:
             from roop_3d.relighting_3d import relighter
             relit_crop, normal_vis, sh_vis, _ = relighter.relight(
                 harmonized, current_target, skin_mask=current_skin, face_mask=current_alpha,
@@ -345,6 +362,23 @@ class FrameCompositor:
             if observer is not None:
                 observer('normal_map', normal_vis, current_inverse, current_alpha)
                 observer('sh_lighting', sh_vis, current_inverse, current_alpha)
+        detail = getattr(replacement, 'face_detail', None)
+        if detail is not None:
+            harmonized = detail.condition(harmonized, current_target)
+        if options.relight and photo is not None and options.photometric_identity_floor:
+            from roop_3d.faceset.recognizer import Recognizer
+            from roop_3d.compositor.photometric_identity import constrain_identity
+            if self._relight_recognizer is None:
+                self._relight_recognizer = Recognizer(self.catalog)
+            baseline = detail.condition(enhanced,current_target) if detail is not None else enhanced
+            points = getattr(replacement,'landmarks5',None)
+            points = np.asarray(points,np.float32) * (size/side) if points is not None else None
+            harmonized, constraint = constrain_identity(baseline,harmonized,points,self._relight_recognizer,
+                                                       floor=options.photometric_identity_floor)
+            self.last_relighting[replacement.track_id] = constraint.metadata()
+            self.last_relighting[replacement.track_id].update(
+                requested_strength=options.relight_strength,
+                effective_strength=options.relight_strength * constraint.applied_fraction)
         return harmonized, color_stats, restorer_seconds
 
     def compose(self, frame: np.ndarray, replacements, landmarks_by_track: Mapping[int, np.ndarray] | None = None,
@@ -360,6 +394,7 @@ class FrameCompositor:
         occluder_masks = occluder_masks or {}
         lip_sync_results = lip_sync_results or {}
         active_tracks = set(landmarks_by_track) | {item.track_id for item in replacements}
+        self.last_relighting = {key:value for key,value in self.last_relighting.items() if key in active_tracks}
         self.temporal.begin_frame(frame_index, active_track_ids=active_tracks, scene_cut=scene_cut)
         self.mask_ema.retain(active_tracks)
         if scene_cut:
@@ -745,12 +780,19 @@ class FrameCompositor:
                   "temporal_cache_bytes": self.temporal.cache_bytes,
                   "temporal_cache_limit_bytes": self.temporal.max_cache_bytes,
                   "frames_composited": self.frames_composited,
+                  "photometric_identity": dict(self.last_relighting),
                   "occlusion_modes": {"default": "standard", "available": list(OCCLUSION_MODES)}}
         if self._analyzer is not None:
             result["robust_occlusion"] = self._analyzer.capability()
         return result
 
     def release(self) -> None:
+        from roop_3d.reconstruction.photometric_gpu import release_renderer
+        release_renderer()
+        if self._relight_recognizer is not None:
+            self._relight_recognizer.release_for_build()
+            self._relight_recognizer = None
+        self.last_relighting.clear()
         if hasattr(self, "_background_propagator"):
             self._background_propagator.release()
         if self.parser is not None and hasattr(self.parser, "release"):

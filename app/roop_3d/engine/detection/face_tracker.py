@@ -26,6 +26,8 @@ class FaceObservation:
     landmarks68: np.ndarray | None = None
     shape_coefficients: np.ndarray | None = None
     expression_coefficients: np.ndarray | None = None
+    # Frame-pixel MediaPipe coordinates; 468 points cannot provide iris gaze.
+    landmarks478: np.ndarray | None = None
 
 
 @dataclass(frozen=True)
@@ -131,7 +133,9 @@ class FaceTracker:
                 raise DomainError("IDENTITY_EMBEDDING_INVALID", "Recognizer did not produce a unit embedding", 422)
             points203 = self.dense.infer203(image, points106) if include203 else None
             observations.append(FaceObservation(box.astype(np.float32), points.astype(np.float32), points106,
-                                                embedding, geometric_pose(points), points203))
+                                                embedding, geometric_pose(points), points203,
+                                                landmarks478=(self.dense.infer478(image, box)
+                                                    if hasattr(self.dense, 'infer478') else None)))
         return observations
 
     def process(self, image: np.ndarray, *, include203: bool = False) -> tuple[TrackedFace, ...]:

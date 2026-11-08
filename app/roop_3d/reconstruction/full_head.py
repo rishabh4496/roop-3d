@@ -5,7 +5,7 @@ both be inferred from monocular video. Scale is fixed by the source asset (metre
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import sys
 import threading
 
@@ -62,6 +62,9 @@ class HeadRenderBuffers:
     silhouette: np.ndarray
     depth: np.ndarray
     uv: np.ndarray
+    normals: np.ndarray | None = None
+    rest_normals: np.ndarray | None = None
+    seam: np.ndarray | None = None
 
 
 class GPUHeadRasterizer:
@@ -85,16 +88,22 @@ class GPUHeadRasterizer:
                     raise RuntimeError("Software OpenGL is not supported")
                 program = context.program(vertex_shader='''#version 330
                     in vec4 clip_position; in vec2 atlas_uv; in float camera_depth;
-                    out vec2 uv; out float metric_depth;
-                    void main() { gl_Position = clip_position; uv = atlas_uv; metric_depth = camera_depth; }
+                    in vec3 surface_normal; in vec3 rest_normal; in float seam_weight;
+                    out vec2 uv; out float metric_depth; out vec3 normal; out vec3 canonical_normal; out float seam;
+                    void main() { gl_Position = clip_position; uv = atlas_uv; metric_depth = camera_depth;
+                        normal = surface_normal; canonical_normal = rest_normal; seam = seam_weight; }
                     ''', fragment_shader='''#version 330
                     uniform sampler2D albedo; uniform sampler2D confidence;
-                    in vec2 uv; in float metric_depth;
+                    in vec2 uv; in float metric_depth; in vec3 normal; in vec3 canonical_normal; in float seam;
                     layout(location=0) out vec4 color;
                     layout(location=1) out vec4 geometry;
+                    layout(location=2) out vec4 normals;
+                    layout(location=3) out vec4 rest_normals;
                     void main() { color = vec4(texture(albedo, uv).rgb,
                                                texture(confidence, uv).r);
-                                  geometry = vec4(uv, metric_depth, 1); }
+                                  geometry = vec4(uv, metric_depth, 1);
+                                  normals = vec4(normalize(normal), seam);
+                                  rest_normals = vec4(normalize(canonical_normal), 1); }
                     ''')
                 program["albedo"].value = 0
                 program["confidence"].value = 1
@@ -112,7 +121,8 @@ class GPUHeadRasterizer:
     def last_buffers(self):
         return self.local.last_buffers
 
-    def render_buffers(self, vertices, faces, uvs, texture, coverage, pose, inverse, side=512):
+    def render_buffers(self, vertices, faces, uvs, texture, coverage, pose, inverse, side=512,
+                       *, rest_normals=None, seam=None):
         ctx, program = self._context()
         import moderngl
         camera = pose.camera_vertices(vertices)
@@ -127,15 +137,23 @@ class GPUHeadRasterizer:
         clip = np.column_stack(((2 * (local[:, 0] + .5) / side - 1) * weight,
                                 (1 - 2 * (local[:, 1] + .5) / side) * weight, depth_clip, weight))
         # UV data is uploaded in image row order, so flip OBJ v for sampling.
-        data = np.column_stack((clip, uvs[:, 0], 1 - uvs[:, 1], z)).astype("f4")
+        from roop_3d.reconstruction.rbf_deform import welded_vertex_normals
+        normals = welded_vertex_normals(vertices, faces)
+        # Reflect to CV, rotate, then express +z towards the viewer again.
+        camera_normals = (normals * (1, 1, -1)) @ pose.rotation.T * (1, 1, -1)
+        data = np.column_stack((clip, uvs[:, 0], 1 - uvs[:, 1], z, camera_normals,
+                                normals if rest_normals is None else rest_normals,
+                                np.ones(len(vertices)) if seam is None else seam)).astype("f4")
         resources = []
+        ctx.__enter__()
         try:
             def keep(value):
                 resources.append(value)
                 return value
             vbo = keep(ctx.buffer(data.tobytes()))
             ibo = keep(ctx.buffer(np.asarray(faces, "i4").tobytes()))
-            vao = keep(ctx.vertex_array(program, [(vbo, "4f 2f 1f", "clip_position", "atlas_uv", "camera_depth")], ibo))
+            vao = keep(ctx.vertex_array(program, [(vbo, "4f 2f 1f 3f 3f 1f", "clip_position", "atlas_uv", "camera_depth",
+                "surface_normal", "rest_normal", "seam_weight")], ibo))
             tex = keep(ctx.texture((texture.shape[1], texture.shape[0]), 3,
                                    np.ascontiguousarray(texture).tobytes()))
             cov = keep(ctx.texture((coverage.shape[1], coverage.shape[0]), 1,
@@ -146,8 +164,10 @@ class GPUHeadRasterizer:
                 item.use(unit)
             color = keep(ctx.texture((side, side), 4, dtype="f4"))
             geometry = keep(ctx.texture((side, side), 4, dtype="f4"))
+            normal_map = keep(ctx.texture((side, side), 4, dtype="f4"))
+            rest_map = keep(ctx.texture((side, side), 4, dtype="f4"))
             depth = keep(ctx.depth_renderbuffer((side, side)))
-            fbo = keep(ctx.framebuffer([color, geometry], depth))
+            fbo = keep(ctx.framebuffer([color, geometry, normal_map, rest_map], depth))
             fbo.use()
             ctx.viewport = (0, 0, side, side)
             ctx.enable_only(moderngl.DEPTH_TEST)
@@ -155,14 +175,18 @@ class GPUHeadRasterizer:
             vao.render(moderngl.TRIANGLES)
             rgba = np.frombuffer(fbo.read(components=4, dtype="f4"), np.float32).reshape(side, side, 4)[::-1].copy()
             surface = np.frombuffer(fbo.read(attachment=1, components=4, dtype="f4"), np.float32).reshape(side, side, 4)[::-1].copy()
+            normal_data = np.frombuffer(fbo.read(attachment=2, components=4, dtype="f4"), np.float32).reshape(side, side, 4)[::-1].copy()
+            rest_data = np.frombuffer(fbo.read(attachment=3, components=3, dtype="f4"), np.float32).reshape(side, side, 3)[::-1].copy()
             buffers = HeadRenderBuffers(np.clip(rgba[..., :3] * 255, 0, 255).round().astype(np.uint8),
                 np.clip(rgba[..., 3], 0, 1), surface[..., 3],
-                np.where(surface[..., 3] > 0, surface[..., 2], np.inf), surface[..., :2])
+                np.where(surface[..., 3] > 0, surface[..., 2], np.inf), surface[..., :2],
+                normal_data[..., :3], rest_data, normal_data[..., 3])
             self.local.last_buffers = buffers
             return buffers
         finally:
             for resource in reversed(resources):
                 resource.release()
+            ctx.__exit__(None, None, None)
 
     def visibility(self, points, pose, inverse, buffers=None, tolerance=.0015):
         """GPU depth-test arbitrary surface samples (vertices OR canonical UV texels).
@@ -185,6 +209,7 @@ class GPUHeadRasterizer:
         def keep(item):
             resources.append(item)
             return item
+        ctx.__enter__()
         try:
             program = keep(ctx.program(vertex_shader='''#version 330
                 in vec3 query; uniform sampler2D surface_depth;
@@ -222,10 +247,12 @@ class GPUHeadRasterizer:
         finally:
             for resource in reversed(resources):
                 resource.release()
+            ctx.__exit__(None, None, None)
 
     def release(self):
         if getattr(self.local, "context", None) is not None:
-            self.local.program.release()
+            with self.local.context:
+                self.local.program.release()
             self.local.context.release()
             self.local.context = None
 
@@ -236,6 +263,9 @@ class FullHeadEngine:
         self.rasterizer = GPUHeadRasterizer()
         self.calibrator = NeutralCalibrator(120, 8)
         self.temporal = TrackTemporalStabilizer(min_cutoff=1.5, beta=.03, derivative_cutoff=8.)
+        self.photometry = None
+        self.detail = None
+        self._albedo = None
 
     def process(self, image, face, landmarks68, timestamp, *, scene_cut=False, animate=True,
                 camera_matrix=None, landmark_indices=None, landmark_confidence=None):
@@ -310,19 +340,62 @@ class FullHeadEngine:
             cv2.fillPoly(self.target_silhouette, [np.round(jaw).astype(np.int32)], 1.)
         texture, confidence = view_texture(self.rig.asset, (yaw, pitch, roll))
         texture = complete_diffuse_albedo(texture, confidence)
-        rendered, coverage = self.rasterizer.render(vertices, self.rig.faces, self.rig.asset.uvs,
+        from roop_3d.reconstruction.photometry import (
+            HeadPhotometry, decompose_albedo, extend_neck, fit_target_surface,
+        )
+        from roop_3d.reconstruction.photometric_gpu import renderer
+        from roop_3d.reconstruction.face_detail import extract_detail
+        from roop_3d.reconstruction.rbf_deform import welded_vertex_normals
+        # Canonical calibration is per identity, independent of view selection.
+        # The ratio denominator below also accounts for each selected view's
+        # baked illumination, so the texture bank does not introduce light jumps.
+        if self._albedo is None:
+            atlas = renderer().uv_normals(self.rig.V0, self.rig.faces, self.rig.asset.uvs,
+                                         self.rig.asset.texture.shape[0])
+            self._uv_normals = atlas[..., :3]
+            self._uv_support = atlas[..., 3]
+            self._albedo = decompose_albedo(self.rig.asset.texture, self._uv_normals,
+                self.rig.asset.texel_confidence * self._uv_support)
+        # Calibrate the selected blend without retaining a per-frame texture cache.
+        from roop_3d.reconstruction.photometry import fit_sh, linearize
+        sh_source = fit_sh(self._uv_normals, linearize(texture), confidence * self._uv_support,
+                          albedo=self._albedo.albedo)
+        target_vertices = fit_target_surface(vertices, indices, points, pose)
+        target_buffers = self.rasterizer.render_buffers(target_vertices, self.rig.faces, self.rig.asset.uvs,
             texture, confidence, pose, inverse, self.side)
-        self.source_silhouette = self.rasterizer.last_buffers.silhouette
+        # A short submental mesh ribbon replaces a normal-guided alpha edge.
+        expanded, triangles, uvs, seam = extend_neck(vertices, self.rig.faces, self.rig.asset.uvs,
+                                                   reference_vertices=self.rig.V0)
+        rest_vertices, _, _, _ = extend_neck(self.rig.V0, self.rig.faces, self.rig.asset.uvs)
+        rest_normals = welded_vertex_normals(rest_vertices, triangles)
+        buffers = self.rasterizer.render_buffers(expanded, triangles, uvs, texture, confidence, pose, inverse,
+            self.side, rest_normals=rest_normals, seam=seam)
+        rendered, coverage = buffers.image, buffers.coverage
+        self.source_silhouette = buffers.silhouette
         self.observed_fraction = float(coverage.sum() / max(self.source_silhouette.sum(), 1))
         # Source geometry owns the matte. Missing observations use a diffuse
         # color prior, never the target's original facial features or stretched eyes.
-        coverage = self.source_silhouette
+        feather = np.clip(buffers.seam, 0, 1)
+        feather = feather * feather * (3 - 2 * feather)
+        # More grazing normals soften the transition; only the extruded ribbon
+        # is affected, so the source jaw contour itself remains well-defined.
+        feather *= np.where(buffers.seam < .999, .5 + .5 * np.abs(buffers.normals[..., 2]), 1)
+        coverage = self.source_silhouette * feather
+        self.detail = extract_detail(getattr(face, 'landmarks478', None), target68, inverse, self.side)
+        if abs(yaw) > 65 and getattr(face, 'landmarks478', None) is None:
+            # A 68-point profile projects the hidden lip onto the visible one;
+            # its aperture aspect ratio is not a measured oral opening.
+            self.detail = replace(self.detail, mouth=np.zeros_like(self.detail.mouth), openness=0.)
+        self.photometry = HeadPhotometry(buffers.normals, buffers.rest_normals, target_buffers.normals,
+            buffers.depth, target_buffers.silhouette, sh_source, inverse.copy(), k.copy(), self.detail)
         if self.refiner is not None:
             target = cv2.warpAffine(image, cv2.invertAffineTransform(inverse), (self.side, self.side))
             refined = self.refiner(rendered, target, coverage, self.rig.asset)
             if refined.shape != rendered.shape or refined.dtype != np.uint8:
                 raise ValueError("Full-head refiner must preserve ROI shape and uint8 BGR")
             rendered = refined
+        target = cv2.warpAffine(image, cv2.invertAffineTransform(inverse), (self.side, self.side))
+        rendered = self.detail.condition(rendered, target)
         return rendered, coverage, inverse
 
 
