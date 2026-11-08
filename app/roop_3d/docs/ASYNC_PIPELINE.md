@@ -111,6 +111,32 @@ re-encoded to each size):
 
 Stages overlapped (≥ 3 active simultaneously) 61 % (1080p) and 75 % (2160p) of the time.
 
+**Re-run on the committed code (2026-11-08, after the CUDA-timing drain lock was added):**
+
+| | serial | async | |
+|---|---|---|---|
+| **1080p** fps (60 frames) | 2.19 | **4.20** | ×1.91 |
+| GPU util mean / p10 / samples ≥ 80 % | 43.9 / 0 / 31 % | **87.1 / 75 / 64 %** | mean > 80, **not sustained** (< 80 % of samples) |
+| output equivalence (first 20 frames) | | 20/20 bit-identical | max abs diff 0 |
+| **2160p** fps (40 frames, 2 clean async runs) | 1.46 | **3.92 / 3.93** | ×2.7 |
+| GPU util mean / p10 / samples ≥ 80 % | 32.8 / 0 / 22 % | **81.7 / 52 / 72 %** and **82.7 / 52 / 63 %** | mean > 80, not sustained |
+
+So the first run's "target met" at 1080p (83 % of samples) was not reproduced: throughput and the mean hold, the share of
+samples at ≥ 80 % does not. Treat 64–83 % as the real range.
+
+## Known issue: intermittent access violation at 2160p
+
+In the re-run, **2 of 4** async 2160p runs ended in a native `Windows fatal exception: access violation` (exit 139);
+the single 1080p async re-run completed (too few runs to say 1080p is immune). Both crashes came shortly after a lazily created session logged a TensorRT init error
+(`roop3d_gs_109_Unsqueeze has no shape specified`, normally handled by falling back to CUDA) while stage threads were
+running: once inside `compositor/pipeline.py: compose` (after a TRT `Cask convolution execution` failure and CUDA error
+906), once inside `GpuIoBinding.run -> update_inplace` in the track stage's detector. Session construction takes the
+exclusive fence on the `SessionManager` path, so the open question is whether another creation/recovery path
+(`gpu_compositor`, `vectorized_pipeline`, TRT error recovery) runs unfenced, or whether first-frame ordering
+(every stage creating its sessions at once) is the trigger. **Not root-caused.** `ROOP3D_ASYNC_PIPELINE=0` restores the
+serial loop; a candidate mitigation is to build/warm every lazily created session on the first frame, single-threaded,
+before the stage threads start.
+
 ## What this does not do
 
 * **Not real time.** The slowest stage now sets the pace: `swap` (~270–300 ms/frame; LivePortrait was ~330 of 375 ms of `infer_frame` in the 720p serial profile, and its
