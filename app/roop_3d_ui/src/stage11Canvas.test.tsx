@@ -65,7 +65,7 @@ describe('shader maths (CPU reference)', () => {
     expect(FRAGMENT_SHADER).toContain(`const float NOISE_FLOOR = ${DIFF_NOISE_FLOOR}.0 / 255.0;`);
     expect(FRAGMENT_SHADER).toContain(`const float FULL_SCALE = ${DIFF_FULL_SCALE}.0 / 255.0;`);
     for (const needle of ['abs(b - a)', 'sampleCatmullRom', 'uBicubic', 'uLoupeZoom', 'uMode == 3', 'uMode == 4', 'mix(a, b, uMix)', 'uColormap']) expect(FRAGMENT_SHADER).toContain(needle);
-    expect(Object.keys(MODE_IDS)).toEqual(['wipe', 'crossfade', 'blend', 'diff', 'loupe']);
+    expect(Object.keys(MODE_IDS)).toEqual(['wipe', 'crossfade', 'blend', 'diff', 'loupe', 'result', 'matte']);
   });
 });
 

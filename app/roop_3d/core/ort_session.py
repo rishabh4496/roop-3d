@@ -393,6 +393,15 @@ class SessionManager:
 
     def create(self, model_path: str | Path, *, model_name: str | None = None,
                providers: tuple[str, ...] = (TRT, CUDA, CPU), intra_op_threads: int | None = None) -> SessionInfo:
+        # Loading CUDA / TensorRT libraries and engines while another thread is mid-inference crashes the process
+        # (access violation in the driver), so construction takes the exclusive side of the inference fence.
+        from roop_3d.engine.resources import build_fence
+        with build_fence():
+            return self._create(model_path, model_name=model_name, providers=providers,
+                                intra_op_threads=intra_op_threads)
+
+    def _create(self, model_path: str | Path, *, model_name: str | None = None,
+                providers: tuple[str, ...] = (TRT, CUDA, CPU), intra_op_threads: int | None = None) -> SessionInfo:
         from roop_3d.models.native_libraries import register_native_libraries
         register_native_libraries()
         import onnxruntime as ort

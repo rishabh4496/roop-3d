@@ -439,7 +439,7 @@ export default function MaskBrushOverlay({
               type="button"
               className={`brush-mode-btn ${brushMode === 'include' ? 'active include' : ''}`}
               onClick={() => { eraseLayer.current = 'include'; setBrushMode('include'); }}
-              title="Include this area in the face swap (â— Paint)"
+              title="Include this area in the face swap. Paint the include mask."
             >
               Include
             </button>
@@ -447,7 +447,7 @@ export default function MaskBrushOverlay({
               type="button"
               className={`brush-mode-btn ${brushMode === 'exclude' ? 'active exclude' : ''}`}
               onClick={() => { eraseLayer.current = 'exclude'; setBrushMode('exclude'); }}
-              title="Exclude this area and keep the target pixels (âŠ˜ Erase)"
+              title="Exclude this area and keep the target pixels. Paint the exclusion mask."
             >
               Exclude
             </button>
@@ -455,7 +455,7 @@ export default function MaskBrushOverlay({
               type="button"
               className={`brush-mode-btn ${brushMode === 'erase' ? 'active erase' : ''}`}
               onClick={() => setBrushMode('erase')}
-              title="Erase the selected Include or Exclude override (â‰‹ Blur)"
+              title="Erase the selected Include or Exclude override."
             >
               Erase
             </button>
@@ -526,7 +526,7 @@ export default function MaskBrushOverlay({
             onClick={onClose}
             title="Done editing mask"
           >
-            Done âœ“
+            Done ✓
           </button>
         </div>
       </div>

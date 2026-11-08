@@ -117,10 +117,15 @@ def create_app(settings: Settings | None = None, *, repo_root: Path | None = Non
         try:
             yield
         finally:
-            await run_in_threadpool(model_downloads.close)
-            await run_in_threadpool(media.frames.close)
+            # Jobs share the decoder pool, model catalog and live-frame hub. Let
+            # active jobs finish before tearing down any resource they can use.
             if worker is not None:
                 await run_in_threadpool(worker.stop)
+            await run_in_threadpool(model_downloads.close)
+            await run_in_threadpool(media.frames.close)
+            # The live encoder owns a daemon thread (and may own a CUDA stream).
+            # Stop it after the worker so no render can publish into a torn-down hub.
+            await run_in_threadpool(app.state.live_hub.stop)
             await run_in_threadpool(MONITOR.stop)
             LEDGER.drop_gauge("event_subscribers")
             LEDGER.drop_gauge("worker_active_jobs")
@@ -153,6 +158,10 @@ def create_app(settings: Settings | None = None, *, repo_root: Path | None = Non
     app.state.thread_benchmark = ThreadBenchmark()
     app.state.previews = PreviewService(app.state)
     app.state.live_previews = LivePreviewService(app.state)
+    from roop_3d.server.live_stream import make_hub
+    app.state.live_hub = make_hub()
+    if worker is not None and hasattr(worker.runner, "live_hub"):
+        worker.runner.live_hub = app.state.live_hub       # finished render frames are offered to the binary stream
     app.state.face_extract = FaceExtractService(app.state)
 
     def envelope(request: Request, code: str, message: str, status: int) -> JSONResponse:
@@ -207,6 +216,8 @@ def create_app(settings: Settings | None = None, *, repo_root: Path | None = Non
     app.include_router(workstation_router)
     app.include_router(preview_router)
     app.include_router(live_preview_router)
+    from roop_3d.server.live_stream import preview_stream, router as live_stream_router
+    app.include_router(live_stream_router)
     app.include_router(face_extract_router)
     from roop_3d.server.media_frames import router as media_frames_router
     app.include_router(media_frames_router)
@@ -244,6 +255,7 @@ def create_app(settings: Settings | None = None, *, repo_root: Path | None = Non
     app.add_api_websocket_route("/ws/events", event_stream)
     app.add_api_websocket_route("/ws/queue", event_stream)
     app.add_api_websocket_route("/ws/v1/pipeline/status", pipeline_status_stream)
+    app.add_api_websocket_route("/ws/v1/preview/stream", preview_stream)
 
     mount_workstation(app, root)
     if settings.dev_cors:

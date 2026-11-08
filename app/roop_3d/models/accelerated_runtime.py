@@ -12,7 +12,7 @@ import numpy as np
 from roop_3d.audit.project_paths import application_root
 from roop_3d.core.errors import DomainError
 from roop_3d.core.storage import atomic_json, owned
-from roop_3d.engine.resources import guarded, register
+from roop_3d.engine.resources import guarded, inference, register
 from roop_3d.engine.runtime import RuntimeConfig, record_named, contract_array
 from roop_3d.models.benchmark import benchmark
 from roop_3d.models.catalog import ModelCatalog
@@ -278,7 +278,7 @@ class AcceleratedModel:
                 self.factory._failure(self.history, provider, "fp32", error)
         raise DomainError("REFERENCE_INFERENCE_FAILED", "No runtime provider passed golden parity", 503)
 
-    @guarded
+    @inference
     def run(self, values: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
         if self.session is None:
             raise DomainError("SESSION_RELEASED", "Accelerated session was released; prepare again after a build", 409)

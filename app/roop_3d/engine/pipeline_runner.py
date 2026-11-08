@@ -2,7 +2,8 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from contextlib import nullcontext
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from fractions import Fraction
 import hashlib
@@ -18,6 +19,9 @@ import cv2
 import numpy as np
 from pydantic import Field
 
+from roop_3d.async_pipeline import AsyncPipeline, Item, PinnedFramePool
+from roop_3d.async_pipeline.config import async_pipeline_enabled, async_queue_depth, pinned_enabled
+from roop_3d.async_pipeline.reference import ReferenceStages
 from roop_3d.audit.isolation import safe_path, sha256_file
 from roop_3d.core.errors import DomainError
 from roop_3d.core.settings import Contract, Settings
@@ -155,6 +159,9 @@ class MasterPipelineRunner:
         self.pipeline_factory, self.writer = pipeline_factory, writer
         self.checkpoint_every = checkpoint_every
         self.hardware_probe = hardware_probe
+        self.live_hub = None                    # set by the server: a LiveFrameHub that receives every finished frame
+        self.last_pipeline = None               # the most recent AsyncPipeline, kept for post-run telemetry
+        self.last_pipeline_snapshot = None
 
     @staticmethod
     def _request_digest(record: JobRecord) -> str:
@@ -487,12 +494,15 @@ class MasterPipelineRunner:
             raise signal()
 
     @staticmethod
-    def _stage_timings(result, session, decode_ms: float, encode_ms: float) -> dict[str, float]:
-        """Measured per-stage milliseconds for one frame; a stage the engine did not time is omitted."""
+    def _stage_timings(result, session, decode_ms: float, encode_ms: float, timing: dict | None = None) -> dict[str, float]:
+        """Measured per-stage milliseconds for one frame; a stage the engine did not time is omitted.
+
+        ``timing`` is the compositor's per-frame timing captured by the composite stage itself; reading
+        ``session.compositor.last_timing`` here would report a later frame once the stages overlap."""
         def number(value) -> float | None:
             return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) and value >= 0 and value == value and value != float('inf') else None
         latency = getattr(result, 'latency', None)
-        timing = getattr(getattr(session, 'compositor', None), 'last_timing', None) or {}
+        timing = timing if timing is not None else (getattr(getattr(session, 'compositor', None), 'last_timing', None) or {})
         found: dict[str, float | None] = {
             'decode': number(decode_ms), 'detection': number(getattr(latency, 'detection_ms', None)),
             'inswapper': number(getattr(latency, 'swap_ms', None)), 'masking': number(timing.get('masking')),
@@ -633,65 +643,98 @@ class MasterPipelineRunner:
 
             reader = VideoReader(target, hardware="auto", hdr_policy=hdr_policy)
             frames = reader.frames()
-            iteration_end = time.perf_counter()
+            # Frames <= resume_after were saved by an earlier attempt: they are still inferred (tracker / temporal state)
+            # but never written again.
+            resume_after = checkpoint.completed_frame
+            pipelined = hasattr(session, "track_frame") and async_pipeline_enabled()   # stubs run inline
+            request = record.request
+
+            # -- the four stages of one frame; identical whether they run on four threads or inline ------------------
+            def save_passes(collector, result, index):
+                collector.geometry(result.replacements, request.parameters_at(index).pose_strength)
+                collector.save(self.root, record.job_id, index)
+
+            frame_stages = ReferenceStages(
+                session, request=request, edit_plan=prepared.edit_plan, export=export, identity_report=identity_report,
+                lip_sync=settings.lip_sync_mode == "wav2lip", working_transfer=lambda: reader.working.transfer,
+                resume_after=resume_after, scene_cuts=scene_cuts, swapped_ranges=swapped_ranges, save_passes=save_passes,
+                write_frame=lambda index, image, shape: self._save_frame(record.job_id, index, image, shape))
+            stages = frame_stages.stages()
+            depth = async_queue_depth()
+            pipeline = AsyncPipeline("render", None, queue_size=depth) if pipelined else None
+
+            def decoded_items():
+                pool = None
+                try:
+                    for decoded in frames:
+                        image = decoded.image
+                        if pool is None and pinned_enabled():
+                            pool = PinnedFramePool(image.shape, depth + len(stages) + 2, cancel=pipeline.cancel_event)
+                            pipeline.add_pool(pool)
+                        if pool is not None and image.shape == pool.shape:
+                            slot, buffer = pool.acquire()        # blocks when every buffer is in flight: bounded memory
+                            np.copyto(buffer, image)
+                            decoded = replace(decoded, image=buffer)
+                            yield Item(index=decoded.index, payload=decoded, cleanups=[lambda number=slot: pool.release(number)])
+                        else:
+                            yield Item(index=decoded.index, payload=decoded)
+                finally:
+                    frames.close()
+
+            def inline_items():
+                try:
+                    iterator = iter(frames)
+                    while True:
+                        began = time.perf_counter()
+                        decoded = next(iterator, None)
+                        if decoded is None:
+                            return
+                        item = Item(index=decoded.index, payload=decoded)
+                        item.wall_ms["decode"] = (time.perf_counter() - began) * 1000
+                        for name, stage in stages:
+                            began = time.perf_counter()
+                            item.payload = stage(item)
+                            item.wall_ms[name] = (time.perf_counter() - began) * 1000
+                        yield item
+                finally:
+                    frames.close()
+
+            if pipelined:
+                pipeline.set_source(decoded_items())
+                for name, stage in stages:
+                    pipeline.add_stage(name, stage, stream=name != "write")
+                self.last_pipeline = pipeline
+            hub = getattr(self, "live_hub", None)
             try:
-                for decoded in frames:
-                    decode_ms = (time.perf_counter() - iteration_end) * 1000
-                    self._check_control(control, checkpoint, last_completed)
-                    expected_shape = decoded.image.shape
-                    frame_started = time.perf_counter()
-                    if prepared.edit_plan:
-                        prepared.edit_plan.apply(session, decoded.index)
-                    parameters = record.request.parameters_at(decoded.index) if record.request.workstation_parameters or record.request.parameter_curves else None
-                    if hasattr(session, 'set_frame_timestamp'):
-                        session.set_frame_timestamp(float(decoded.timestamp.seconds))
-                    if hasattr(session, 'set_angle_frame'):
-                        session.set_angle_frame(decoded.index)
-                    result = (session.infer_frame(decoded.image, **parameters.inference_options())
-                              if parameters else session.infer_frame(decoded.image))
-                    if identity_report is not None:
-                        identity_report.observe(decoded.index, result)
-                    if export:
-                        if getattr(result, 'scene_cut', False):
-                            scene_cuts.append(decoded.index)
-                        if result.replacements:
-                            if swapped_ranges and swapped_ranges[-1][1] == decoded.index:
-                                swapped_ranges[-1][1] += 1
-                            else:
-                                swapped_ranges.append([decoded.index, decoded.index + 1])
-                    collector = None
-                    if export and export.passes:
-                        from roop_3d.media.vfx import PassCollector
-                        collector = PassCollector(decoded.image.shape[:2], export.passes)
-                    output = session.composite_frame(
-                        decoded.image, result,
-                        options=(parameters.with_source_transfer(reader.working.transfer).composite_options() if parameters
-                                 else CompositeOptions(restoration_blend=(0.35 if session.compositor.restorer else 0.0))),
-                        occluder_masks=prepared.edit_plan.occluders(decoded.image, result) if prepared.edit_plan and prepared.edit_plan.mask is not None else None,
-                        lip_sync_enabled=settings.lip_sync_mode == "wav2lip",
-                        **({'observer': collector.observe} if collector else {}))
-                    if collector is not None and decoded.index > checkpoint.completed_frame:
-                        collector.geometry(result.replacements, record.request.parameters_at(decoded.index).pose_strength)
-                        collector.save(self.root, record.job_id, decoded.index)
-                    mapped_seen.update(item.track_id for item in result.replacements if item.track_id in numeric_ids)
-                    decoded_count += 1
-                    if decoded.index > checkpoint.completed_frame:
-                        encode_began = time.perf_counter()
-                        self._save_frame(record.job_id, decoded.index, output, expected_shape)
-                        encode_ms = (time.perf_counter() - encode_began) * 1000
-                        last_completed = decoded.index
-                        completed = decoded.index + 1
-                        elapsed = max(time.monotonic() - started, 1e-6)
-                        report_progress(JobProgress(frame=completed, total_frames=total_frames,
-                            fps=completed / elapsed, stage="render", stage_latency_ms=(time.perf_counter() - frame_started) * 1000,
-                            stage_timings_ms=self._stage_timings(result, session, decode_ms, encode_ms)))
-                        if completed % self.checkpoint_every == 0:
-                            checkpoint = self._checkpoint(checkpoint, completed_frame=last_completed,
-                                                          profile=admission.profile)
-                    self._check_control(control, checkpoint, last_completed)
-                    iteration_end = time.perf_counter()
+                with (pipeline if pipelined else nullcontext()):
+                    for item in (pipeline.results() if pipelined else inline_items()):
+                        expected_shape = frame_stages.expected_shape
+                        decoded, result = item.meta["decoded"], item.meta["result"]
+                        walls = item.wall_ms
+                        self._check_control(control, checkpoint, last_completed)
+                        mapped_seen.update(entry.track_id for entry in result.replacements if entry.track_id in numeric_ids)
+                        decoded_count += 1
+                        if hub is not None:
+                            hub.publish(item.payload, frame_index=decoded.index, timestamp_s=float(decoded.timestamp.seconds),
+                                        stage_ms=(walls.get("track", 0.0), walls.get("swap", 0.0), walls.get("composite", 0.0)))
+                        if item.meta.get("saved"):
+                            last_completed = decoded.index
+                            completed = decoded.index + 1
+                            elapsed = max(time.monotonic() - started, 1e-6)
+                            work_ms = sum(walls.get(name, 0.0) for name, _ in stages)
+                            report_progress(JobProgress(frame=completed, total_frames=total_frames,
+                                fps=completed / elapsed, stage="render", stage_latency_ms=work_ms,
+                                stage_timings_ms=self._stage_timings(result, session, walls.get("decode", 0.0),
+                                                                      walls.get("write", 0.0), item.meta.get("timing"))))
+                            if completed % self.checkpoint_every == 0:
+                                checkpoint = self._checkpoint(checkpoint, completed_frame=last_completed,
+                                                              profile=admission.profile)
+                        item.release()
+                        self._check_control(control, checkpoint, last_completed)
             finally:
                 frames.close()
+                if pipelined:
+                    self.last_pipeline_snapshot = pipeline.snapshot()
             if decoded_count == 0:
                 raise DomainError("MEDIA_EMPTY", "Target video contains no decodable frames", 422)
             required_ids = numeric_ids if record.request.face_segments is None else {prepared.edit_plan.ids[item.track_id] for item in record.request.face_segments if item.role == 'swap'}

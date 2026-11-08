@@ -13,7 +13,7 @@ import numpy as np
 
 from roop_3d.core.errors import DomainError
 from roop_3d.models.catalog import ModelCatalog
-from roop_3d.engine.resources import guarded, register
+from roop_3d.engine.resources import guarded, inference, register
 
 ARCFACE_REFERENCE_5PTS = np.array([
     [38.2946, 51.6963],  # left eye
@@ -36,7 +36,7 @@ class Recognizer:
         self._session_factory = session_factory
         register(self, "release_for_build")
 
-    @guarded
+    @inference
     def embed(self, image: np.ndarray, landmarks: np.ndarray | None = None) -> np.ndarray:
         record = self.catalog.recognizer()
         with self._lock:
@@ -48,7 +48,9 @@ class Recognizer:
                     import onnxruntime as ort
                     options = ort.SessionOptions()
                     options.intra_op_num_threads = 2
-                    self._session = ort.InferenceSession(data, sess_options=options, providers=["CPUExecutionProvider"])
+                    from roop_3d.engine.resources import build_fence
+                    with build_fence():
+                        self._session = ort.InferenceSession(data, sess_options=options, providers=["CPUExecutionProvider"])
                 self._session_sha = record["sha256"]
                 self._input_name = self._session.get_inputs()[0].name
                 self._output_name = self._session.get_outputs()[0].name

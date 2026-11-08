@@ -87,9 +87,9 @@ describe('MaskBrushOverlay Manual & Occlusion Editor', () => {
     );
 
     // Brush modes
-    expect(html).toContain('● Paint');
-    expect(html).toContain('⊘ Erase');
-    expect(html).toContain('≋ Blur');
+    expect(html).toContain('Include this area in the face swap. Paint the include mask.');
+    expect(html).toContain('Exclude this area and keep the target pixels. Paint the exclusion mask.');
+    expect(html).toContain('Erase the selected Include or Exclude override.');
 
     // Settings
     expect(html).toContain('Size:');
@@ -97,7 +97,7 @@ describe('MaskBrushOverlay Manual & Occlusion Editor', () => {
     expect(html).toContain('Opacity:');
 
     // Occlusion guides
-    expect(html).toContain('Auto Occlusion Guides');
+    expect(html).toContain('Occlusion Guides');
     expect(html).toContain('glasses, hair strands, fingers');
     expect(html).toContain('+ Fill Glasses');
 

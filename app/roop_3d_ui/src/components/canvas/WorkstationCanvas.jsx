@@ -71,7 +71,7 @@ function useLoadedImage(url) {
  *  - Crossfade: persistent Aâ†”B fade that keeps running while you scrub frames or edit settings.
  *  - Alpha Blend: fixed mix between the two.
  *  - Diff Map: heat-map of exactly which pixels changed (noise floor excluded), boostable.
- *  - Loupe: 3.5Ã— lens that shows individual pixels under the cursor.
+ *  - Loupe: 3.5× lens that shows individual pixels under the cursor.
  * With `originalUrl` / `swappedUrl` it composites the real frames aligned to the letterboxed media rectangle; a live
  * sub-pixel media coordinate readout follows the pointer.
  *
@@ -321,7 +321,7 @@ export default function WorkstationCanvas({
           </div>
         )}
 
-        {activeMode === 'loupe' && <div className="loupe-controls"><span className="tiny-badge">3.5x SUB-PIXEL LENS Â· Hold Z</span>
+        {activeMode === 'loupe' && <div className="loupe-controls"><span className="tiny-badge">3.5x SUB-PIXEL LENS · Hold Z</span>
           {useGl && <span className="loupe-sampling" role="group" aria-label="Loupe sampling">
             <button type="button" className={`preview-mode-btn ${bicubic ? '' : 'active'}`} aria-pressed={!bicubic} onClick={() => setBicubic(false)} title="Hardware bilinear sampling">Bilinear</button>
             <button type="button" className={`preview-mode-btn ${bicubic ? 'active' : ''}`} aria-pressed={bicubic} onClick={() => setBicubic(true)} title="Catmull-Rom bicubic sampling (sharper at 3.5x)">Bicubic</button>
@@ -355,7 +355,7 @@ export default function WorkstationCanvas({
           style={wipeOrientation === 'horizontal'
             ? { left: fullBleed ? stage.left + split * stage.width : `${split * 100}%` }
             : { top: fullBleed ? stage.top + split * stage.height : `${split * 100}%` }}>
-          <div className="wipe-handle"><span>{wipeOrientation === 'horizontal' ? 'â—€ â–¶' : 'â–² â–¼'}</span></div>
+          <div className="wipe-handle"><span>{wipeOrientation === 'horizontal' ? '◀ ▶' : '▲ ▼'}</span></div>
           <span className="wipe-tag left">{wipeOrientation === 'horizontal' ? 'ORIGINAL' : 'TOP'}</span>
           <span className="wipe-tag right">{wipeOrientation === 'horizontal' ? 'SWAPPED' : 'BOTTOM'}</span>
         </div>
@@ -373,7 +373,7 @@ export default function WorkstationCanvas({
 
       {activeMode === 'blend' && hasOutput && !useGl && <div className="alpha-blend-layer" style={{ opacity: blendOpacity }} />}
 
-      {activeMode === 'loupe' && mousePos.active && useGl && <span className="loupe-badge gl-loupe-badge" style={{ left: mousePos.x + LOUPE_RADIUS - 24, top: mousePos.y + LOUPE_RADIUS - 6 }}>3.5x Â· {bicubic ? 'bicubic' : 'bilinear'}</span>}
+      {activeMode === 'loupe' && mousePos.active && useGl && <span className="loupe-badge gl-loupe-badge" style={{ left: mousePos.x + LOUPE_RADIUS - 24, top: mousePos.y + LOUPE_RADIUS - 6 }}>3.5x · {bicubic ? 'bicubic' : 'bilinear'}</span>}
       {activeMode === 'loupe' && mousePos.active && !useGl && (
         <div className="magnifier-loupe" style={{ left: `${mousePos.x - LOUPE_RADIUS}px`, top: `${mousePos.y - LOUPE_RADIUS}px`, width: `${LOUPE_RADIUS * 2}px`, height: `${LOUPE_RADIUS * 2}px` }}>
           <canvas ref={loupeCanvasRef} className="loupe-canvas" />
@@ -381,7 +381,7 @@ export default function WorkstationCanvas({
         </div>
       )}
 
-      {coords && <div className="coord-readout" aria-live="off">x {coords.x.toFixed(2)} Â· y {coords.y.toFixed(2)} px</div>}
+      {coords && <div className="coord-readout" aria-live="off">x {coords.x.toFixed(2)} · y {coords.y.toFixed(2)} px</div>}
       {onMaskEditToggle && <button type="button" className="canvas-mask-toggle" aria-pressed={maskEditing}
         onClick={() => onMaskEditToggle(!maskEditing)} title="Paint include and exclude overrides on this frame">{maskEditing ? 'Done Mask' : 'Mask Brush'}</button>}
       {maskEditing && <MaskBrushOverlay containerWidth={containerWidth} containerHeight={containerHeight}

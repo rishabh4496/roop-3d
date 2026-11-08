@@ -199,11 +199,47 @@ class LivePreviewPayload(Contract):
 
 
 # --------------------------------------------------------------------------- cache
-@dataclass(frozen=True)
 class CacheEntry:
-    image: bytes
-    media_type: str
-    meta: dict[str, Any]
+    """One rendered preview frame.
+
+    Built from encoded bytes (the original form) or from the raw BGR frame (``from_raw``).  A raw entry is stored the
+    moment inference finishes -- the GPU slot is released without spending any time in an image encoder -- and its PNG
+    is produced on first use of ``.image``, by whichever HTTP worker needs it.  The binary WebSocket stream never
+    needs the PNG at all: it hands ``raw`` to the JPEG hub.
+    """
+    __slots__ = ("_image", "media_type", "meta", "raw", "_lock", "counted")
+
+    def __init__(self, image: bytes | None, media_type: str, meta: dict[str, Any], *, raw: np.ndarray | None = None):
+        if image is None and raw is None:
+            raise ValueError("A cache entry needs encoded bytes or a raw frame")
+        self._image, self.media_type, self.meta, self.raw = image, media_type, meta, raw
+        self._lock = threading.Lock()
+        self.counted = 0                      # bytes charged to the cache when it was stored
+
+    @classmethod
+    def from_raw(cls, raw: np.ndarray, meta: dict[str, Any]) -> "CacheEntry":
+        return cls(None, "image/png", meta, raw=raw)
+
+    @property
+    def nbytes(self) -> int:
+        return len(self._image) if self._image is not None else int(self.raw.nbytes)
+
+    @property
+    def image(self) -> bytes:
+        if self._image is None:
+            with self._lock:
+                if self._image is None:
+                    ok, encoded = cv2.imencode(".png", self.raw, [cv2.IMWRITE_PNG_COMPRESSION, 1])
+                    if not ok:
+                        raise DomainError("PREVIEW_ENCODE_FAILED", "Preview encoding failed", 500)
+                    self._image = encoded.tobytes()
+        return self._image
+
+    def bgr(self) -> np.ndarray:
+        """The decoded frame (the raw buffer when we still hold it, otherwise the PNG decoded)."""
+        if self.raw is not None:
+            return self.raw
+        return cv2.imdecode(np.frombuffer(self.image, np.uint8), cv2.IMREAD_COLOR)
 
 
 class PreviewCache:
@@ -226,12 +262,14 @@ class PreviewCache:
         with self._lock:
             old = self._items.pop(key, None)
             if old is not None:
-                self._bytes -= len(old.image)
+                self._bytes -= old.counted
+            if not entry.counted:
+                entry.counted = entry.nbytes
             self._items[key] = entry
-            self._bytes += len(entry.image)
+            self._bytes += entry.counted
             while len(self._items) > self.max_entries or (self._bytes > self.max_bytes and len(self._items) > 1):
                 _, evicted = self._items.popitem(last=False)
-                self._bytes -= len(evicted.image)
+                self._bytes -= evicted.counted
 
     def clear(self) -> None:
         with self._lock:
@@ -540,15 +578,14 @@ class LivePreviewService:
         image = raw["buffers"].get(payload.solo_node)
         if image is None:
             raise DomainError("SOLO_NODE_UNAVAILABLE", f"Pipeline node '{payload.solo_node}' produced no buffer for this frame", 422)
-        ok, encoded = cv2.imencode(".png", image, [cv2.IMWRITE_PNG_COMPRESSION, 1])
-        if not ok:
-            raise DomainError("PREVIEW_ENCODE_FAILED", "Preview encoding failed", 500)
         meta = {"media_id": payload.inspection_id, "frame_index": raw["frame_index"], "swap_config_hash": digest,
                 "solo_node": payload.solo_node, "width": int(image.shape[1]), "height": int(image.shape[0]),
                 "decoded_frame_index": raw["frame_index"], "timestamp": raw["timestamp"], "faces": raw.get("faces", []),
                 "applied": self._applied(payload), "unsupported": payload.unsupported(), "notes": raw.get("notes", []),
                 "latency": raw.get("latency", {}), "provider": raw.get("provider"), "profile": str(raw.get("profile"))}
-        return CacheEntry(encoded.tobytes(), "image/png", meta)
+        # No encoder runs here: this thread holds the render slot. The entry keeps its own copy of the pixels and is
+        # encoded (PNG for HTTP, JPEG for the binary stream) by whoever consumes it, after the slot is released.
+        return CacheEntry.from_raw(np.ascontiguousarray(image).copy(), meta)
 
     @staticmethod
     def _applied(payload: LivePreviewPayload) -> list[str]:
@@ -613,6 +650,7 @@ def busy_response(stage: str) -> JSONResponse:
 
 
 def image_response(entry: CacheEntry, *, cached: bool, digest: str, as_json: bool = False) -> Response:
+    """``entry.image`` must already be encoded (see ``_single``): this runs on the event loop and must not block it."""
     meta = {**entry.meta, "cached": cached}
     if as_json:
         body = {**meta, "image": f"data:{entry.media_type};base64," + base64.b64encode(entry.image).decode("ascii")}
@@ -669,6 +707,7 @@ async def _single(request: Request, payload: LivePreviewPayload, as_json: bool) 
     if outcome.status == "busy":
         return busy_response(outcome.stage or REBIND)
     assert outcome.entry is not None
+    await run_in_threadpool(lambda: outcome.entry.image)       # PNG encode in a worker thread, not on the loop
     return image_response(outcome.entry, cached=outcome.cached, digest=digest, as_json=as_json)
 
 
@@ -727,8 +766,7 @@ async def target_preview_grid(request: Request, config: str = Query(min_length=8
         first_error = next((item.error for item in outcomes if item.error), None)
         raise DomainError((first_error or {}).get("code", "PREVIEW_EMPTY"),
                           (first_error or {}).get("message", "No grid cell could be rendered"), 422)
-    tiles = [cv2.imdecode(np.frombuffer(item.entry.image, np.uint8), cv2.IMREAD_COLOR) if item.entry else None
-             for item in outcomes]
+    tiles = [item.entry.bgr() if item.entry else None for item in outcomes]
     height, width = next(tile.shape[:2] for tile in tiles if tile is not None)
     height, width = min(height, 360), round(width * min(height, 360) / height)
     sheet = np.zeros((rows * height, cols * width, 3), np.uint8)

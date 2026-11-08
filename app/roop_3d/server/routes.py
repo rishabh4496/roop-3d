@@ -301,7 +301,7 @@ def download(model_id: str, request: Request,
                              resumed=result.resumed)
 
 
-@router.get("/models/required_status")
+@router.get("/models/required_status", include_in_schema=False)
 @router.get("/models/required-status")
 def models_required_status(request: Request) -> dict[str, Any]:
     from roop.core.model_downloader import verify_all_required_models
@@ -315,7 +315,7 @@ class DownloadMissingModelsRequest(Contract):
     models: list[str] | None = None
 
 
-@router.post("/models/download_missing")
+@router.post("/models/download_missing", include_in_schema=False)
 @router.post("/models/download-missing")
 def download_missing_models_endpoint(
     request: Request,

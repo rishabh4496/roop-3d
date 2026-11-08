@@ -1,6 +1,6 @@
 import CurveEditorTrack from './CurveEditorTrack';
 import { renderProbe } from '../../utils/renderProbe';
-import React, { useRef, useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useRef, useState, useEffect, useLayoutEffect, useMemo, useCallback } from 'react';
 import { useFaceSelectionStore } from '../../useFaceSelectionStore';
 import { addChapter, adjacentChapter, chapterAt, loadChapters, removeChapter, renameChapter, saveChapters } from './chapters';
 import { getPlayhead, playheadStore, usePlayhead } from '../../stores/playheadStore';
@@ -175,6 +175,12 @@ export function getClusterColor(clusterId) {
   return CLUSTER_COLORS[Math.abs(hash) % CLUSTER_COLORS.length];
 }
 
+/** Keep the timeline position under the pointer fixed while its content width changes. */
+export function zoomAnchoredScrollLeft(scrollLeft, pointerOffset, oldWidth, newWidth) {
+  if (!(oldWidth > 0) || !(newWidth > 0)) return Math.max(0, scrollLeft);
+  return Math.max(0, (scrollLeft + pointerOffset) * (newWidth / oldWidth) - pointerOffset);
+}
+
 /**
  * Chip-shaped inline editable range field matching roop-ultimate.
  * Displays SMPTE timecode and frame number, editable on click.
@@ -282,6 +288,9 @@ export default function TimelineWorkstation({
 }) {
   const containerRef = useRef(null);
   const trackRef = useRef(null);
+  const zoomScrollTarget = useRef(null);
+  const panOrigin = useRef(null);
+  const scaledTrackWidthRef = useRef(1000);
   renderProbe('TimelineWorkstation');
   const trackInnerRef = useRef(null);
   const [trackWidth, setTrackWidth] = useState(1000);
@@ -295,6 +304,7 @@ export default function TimelineWorkstation({
 
   // Timeline zoom & navigation extensions
   const [timelineZoom, setTimelineZoom] = useState(1); // 1x to 16x
+  const timelineZoomRef = useRef(1);
   const [snapToFrames, setSnapToFrames] = useState(true);
   const [isLooping, setIsLooping] = useState(false);
   const [isEditingTimecode, setIsEditingTimecode] = useState(false);
@@ -333,6 +343,14 @@ export default function TimelineWorkstation({
   }, []);
 
   const scaledTrackWidth = Math.max(trackWidth, Math.round(trackWidth * timelineZoom));
+  scaledTrackWidthRef.current = scaledTrackWidth;
+  timelineZoomRef.current = timelineZoom;
+
+  useLayoutEffect(() => {
+    if (zoomScrollTarget.current === null || !trackRef.current) return;
+    trackRef.current.scrollLeft = zoomScrollTarget.current;
+    zoomScrollTarget.current = null;
+  }, [scaledTrackWidth]);
 
   // The filmstrip: one request for every thumbnail (GET /media/filmstrip, at least 16, one per ~120 px when zoomed in). Each card
   // carries the time of the frame it really shows. Until it arrives the cards are empty placeholders; if it fails the track
@@ -342,12 +360,12 @@ export default function TimelineWorkstation({
   const defaultThumbnails = useMemo(() => {
     if (!target || effectiveDuration <= 0) return [];
     if (filmstrip.status === 'ready' && Array.isArray(filmstrip.data?.frames) && filmstrip.data.frames.length) {
-      return filmstrip.data.frames.map(frame => ({ index: frame.slot, timestamp: frame.timestamp_sec, url: frame.data_url }));
+      return filmstrip.data.frames.map(frame => ({ index: frame.slot, frameIndex: frame.frame_index, timestamp: frame.timestamp_sec, url: frame.data_url }));
     }
     const count = filmstrip.status === 'error' ? Math.max(3, Math.min(32, Math.floor(Math.max(scaledTrackWidth, 360) / 120))) : stripCount;
     return Array.from({ length: count }, (_, i) => {
       const timestamp = ((i + 0.5) / count) * effectiveDuration;
-      return { index: i, timestamp, url: filmstrip.status === 'error'
+      return { index: i, frameIndex: null, timestamp, url: filmstrip.status === 'error'
         ? `/api/v1/media/preview-frame?${new URLSearchParams({ path: target, timestamp: String(timestamp) })}` : '' };
     });
   }, [target, effectiveDuration, scaledTrackWidth, stripCount, filmstrip.status, filmstrip.data]);
@@ -412,6 +430,12 @@ export default function TimelineWorkstation({
     if (!activeDrag) return;
 
     const handlePointerMove = (e) => {
+      if (activeDrag === 'pan') {
+        if (trackRef.current && panOrigin.current) {
+          trackRef.current.scrollLeft = Math.max(0, panOrigin.current.scrollLeft - (e.clientX - panOrigin.current.clientX));
+        }
+        return;
+      }
       const time = getTimeFromPointer(e.clientX);
       if (activeDrag === 'needle') {
         onSeek?.(time);
@@ -425,33 +449,39 @@ export default function TimelineWorkstation({
     };
 
     const handlePointerUp = () => {
+      panOrigin.current = null;
       setActiveDrag(null);
     };
 
     window.addEventListener('pointermove', handlePointerMove);
     window.addEventListener('pointerup', handlePointerUp);
+    window.addEventListener('pointercancel', handlePointerUp);
     return () => {
       window.removeEventListener('pointermove', handlePointerMove);
       window.removeEventListener('pointerup', handlePointerUp);
+      window.removeEventListener('pointercancel', handlePointerUp);
     };
   }, [activeDrag, getTimeFromPointer, onSeek, onTrimChange, trimStart, trimEnd, effectiveTrimEnd, effectiveFps, effectiveDuration]);
 
-  // Auto-scroll track viewport to keep playhead in view when zoomed in
-  // While playing, the playhead is followed through a transient store subscription (no React render per tick).
-  useEffect(() => {
-    if (timelineZoom <= 1 || !trackRef.current) return undefined;
+  // Follow playhead movement while zoomed, but never reset scroll just because the zoom level changed.
+  const followPlayhead = useCallback((time) => {
     const viewport = trackRef.current;
-    const follow = time => {
-      const needleX = (time / effectiveDuration) * scaledTrackWidth;
-      const viewLeft = viewport.scrollLeft;
-      const viewRight = viewLeft + viewport.clientWidth;
-      if (needleX < viewLeft + 60 || needleX > viewRight - 60) {
-        viewport.scrollLeft = Math.max(0, needleX - viewport.clientWidth / 2);
-      }
-    };
-    follow(currentTime);
-    return playing ? playheadStore.subscribeSelector(state => state.time, follow) : undefined;
-  }, [currentTime, playing, effectiveDuration, scaledTrackWidth, timelineZoom]);
+    if (timelineZoomRef.current <= 1 || !viewport) return;
+    const needleX = (time / effectiveDuration) * scaledTrackWidthRef.current;
+    const viewLeft = viewport.scrollLeft;
+    const viewRight = viewLeft + viewport.clientWidth;
+    if (needleX < viewLeft + 60 || needleX > viewRight - 60) {
+      viewport.scrollLeft = Math.max(0, needleX - viewport.clientWidth / 2);
+    }
+  }, [effectiveDuration]);
+  const isTimelineZoomed = timelineZoom > 1;
+  useEffect(() => {
+    if (!playing || !isTimelineZoomed) return undefined;
+    return playheadStore.subscribeSelector(state => state.time, followPlayhead);
+  }, [playing, isTimelineZoomed, followPlayhead]);
+  useEffect(() => {
+    if (!playing) followPlayhead(currentTime);
+  }, [currentTime, playing, followPlayhead]);
 
   // Range loop playback
   useEffect(() => {
@@ -461,14 +491,23 @@ export default function TimelineWorkstation({
     return playheadStore.subscribeSelector(state => state.time, wrap);
   }, [currentTime, playing, isLooping, effectiveTrimEnd, trimStart, effectiveFps, onSeek]);
 
-  // Ctrl+Wheel or Meta+Wheel to zoom timeline
+  // Ctrl/Meta/Alt+Wheel zooms around the pointer, as in common video editors.
   const handleWheelZoom = useCallback((e) => {
     if (e.ctrlKey || e.metaKey || e.altKey) {
       e.preventDefault();
       const delta = e.deltaY < 0 ? 0.5 : -0.5;
-      setTimelineZoom(z => Math.max(1, Math.min(16, Math.round((z + delta) * 2) / 2)));
+      const nextZoom = Math.max(1, Math.min(16, Math.round((timelineZoom + delta) * 2) / 2));
+      if (nextZoom === timelineZoom) return;
+      const viewport = trackRef.current;
+      if (viewport) {
+        const rect = viewport.getBoundingClientRect();
+        const pointerOffset = Math.max(0, Math.min(rect.width, e.clientX - rect.left));
+        const nextWidth = Math.max(trackWidth, Math.round(trackWidth * nextZoom));
+        zoomScrollTarget.current = zoomAnchoredScrollLeft(viewport.scrollLeft, pointerOffset, scaledTrackWidth, nextWidth);
+      }
+      setTimelineZoom(nextZoom);
     }
-  }, []);
+  }, [timelineZoom, trackWidth, scaledTrackWidth]);
 
   // Commit text timecode edit
   const commitTimecodeInput = useCallback(() => {
@@ -916,13 +955,25 @@ export default function TimelineWorkstation({
 
       {/* 2. Interactive Timeline Canvas Tracks Container */}
       <div
-        className="timeline-tracks-viewport"
+        className={`timeline-tracks-viewport ${activeDrag === 'pan' ? 'is-panning' : ''}`}
         ref={trackRef}
+        role="group"
+        aria-label="Timeline tracks. Click to seek, drag to scrub, Shift-drag or middle-drag to pan, and Ctrl-wheel to zoom."
         onWheel={handleWheelZoom}
         onPointerDown={(e) => {
           if (disabled || !target) return;
-          const time = getTimeFromPointer(e.clientX);
-          onSeek?.(time);
+          if (e.button === 1 || (e.button === 0 && e.shiftKey)) {
+            e.preventDefault();
+            panOrigin.current = { clientX: e.clientX, scrollLeft: trackRef.current?.scrollLeft ?? 0 };
+            setActiveDrag('pan');
+            return;
+          }
+          if (e.button !== 0) return;
+          const targetElement = e.target instanceof Element ? e.target : null;
+          const control = targetElement?.closest('button, .filmstrip-frame-card, .face-marker-pin');
+          // Interactive markers and thumbnail cards perform their own exact seek on click.
+          // Avoid queuing an approximate seek first, which can trigger an unnecessary stale frame decode.
+          if (!control) onSeek?.(getTimeFromPointer(e.clientX));
           setActiveDrag('needle');
         }}
         onPointerMove={(e) => {
@@ -980,20 +1031,28 @@ export default function TimelineWorkstation({
           <div className="sprocket-holes top" />
           <div className="filmstrip-frames-row">
             {thumbnails.length > 0 ? (
-              thumbnails.map((thumb) => (
-                <div
+              thumbnails.map((thumb) => {
+                const frameIndex = thumb.frameIndex ?? Math.round(thumb.timestamp * effectiveFps);
+                const selected = frameIndex === Math.round(liveNow() * effectiveFps);
+                const seekTime = thumb.frameIndex !== null && thumb.frameIndex !== undefined
+                  ? thumb.frameIndex / effectiveFps
+                  : thumb.timestamp;
+                return <button
                   key={thumb.index}
-                  className="filmstrip-frame-card"
+                  type="button"
+                  className={`filmstrip-frame-card ${selected ? 'selected' : ''}`}
+                  aria-pressed={selected}
+                  aria-label={`Seek to frame ${frameIndex + 1} at ${formatTimecode(seekTime, effectiveFps)}`}
                   onClick={(e) => {
                     e.stopPropagation();
-                    if (!disabled) onSeek?.(thumb.timestamp);
+                    if (!disabled) onSeek?.(seekTime);
                   }}
-                  title={`Seek to ${formatTimecode(thumb.timestamp, effectiveFps)}`}
+                  title={`Seek to frame ${frameIndex + 1} · ${formatTimecode(seekTime, effectiveFps)}`}
                 >
                   {thumb.url ? (
                     <img
                       src={thumb.url}
-                      alt={`Frame at ${thumb.timestamp.toFixed(1)}s`}
+                      alt={`Frame at ${seekTime.toFixed(3)}s`}
                       loading="lazy"
                       className="filmstrip-thumb-img"
                       onError={(e) => {
@@ -1003,10 +1062,10 @@ export default function TimelineWorkstation({
                     />
                   ) : <span className="filmstrip-thumb-skeleton" aria-hidden="true" />}
                   <span className="frame-timestamp-pill">
-                    {formatTimecode(thumb.timestamp, effectiveFps).slice(3)}
+                    {formatTimecode(seekTime, effectiveFps).slice(3)}
                   </span>
-                </div>
-              ))
+                </button>;
+              })
             ) : (
               <div className="filmstrip-empty">
                 <span>{target ? 'Generating filmstrip frames…' : 'Load a target video to display filmstrip'}</span>

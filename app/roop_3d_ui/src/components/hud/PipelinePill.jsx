@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import BottleneckFlamegraph from '../diagnostics/BottleneckFlamegraph';
+import PipelineSaturationPanel from '../diagnostics/PipelineSaturationPanel';
 import { publishHardware, publishProgress, useTelemetry } from '../../stores/telemetryStore';
 
 /**
@@ -305,6 +306,11 @@ export default function PipelinePill({
           {/* Measured per-frame stage breakdown (Decode … Encode) */}
           <div className="hud-card hud-flamegraph-card" data-testid="hud-flamegraph">
             <BottleneckFlamegraph compact timings={liveProgress?.stage_timings_ms} activeJob={activeJob} />
+          </div>
+
+          {/* Queue depths, CUDA-stream latency, GPU/CPU/PCIe utilisation of the asynchronous pipeline */}
+          <div className="hud-card hud-saturation-card" data-testid="hud-saturation">
+            <PipelineSaturationPanel enabled={expanded} />
           </div>
 
           {/* Real-Time Bottleneck Indicator */}

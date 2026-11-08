@@ -9,7 +9,7 @@ import FaceOverlayCanvas from './components/canvas/FaceOverlayCanvas';
 import FaceSelectionTray from './components/tray/FaceSelectionTray';
 import WorkstationCanvas from './components/canvas/WorkstationCanvas';
 import CompositionGridOverlay from './components/canvas/CompositionGridOverlay';
-import TimelineWorkstation, { parseFps } from './components/timeline/TimelineWorkstation';
+import TimelineWorkstation, { formatTimecode, parseFps } from './components/timeline/TimelineWorkstation';
 import type { ReactNode } from 'react';
 import type { JobRequest } from './contracts';
 import { post } from './api';
@@ -36,6 +36,7 @@ import { CURVE_PARAMETERS, evaluateParameters, upsertKey } from './stores/parame
 import HistoryDrawer from './components/workstation/HistoryDrawer';
 import SnapshotSlots, { SnapshotViewport } from './components/workstation/SnapshotSlots';
 import { panAnchoredAt } from './utils/zoomPan';
+import { LiveStreamCanvas } from './components/LiveStreamCanvas';
 import { RENDER_FRAME_EVENT, buildLivePayload, downloadBlob, previewFilename, useLiveSwapPreview } from './livePreview';
 import { useMediaInfo, useScrubFrame } from './frameScrub';
 import { bestOverlap, useMatchedFrameFaces, type MatchedFrameFace } from './utils/frameFaces';
@@ -267,8 +268,9 @@ export function VideoViewport({
     const meta = scrub.meta;
     if (!match || !meta || lockingId) return;
     const store = useFaceSelectionStore.getState();
-    void targetLock.lockFace(match.face.face_index);        // Stage 12: the click also locks the PERSON (reference bank + cluster id)
+    // Selecting an existing track must not create a second persistent target lock.
     if (match.stored) { store.setActiveSelection(match.stored.id); return; }
+    void targetLock.lockFace(match.face.face_index);        // Stage 12: a new candidate also locks the PERSON (reference bank + cluster id)
     setLockingId(match.id);
     try {
       // The frame's own presentation time (minus a hair, so rounding can never select the next frame).
@@ -283,7 +285,7 @@ export function VideoViewport({
       noticeLater(source ? `Face #${match.face.face_index + 1} locked and mapped to ${source.name}.` : `Face #${match.face.face_index + 1} locked as a target. Choose a source FaceSet to swap it.`);
     } catch (error) { noticeLater((error as Error).message || 'Locking the face failed.'); }
     finally { setLockingId(null); }
-  }, [scrub.meta, lockingId, target, sources, activeSourceId, onAssignSource, onInspectionUpdate, noticeLater, targetLock.lockFace]);
+  }, [scrub.meta, lockingId, target, sources, activeSourceId, onAssignSource, onInspectionUpdate, noticeLater, targetLock]);
   /** Right-click menu: lock as primary target / add this angle / bind the active source / exclude, for the face with this left-to-right rank. */
   const onTargetAction = useCallback(async (action: TargetAction, menu: FaceMenuTarget) => {
     const match = frameFaces?.find(item => item.face.face_index === menu.faceRank);
@@ -294,7 +296,7 @@ export function VideoViewport({
     await lockFrameFace(match);
     const store = useFaceSelectionStore.getState(), face = store.detectedFaces.find(item => item.id === store.activeSelection);
     if (face?.clusterId) { store.setClusterMode(face.clusterId, 'exclude'); noticeLater(`Face #${menu.faceRank + 1} is excluded from the swap.`); }
-  }, [frameFaces, lockFrameFace, targetLock.addAngle, targetLock.lockFace, noticeLater]);
+  }, [frameFaces, lockFrameFace, targetLock, noticeLater]);
   // The locked face's pose follows the frame under the playhead (the stored track keeps one pose for all its frames).
   const activeFaceId = useFaceSelectionStore(state => state.activeSelection);
   useEffect(() => {
@@ -590,6 +592,17 @@ export function VideoViewport({
     const activePath = isShowingSourcePeek ? target : path;
     const activeResult = isShowingSourcePeek ? sourcePreview : result;
     const showLive = isOutput && !isShowingSourcePeek && !playing && !!liveUrl;
+    const isSourceFrame = !isOutput || isShowingSourcePeek;
+    const requestedFrameIndex = Math.max(0, Math.min(totalFrames - 1, Math.round(time * fps)));
+    const frameStatus = !playing && isSourceFrame && target
+      ? scrub.current && scrub.meta
+        ? `FRAME ${scrub.meta.frame_index + 1} / ${scrub.meta.total_frames} · ${formatTimecode(scrub.meta.timestamp_sec, fps)} · ${scrub.meta.width} × ${scrub.meta.height}`
+        : scrub.error
+          ? `FRAME ${requestedFrameIndex + 1} PREVIEW FAILED`
+          : scrub.loading
+            ? `LOADING FRAME ${requestedFrameIndex + 1} / ${totalFrames}`
+            : `WAITING FOR FRAME ${requestedFrameIndex + 1} / ${totalFrames}`
+      : '';
 
     return (
       <div
@@ -658,6 +671,8 @@ export function VideoViewport({
           />
         )}
         {isOutput && !isShowingSourcePeek && <LiveSwapStatus live={live}/>}
+        {isOutput && <LiveStreamCanvas/>}
+        {frameStatus && <span className={`preview-frame-status ${scrub.current ? 'ready' : 'pending'}`} role="status" aria-live="polite">{frameStatus}</span>}
         <span className="pane-label">
           {isOutput ? (isShowingSourcePeek ? 'SOURCE (PEEK)' : showLive ? 'LIVE SWAP' : 'OUTPUT') : 'SOURCE'} <i className={`dot ${activePath || showLive ? 'mint' : 'dim'}`} />
         </span>
@@ -699,7 +714,7 @@ export function VideoViewport({
         {detectionNotice && <span className="detection-inline-notice">{detectionNotice}</span>}
         {extraction.toast && <span className={`face-toast ${extraction.toast.kind}`} role="status">{extraction.toast.text}</span>}
         {targetLock.toast && <span className={`face-toast ${targetLock.toast.kind}`} role="status">{targetLock.toast.text}</span>}
-        {targetLock.lock && <span className="target-lock-chip" title={`${targetLock.lock.bank_size} reference angles · scan ${targetLock.lock.scan.state}`}>TARGET LOCKED ✓ {targetLock.lock.label}</span>}
+        {targetLock.lock && <span className="target-lock-chip" title={`${targetLock.lock.bank_size} reference angles · scan ${targetLock.lock.scan?.state ?? 'not started'}`}>TARGET LOCKED ✓ {targetLock.lock.label}</span>}
         {solo && <button className="button small" onClick={() => setSolo(null)}>Exit solo · {solo}</button>}
 
         {/* Mask Editing Mode Toggle */}

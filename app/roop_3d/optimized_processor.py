@@ -28,12 +28,13 @@ class StreamingProcessor:
     def __init__(self, root: Path, project_id: str, source: Path, *, detect, track, pipeline,
                  policy: RenderPolicy = RenderPolicy(), identity=None, emit=None,
                  check=lambda: None, progress=lambda *_: None, timings: StageTimings | None = None,
-                 execution_provider: str = "CPUExecutionProvider", settings_3d: dict | None = None):
+                 execution_provider: str = "CPUExecutionProvider", settings_3d: dict | None = None, live_hub=None):
         self.timings = timings if timings is not None else StageTimings()
         self.root, self.project_id, self.source = root, project_id, source
         self.detect, self.track, self.pipeline, self.policy = detect, track, pipeline, policy
         self.identity, self.emit, self.check, self.progress = identity or {}, emit, check, progress
         self.execution_provider, self.settings_3d = execution_provider, settings_3d or {}
+        self.live_hub = live_hub     # a LiveFrameHub: finished frames are offered to the binary live stream (never blocks)
 
     def run(self, destination: Path, *, audio=True, lut_path=None, lut_bake=False, prepass_reader=None):
         from roop_3d.models.owned_files import owned_path
@@ -134,6 +135,9 @@ class StreamingProcessor:
                         lut_path=lut_path, lut_bake=lut_bake, color=source.color)
                 with self.timings.measure("encode"):
                     writer.write(output)
+                if self.live_hub is not None:
+                    self.live_hub.publish(output, frame_index=metadata.index,
+                                          timestamp_s=metadata.pts * metadata.time_base_num / metadata.time_base_den)
                 decoded += 1
                 self.progress(decoded, locked.total_frames, (decoded - resume_from) / max(1e-6, time.perf_counter() - started))
                 if decoded % self.policy.segment_frames == 0:
@@ -354,6 +358,7 @@ def make_stream_runner(root, catalog, media, settings_provider, *, pipeline_trac
                 destination = owned(self.root, f"{settings.output_root}/roop3d_{record.job_id}_{time.time_ns()}.mp4")
                 processor = StreamingProcessor(self.root, record.job_id, prepared.target, detect=detect, track=track,
                     pipeline=pipeline, policy=policy, emit=emit, check=check, timings=timings, execution_provider=accelerator,
+                    live_hub=getattr(self, "live_hub", None),
                     identity={"request": self._request_digest(record), "settings": settings.model_dump(),
                               "model_sha256": model.record["sha256"]},
                     progress=lambda frame, total, fps: report_progress(__import__("roop_3d.jobs.schema", fromlist=["JobProgress"]).JobProgress(

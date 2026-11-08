@@ -229,7 +229,7 @@ input:focus-visible, select:focus-visible { outline: none; border-color: var(--a
 .face-manager-workstation button:not(.button):not(.icon-button):not([class*='hud']) { border-color: var(--edge); }
 
 /* ── Narrow screens: the top bar wraps instead of overflowing ───────── */
-@media (max-width: 1100px) {
+@media (max-width: 1400px) {
   .app-header.topbar { flex-wrap: wrap; height: auto; min-height: var(--topbar-h); padding-block: 8px; row-gap: 8px; }
   .topbar-spacer { flex-basis: 100%; height: 0; }
   .topbar .project-name input { width: 120px; }
@@ -268,7 +268,7 @@ kbd { font: 600 10px ui-monospace, SFMono-Regular, Consolas, monospace; padding:
 .palette-empty { padding: 28px; text-align: center; color: var(--muted); }
 .palette-foot { display: flex; gap: 18px; padding: 10px 18px; border-top: 1px solid var(--edge); font-size: 11px; color: var(--muted); }
 .palette-foot span { display: inline-flex; align-items: center; gap: 4px; }
-@media (max-width: 1560px) { .palette-trigger { min-width: 0; } .palette-trigger span, .palette-trigger kbd { display: none; } .palette-trigger { padding: 0 11px; } }
+@media (max-width: 1800px) { .palette-trigger { min-width: 0; } .palette-trigger span, .palette-trigger kbd { display: none; } .palette-trigger { padding: 0 11px; } }
 
 /* ── Cross-screen polish: consistent page rhythm, quiet banners, native controls themed ── */
 .screen-page { font-size: 13px; max-width: 1400px; margin-inline: auto; padding: 28px 28px 44px; }

@@ -14,7 +14,7 @@ from roop_3d.models.catalog import ModelCatalog
 from roop_3d.models.owned_files import owned_path, model_source
 from roop_3d.models.registry import ModelRegistry, authorize, license_info
 from roop_3d.models.verifier import verify_file
-from roop_3d.engine.resources import guarded, register
+from roop_3d.engine.resources import guarded, inference, register
 
 FACEFUSION_REPOSITORIES = tuple(f"facefusion/models-{v}" for v in ("3.0.0", "3.1.0", "3.2.0", "3.3.0"))
 STAGE16_IDS = (
@@ -162,7 +162,7 @@ class CheckedSession:
         self._profile_closed = False
         register(self, "close")
 
-    @guarded
+    @inference
     def run(self, feeds: Mapping[str, np.ndarray]) -> dict[str, np.ndarray]:
         if self._profile_closed or self.session is None:
             raise RuntimeError("Provider evidence is finalized; prepare a new session for further inference")

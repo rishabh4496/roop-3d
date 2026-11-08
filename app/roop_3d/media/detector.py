@@ -12,7 +12,7 @@ import numpy as np
 
 from roop_3d.core.errors import DomainError
 from roop_3d.models.catalog import ModelCatalog
-from roop_3d.engine.resources import guarded, register
+from roop_3d.engine.resources import guarded, inference, register
 
 
 class Detector:
@@ -25,12 +25,12 @@ class Detector:
         self._session_factory = session_factory
         register(self, "release_for_build")
 
-    @guarded
+    @inference
     def detect(self, image: np.ndarray, threshold: float) -> tuple[list[tuple[np.ndarray, np.ndarray]], dict]:
         scored, record = self._detect(image, threshold)
         return [(box, points) for box, points, _ in scored], record
 
-    @guarded
+    @inference
     def detect_scored(self, image: np.ndarray, threshold: float) -> tuple[list[tuple[np.ndarray, np.ndarray, float]], dict]:
         """`detect`, plus each face's detector confidence (the SCRFD score the face was kept with)."""
         return self._detect(image, threshold)
@@ -47,7 +47,9 @@ class Detector:
                     import onnxruntime as ort
                     options = ort.SessionOptions()
                     options.intra_op_num_threads = 2
-                    self._session = ort.InferenceSession(data, sess_options=options, providers=["CPUExecutionProvider"])
+                    from roop_3d.engine.resources import build_fence
+                    with build_fence():
+                        self._session = ort.InferenceSession(data, sess_options=options, providers=["CPUExecutionProvider"])
                 if hasattr(self._session, "io_binding"):
                     from roop_3d.core.ort_session import GpuIoBinding
                     self._io_runner = GpuIoBinding(self._session)

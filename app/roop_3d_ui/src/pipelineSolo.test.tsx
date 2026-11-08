@@ -34,7 +34,7 @@ it('solos a pipeline node through POST /api/preview solo_node, returns to the co
   try {
     await act(async () => root.render(<VideoViewport {...props} time={1}/>));
     await act(async () => { await vi.advanceTimersByTimeAsync(200); });
-    expect(previewBodies(fetch)[0].solo_node).toBeUndefined();              // not soloed: the final composite
+    expect(previewBodies(fetch)[0].solo_node).toBe('final');          // explicit final buffer is the composite, not an intermediate solo
     await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Solo Occlusion & Seam Mask"]')!.click());
     await act(async () => { await vi.advanceTimersByTimeAsync(200); });
     expect(previewBodies(fetch).at(-1)).toMatchObject({ solo_node: 'matte', timestamp: 1 });

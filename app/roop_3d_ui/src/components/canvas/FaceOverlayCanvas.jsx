@@ -733,7 +733,6 @@ function toOverlayFace(match, meta) {
 }
 
 const FRAME_CYAN = '#22d3ee', FRAME_LOCKED = '#34d399';
-const signed = value => `${value >= 0 ? '+' : '-'}${Math.abs(value).toFixed(0)}`;
 /** One decimal and never `-0.0`: the live pose pill (`#1 · Y: -34.2° P: +6.1° R: -2.0°`). */
 export const signed1 = value => { const v = Math.round(value * 10) / 10; return `${v < 0 ? '-' : '+'}${Math.abs(v).toFixed(1)}`; };
 

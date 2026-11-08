@@ -748,7 +748,7 @@ def generate_14_section_report(root: Path, state) -> dict[str, Any]:
     iso = isolation_status(root)
 
     gpu = hw.gpus[0] if hw.gpus else None
-    models_summary = state.models.public() if hasattr(state, "models") else []
+    models_summary = (state.models.public() if hasattr(state, "models") else None) or []
 
     # Count TensorRT engine caches
     trt_cache_dir = owned(root, "roop_3d/cache/tensorrt") if (root / "roop_3d/cache/tensorrt").exists() else None
@@ -848,7 +848,7 @@ def generate_14_section_report(root: Path, state) -> dict[str, Any]:
         "models_dir_status": models_dir_health["status"],
         "checksums": {m.get("name"): m.get("sha256") for m in models_summary if m.get("name")},
         "verified_models": [
-            {"name": m.get("name"), "sha256": m.get("sha256", "")[:16] + "...", "state": m.get("state")}
+            {"name": m.get("name"), "sha256": (m.get("sha256")[:16] + "...") if m.get("sha256") else None, "state": m.get("state")}
             for m in models_summary[:8]
         ],
         "status": "PASS" if any(m.get("state") == "VERIFIED_LOCAL" for m in models_summary) else "WARN",

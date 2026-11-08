@@ -75,6 +75,9 @@ describe('VideoViewport Preview Box Controls', () => {
 
     // Viewport stage wrapper
     expect(html).toContain('viewport-stage');
+    // The preview shows which decoded frame is current or still being fetched.
+    expect(html).toContain('preview-frame-status');
+    expect(html).toContain('WAITING FOR FRAME 76 / 300');
   });
 
   it('renders Hold: Source button when output media is provided', () => {

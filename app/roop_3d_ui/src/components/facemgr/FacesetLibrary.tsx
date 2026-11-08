@@ -6,6 +6,28 @@ import type { FaceSet } from '../../contracts';
 import VirtualList from '../common/VirtualList';
 import { startFacesetDrag } from '../../utils/facesetDrag';
 
+const FAVORITES_STORAGE_KEY = 'roop3d.faceset-library-favorites.v1';
+
+function readFavoriteIds(): string[] {
+  if (typeof window === 'undefined') return [];
+  try {
+    const stored = window.localStorage.getItem(FAVORITES_STORAGE_KEY);
+    if (!stored) return [];
+    const parsed: unknown = JSON.parse(stored);
+    return Array.isArray(parsed) && parsed.every((id) => typeof id === 'string') ? [...new Set(parsed)] : [];
+  } catch {
+    return [];
+  }
+}
+
+function persistFavoriteIds(ids: string[]) {
+  try {
+    window.localStorage.setItem(FAVORITES_STORAGE_KEY, JSON.stringify(ids));
+  } catch {
+    // Keep favorites usable for this session when browser storage is unavailable.
+  }
+}
+
 export interface FacesetLibraryProps {
   sources?: FaceSet[];
   selectedSourceId?: string;
@@ -43,15 +65,29 @@ export default function FacesetLibrary({
   const [renameVal, setRenameVal] = useState('');
   const [saveModalOpen, setSaveModalOpen] = useState(false);
   const [newFacesetName, setNewFacesetName] = useState('');
+  const [favoriteIds, setFavoriteIds] = useState<string[]>(readFavoriteIds);
 
   const importRef = useRef<HTMLInputElement>(null);
   const pickerRef = useRef<HTMLDivElement>(null);
   const renameDone = useRef(false);
 
   const selected = sources.find((s) => s.faceset_id === selectedSourceId) || null;
+  const favoriteSet = new Set(favoriteIds);
 
   const q = filter.trim().toLowerCase();
-  const shown = q ? sources.filter((e) => e.name.toLowerCase().includes(q)) : sources;
+  const shown = (q ? sources.filter((e) => e.name.toLowerCase().includes(q)) : sources)
+    .slice()
+    .sort((a, b) => Number(favoriteSet.has(b.faceset_id)) - Number(favoriteSet.has(a.faceset_id)));
+
+  const toggleFavorite = useCallback((facesetId: string) => {
+    setFavoriteIds((current) => {
+      const next = current.includes(facesetId)
+        ? current.filter((id) => id !== facesetId)
+        : [...current, facesetId];
+      persistFavoriteIds(next);
+      return next;
+    });
+  }, []);
 
   const refresh = useCallback(async () => {
     if (onRefreshSources) {
@@ -239,6 +275,11 @@ export default function FacesetLibrary({
                 {renaming === e.faceset_id && <input autoFocus className="fs-rename" aria-label="Rename FaceSet" value={renameVal} onChange={(ev) => setRenameVal(ev.target.value)} onBlur={() => commitRename(e)}
                   onKeyDown={(ev) => { ev.stopPropagation(); if (ev.key === 'Enter') commitRename(e); if (ev.key === 'Escape') cancelRename(); }} />}
                 <span className="fs-row-actions">
+                  <button type="button" className="icon-button tiny" title={favoriteSet.has(e.faceset_id) ? `Remove ${e.name} from favorites` : `Add ${e.name} to favorites`}
+                    aria-label={favoriteSet.has(e.faceset_id) ? `Remove ${e.name} from favorites` : `Add ${e.name} to favorites`}
+                    aria-pressed={favoriteSet.has(e.faceset_id)} onClick={() => toggleFavorite(e.faceset_id)}>
+                    {favoriteSet.has(e.faceset_id) ? '★' : '☆'}
+                  </button>
                   <button type="button" className="icon-button tiny" title="Rename" aria-label={`Rename ${e.name}`} onClick={() => beginRename(e)}>✎</button>
                   <a className="icon-button tiny" title="Download .fsz" aria-label={`Download ${e.name}`} href={`/api/v1/facesets/${e.faceset_id}/download`} download={`${e.faceset_id}.fsz`}>⤓</a>
                   <button type="button" className="icon-button tiny danger" title="Delete FaceSet" aria-label={`Delete ${e.name}`} onClick={() => void del(e)}>✕</button>
@@ -412,6 +453,19 @@ export default function FacesetLibrary({
 
                               {/* Action buttons on hover/focus */}
                               <span className="flex items-center gap-1.5 text-mini text-muted shrink-0 opacity-80 group-hover:opacity-100 transition-opacity">
+                                <button
+                                  type="button"
+                                  className="hover:text-white transition-colors px-1"
+                                  title={favoriteSet.has(e.faceset_id) ? `Remove ${e.name} from favorites` : `Add ${e.name} to favorites`}
+                                  aria-label={favoriteSet.has(e.faceset_id) ? `Remove ${e.name} from favorites` : `Add ${e.name} to favorites`}
+                                  aria-pressed={favoriteSet.has(e.faceset_id)}
+                                  onClick={(ev) => {
+                                    ev.stopPropagation();
+                                    toggleFavorite(e.faceset_id);
+                                  }}
+                                >
+                                  <span aria-hidden="true">{favoriteSet.has(e.faceset_id) ? '★' : '☆'}</span>
+                                </button>
                                 <button
                                   type="button"
                                   className="hover:text-white transition-colors px-1"

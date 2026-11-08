@@ -7,7 +7,7 @@ import threading
 
 from roop_3d.models.dynamic_shapes import assert_finite
 from roop_3d.trt_session_builder import BatchProfile, TensorRTSessionBuilder
-from roop_3d.engine.resources import guarded
+from roop_3d.engine.resources import guarded, inference
 
 
 class OptimizedTRTEngine:
@@ -30,7 +30,7 @@ class OptimizedTRTEngine:
                 self._build = copy.deepcopy(self.builder.last_build)
             return self._session
 
-    @guarded
+    @inference
     def run(self, feeds):
         with self._lock:
             session = self.prepare()
@@ -48,7 +48,7 @@ class OptimizedTRTEngine:
             assert_finite(outputs)
             return outputs
 
-    @guarded
+    @inference
     def run_cuda(self, feeds, outputs):
         """Bind caller-owned CUDA tensors directly; never session.run/NumPy pixels.
 

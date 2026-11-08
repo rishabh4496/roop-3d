@@ -10,7 +10,7 @@ import numpy as np
 from roop_3d.core.errors import DomainError
 from roop_3d.models.catalog import ModelCatalog
 from roop_3d.models.registry import authorize
-from roop_3d.engine.resources import guarded, register
+from roop_3d.engine.resources import guarded, inference, register
 
 # Shared low-level session construction is also available to GPU graph callers.
 # This additive adapter keeps the verified catalog as the only model path source.
@@ -204,6 +204,7 @@ class OrtModel:
         self._io_binder = GpuIoBinding(self.session)
         register(self, "release")
 
+    @guarded
     def _switch_to_cpu(self, reason: str) -> None:
         import onnxruntime as ort
         self.session = None
@@ -220,6 +221,7 @@ class OrtModel:
         self._check_graph()
         self._io_binder = GpuIoBinding(self.session)
 
+    @guarded
     def _switch_to_cuda(self, reason: str) -> None:
         """Recover a failed TensorRT engine with a CUDA-only session."""
         self.session = None
@@ -255,7 +257,7 @@ class OrtModel:
                 if node.type != expected_type:
                     raise DomainError("MODEL_GRAPH_DRIFT", "Runtime tensor dtype differs from verified graph", 503)
 
-    @guarded
+    @inference
     def run(self, values: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
         if self.session is None:
             raise DomainError("SESSION_RELEASED", "Inference session has been released", 409)

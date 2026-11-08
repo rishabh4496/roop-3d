@@ -154,4 +154,8 @@ def test_high_resolution_render_is_bounded_and_complete():
     assert result["passed"], {"growth": result["growth"]["violations"], "invariants": result["invariants"],
                               "state": result["state"], "failure": result["failure"]}
     assert result["frames"] == 100 and result["workdir_released"]
-    assert result["peak_rss_mib"] < 2500, "frame buffers must not accumulate"
+    rss_samples = result["series"].get("rss_mib", [])
+    assert rss_samples, "the soak must sample process RSS before it starts rendering"
+    baseline_rss = rss_samples[0][1]
+    peak_growth = result["peak_rss_mib"] - baseline_rss
+    assert peak_growth < 1024, f"frame buffers added {peak_growth:.1f} MiB above the process baseline"

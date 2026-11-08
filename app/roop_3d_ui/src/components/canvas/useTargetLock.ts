@@ -39,7 +39,7 @@ export function useTargetLock({ target, frameIndex, lock = lockTargetFromFrame, 
   const watchScan = useCallback((first: TargetLock) => {
     let remaining = 40;
     const tick = async (value: TargetLock) => {
-      if (value.scan.state !== 'running' || remaining-- <= 0) return;
+      if (value.scan?.state !== 'running' || remaining-- <= 0) return;
       timers.current.poll = setTimeout(async () => {
         try { const next = await refresh(value.lock_id); setCurrent(prev => (prev?.lock_id === next.lock_id ? next : prev)); void tick(next); } catch { /* the lock stays usable */ }
       }, pollMs);
