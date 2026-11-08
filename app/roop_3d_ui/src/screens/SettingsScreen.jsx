@@ -6,6 +6,7 @@ import ThemeGallery from '../components/ThemeGallery';
 import { THEMES, themeByName, applyThemeToDom } from '../themes';
 import { useTelemetry } from '../stores/telemetryStore';
 import ModelHubPanel from '../components/modelhub/ModelHubPanel';
+import ModelManager from '../components/modelhub/ModelManager';
 
 /** Leaf subscriber: the Settings screen itself never re-renders when the telemetry store first learns the GPU. */
 function GpuName({ override }) {
@@ -270,7 +271,7 @@ export default function SettingsScreen({
             onClick={() => setActiveTab('models')}
             data-testid="tab-models"
           >
-            Model Hub & TRT Engine Manager
+            Models & Engines Manager
           </button>
           <button
             className={`tab-btn ${activeTab === 'installer' ? 'active' : ''}`}
@@ -698,7 +699,7 @@ export default function SettingsScreen({
         </div>
       )}
 
-      {activeTab === 'models' && <ModelHubPanel active />}
+      {activeTab === 'models' && <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}><ModelManager /><ModelHubPanel active /></div>}
 
       {activeTab === 'installer' && (
         <div className="diagnostics-dashboard installer-dashboard" data-testid="installer-tab-content">

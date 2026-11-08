@@ -8,6 +8,7 @@ import { EventConnection } from './events';
 import { publishHardware } from './stores/telemetryStore';
 import { setPlayhead } from './stores/playheadStore';
 import { selectEngine, useSelectedEngine } from './stores/engineSelection';
+import { setRack, useRack } from './stores/rackSelection';
 import { featureReason, jobActions, mappings, optionReason } from './state';
 import { SettingsInspector } from './SettingsInspector';
 import { VideoViewport, formatTime } from './VideoViewport';
@@ -60,8 +61,11 @@ const PoseCoverageInspector = lazy(() => import('./ThreeViewport').then(module =
 
 export default function App() {
   const selectedEngine = useSelectedEngine();
+  // The Engine & Model Rack's swapper choice. null = follow the saved global setting.
+  const rackSwapper = useRack(state => state.swapper);
   renderProbe('App');
   const [caps, setCaps] = useState<Capabilities | null>(null), [config, setConfig] = useState<Config | null>(null);
+  const swapperModelId = rackSwapper ?? (typeof config?.swapper_model_id === 'string' ? config.swapper_model_id : undefined);
   const [sources, setSources] = useState<FaceSet[]>([]), [jobs, setJobs] = useState<Job[]>([]);
   // `time` is the *committed* playhead (seek / step / pause). Per-tick playback time lives in `playheadStore`, and
   // hardware telemetry in `telemetryStore`: neither is React state here, so neither re-renders the workstation.
@@ -172,6 +176,7 @@ export default function App() {
   const currentTrack: Track | null = inspection?.tracks.find(track => track.track_id === selectedTrack) ?? null;
   const projectDirty = !project || project.name !== projectName || project.request.target_path !== target
     || (project.request.engine_id ?? 'reference_onnx') !== selectedEngine
+    || (project.request.swapper_model_id ?? undefined) !== swapperModelId
     || JSON.stringify(project.preview ?? { timestamp: 0, selected_track: '', source_faceset_id: '', viewport: DEFAULT_VIEWPORT }) !== JSON.stringify({ timestamp: time, selected_track: selectedTrack, source_faceset_id: sourceId, viewport: previewView })
     || project.request.inspection_id !== inspection?.inspection_id || (project.request.trim_start_seconds ?? 0) !== trimStart
     || project.request.trim_end_seconds !== trimEnd
@@ -318,7 +323,7 @@ export default function App() {
       const lockIssue = lockProblem(identityLock, Object.fromEntries(selected.map(item => [item.track_id, item.faceset_id])));
       if (lockIssue) throw new Error(`${lockIssue} Re-lock or release the identity lock before rendering.`);
     }
-    return { engine_id: selectedEngine, swapper_model_id: typeof config?.swapper_model_id === 'string' ? config.swapper_model_id : undefined, identity_lock_id: identityLock?.lock_id, identity_blend: identitySourceB && sourceId ? {method: 'slerp',source_face_ids: [sourceId, identitySourceB],weights:[1,0]} : undefined, target_path: target, inspection_id: inspection.inspection_id, face_mappings: selected, processing: 'local', remote_consent: false, trim_start_seconds: trimStart || null, trim_end_seconds: trimEnd, mask_base64: maskBase64 || undefined, workstation_parameters: parameters, parameter_curves: { tracks: curves }, face_segments: segments, export: exportOptions };
+    return { engine_id: selectedEngine, swapper_model_id: swapperModelId, identity_lock_id: identityLock?.lock_id, identity_blend: identitySourceB && sourceId ? {method: 'slerp',source_face_ids: [sourceId, identitySourceB],weights:[1,0]} : undefined, target_path: target, inspection_id: inspection.inspection_id, face_mappings: selected, processing: 'local', remote_consent: false, trim_start_seconds: trimStart || null, trim_end_seconds: trimEnd, mask_base64: maskBase64 || undefined, workstation_parameters: parameters, parameter_curves: { tracks: curves }, face_segments: segments, export: exportOptions };
   };
   const executeQueue = () => void run('Queueing local render', async () => {
     const saved = await persistProject(), fingerprint = JSON.stringify({ project: saved.project_id, request: saved.request });
@@ -367,6 +372,7 @@ export default function App() {
     const restoredLock = saved.request.identity_lock_id ? await api<IdentityLock>(`/identity/locks/${saved.request.identity_lock_id}?verify=true`) : null;
     const restoredMappings = Object.fromEntries(saved.request.face_mappings.map(item => [item.track_id, item.faceset_id]));
     selectEngine(saved.request.engine_id ?? 'reference_onnx');
+    setRack({ swapper: saved.request.swapper_model_id ?? null });
     setConfig(settings); setInspection(loaded); setAssigned(restoredMappings); setSelectedTrack(loaded.tracks[0]?.track_id ?? '');
     setIdentityLock(restoredLock);
     setSelectedTrack(saved.preview?.selected_track || loaded.tracks[0]?.track_id || '');
@@ -390,6 +396,7 @@ export default function App() {
   });
   const showJob = (job: Job) => {
     selectEngine(job.request.engine_id ?? 'reference_onnx');
+    setRack({ swapper: job.request.swapper_model_id ?? null });
     void run('Opening job target', async () => {
       const jobProbe = job.request.target_path === target && probe ? probe : await loadTarget(job.request.target_path);
       const loaded = await api<Inspection>(`/media/inspections/${job.request.inspection_id}?${new URLSearchParams({ path: job.request.target_path })}`);
@@ -599,7 +606,7 @@ export default function App() {
           </main>
           <aside className="studio-panel studio-right" aria-label="Inspector">
             <div className="studio-panel-head"><span className="eyebrow">04 · INSPECTOR</span></div>
-            <PanelBoundary name="Inspector"><StudioInspector caps={caps} track={currentTrack} sheet={sheet} sources={sources} assignedId={currentTrack ? assigned[currentTrack.track_id] ?? '' : ''} onAssign={assignTrack}
+            <PanelBoundary name="Inspector"><StudioInspector caps={caps} config={config} onSaveConfig={saveSettings} track={currentTrack} sheet={sheet} sources={sources} assignedId={currentTrack ? assigned[currentTrack.track_id] ?? '' : ''} onAssign={assignTrack}
               parameters={parameters} setParameters={setParameters} coverage={coverage} reconstruction={reconstruction} mesh={identityMesh ?? mesh} panelsRef={setPanelsSlot}
               reconstructionPicker={reconstructionPicker}
               facesetCreator={<FacesetBuilder sourceId={sourceId} label="+ Create .fsz from Video/Photos" className="viewer-action-btn"

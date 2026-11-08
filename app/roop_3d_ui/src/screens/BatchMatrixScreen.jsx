@@ -1,6 +1,8 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { api, post } from '../api';
 import { engineSelection } from '../stores/engineSelection';
+import { rackStore, setRack, useRack } from '../stores/rackSelection';
+import EngineModelRack from '../components/modelhub/EngineModelRack';
 import { featureReason } from '../state';
 import NumericInput from '../components/controls/NumericInput';
 
@@ -65,6 +67,9 @@ export default function BatchMatrixScreen({
   refreshJobs = async () => {},
 }) {
   const [strategy, setStrategy] = useState('one-to-many'); // 'one-to-many' | 'grouped' | 'matrix' | 'recipe'
+  const batchParameters = useRack(state => state.batchParameters);
+  const [engineConfig, setEngineConfig] = useState(null);
+  useEffect(() => { let alive = true; api('/config').then(value => { if (alive) setEngineConfig(value); }).catch(() => undefined); return () => { alive = false; }; }, []);
   const [batchBusy, setBatchBusy] = useState(false);
   const [statusMessage, setStatusMessage] = useState('');
   const [errorMessage, setErrorMessage] = useState('');
@@ -174,6 +179,10 @@ export default function BatchMatrixScreen({
         for (const sub of subRequests) {
           const idemKey = `matrix-${crypto.randomUUID()}`;
           const cleanRequest = { engine_id: engineSelection.get().engineId, ...sub };
+          // Engine & Model Rack: the chosen swapper and any touched enhancer / 3D / mask fields apply to every queued job.
+          const rack = rackStore.get();
+          if (rack.swapper) cleanRequest.swapper_model_id = rack.swapper;
+          if (Object.keys(rack.batchParameters).length) cleanRequest.workstation_parameters = { ...(cleanRequest.workstation_parameters || {}), ...rack.batchParameters };
           const segIdx = cleanRequest._segment_index;
           const totalSegs = cleanRequest._total_segments;
           delete cleanRequest._segment_index;
@@ -488,6 +497,14 @@ export default function BatchMatrixScreen({
           </button>
         </div>
       </div>
+
+      <details className="batch-rack" open data-testid="batch-model-rack">
+        <summary><b>Engine &amp; Model Rack</b> <span className="muted">applies to every job in this batch</span></summary>
+        <p className="muted">Fields you change here override the matching recipe values in every queued job; untouched fields keep the recipe's own.</p>
+        <EngineModelRack variant="batch" params={batchParameters} onParams={patch => setRack({ batchParameters: { ...rackStore.get().batchParameters, ...patch } })}
+          config={engineConfig} caps={caps}
+          onSaveConfig={value => { void api('/config', { method: 'PUT', body: JSON.stringify(value) }).then(setEngineConfig).catch(reason => setErrorMessage(reason instanceof Error ? reason.message : 'Could not save the engine setting.')); }} />
+      </details>
 
       {/* Segment Splitting Controls Banner */}
       <section className="batch-split-banner">

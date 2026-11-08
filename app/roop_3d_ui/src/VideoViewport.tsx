@@ -17,6 +17,9 @@ import PipelineNodeFlowBar from './components/workstation/PipelineNodeFlowBar';
 import ContactSheetModal, { type Patch } from './components/workstation/ContactSheetModal';
 import SettingControl from './components/controls/SettingControl';
 import { PANELS, settingValue, settingsOf, type PanelId } from './components/controls/settingsRegistry';
+import Modal from './components/controls/Modal';
+import PersonModelPicker from './components/modelhub/PersonModelPicker';
+import { SWAPPERS, ENHANCERS } from './components/modelhub/EngineModelRack';
 import FaceContextMenu, { type FaceMenuTarget, type TargetAction, type TargetActionExtra } from './components/canvas/FaceContextMenu';
 import { useTargetLock } from './components/canvas/useTargetLock';
 import { useFaceExtraction } from './components/canvas/useFaceExtraction';
@@ -296,9 +299,12 @@ export function VideoViewport({
   }, [scrub.meta, lockingId, target, sources, activeSourceId, onAssignSource, onInspectionUpdate, noticeLater, targetLock]);
   /** Right-click menu: lock as primary target / add this angle / bind the active source / exclude, for the face with this left-to-right rank. */
   const showMatteRef = useRef<() => void>(() => {});
+  // Per-person model pinning (right-click menu): which person the dialog is editing.
+  const [personDialog, setPersonDialog] = useState<{ key: string; label: string } | null>(null);
   const onTargetAction = useCallback(async (action: TargetAction, menu: FaceMenuTarget, extra?: TargetActionExtra) => {
     const match = frameFaces?.find(item => item.face.face_index === menu.faceRank);
     // Per-face canvas toggles: view state only (pose lock, mask solo) or the one global enhancer (UltraMax).
+    if (action === 'person_models') { setPersonDialog({ key: menu.faceKey ?? `rank:${menu.faceRank}`, label: `Face ${menu.faceRank + 1}` }); return; }
     if (action === 'toggle_pose_lock') { if (menu.faceKey) togglePoseLock(menu.faceKey, menu.pose); return; }
     if (action === 'solo_mask') {
       if (!menu.faceKey) return;
@@ -1055,6 +1061,12 @@ export function VideoViewport({
         ultramaxOn={parameters.restoration_blend > 0 && parameters.restorer_model === 'ultramax'}
         poseLocked={!!faceMenu.faceKey && !!faceState.locks[faceMenu.faceKey]} maskSolo={!!faceMenu.faceKey && faceState.soloKey === faceMenu.faceKey}
         onChoose={(destination, menu) => { setFaceMenu(null); void extraction.run(destination, menu); }}/>}
+      {personDialog && <Modal title={`Models for ${personDialog.label}`} close={() => setPersonDialog(null)}>
+        <h3>Models for {personDialog.label}</h3>
+        <PersonModelPicker personKey={personDialog.key} label={personDialog.label} swapperOptions={SWAPPERS} enhancerOptions={ENHANCERS} />
+        <p className="muted">The render engine applies one swapper and one enhancer per job. These per-person choices are kept with this workspace for when it supports them; the scene-wide choices in the Engine &amp; Model Rack are what renders today.</p>
+        <button type="button" className="button small" onClick={() => setPersonDialog(null)}>Done</button>
+      </Modal>}
       {sweepPanel && <ContactSheetModal panel={sweepPanel} parameters={parameters} frameLabel={`Frame ${currentFrame} · ${time.toFixed(3)} s`}
         payloadFor={(patch: Patch) => {
           const { fidelity_weight: _inactive, ...applied } = patch;

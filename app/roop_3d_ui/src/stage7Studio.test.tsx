@@ -246,14 +246,16 @@ describe('StudioInspector', () => {
   });
 
   it('a failed model hub shows the reason and retries on request (no endless skeleton)', async () => {
-    api.mockRejectedValueOnce(new Error('offline')).mockResolvedValueOnce({ engines: [] });
+    // The Engine & Model Rack also reads /models; answer it by path so only the hub call fails once.
+    let hubCalls = 0;
+    api.mockImplementation(async (path: string) => { if (path === '/models') return []; hubCalls += 1; if (hubCalls === 1) throw new Error('offline'); return { engines: [] }; });
     await render(<StudioInspector {...base} track={null} parameters={{ ...DEFAULT_PARAMETERS }} setParameters={vi.fn()} />);
     await flush();
     expect(host.textContent).toContain('Model hub unavailable: offline');
     await act(async () => byText('Retry')!.click());
     await flush();
     expect(host.querySelector('select[aria-label="Swap engine"]')).toBeTruthy();
-    expect(api).toHaveBeenCalledTimes(2);
+    expect(hubCalls).toBe(2);
   });
 });
 

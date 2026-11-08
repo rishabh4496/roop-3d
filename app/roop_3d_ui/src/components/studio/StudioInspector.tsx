@@ -1,6 +1,7 @@
 import { lazy, Suspense, useEffect, useMemo, useState, type ReactNode, type Ref } from 'react';
 import { api } from '../../api';
-import type { Capabilities, Coverage, FaceSet, IdentitySheet, Reconstruction, ReconstructionStatus, Track } from '../../contracts';
+import type { Capabilities, Config, Coverage, FaceSet, IdentitySheet, Reconstruction, ReconstructionStatus, Track } from '../../contracts';
+import EngineModelRack from '../modelhub/EngineModelRack';
 import { PREVIEW_TAB_LABEL, RENDER_MODES, renderModeInfo } from '../workstation/renderModes';
 import { useFaceSelectionStore } from '../../useFaceSelectionStore';
 import { selectEngine, useSelectedEngine } from '../../stores/engineSelection';
@@ -42,6 +43,8 @@ const deg = (value: [number, number] | null | undefined) => (value ? `${value[0]
 
 export interface StudioInspectorProps {
   caps: Capabilities | null;
+  /** Global engine settings (execution provider / precision) edited from the Engine & Model Rack. */
+  config?: Config | null; onSaveConfig?: (value: Config) => void;
   track: Track | null; sheet: IdentitySheet | null;
   sources: FaceSet[]; assignedId: string; onAssign: (trackId: string, facesetId: string | null) => void;
   parameters: WorkstationParameters; setParameters: (value: WorkstationParameters) => void;
@@ -69,7 +72,7 @@ export const ENHANCERS: readonly { id: 'none' | RestorerModel; label: string; hi
 export const activeEnhancer = (parameters: WorkstationParameters): 'none' | RestorerModel =>
   parameters.restoration_blend > 0 ? (parameters.restorer_model ?? 'gpen') : 'none';
 
-export default function StudioInspector({ caps, track, sheet, sources, assignedId, onAssign, parameters, setParameters, coverage, mesh, reconstruction, reconstructionPicker, facesetCreator, panelsRef, processing, footer }: StudioInspectorProps) {
+export default function StudioInspector({ caps, config, onSaveConfig, track, sheet, sources, assignedId, onAssign, parameters, setParameters, coverage, mesh, reconstruction, reconstructionPicker, facesetCreator, panelsRef, processing, footer }: StudioInspectorProps) {
   const engine = useSelectedEngine();
   const engines = useEngines();
   const cluster = useFaceSelectionStore(state => (track ? state.targetClusters.find(item => item.id === track.track_id) ?? null : null));
@@ -141,6 +144,12 @@ export default function StudioInspector({ caps, track, sheet, sources, assignedI
           <label className="inspector-field">Blend amount <output>{Math.round(parameters.restoration_blend * 100)}%</output>
             <input type="range" aria-label="Enhancer blend amount" min={0} max={100} step={1} value={Math.round(parameters.restoration_blend * 100)}
               onChange={event => set({ restoration_blend: Number(event.target.value) / 100 })} /></label>
+        </section>
+
+        <section className="workflow-step" aria-labelledby="step-rack" data-testid="step-rack">
+          <h3 id="step-rack"><span className="step-no">4</span>Engine &amp; Model Rack</h3>
+          <EngineModelRack params={parameters} onParams={set} config={config ?? null} caps={caps} onSaveConfig={onSaveConfig}
+            people={(sheet?.tracks ?? []).map(item => ({ key: item.track_id, label: trackLabel(item.track_id) }))} />
         </section>
       </div>
 
