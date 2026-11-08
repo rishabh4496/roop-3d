@@ -105,6 +105,7 @@ class FaceTracker:
         self._tracks: dict[int, tuple[FaceObservation, int, int]] = {}
         from roop_3d.temporal import TrackTemporalStabilizer
         self.stabilizer = TrackTemporalStabilizer()
+        self._last_raw_box: dict[int, np.ndarray] = {}   # previous unfiltered box per track, to detect an implausible jump
         self.stabilize = stabilize
         self.frame_index = 0
         self.next_id = self.scene_id = 0
@@ -224,6 +225,16 @@ class FaceTracker:
         if not self.stabilize:
             return tuple(output)
         self.stabilizer.retain(retained)
+        # A box that no longer overlaps the same track's previous box at all is a jump (a re-acquired face, a cut inside a shot), not
+        # motion. The Kalman channel would carry the old velocity across it and overshoot by many box widths while the track is still
+        # swappable, so such a track restarts its filters from the measurement (the rotation channel has the same rule).
+        for item in output:
+            previous = self._last_raw_box.get(item.track_id)
+            if previous is not None and iou(item.observation.box, previous) <= 0.0:
+                self.stabilizer.forget_track(item.track_id)
+            self._last_raw_box[item.track_id] = np.asarray(item.observation.box, np.float32).copy()
+        alive = {item.track_id for item in output}
+        self._last_raw_box = {key: value for key, value in self._last_raw_box.items() if key in alive}
         self.frame_index += 1
         timestamp = getattr(self, "timestamp_seconds", self.frame_index / 30.0)
         filtered = []
@@ -461,6 +472,7 @@ class FaceTracker:
         self._lost.clear()
         self.stabilizer.reset()
         self.frame_index = self.next_id = self.scene_id = 0
+        self._last_raw_box.clear()
         self.previous_thumbnail = None
         self.scene_cut = False
         self.events.clear()

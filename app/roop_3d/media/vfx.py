@@ -73,7 +73,7 @@ def geometry_passes(replacement, shape: tuple[int, int], weight: float) -> tuple
 class PassCollector:
     def __init__(self, shape: tuple[int, int], selected: tuple[str, ...]):
         self.shape, self.selected = shape, selected
-        self.buffers = {name: np.zeros((*shape, 3), np.float32) if name in {'uv', 'normal'}
+        self.buffers = {name: np.zeros((*shape, 3), np.float32) if name in {'uv', 'normal', 'relit'}
                         else np.zeros(shape, np.float32) for name in selected}
 
     def observe(self, stage, crop, inverse, alpha):
@@ -86,6 +86,12 @@ class PassCollector:
                 # Unpremultiplied RGB with a separate straight alpha pass.
                 image = cv2.warpAffine(crop.astype(np.float32) / 255, inverse, size)
                 self.buffers['uv'] = np.where((weight > 0)[..., None], image, self.buffers['uv'])
+        elif stage == 'color' and 'relit' in self.buffers:
+            # The harmonised face after SH relighting, before it is blended with the target: straight RGB, no background or
+            # occluders. Coverage is the separate alpha pass. The compositor already scaled `inverse` for high-resolution crops.
+            weight = cv2.warpAffine(alpha.astype(np.float32), inverse, size)
+            image = cv2.warpAffine(crop.astype(np.float32) / 255, inverse, size)
+            self.buffers['relit'] = np.where((weight > 0)[..., None], image, self.buffers['relit'])
         elif stage == 'occluder' and 'occluder' in self.buffers:
             self.buffers['occluder'] = np.maximum(self.buffers['occluder'], cv2.warpAffine(crop, inverse, size))
 
@@ -126,6 +132,7 @@ def publish_passes(root: Path, job_id: str, source: Path, selected: tuple[str, .
                 'normal': 'flat camera-space normals; RGB=(normal+1)/2, OpenCV +X right +Y down +Z away',
                 'depth': {'encoding': 'linear camera Z / 2048', 'far': DEPTH_FAR, 'background': 0,
                           'units': 'estimated canonical camera units, not physical distance'},
+                'relit': 'clean relit face: harmonised swap after SH relighting, before blending with the target; straight RGB, pair with the alpha pass',
                 'geometry': 'frame-aligned mesh blend projection, estimated canonical proxy and camera',
                 'sequence_root': f'roop_3d/.runtime/jobs/{job_id}/passes'}
     if timeline is not None:

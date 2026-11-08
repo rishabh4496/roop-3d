@@ -2896,3 +2896,26 @@ button.lane-label:hover{background:var(--raised)}
 .preview-frame-status { position: absolute; right: 10px; bottom: 10px; z-index: 12; max-width: calc(100% - 20px); padding: 4px 8px; border: 1px solid rgba(255,255,255,.14); border-radius: 4px; background: rgba(5,8,10,.78); color: #e8f1f2; font: 600 10px ui-monospace, Menlo, Consolas, monospace; pointer-events: none; }
 .preview-frame-status.ready { color: #a7f3d0; }
 .preview-frame-status.pending { color: #fcd34d; }
+
+/* Final workstation stage: sweep zoom, parameter-curve hints, flamegraph lanes, readiness checks */
+.sweep-cell-wrap{position:relative;min-width:0}
+.sweep-cell-wrap .sweep-cell{width:100%}
+.sweep-zoom-button{position:absolute;top:6px;right:6px;opacity:.94}
+.sweep-zoom{display:grid;gap:8px;margin-top:10px}
+.sweep-zoom-actions{display:flex;gap:8px;justify-content:flex-end}
+.zoomable{display:grid;gap:6px}
+.zoomable-frame{position:relative;overflow:hidden;border:1px solid var(--line);border-radius:6px;background:#05090a;aspect-ratio:16/9;max-height:62vh;outline-offset:2px}
+.zoomable-frame img{width:100%;height:100%;object-fit:contain;display:block;user-select:none;will-change:transform}
+.zoomable-bar{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.stream-panel{display:grid;gap:14px}
+.lane-chart{display:grid;gap:4px}
+.lane-row{display:grid;grid-template-columns:minmax(150px,230px) minmax(0,1fr) 64px;align-items:center;gap:8px;font-size:11px}
+.lane-label{color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.lane-track{position:relative;height:14px;border-radius:3px;background:color-mix(in srgb,var(--line) 55%,transparent);overflow:hidden}
+.lane-seg{position:absolute;top:1px;bottom:1px;border-radius:2px;opacity:.9}
+.lane-busy{text-align:right;color:var(--muted);font-variant-numeric:tabular-nums}
+.pool-row{display:grid;grid-template-columns:minmax(150px,240px) minmax(80px,160px) 1fr;align-items:center;gap:8px;font-size:11px}
+@media(max-width:700px){.lane-row{grid-template-columns:1fr}.lane-busy{text-align:left}.pool-row{grid-template-columns:1fr}}
+/* A contact sheet is only useful if all nine tiles are visible together: cap each image so three rows fit the dialog. */
+.sweep-grid .sweep-cell img{max-height:calc((94vh - 330px) / 3);object-fit:contain;background:#05090a;margin:0 auto}
+.sweep-grid .sweep-cell .sweep-pending{min-height:90px}

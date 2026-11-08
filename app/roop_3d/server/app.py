@@ -42,6 +42,17 @@ from roop_3d.server.security import ShareMode
 from roop_3d.server.ws import EventBroker, event_stream, pipeline_status_stream
 
 
+def release_media_models(media, worker=None) -> None:
+    """Drop the app-level detector / recognizer sessions, and the render runner's own FaceSet reader models.
+    Safe to call twice and with partially built services."""
+    owners = [getattr(media, "detector", None), getattr(getattr(media, "analyzer", None), "recognizer", None),
+              getattr(getattr(worker, "runner", None), "faceset_reader", None)]
+    for owner in owners:
+        release = getattr(owner, "release_for_build", None) or getattr(owner, "release", None)
+        if callable(release):
+            release()
+
+
 def create_app(settings: Settings | None = None, *, repo_root: Path | None = None,
                worker_enabled: bool | None = None, pipeline_runner=None, share: ShareMode | None = None) -> FastAPI:
     root = repo_root or Path(__file__).absolute().parents[2]
@@ -123,6 +134,9 @@ def create_app(settings: Settings | None = None, *, repo_root: Path | None = Non
                 await run_in_threadpool(worker.stop)
             await run_in_threadpool(model_downloads.close)
             await run_in_threadpool(media.frames.close)
+            # The detector and recognizer own GPU sessions; nothing may keep them alive past the app (a later app in the same process
+            # would otherwise start with them still resident). The worker is already stopped, so no job can be using them.
+            await run_in_threadpool(release_media_models, media, worker)
             # The live encoder owns a daemon thread (and may own a CUDA stream).
             # Stop it after the worker so no render can publish into a torn-down hub.
             await run_in_threadpool(app.state.live_hub.stop)

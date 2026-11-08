@@ -304,7 +304,7 @@ def download(model_id: str, request: Request,
 @router.get("/models/required_status", include_in_schema=False)
 @router.get("/models/required-status")
 def models_required_status(request: Request) -> dict[str, Any]:
-    from roop.core.model_downloader import verify_all_required_models
+    from roop_3d.core.model_downloader import verify_all_required_models
     return {
         "status": "ok",
         "models": verify_all_required_models(request.app.state.root),
@@ -321,7 +321,7 @@ def download_missing_models_endpoint(
     request: Request,
     value: Annotated[DownloadMissingModelsRequest | None, Body()] = None,
 ) -> dict[str, Any]:
-    from roop.core.model_downloader import REQUIRED_MODELS, download_model, find_model_path
+    from roop_3d.core.model_downloader import REQUIRED_MODELS, download_model, find_model_path
     req_models = value.models if (value and value.models) else list(REQUIRED_MODELS.keys())
     results = []
     root = request.app.state.root

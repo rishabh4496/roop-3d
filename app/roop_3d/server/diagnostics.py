@@ -31,6 +31,9 @@ class PreFlightLintRequest(Contract):
     face_mappings: list[dict[str, str]] = Field(default_factory=list)
     workstation_parameters: dict[str, Any] | None = None
     mask_base64: str | None = None
+    # Optional context that sharpens the readiness estimates; omitted = the check says what it could not know.
+    swapper_model_id: str | None = Field(default=None, max_length=96)
+    export_passes: list[str] = Field(default_factory=list, max_length=6)
 
 
 class BenchmarkRequest(Contract):
@@ -45,6 +48,13 @@ FRONTALIZATION_OVERCORRECT = 0.5    # strictly above this with a populated matri
 HIGH_RES_MIN_EDGE = 1080            # shortest edge, pixels, treated as "high-resolution" video
 LOW_VRAM_MIB = 4096
 HIGH_THREADS = 4
+EXTREME_YAW_DEG = 40.0              # a target turning further than this needs profile views in the FaceSet
+YAW_SLACK_DEG = 15.0                # one pose-cell width (core.pose.YAW_EDGE): a view this close to the need still covers it
+UHD_MIN_EDGE = 2160                 # shortest edge of a 4K UHD frame (3840x2160); portrait 4K has the same short edge
+# Rendered frames are checkpointed as 8-bit PNG and each pass as 16-bit PNG. PNG size depends on content, so the estimate
+# uses a deliberately conservative fraction of the raw size and the report labels it an estimate.
+PNG_FRACTION = 0.6
+PASS_CHANNELS = {"alpha": 1, "occluder": 1, "depth": 1, "uv": 3, "normal": 3, "relit": 3}
 
 
 def _verify_dir_health(path: Path, fallback: Path | None = None) -> dict[str, Any]:
@@ -411,6 +421,203 @@ def optimize_models(state, models: list[str] | None = None) -> dict[str, Any]:
             "remaining": missing_dynamic_models(state)}
 
 
+def _faceset_view_yaws(state, faceset_id: str) -> list[float] | None:
+    """Signed yaw (degrees) of every real view in a mapped FaceSet; None when its .fsz cannot be read (unknown, not zero)."""
+    from roop_3d.faceset.faceset_reader import FaceSetReader
+    reader = FaceSetReader(state.models, cache_root=state.root / "roop_3d/.runtime/cache")
+    for relative in (f"roop_3d/outputs/facesets/{faceset_id}.fsz", f"roop_3d/.runtime/facesets/{faceset_id}.fsz"):
+        try:
+            path = owned(state.root, relative)
+            if path.is_file():
+                return [float(view.yaw) for view in reader.read(path, faceset_id).views]
+        except Exception:
+            return None
+    return None
+
+
+def _target_yaw_ranges(root: Path, inspection_id: str | None) -> dict[str, tuple[float, float]]:
+    """Per-track (min, max) signed yaw the target video actually reaches, from the face inspection."""
+    if not inspection_id:
+        return {}
+    try:
+        path = owned(root, f"roop_3d/.runtime/inspections/{inspection_id}.json")
+        tracks = json.loads(path.read_text("utf-8")).get("tracks", []) if path.is_file() else []
+    except Exception:
+        return {}
+    found: dict[str, tuple[float, float]] = {}
+    for track in tracks:
+        span = (track.get("pose_range") or {}).get("yaw_degrees")
+        if isinstance(span, (list, tuple)) and len(span) == 2 and all(isinstance(v, (int, float)) for v in span) and track.get("track_id"):
+            found[str(track["track_id"])] = (float(min(span)), float(max(span)))
+    return found
+
+
+def _fsz_extreme_yaw_check(root: Path, state, payload: PreFlightLintRequest) -> dict[str, Any]:
+    """The target turns further than the FaceSet's profile views reach: those frames would be synthesised from a frontal view."""
+    check = _check("fsz_extreme_yaw", ".fsz Extreme-Yaw Coverage", "Mapped FaceSets cover the yaw angles the target video reaches.")
+    ranges = _target_yaw_ranges(root, payload.inspection_id)
+    if not ranges:
+        check["message"] = "No pose range is available for the target tracks, so profile coverage could not be checked."
+        check["details"] = ["Inspect the target video to measure the yaw range of each face."]
+        return check
+    problems, unreadable, checked = [], [], 0
+    for mapping in payload.face_mappings:
+        track_id, faceset_id = str(mapping.get("track_id", "")), str(mapping.get("faceset_id", ""))
+        if track_id not in ranges or not faceset_id:
+            continue
+        low, high = ranges[track_id]
+        needs = [(side, need) for side, need in (("left", -low), ("right", high)) if need > EXTREME_YAW_DEG]
+        if not needs:
+            checked += 1
+            continue
+        yaws = _faceset_view_yaws(state, faceset_id)
+        if yaws is None:
+            unreadable.append(faceset_id)
+            continue
+        checked += 1
+        for side, need in needs:
+            sign = -1.0 if side == "left" else 1.0
+            reach = max((sign * yaw for yaw in yaws if sign * yaw > 0), default=0.0)
+            if reach < need - YAW_SLACK_DEG:
+                have = f"its widest {side} view is only {reach:.0f} deg" if reach else f"it has no {side}-facing view"
+                problems.append(f"Track '{track_id}' turns {need:.0f} deg {side} but FaceSet '{faceset_id}' {have}; "
+                                f"add a view near {need:.0f} deg {side} in the FaceSet Builder.")
+    if problems:
+        check["status"] = "WARN"
+        check["message"] = (f"{len(problems)} extreme-yaw angle(s) the target reaches are missing from the mapped FaceSet(s); those frames "
+                            "are rebuilt from the nearest available view and may lose identity.")
+        check["details"] = problems
+    elif unreadable:
+        check["message"] = "Some FaceSet archives could not be read, so their profile coverage is unknown."
+        check["details"] = [f"FaceSet '{fid}': .fsz not readable" for fid in sorted(set(unreadable))]
+    else:
+        check["message"] = (f"Profile coverage is sufficient for {checked} mapped track(s) (extreme yaw = beyond {EXTREME_YAW_DEG:.0f} deg)."
+                            if checked else check["message"])
+    return check
+
+
+def _trt_engine_status(state, payload: PreFlightLintRequest, hw) -> dict[str, list[str]]:
+    """Models this render will load, split by whether a TensorRT engine is already cached for them."""
+    params = payload.workstation_parameters or {}
+    wanted = [payload.swapper_model_id or state.settings.swapper_model_id]
+    restorer = _effective_restorer(state.settings, params)
+    if restorer in ("gpen", "gfpgan", "codeformer", "ultramax"):
+        wanted.append({"gpen": "gpen_bfr_512", "gfpgan": "gfpgan_v14"}.get(restorer, restorer))
+    rows = {row["id"]: row for row in state.models.public() if isinstance(row, dict) and "id" in row}
+    built, unbuilt = [], []
+    for model_id in dict.fromkeys(wanted):
+        row = rows.get(model_id)
+        if row is None or not row.get("installed"):
+            continue                      # absent weights are the required-models check's finding, not this one's
+        (built if row.get("trt_cached") else unbuilt).append(model_id)
+    return {"built": built, "unbuilt": unbuilt}
+
+
+def _trt_engines_check(state, payload: PreFlightLintRequest, hw) -> dict[str, Any]:
+    check = _check("trt_engines_built", "TensorRT Engines Built", "TensorRT engines are cached for the models this render uses.")
+    if not trt_selected(state.settings, hw):
+        check["message"] = "TensorRT is not the selected provider on a verified NVIDIA GPU, so no engine build is involved."
+        return check
+    status = _trt_engine_status(state, payload, hw)
+    if status["unbuilt"]:
+        check["status"] = "WARN"
+        check["message"] = (f"No cached TensorRT engine for {', '.join(status['unbuilt'])}. The first frame compiles it (a one-time build "
+                            "that can take several minutes at 4K profiles) and the render appears stalled until it finishes.")
+        check["details"] = [f"Engine cached: {', '.join(status['built']) or 'none'}", f"Engine missing: {', '.join(status['unbuilt'])}"]
+    elif status["built"]:
+        check["message"] = f"TensorRT engines are cached for {', '.join(status['built'])}."
+    else:
+        check["message"] = "No installed model for this render could be matched to a TensorRT engine."
+    return check
+
+
+def _effective_restorer(settings, params: dict[str, Any]) -> str:
+    """The restorer that will actually run: an explicit choice with a non-zero blend, else the settings policy."""
+    model = params.get("restorer_model", "auto")
+    if model != "auto":
+        return model if float(params.get("restoration_blend", 0) or 0) > 0 else "off"
+    return settings.face_restoration_policy
+
+
+def _ultramax_4k_check(state, payload: PreFlightLintRequest) -> dict[str, Any]:
+    check = _check("ultramax_on_4k", "UltraMax on 4K Targets", "UltraMax is enabled, or the target is below 4K.")
+    edge, _faces = _target_geometry(state, payload)
+    if edge <= 0:
+        check["message"] = "The target resolution could not be probed, so the 4K restorer check was skipped."
+        return check
+    restorer = _effective_restorer(state.settings, payload.workstation_parameters or {})
+    if edge < UHD_MIN_EDGE:
+        check["message"] = f"Target is {edge}p on its short edge (below 4K), so UltraMax is optional."
+    elif restorer == "ultramax":
+        check["message"] = f"UltraMax is enabled for the {edge}p target."
+    else:
+        label = "no restorer" if restorer == "off" else restorer
+        check["status"] = "WARN"
+        check["message"] = (f"The target is 4K ({edge}p short edge) but UltraMax is off (effective restorer: {label}). The swap model runs at "
+                            "128-256 px, so faces stay soft at this resolution.")
+        check["details"] = ["Enable UltraMax and give it a non-zero restoration blend for native high-resolution detail."]
+        check["action"] = {"id": "set_parameter", "label": "Use UltraMax", "parameter": "restorer_model", "value": "ultramax"}
+    return check
+
+
+def _output_space_estimate(state, payload: PreFlightLintRequest) -> dict[str, Any] | None:
+    """Bytes a render of this target will write, from the probed geometry. None when the media cannot be probed."""
+    try:
+        probe = state.media.probe(payload.target_path)
+        width, height = int(probe.width), int(probe.height)
+        fps = float(probe.fps or 0)
+        frames = int(probe.declared_frame_count or 0) or int(float(probe.duration_seconds or 0) * fps)
+    except Exception:
+        return None
+    if width <= 0 or height <= 0 or frames <= 0:
+        return None
+    raw = width * height
+    checkpoint = frames * raw * 3 * PNG_FRACTION                                   # per-frame 8-bit PNG checkpoints
+    passes = sum(frames * raw * PASS_CHANNELS.get(name, 1) * 2 * PNG_FRACTION for name in payload.export_passes)
+    try:
+        source = Path(payload.target_path) if Path(payload.target_path).is_absolute() else state.root / payload.target_path
+        baked = int(source.stat().st_size * 1.5)                                   # re-encoded video is assumed within 1.5x of the source
+    except OSError:
+        baked = 0
+    return {"frames": frames, "width": width, "height": height, "checkpoint": int(checkpoint), "passes": int(passes), "baked": baked,
+            "total": int(checkpoint + passes + baked)}
+
+
+def _disk_space_check(root: Path, state, payload: PreFlightLintRequest) -> dict[str, Any]:
+    check = _check("storage_disk_space", "Storage & Free Disk Space", "Enough free disk space for this render.")
+    gib = 1024 ** 3
+    try:
+        out_root = runtime_path(state.settings.output_root, root)
+        out_root.mkdir(parents=True, exist_ok=True)
+        free = shutil.disk_usage(out_root).free
+    except Exception as error:
+        check["status"], check["message"] = "WARN", f"Free disk space could not be read: {error}"
+        return check
+    estimate = _output_space_estimate(state, payload)
+    check["free_gb"] = round(free / gib, 2)
+    if estimate is None:
+        low = free < 0.5 * gib
+        check["status"] = "WARN" if low else "PASS"
+        check["message"] = (f"Low disk space on the output volume: {free / gib:.2f} GB free." if low else
+                            f"{free / gib:.2f} GB free; the render size could not be estimated because the target could not be probed.")
+        check["details"] = [f"Free: {free / gib:.2f} GB", "Minimum recommended without an estimate: 0.5 GB"]
+        return check
+    need = estimate["total"]
+    check["estimated_gb"] = round(need / gib, 2)
+    check["details"] = [f"Free: {free / gib:.2f} GB", f"Estimated need: {need / gib:.2f} GB for {estimate['frames']} frames at {estimate['width']}x{estimate['height']}",
+                        f"Frame checkpoints {estimate['checkpoint'] / gib:.2f} GB, passes {estimate['passes'] / gib:.2f} GB, baked video {estimate['baked'] / gib:.2f} GB",
+                        f"Estimate assumes PNG at {PNG_FRACTION:.0%} of raw size; actual size depends on image content."]
+    if free < need:
+        check["status"] = "FAIL"
+        check["message"] = f"Not enough disk space: about {need / gib:.1f} GB needed, {free / gib:.1f} GB free on the output volume."
+    elif free < max(need * 1.5, 2 * gib):
+        check["status"] = "WARN"
+        check["message"] = f"Disk space is tight: about {need / gib:.1f} GB needed, {free / gib:.1f} GB free."
+    else:
+        check["message"] = f"Sufficient disk space: about {need / gib:.1f} GB needed, {free / gib:.1f} GB free."
+    return check
+
+
 def run_preflight_lint(root: Path, state, payload: PreFlightLintRequest) -> dict[str, Any]:
     checks: list[dict[str, Any]] = []
     settings = state.settings
@@ -435,7 +642,7 @@ def run_preflight_lint(root: Path, state, payload: PreFlightLintRequest) -> dict
                     tid = mapping.get("track_id", "")
                     fid = mapping.get("faceset_id", "")
                     track = tracks_by_id.get(tid)
-                    if track and fid:
+                    if track and fid and _faceset_view_yaws(state, fid) is None:   # a readable .fsz is judged precisely by fsz_extreme_yaw
                         pose_range = track.get("pose_range", {})
                         yaw_range = pose_range.get("yaw_degrees") or [0, 0]
                         max_yaw = max(abs(yaw_range[0]), abs(yaw_range[1]))
@@ -561,6 +768,9 @@ def run_preflight_lint(root: Path, state, payload: PreFlightLintRequest) -> dict
 
     # Stage 27 checks a-d: configuration-vs-hardware conflicts that are cheap to detect before a render starts.
     checks.extend(_configuration_checks(root, state, payload, hw))
+    checks.append(_fsz_extreme_yaw_check(root, state, payload))
+    checks.append(_trt_engines_check(state, payload, hw))
+    checks.append(_ultramax_4k_check(state, payload))
 
     # ── Check: Source Face / FaceSet Loaded ───────────────────────────────────
     has_source = False
@@ -615,7 +825,7 @@ def run_preflight_lint(root: Path, state, payload: PreFlightLintRequest) -> dict
     checks.append(face_locked_check)
 
     # ── Check: Required Model Weights On Disk ─────────────────────────────────
-    from roop.core.model_downloader import REQUIRED_MODELS, find_model_path
+    from roop_3d.core.model_downloader import REQUIRED_MODELS, find_model_path
     missing_models = []
     found_models = []
     for mname, mspec in REQUIRED_MODELS.items():
@@ -641,25 +851,7 @@ def run_preflight_lint(root: Path, state, payload: PreFlightLintRequest) -> dict
         }
     checks.append(models_check)
 
-    # ── Check: Sufficient Free Disk Space ────────────────────────────────────
-    try:
-        out_root = runtime_path(settings.output_root, root)
-        out_root.mkdir(parents=True, exist_ok=True)
-        usage = shutil.disk_usage(out_root)
-        free_disk_gb = round(usage.free / (1024**3), 2)
-        disk_ok = free_disk_gb >= 0.5
-    except Exception:
-        free_disk_gb = 10.0
-        disk_ok = True
-
-    disk_check = {
-        "id": "storage_disk_space",
-        "name": "Storage & Free Disk Space",
-        "status": "PASS" if disk_ok else "WARN",
-        "message": f"Sufficient free disk space available ({free_disk_gb} GB free)." if disk_ok else f"Low disk space on output volume: only {free_disk_gb} GB free.",
-        "details": [f"Free disk space: {free_disk_gb} GB", "Minimum recommended: 0.5 GB"],
-    }
-    checks.append(disk_check)
+    checks.append(_disk_space_check(root, state, payload))
 
     overall_status = "FAIL" if any(c["status"] == "FAIL" for c in checks) else (
         "WARN" if any(c["status"] == "WARN" for c in checks) else "PASS"

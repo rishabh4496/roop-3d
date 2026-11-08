@@ -1,6 +1,6 @@
 import React, { useRef, useState } from 'react';
 import useHistoryStore, { editCurves } from '../../stores/useHistoryStore';
-import { CURVE_PARAMETERS, evaluateCurve, upsertKey } from '../../stores/parameterCurves';
+import { CURVE_HINTS, CURVE_PARAMETERS, evaluateCurve, upsertKey } from '../../stores/parameterCurves';
 import NumericInput from '../controls/NumericInput';
 
 /** @param {any} props */
@@ -22,6 +22,7 @@ export default function CurveEditorTrack({ frame = 0, totalFrames = 1, parameter
       {selectedKey?.easing === 'bezier' && [1,2].map(index=><NumericInput key={index} label={`Bezier control ${index}`} value={selectedKey[`control${index}`] ?? (index-1)} min={0} max={1} step={.01} onChange={value=>commit(upsertKey(keys,{...selectedKey,[`control${index}`]:value}),'Edit Bezier control')}/>)}
       <button className="button small" disabled={disabled} onClick={() => add({ frame: Math.min(maxFrame, Math.max(0, Math.round(frame))), value: evaluateCurve(keys, frame, parameters[definition.field] ?? definition.initial), easing })}>Add key at playhead</button><button className="button small" disabled={disabled || !selectedKey} onClick={() => { commit(keys.filter(key => key.frame !== selected), 'Delete keyframe'); setSelected(null); }}>Delete key</button>
     </div>
+    {CURVE_HINTS[parameter] && <p className="muted" data-testid="curve-hint">{CURVE_HINTS[parameter]}</p>}
     {parameter === 'pose_correction_strength' && <p className="muted">{parameters.pose_mode === 'mesh_blend' ? '0 = TPS 2.5D warp · 1 = perspective 3D mesh projection. Geometry is an estimated canonical proxy; unseen pixels preserve the target.' : 'Reference retarget mode. Select 2.5D / 3D mesh blend in the canvas to animate geometric projection.'}</p>}
     <svg ref={svg} className="curve-svg" viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none" role="img" aria-label={`${definition.label} parameter curve`} onDoubleClick={event => { if (!disabled) add(point(event)); }} onPointerMove={event => { if (drag.current) { const key = { ...drag.current.key, ...point(event), easing: drag.current.key.easing }; setDragKeys(upsertKey(drag.current.keys, key, drag.current.key.frame)); setSelected(key.frame); } }} onPointerUp={event => { if (!drag.current) return; const next = dragKeys; drag.current = null; if (next) commit(next, `Move ${definition.label} keyframe`); setDragKeys(null); event.currentTarget.releasePointerCapture(event.pointerId); }} onPointerCancel={() => { drag.current = null; setDragKeys(null); }}>
       {[0, .25, .5, .75, 1].map(t => <line key={t} x1={pad} x2={width - pad} y1={pad + t * (height - 2 * pad)} y2={pad + t * (height - 2 * pad)} className="curve-grid-line"/>)}

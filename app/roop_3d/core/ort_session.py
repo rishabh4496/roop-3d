@@ -398,6 +398,8 @@ class SessionManager:
         # Loading CUDA / TensorRT libraries and engines while another thread is mid-inference crashes the process
         # (access violation in the driver), so construction takes the exclusive side of the inference fence.
         from roop_3d.engine.resources import build_fence
+        from roop_3d.core.transfer_ledger import TRANSFERS
+        TRANSFERS.install()          # idempotent; makes every later ORT host<->device copy measurable
         with build_fence():
             return self._create(model_path, model_name=model_name, providers=providers,
                                 intra_op_threads=intra_op_threads)
@@ -463,6 +465,8 @@ class GpuIoBinding:
     """
     def __init__(self, session, *, device_id: int = 0,
                  output_buffers: Mapping[str, tuple[tuple[int, ...], object]] | None = None):
+        from roop_3d.core.transfer_ledger import TRANSFERS
+        TRANSFERS.install()
         active = tuple(session.get_providers()) if hasattr(session, "get_providers") else ()
         self.device_name = "cuda" if active and active[0] in (TRT, CUDA) else "cpu"
         self.session, self.device_id = session, device_id if self.device_name == "cuda" else 0

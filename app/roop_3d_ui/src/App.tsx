@@ -44,6 +44,7 @@ import { isOfflineError } from './components/guide/errorGuide';
 import DialogFrame from './components/guide/DialogFrame';
 import ExportPresetBar from './components/export/ExportPresetBar';
 import { normalizeExport } from './components/export/exportOptions';
+import { SWEEP_ENHANCER_BLEND } from './components/workstation/sweepPatch';
 import { markOnboardingSeen, onboardingSeen, workflowProgress } from './components/guide/workflowState';
 import type { WorkflowStepId } from './components/guide/helpContent';
 import { applyMotionPref, watchSystemMotion } from './utils/motionPrefs';
@@ -670,7 +671,7 @@ export default function App() {
       </section>
       {queuePanel}
     </main></div></>}</AppRouter>
-    <WorkstationScreens route={route} caps={caps} config={config} sources={sources} jobs={jobs} projects={projects} busy={!!busy} connection={connection} openProject={openProject} showJob={showJob} controlJob={controlJob} saveSettings={saveSettings} refreshJobs={refreshJobs} openLibrary={() => { setProjectsOpen(true); void refreshProjects(); }} latency={previewLatency} target={target} probe={probe} inspection={inspection} refreshProjects={refreshProjects} exportOptions={exportOptions} onExportChange={setExportOptions} meshBlend={parameters.pose_mode === 'mesh_blend'} onQueue={queue} canQueue={!reason('queue') && !!inspection && !!renderMappings().length && !busy} previewRequest={inspection && renderMappings().length ? previewRequest : null} timestamp={time} themeName={themeName} onThemeChange={setThemeName} onStartTour={() => setTourOpen(true)} workflow={workflow} onWorkflowAction={guideAction} onOpenGuide={() => openGuide()} projectsLoading={projectsLoading}/>
+    <WorkstationScreens route={route} caps={caps} config={config} sources={sources} jobs={jobs} projects={projects} busy={!!busy} connection={connection} openProject={openProject} showJob={showJob} controlJob={controlJob} saveSettings={saveSettings} refreshJobs={refreshJobs} openLibrary={() => { setProjectsOpen(true); void refreshProjects(); }} latency={previewLatency} target={target} probe={probe} inspection={inspection} refreshProjects={refreshProjects} exportOptions={exportOptions} onExportChange={setExportOptions} meshBlend={parameters.pose_mode === 'mesh_blend'} relight={!!parameters.relight} onQueue={queue} canQueue={!reason('queue') && !!inspection && !!renderMappings().length && !busy} previewRequest={inspection && renderMappings().length ? previewRequest : null} timestamp={time} themeName={themeName} onThemeChange={setThemeName} onStartTour={() => setTourOpen(true)} workflow={workflow} onWorkflowAction={guideAction} onOpenGuide={() => openGuide()} projectsLoading={projectsLoading}/>
     </div>
     <footer className="app-footer"><span>ROOP 3D / LOCAL WORKSTATION</span><span>Observed identities. Explicit processing. Synthetic media.</span><span>API :{config?.port ?? '—'}</span></footer>
     </div>
@@ -688,10 +689,13 @@ export default function App() {
       inspectionId={inspection?.inspection_id || ''}
       faceMappings={renderMappings()}
       workstationParameters={parameters}
+      swapperModelId={swapperModelId}
+      exportPasses={exportOptions.passes}
       maskBase64={maskBase64}
       hardware={caps}
       onApplySettings={(values: Config) => { if (config) saveSettings({ ...config, ...values }); }}
-      onApplyParameter={(name: string, value: number) => setParameters({ ...parameters, [name]: value })}
+      // Choosing a restorer at a blend of 0 would change nothing, so the one-click fix also gives it a visible blend.
+      onApplyParameter={(name: string, value: number | string) => setParameters({ ...parameters, [name]: value, ...(name === 'restorer_model' && parameters.restoration_blend <= 0 ? { restoration_blend: SWEEP_ENHANCER_BLEND } : {}) })}
     />
     <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} commands={commands} />
     {themeGalleryOpen && (

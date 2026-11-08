@@ -36,7 +36,7 @@ class FinishPreviewRequest(FinishRequest):
 
 @router.get('/finishing/capabilities')
 def finishing_capabilities():
-    return {'provenance': capabilities(), 'passes': ['alpha', 'occluder', 'normal', 'depth', 'uv'],
+    return {'provenance': capabilities(), 'passes': ['alpha', 'occluder', 'normal', 'depth', 'uv', 'relit'],
             'geometry_requires': 'frame-aligned mesh blend projection', 'lut_max_bytes': 1048576,
             'lut_size': [2, 33]}
 

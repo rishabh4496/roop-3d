@@ -1,7 +1,7 @@
 {
   "release_version": "0.2.0",
-  "generated_at": "2026-11-06T18:45:04.828037+00:00",
-  "total_models": 123,
+  "generated_at": "2026-11-08T20:58:34.477930+00:00",
+  "total_models": 151,
   "profiles": {
     "12gb": "RTX 4070 Desktop Resident Profile (Full model catalog supported)",
     "6gb": "RTX 3060 Laptop Clamped Profile (Sequential swapping, batch <= 2)",
@@ -2637,6 +2637,620 @@
       "role": "frame_upscaler",
       "expected_sha256": "82f458db35dd94f2200f9a32fd0232c581da861c1b2e5c956d5574b0e9c5aea2",
       "byte_size": 18406820,
+      "precision": "FP32",
+      "supported_execution_providers": [
+        "TensorrtExecutionProvider",
+        "CUDAExecutionProvider",
+        "CPUExecutionProvider"
+      ],
+      "supported_hardware_profiles": [
+        "12gb",
+        "6gb",
+        "cpu"
+      ],
+      "offline_support": true
+    },
+    {
+      "model_id": "inswapper_128",
+      "name": "InSwapper 128",
+      "filenames": [
+        "inswapper_128.onnx"
+      ],
+      "role": "identity_swapper",
+      "expected_sha256": null,
+      "byte_size": null,
+      "precision": "FP32",
+      "supported_execution_providers": [
+        "TensorrtExecutionProvider",
+        "CUDAExecutionProvider",
+        "CPUExecutionProvider"
+      ],
+      "supported_hardware_profiles": [
+        "12gb",
+        "6gb",
+        "cpu"
+      ],
+      "offline_support": true
+    },
+    {
+      "model_id": "inswapper_128_fp16",
+      "name": "InSwapper 128 FP16",
+      "filenames": [
+        "inswapper_128_fp16.onnx"
+      ],
+      "role": "identity_swapper",
+      "expected_sha256": null,
+      "byte_size": null,
+      "precision": "FP16",
+      "supported_execution_providers": [
+        "TensorrtExecutionProvider",
+        "CUDAExecutionProvider"
+      ],
+      "supported_hardware_profiles": [
+        "12gb",
+        "6gb"
+      ],
+      "offline_support": true
+    },
+    {
+      "model_id": "hyperswap_1a_256",
+      "name": "HyperSwap 1A 256",
+      "filenames": [
+        "hyperswap_1a_256.onnx"
+      ],
+      "role": "identity_swapper",
+      "expected_sha256": null,
+      "byte_size": null,
+      "precision": "FP32",
+      "supported_execution_providers": [
+        "TensorrtExecutionProvider",
+        "CUDAExecutionProvider",
+        "CPUExecutionProvider"
+      ],
+      "supported_hardware_profiles": [
+        "12gb",
+        "6gb",
+        "cpu"
+      ],
+      "offline_support": true
+    },
+    {
+      "model_id": "hyperswap_1b_256",
+      "name": "HyperSwap 1B 256",
+      "filenames": [
+        "hyperswap_1b_256.onnx"
+      ],
+      "role": "identity_swapper",
+      "expected_sha256": null,
+      "byte_size": null,
+      "precision": "FP32",
+      "supported_execution_providers": [
+        "TensorrtExecutionProvider",
+        "CUDAExecutionProvider",
+        "CPUExecutionProvider"
+      ],
+      "supported_hardware_profiles": [
+        "12gb",
+        "6gb",
+        "cpu"
+      ],
+      "offline_support": true
+    },
+    {
+      "model_id": "hyperswap_1c_256",
+      "name": "HyperSwap 1C 256",
+      "filenames": [
+        "hyperswap_1c_256.onnx"
+      ],
+      "role": "identity_swapper",
+      "expected_sha256": null,
+      "byte_size": null,
+      "precision": "FP32",
+      "supported_execution_providers": [
+        "TensorrtExecutionProvider",
+        "CUDAExecutionProvider",
+        "CPUExecutionProvider"
+      ],
+      "supported_hardware_profiles": [
+        "12gb",
+        "6gb",
+        "cpu"
+      ],
+      "offline_support": true
+    },
+    {
+      "model_id": "realswap_256",
+      "name": "RealSwap 256",
+      "filenames": [
+        "realswap_256.onnx"
+      ],
+      "role": "identity_swapper",
+      "expected_sha256": null,
+      "byte_size": null,
+      "precision": "FP32",
+      "supported_execution_providers": [
+        "TensorrtExecutionProvider",
+        "CUDAExecutionProvider",
+        "CPUExecutionProvider"
+      ],
+      "supported_hardware_profiles": [
+        "12gb",
+        "6gb",
+        "cpu"
+      ],
+      "offline_support": true
+    },
+    {
+      "model_id": "realswap_512",
+      "name": "RealSwap 512",
+      "filenames": [
+        "realswap_512.onnx"
+      ],
+      "role": "identity_swapper",
+      "expected_sha256": null,
+      "byte_size": null,
+      "precision": "FP32",
+      "supported_execution_providers": [
+        "TensorrtExecutionProvider",
+        "CUDAExecutionProvider",
+        "CPUExecutionProvider"
+      ],
+      "supported_hardware_profiles": [
+        "12gb",
+        "6gb",
+        "cpu"
+      ],
+      "offline_support": true
+    },
+    {
+      "model_id": "simswap_256",
+      "name": "SimSwap 256",
+      "filenames": [
+        "simswap_256.onnx"
+      ],
+      "role": "identity_swapper",
+      "expected_sha256": null,
+      "byte_size": null,
+      "precision": "FP32",
+      "supported_execution_providers": [
+        "TensorrtExecutionProvider",
+        "CUDAExecutionProvider",
+        "CPUExecutionProvider"
+      ],
+      "supported_hardware_profiles": [
+        "12gb",
+        "6gb",
+        "cpu"
+      ],
+      "offline_support": true
+    },
+    {
+      "model_id": "simswap_512_unofficial",
+      "name": "SimSwap 512 Unofficial",
+      "filenames": [
+        "simswap_512_unofficial.onnx"
+      ],
+      "role": "identity_swapper",
+      "expected_sha256": null,
+      "byte_size": null,
+      "precision": "FP32",
+      "supported_execution_providers": [
+        "TensorrtExecutionProvider",
+        "CUDAExecutionProvider",
+        "CPUExecutionProvider"
+      ],
+      "supported_hardware_profiles": [
+        "12gb",
+        "6gb",
+        "cpu"
+      ],
+      "offline_support": true
+    },
+    {
+      "model_id": "ghost_256_unet_1",
+      "name": "Ghost 256 UNet 1",
+      "filenames": [
+        "ghost_256_unet_1.onnx"
+      ],
+      "role": "identity_swapper",
+      "expected_sha256": null,
+      "byte_size": null,
+      "precision": "FP32",
+      "supported_execution_providers": [
+        "TensorrtExecutionProvider",
+        "CUDAExecutionProvider",
+        "CPUExecutionProvider"
+      ],
+      "supported_hardware_profiles": [
+        "12gb",
+        "6gb",
+        "cpu"
+      ],
+      "offline_support": true
+    },
+    {
+      "model_id": "ghost_256_unet_2",
+      "name": "Ghost 256 UNet 2",
+      "filenames": [
+        "ghost_256_unet_2.onnx"
+      ],
+      "role": "identity_swapper",
+      "expected_sha256": null,
+      "byte_size": null,
+      "precision": "FP32",
+      "supported_execution_providers": [
+        "TensorrtExecutionProvider",
+        "CUDAExecutionProvider",
+        "CPUExecutionProvider"
+      ],
+      "supported_hardware_profiles": [
+        "12gb",
+        "6gb",
+        "cpu"
+      ],
+      "offline_support": true
+    },
+    {
+      "model_id": "ghost_256_unet_3",
+      "name": "Ghost 256 UNet 3",
+      "filenames": [
+        "ghost_256_unet_3.onnx"
+      ],
+      "role": "identity_swapper",
+      "expected_sha256": null,
+      "byte_size": null,
+      "precision": "FP32",
+      "supported_execution_providers": [
+        "TensorrtExecutionProvider",
+        "CUDAExecutionProvider",
+        "CPUExecutionProvider"
+      ],
+      "supported_hardware_profiles": [
+        "12gb",
+        "6gb",
+        "cpu"
+      ],
+      "offline_support": true
+    },
+    {
+      "model_id": "blendswap_256",
+      "name": "BlendSwap 256",
+      "filenames": [
+        "blendswap_256.onnx"
+      ],
+      "role": "identity_swapper",
+      "expected_sha256": null,
+      "byte_size": null,
+      "precision": "FP32",
+      "supported_execution_providers": [
+        "TensorrtExecutionProvider",
+        "CUDAExecutionProvider",
+        "CPUExecutionProvider"
+      ],
+      "supported_hardware_profiles": [
+        "12gb",
+        "6gb",
+        "cpu"
+      ],
+      "offline_support": true
+    },
+    {
+      "model_id": "uniface_256",
+      "name": "Uniface 256",
+      "filenames": [
+        "uniface_256.onnx"
+      ],
+      "role": "identity_swapper",
+      "expected_sha256": null,
+      "byte_size": null,
+      "precision": "FP32",
+      "supported_execution_providers": [
+        "TensorrtExecutionProvider",
+        "CUDAExecutionProvider",
+        "CPUExecutionProvider"
+      ],
+      "supported_hardware_profiles": [
+        "12gb",
+        "6gb",
+        "cpu"
+      ],
+      "offline_support": true
+    },
+    {
+      "model_id": "ultramax",
+      "name": "UltraMax",
+      "filenames": [
+        "ultramax.onnx"
+      ],
+      "role": "face_restorer",
+      "expected_sha256": null,
+      "byte_size": null,
+      "precision": "FP32",
+      "supported_execution_providers": [
+        "TensorrtExecutionProvider",
+        "CUDAExecutionProvider",
+        "CPUExecutionProvider"
+      ],
+      "supported_hardware_profiles": [
+        "12gb",
+        "6gb",
+        "cpu"
+      ],
+      "offline_support": true
+    },
+    {
+      "model_id": "gpen_bfr_512",
+      "name": "GPEN-BFR-512",
+      "filenames": [
+        "gpen_bfr_512.onnx"
+      ],
+      "role": "face_restorer",
+      "expected_sha256": null,
+      "byte_size": null,
+      "precision": "FP32",
+      "supported_execution_providers": [
+        "TensorrtExecutionProvider",
+        "CUDAExecutionProvider",
+        "CPUExecutionProvider"
+      ],
+      "supported_hardware_profiles": [
+        "12gb",
+        "6gb",
+        "cpu"
+      ],
+      "offline_support": true
+    },
+    {
+      "model_id": "gpen_bfr_1024",
+      "name": "GPEN-BFR-1024",
+      "filenames": [
+        "gpen_bfr_1024.onnx"
+      ],
+      "role": "face_restorer",
+      "expected_sha256": null,
+      "byte_size": null,
+      "precision": "FP32",
+      "supported_execution_providers": [
+        "TensorrtExecutionProvider",
+        "CUDAExecutionProvider",
+        "CPUExecutionProvider"
+      ],
+      "supported_hardware_profiles": [
+        "12gb",
+        "6gb",
+        "cpu"
+      ],
+      "offline_support": true
+    },
+    {
+      "model_id": "codeformer",
+      "name": "CodeFormer",
+      "filenames": [
+        "codeformer.onnx"
+      ],
+      "role": "face_restorer",
+      "expected_sha256": null,
+      "byte_size": null,
+      "precision": "FP32",
+      "supported_execution_providers": [
+        "TensorrtExecutionProvider",
+        "CUDAExecutionProvider",
+        "CPUExecutionProvider"
+      ],
+      "supported_hardware_profiles": [
+        "12gb",
+        "6gb",
+        "cpu"
+      ],
+      "offline_support": true
+    },
+    {
+      "model_id": "gfpgan_v14",
+      "name": "GFPGANv1.4",
+      "filenames": [
+        "gfpganv1.4.onnx"
+      ],
+      "role": "face_restorer",
+      "expected_sha256": null,
+      "byte_size": null,
+      "precision": "FP32",
+      "supported_execution_providers": [
+        "TensorrtExecutionProvider",
+        "CUDAExecutionProvider",
+        "CPUExecutionProvider"
+      ],
+      "supported_hardware_profiles": [
+        "12gb",
+        "6gb",
+        "cpu"
+      ],
+      "offline_support": true
+    },
+    {
+      "model_id": "restoreformer_pp",
+      "name": "RestoreFormer++",
+      "filenames": [
+        "restoreformer++.onnx"
+      ],
+      "role": "face_restorer",
+      "expected_sha256": null,
+      "byte_size": null,
+      "precision": "FP32",
+      "supported_execution_providers": [
+        "TensorrtExecutionProvider",
+        "CUDAExecutionProvider",
+        "CPUExecutionProvider"
+      ],
+      "supported_hardware_profiles": [
+        "12gb",
+        "6gb",
+        "cpu"
+      ],
+      "offline_support": true
+    },
+    {
+      "model_id": "scrfd",
+      "name": "SCRFD",
+      "filenames": [
+        "scrfd.onnx"
+      ],
+      "role": "detector",
+      "expected_sha256": null,
+      "byte_size": null,
+      "precision": "FP32",
+      "supported_execution_providers": [
+        "TensorrtExecutionProvider",
+        "CUDAExecutionProvider",
+        "CPUExecutionProvider"
+      ],
+      "supported_hardware_profiles": [
+        "12gb",
+        "6gb",
+        "cpu"
+      ],
+      "offline_support": true
+    },
+    {
+      "model_id": "retinaface",
+      "name": "RetinaFace",
+      "filenames": [
+        "retinaface.onnx"
+      ],
+      "role": "detector",
+      "expected_sha256": null,
+      "byte_size": null,
+      "precision": "FP32",
+      "supported_execution_providers": [
+        "TensorrtExecutionProvider",
+        "CUDAExecutionProvider",
+        "CPUExecutionProvider"
+      ],
+      "supported_hardware_profiles": [
+        "12gb",
+        "6gb",
+        "cpu"
+      ],
+      "offline_support": true
+    },
+    {
+      "model_id": "yoloface",
+      "name": "YOLOFace",
+      "filenames": [
+        "yoloface.onnx"
+      ],
+      "role": "detector",
+      "expected_sha256": null,
+      "byte_size": null,
+      "precision": "FP32",
+      "supported_execution_providers": [
+        "TensorrtExecutionProvider",
+        "CUDAExecutionProvider",
+        "CPUExecutionProvider"
+      ],
+      "supported_hardware_profiles": [
+        "12gb",
+        "6gb",
+        "cpu"
+      ],
+      "offline_support": true
+    },
+    {
+      "model_id": "xseg",
+      "name": "XSeg",
+      "filenames": [
+        "xseg.onnx"
+      ],
+      "role": "occlusion_mask",
+      "expected_sha256": null,
+      "byte_size": null,
+      "precision": "FP32",
+      "supported_execution_providers": [
+        "TensorrtExecutionProvider",
+        "CUDAExecutionProvider",
+        "CPUExecutionProvider"
+      ],
+      "supported_hardware_profiles": [
+        "12gb",
+        "6gb",
+        "cpu"
+      ],
+      "offline_support": true
+    },
+    {
+      "model_id": "bisenet",
+      "name": "BiSeNet",
+      "filenames": [
+        "bisenet.onnx"
+      ],
+      "role": "occlusion_mask",
+      "expected_sha256": null,
+      "byte_size": null,
+      "precision": "FP32",
+      "supported_execution_providers": [
+        "TensorrtExecutionProvider",
+        "CUDAExecutionProvider",
+        "CPUExecutionProvider"
+      ],
+      "supported_hardware_profiles": [
+        "12gb",
+        "6gb",
+        "cpu"
+      ],
+      "offline_support": true
+    },
+    {
+      "model_id": "realesrgan_x2plus",
+      "name": "RealESRGAN x2plus",
+      "filenames": [
+        "realesrgan_x2plus.onnx"
+      ],
+      "role": "frame_upscaler",
+      "expected_sha256": null,
+      "byte_size": null,
+      "precision": "FP32",
+      "supported_execution_providers": [
+        "TensorrtExecutionProvider",
+        "CUDAExecutionProvider",
+        "CPUExecutionProvider"
+      ],
+      "supported_hardware_profiles": [
+        "12gb",
+        "6gb",
+        "cpu"
+      ],
+      "offline_support": true
+    },
+    {
+      "model_id": "realesrgan_x4plus",
+      "name": "RealESRGAN x4plus",
+      "filenames": [
+        "realesrgan_x4plus.onnx"
+      ],
+      "role": "frame_upscaler",
+      "expected_sha256": null,
+      "byte_size": null,
+      "precision": "FP32",
+      "supported_execution_providers": [
+        "TensorrtExecutionProvider",
+        "CUDAExecutionProvider",
+        "CPUExecutionProvider"
+      ],
+      "supported_hardware_profiles": [
+        "12gb",
+        "6gb",
+        "cpu"
+      ],
+      "offline_support": true
+    },
+    {
+      "model_id": "4x_ultrasharp",
+      "name": "4x-UltraSharp",
+      "filenames": [
+        "4x-ultrasharp.onnx"
+      ],
+      "role": "frame_upscaler",
+      "expected_sha256": null,
+      "byte_size": null,
       "precision": "FP32",
       "supported_execution_providers": [
         "TensorrtExecutionProvider",

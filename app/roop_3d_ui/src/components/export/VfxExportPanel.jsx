@@ -9,7 +9,7 @@ import ExportPresetBar from './ExportPresetBar';
 export const DEFAULT_EXPORT = { baked_video: true, passes: [], finishing: { cube: null, grain: { size: 1, intensity: 0, shadows: 1, highlights: .5, seed: 0 }, provenance: 'none' } };
 /** Offered by the interface but rejected by the job schema (jobs/schema.py accepts alpha, occluder, uv, normal, depth only). */
 const UNAVAILABLE_PASSES = new Set(['foreground']);
-const PASSES = [['alpha', 'Face-Canvas Alpha Matte'], ['foreground', 'Swapped-Face-Only Foreground (RGBA)'], ['occluder', 'Occluder / XSeg Matte Pass'], ['normal', '3D Normal Map Pass'], ['depth', '3D Depth Map Pass'], ['uv', 'UV Warped Face Pass']];
+const PASSES = [['alpha', 'Face-Canvas Alpha Matte'], ['foreground', 'Swapped-Face-Only Foreground (RGBA)'], ['occluder', 'Occluder / XSeg Matte Pass'], ['normal', '3D Normal Map Pass'], ['depth', '3D Depth Map Pass'], ['uv', 'UV Warped Face Pass'], ['relit', 'Clean Relit Face Pass']];
 
 export function FinishingControls({ value, onChange, capabilities = null, disabled = false }) {
   const [error, setError] = useState(''), [lutName, setLutName] = useState('');
@@ -38,7 +38,7 @@ export function FinishingControls({ value, onChange, capabilities = null, disabl
   </fieldset>;
 }
 
-export default function VfxExportPanel({ value = DEFAULT_EXPORT, onChange, capabilities = null, jobs = [], meshBlend = false, disabled = false, onQueue, canQueue = false, previewRequest = null, timestamp = 0 }) {
+export default function VfxExportPanel({ value = DEFAULT_EXPORT, onChange, capabilities = null, jobs = [], meshBlend = false, relight = false, disabled = false, onQueue, canQueue = false, previewRequest = null, timestamp = 0 }) {
   const [selected, setSelected] = useState(''), [busy, setBusy] = useState(false), [error, setError] = useState(''), [notice, setNotice] = useState('');
   const completed = jobs.filter(job => job.state === 'succeeded' && job.output);
   const job = completed.find(item => item.job_id === selected);
@@ -67,12 +67,14 @@ export default function VfxExportPanel({ value = DEFAULT_EXPORT, onChange, capab
       <label className="export-check"><input type="checkbox" checked={value.baked_video} onChange={event => onChange(normalizeExport({ ...value, baked_video: event.target.checked, profile: event.target.checked ? value.profile : null, finishing: event.target.checked ? value.finishing : DEFAULT_EXPORT.finishing }))}/>Final baked video</label>
       {PASSES.map(([id, label]) => <label className="export-check" key={id} title={UNAVAILABLE_PASSES.has(id) ? 'The render service does not produce this pass yet, so it cannot be selected.' : undefined}><input type="checkbox" checked={value.passes.includes(id) && !UNAVAILABLE_PASSES.has(id)} disabled={UNAVAILABLE_PASSES.has(id) || (['normal', 'depth'].includes(id) && !meshBlend)} onChange={() => togglePass(id)}/>{label}{UNAVAILABLE_PASSES.has(id) ? ' (not available in this build)' : ''}</label>)}
       <p className="muted">16-bit PNG sequences + lossless FFV1 video. Face RGB is unblended, with straight alpha supplied separately. Occluders use available semantic/manual masks; XSeg inference is not configured.</p>
+      <p className="muted">The clean relit face is the swapped face after SH relighting, before it is blended with the target: straight RGB, no background or occluders, paired with the alpha pass. It requires 3D Relighting to be switched on.</p>
+      {value.passes.includes('relit') && !relight && <p role="alert" data-testid="relit-needs-relight">Turn on 3D Relighting in the workstation to queue the clean relit face pass.</p>}
       <p className="muted">Normal/depth sequences require mesh blend mode. Geometry and camera are estimated; depth uses canonical camera units. Preserve source timing for pass exports.</p>
       {!valid && <p role="alert">Choose a baked video or at least one pass.</p>}
     </fieldset>
     <ExportPresetBar value={value} onChange={onChange} disabled={disabled || busy} />
     <FinishingControls value={value.finishing} onChange={finishing => onChange({ ...value, finishing })} capabilities={capabilities} disabled={disabled || !value.baked_video || busy}/>
-    {onQueue && <button className="button accent" disabled={disabled || busy || !valid || !canQueue || (value.passes.some(name => ['normal', 'depth'].includes(name)) && !meshBlend)} onClick={onQueue}>Queue export render</button>}
+    {onQueue && <button className="button accent" disabled={disabled || busy || !valid || !canQueue || (value.passes.some(name => ['normal', 'depth'].includes(name)) && !meshBlend) || (value.passes.includes('relit') && !relight)} onClick={onQueue}>Queue export render</button>}
     <button className="button" disabled={disabled || busy || !previewRequest || !meshBlend} onClick={() => void perform(async () => {
       const frame = await post('/workstation/preview', { request: { ...previewRequest, export: { ...value, baked_video: true, passes: ['normal', 'depth'] } }, timestamp });
       const { renderAlignedMeshPasses, passPFM, downloadPass } = await import('../../utils/meshPassExporter');
@@ -86,7 +88,7 @@ export default function VfxExportPanel({ value = DEFAULT_EXPORT, onChange, capab
     <h2>NLE timeline interchange</h2>
     <label>Completed render<select aria-label="Export render" value={selected} onChange={event => { setSelected(event.target.value); setNotice(''); setError(''); }}><option value="">Select a completed render</option>{completed.map(item => <option key={item.job_id} value={item.job_id}>{item.request.target_path.split(/[\\/]/).at(-1)} · {item.job_id.slice(0, 8)}</option>)}</select></label>
     <div className="export-actions">{[['fcpxml', 'Final Cut Pro XML (.fcpxml)'], ['xml', 'Premiere / FCP 7 XML (.xml)'], ['edl', 'CMX 3600 EDL (.edl)'], ['otio', 'OpenTimelineIO (.otio)']].map(([id, label]) => <button key={id} className="button" disabled={!job || busy} onClick={() => void interchange(id)}>{label}</button>)}</div>
-    <p className="muted">V1 source · V2 actual swapped ranges · V3 face alpha. Scene cuts and range boundaries create separate clips. EDL exports one file per track. CFR media is required; missing passes are omitted.</p>
+    <p className="muted">V1 source · V2 actual swapped ranges · V3 face alpha. Scene cuts and range boundaries create separate clips. EDL exports one file per track. CFR media is required; missing passes are omitted. DaVinci Resolve imports the FCPXML, OTIO or EDL through File › Import › Timeline.</p>
     {job && <div className="export-actions"><a className="button" href={`/api/v1/exports/${job.job_id}/manifest`} download>Render manifest</a>{job.output.pass_manifest_path && <a className="button" href={`/api/v1/exports/${job.job_id}/manifest?passes=true`} download>Pass manifest & sequence paths</a>}{Object.entries(job.output.passes || {}).map(([name, path]) => <a className="button" key={name} href={mediaURL(path)} download>{name} pass</a>)}<button className="button" disabled={busy} onClick={() => void perform(async () => { const result = await api(`/exports/${job.job_id}/verify`); setNotice(JSON.stringify(result)); })}>Verify output integrity</button></div>}
     {notice && <p role="status">{notice}</p>}{error && <p role="alert">{error}</p>}
   </section>;

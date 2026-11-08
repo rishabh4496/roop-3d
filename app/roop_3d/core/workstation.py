@@ -34,6 +34,9 @@ class WorkstationParameters(Contract):
     # flow-aware temporal matte, depth-ordered multi-face compositing and frame-space matte/texture refinement.
     # Missing models are reported through the compositor capability, never simulated.
     occlusion_mode: Literal['standard', 'robust'] = 'standard'
+    # Confidence the semantic face parser (BiSeNet) must reach before its mask is trusted over the landmark hull. 0.55 is the
+    # compositor's long-standing constant, so leaving this unset changes nothing; it is opt-in on the wire.
+    occlusion_threshold: float = Field(default=0.55, ge=0, le=1)
     # Stage 17: 3D Spherical Harmonics relighting, specular skin sheen, and cast shadow preservation.
     relight: bool = False
     relight_strength: float = Field(default=0.8, ge=0, le=1)
@@ -55,7 +58,7 @@ class WorkstationParameters(Contract):
         for field in ('expression_restore_factor', 'face_expression_overrides'):
             if field not in self.model_fields_set:
                 value.pop(field, None)
-        for field in ('color_method', 'restorer_model', 'identity_blend_t', 'fidelity_weight', 'swap_weight', 'erosion_px', 'pose_mode', 'pose_frontalization', 'tps_expression_weight', 'render_mode', 'occlusion_mode', 'linear_light', 'blend_transfer', 'ultramax_small_face_mode', 'ultramax_min_native_pixels', 'ambient_fill', 'hairline_offset_px'):
+        for field in ('color_method', 'restorer_model', 'identity_blend_t', 'fidelity_weight', 'swap_weight', 'erosion_px', 'pose_mode', 'pose_frontalization', 'tps_expression_weight', 'render_mode', 'occlusion_mode', 'linear_light', 'blend_transfer', 'ultramax_small_face_mode', 'ultramax_min_native_pixels', 'ambient_fill', 'hairline_offset_px', 'occlusion_threshold'):
             if field not in self.model_fields_set:
                 value.pop(field, None)
         return value
@@ -98,6 +101,7 @@ class WorkstationParameters(Contract):
                                 feather_px=self.feather_px,
                                 swap_weight=self.swap_weight, erosion_px=self.erosion_px,
                                 occlusion_mode=self.occlusion_mode,
+                                semantic_confidence_threshold=self.occlusion_threshold,
                                 color_strength=0 if 'color' in self.bypass else self.color_strength,
                                 relight=self.relight,
                                 relight_strength=self.relight_strength,

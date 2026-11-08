@@ -108,6 +108,6 @@ it('provides a keyboard-dismissable modal when popups are blocked', async () => 
   vi.spyOn(window, 'open').mockReturnValue(null);
   function Fallback() { const floating = useFloatingPreview(<span>Preview frame</span>); return <><button onClick={floating.open}>Detach</button>{floating.portal}</>; }
   await mount(<Fallback/>); await click(host.querySelector('button'));
-  expect(host.querySelector('[role=dialog]')).toBeTruthy();
-  await key(document.activeElement!, 'Escape'); expect(host.querySelector('[role=dialog]')).toBeNull();
+  expect(document.querySelector('[role=dialog]')).toBeTruthy();
+  await key(document.activeElement!, 'Escape'); expect(document.querySelector('[role=dialog]')).toBeNull();
 });

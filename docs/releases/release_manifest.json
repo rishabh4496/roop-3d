@@ -1,8 +1,8 @@
 {
   "application": "roop-3d",
   "version": "0.2.0",
-  "commit": "90448ae27a4c449650ac58afb170145e619b640a",
-  "release_timestamp": "2026-11-04T18:53:04.268534+00:00",
+  "commit": "8606b5ce91322f47543c0d990686ed1bfdbc19b4",
+  "release_timestamp": "2026-11-08T20:58:34.517055+00:00",
   "release_channel": "stable",
   "airgap_compatible": true,
   "supported_hardware_profiles": [
@@ -22,7 +22,7 @@
   },
   "signature": {
     "algorithm": "HMAC-SHA256",
-    "digest": "1fb4153f37ef31449e33ed8a7bc50e9124f1d9ffbde8076687875e03f23a87b0",
+    "digest": "4f4515dbb91024b887488ae629e1c7e8c809ec29e1cb3f2977ba8662d6289b5f",
     "signer": "roop-3d-airgap-release-authority"
   }
 }

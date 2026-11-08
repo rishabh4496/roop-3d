@@ -156,7 +156,10 @@ class JobStore:
                 raise DomainError("JOB_NOT_FOUND", "Job does not exist", 404)
             if before.state != JobState.running:
                 raise DomainError("JOB_NOT_RUNNING", "Only running jobs may report frame progress")
-            if value.frame < before.progress.frame:
+            # The angle-scan phase is preparatory: it counts 0..N over the whole clip and the render that follows starts counting from its
+            # first frame again. That one hand-off may restart the count; every other backwards move is still a defect.
+            scan_handoff = before.progress.stage == "angle_scan" and value.stage != "angle_scan"
+            if value.frame < before.progress.frame and not scan_handoff:
                 raise DomainError("PROGRESS_REGRESSION", "Frame progress cannot move backwards")
             record = before.model_copy(update={"progress": value, "revision": before.revision + 1, "updated_at": now()})
             data.jobs[job_id] = record

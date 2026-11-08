@@ -74,6 +74,7 @@ type Props = {
   exportOptions?: ExportOptions;
   onExportChange?: (value: ExportOptions) => void;
   meshBlend?: boolean;
+  relight?: boolean;
   onQueue?: () => void;
   canQueue?: boolean;
   previewRequest?: JobRequest | null;
@@ -257,7 +258,7 @@ export default function WorkstationScreens(props: Props) {
       </AppRouter>
 
       <AppRouter route={route} screen="extras">
-        <ExtrasScreen active={route === '#/extras'} jobs={jobs} target={target} exportOptions={props.exportOptions} onExportChange={props.onExportChange} meshBlend={props.meshBlend} onQueue={props.onQueue} canQueue={props.canQueue} previewRequest={props.previewRequest} timestamp={props.timestamp}/>
+        <ExtrasScreen active={route === '#/extras'} jobs={jobs} target={target} exportOptions={props.exportOptions} onExportChange={props.onExportChange} meshBlend={props.meshBlend} relight={props.relight} onQueue={props.onQueue} canQueue={props.canQueue} previewRequest={props.previewRequest} timestamp={props.timestamp}/>
       </AppRouter>
 
       <AppRouter route={route} screen="gallery">

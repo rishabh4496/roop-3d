@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { api, post, mediaURL } from '../api';
 import VfxExportPanel, { DEFAULT_EXPORT, FinishingControls } from '../components/export/VfxExportPanel';
 
-export default function ExtrasScreen({ active, jobs, target, exportOptions = DEFAULT_EXPORT, onExportChange = () => {}, meshBlend, onQueue, canQueue, previewRequest, timestamp = 0 }) {
+export default function ExtrasScreen({ active, jobs, target, exportOptions = DEFAULT_EXPORT, onExportChange = () => {}, meshBlend, relight = false, onQueue, canQueue, previewRequest, timestamp = 0 }) {
   const [capabilities, setCapabilities] = useState(null), [path, setPath] = useState(''), [options, setOptions] = useState(DEFAULT_EXPORT.finishing);
   const [busy, setBusy] = useState(false), [error, setError] = useState(''), [preview, setPreview] = useState(''), [output, setOutput] = useState(null);
   useEffect(() => { if (active) void api('/finishing/capabilities').then(setCapabilities).catch(e => setError(e.message)); }, [active]);
@@ -12,7 +12,7 @@ export default function ExtrasScreen({ active, jobs, target, exportOptions = DEF
     catch (e) { setError(e.message); } finally { setBusy(false); }
   };
   return <main className="screen-page extras-screen"><span className="eyebrow">LOCAL POST-PRODUCTION</span><h1>Media tools</h1>
-    <VfxExportPanel value={exportOptions} onChange={onExportChange} capabilities={capabilities?.provenance} jobs={jobs} meshBlend={meshBlend} onQueue={onQueue} canQueue={canQueue} previewRequest={previewRequest} timestamp={timestamp}/>
+    <VfxExportPanel value={exportOptions} onChange={onExportChange} capabilities={capabilities?.provenance} jobs={jobs} meshBlend={meshBlend} relight={relight} onQueue={onQueue} canQueue={canQueue} previewRequest={previewRequest} timestamp={timestamp}/>
     <section className="standalone-finishing"><h2>Standalone finishing workstation</h2><p className="muted">Grade an existing local source or rendered video, preserving its audio policy and timing.</p>
       <label>Owned media path<input aria-label="Finishing media path" value={path} placeholder={target || 'roop_3d/.runtime/media/…'} onChange={event => { setPath(event.target.value); setPreview(''); setOutput(null); }}/></label>
       <FinishingControls value={options} onChange={next => { setOptions(next); setPreview(''); setOutput(null); }} capabilities={capabilities?.provenance} disabled={busy}/>

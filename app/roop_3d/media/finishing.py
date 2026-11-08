@@ -35,7 +35,7 @@ class FinishingOptions(Contract):
 
 class ExportOptions(Contract):
     baked_video: bool = True
-    passes: tuple[str, ...] = Field(default=(), max_length=5)
+    passes: tuple[str, ...] = Field(default=(), max_length=6)
     finishing: FinishingOptions = FinishingOptions()
     # Stage 15 (all optional; omitted = the pre-Stage-15 behaviour): export preset, HDR policy, subtitle policy.
     profile: Literal['standard_mp4', 'high_quality_mp4', 'archival_hevc10', 'mov_workflow', 'lossless_intermediate',
@@ -47,7 +47,7 @@ class ExportOptions(Contract):
 
     @model_validator(mode='after')
     def pass_contract(self):
-        if len(set(self.passes)) != len(self.passes) or set(self.passes) - {'alpha', 'occluder', 'uv', 'normal', 'depth'}:
+        if len(set(self.passes)) != len(self.passes) or set(self.passes) - {'alpha', 'occluder', 'uv', 'normal', 'depth', 'relit'}:
             raise ValueError('Select unique supported compositing passes')
         if not self.baked_video and not self.passes:
             raise ValueError('Select baked video or at least one pass')

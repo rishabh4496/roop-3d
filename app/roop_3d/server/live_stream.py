@@ -23,6 +23,7 @@ from typing import Any
 from fastapi import APIRouter, Request, WebSocket, WebSocketDisconnect
 
 from roop_3d.async_pipeline import monitor, snapshot_all
+from roop_3d.core.transfer_ledger import TRANSFERS
 from roop_3d.async_pipeline.live import HEADER_SIZE, SOURCE_PREVIEW, LiveFrameHub, Subscription
 from roop_3d.core.errors import DomainError
 from roop_3d.engine.resources import fence_snapshot
@@ -54,6 +55,7 @@ def pipeline_metrics(request: Request) -> dict[str, Any]:
     if finished is not None and all(item["id"] != finished["id"] for item in live):
         live.append(finished)
     return {"pipelines": live, "hardware": hardware.snapshot(), "live_stream": hub.stats(), "fence": fence_snapshot(),
+            "transfers": TRANSFERS.snapshot(),
             "pcie_note": "NVML reports PCIe throughput over a ~20 ms window; values are instantaneous, not averaged."}
 
 

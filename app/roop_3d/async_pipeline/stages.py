@@ -27,6 +27,7 @@ import time
 from typing import Any, Callable, Iterable, Iterator
 import weakref
 
+from roop_3d.core.transfer_ledger import TRANSFERS
 from roop_3d.async_pipeline.buffers import BoundedQueue, DEFAULT_QUEUE_SIZE, END, PipelineCancelled
 
 
@@ -95,6 +96,7 @@ class StageStats:
         self.cuda_items = 0
         self.intervals: deque[tuple[float, float]] = deque(maxlen=8192)   # host wall (start, end)
         self.gpu_windows: deque[tuple[float, float]] = deque(maxlen=8192)  # ms on the GPU timeline
+        self.lanes: deque[tuple[int, float, float]] = deque(maxlen=512)    # (frame index, host start, host end): the flamegraph lanes
         self.last_ms = 0.0
 
 
@@ -243,6 +245,7 @@ class AsyncPipeline:
                 self.source_stats.items += 1
                 self.source_stats.busy_s += ended - began
                 self.source_stats.intervals.append((began, ended))
+                self.source_stats.lanes.append((item.index, began, ended))
                 index += 1
                 out.put(item)
             out.close()
@@ -282,7 +285,8 @@ class AsyncPipeline:
                     if stream is not None:
                         start = torch.cuda.Event(enable_timing=True)
                         start.record(stream)
-                    item.payload = stage.function(item)
+                    with TRANSFERS.scope(stage.name):       # attribute ORT host<->device copies to this stage
+                        item.payload = stage.function(item)
                     if stream is not None:
                         end = torch.cuda.Event(enable_timing=True)
                         end.record(stream)
@@ -293,6 +297,7 @@ class AsyncPipeline:
                 stage.stats.busy_s += finished - began
                 stage.stats.last_ms = item.wall_ms[stage.name]
                 stage.stats.intervals.append((began, finished))
+                stage.stats.lanes.append((item.index, began, finished))
                 if start is not None:
                     stage._pending.append((start, end))
                     stage._drain_cuda_timings(self._base_event)
@@ -398,7 +403,19 @@ class AsyncPipeline:
         return {"ge1": round(spans[1] / total, 4), "ge2": round(spans[2] / total, 4),
                 "ge3": round(spans[3] / total, 4), "mean_active": round(weighted / total, 3)}
 
-    def snapshot(self) -> dict[str, Any]:
+    def _lanes(self, *, limit: int) -> dict[str, Any]:
+        """Last ``limit`` frames per stage as ms offsets from the earliest start in the window (host wall clock, measured)."""
+        groups = [(self.source_name, self.source_stats), *((stage.name, stage.stats) for stage in self._stages)]
+        rows = {name: list(stats.lanes)[-limit:] for name, stats in groups}
+        starts = [row[0][1] for row in rows.values() if row]
+        if not starts:
+            return {"window_ms": 0.0, "stages": {}}
+        origin = min(starts)
+        stages = {name: [[index, round((a - origin) * 1000, 3), round((b - origin) * 1000, 3)] for index, a, b in row] for name, row in rows.items()}
+        ends = [row[-1][2] for row in rows.values() if row]
+        return {"window_ms": round((max(ends) - origin) * 1000, 3), "stages": stages}
+
+    def snapshot(self, *, lane_frames: int = 48) -> dict[str, Any]:
         now = time.perf_counter()
         began = self._begun or now
         wall = max(1e-9, (self._finished or now) - began)
@@ -424,11 +441,15 @@ class AsyncPipeline:
         intervals = [i for s in [self.source_stats, *(st.stats for st in self._stages)] for i in list(s.intervals)]
         gpu = [w for st in self._stages for w in list(st.stats.gpu_windows)]
         bottleneck = max(stages, key=lambda s: s["busy_pct"], default=None)
+        lanes = self._lanes(limit=lane_frames)
         return {"id": self.pipeline_id, "name": self.name, "running": bool(self._started and not self._finished),
                 "frames_out": self.frames_out, "wall_s": round(wall, 3), "fps": round(self.frames_out / wall, 2),
                 "stages": stages, "bottleneck": bottleneck["name"] if bottleneck else None,
                 "overlap_wall": self._overlap(intervals),
                 "overlap_gpu_streams": self._overlap(gpu) if gpu else None,
+                "gpu_stream_note": None if gpu else "No CUDA stream windows were recorded: torch.cuda streams need PyTorch, which this environment does not use, so only host-thread overlap is measured.",
+                "lanes": lanes,
+                "transfers": TRANSFERS.snapshot(frames=self.frames_out or None),
                 "pools": [{"backend": p.backend, "count": p.count, "in_flight": p.in_flight,
                            "bytes": p.nbytes, "waits": p.waits, "blocked_s": round(p.wait_s, 3)} for p in self.pools]}
 

@@ -21,6 +21,7 @@ Successful worker cleanup preserves these sequences.
 | UV warped face | Current projected swap RGB before restoration, grading, and blending, in full-frame coordinates; straight/unpremultiplied RGB with separate face alpha. This is a warped face layer, not a UV-coordinate AOV. |
 | Normal | Frame-aligned mesh blend geometry, flat camera-space normals encoded as `(XYZ+1)/2`; RGB axes use OpenCV (+X right, +Y down, +Z away). |
 | Depth | Linear camera Z / 2048, background zero; estimated canonical camera units, **not metres**. Out-of-range geometry fails explicitly. |
+| Clean relit face | The swapped face after SH relighting, before it is blended with the target: straight RGB, no background or occluders, in full-frame coordinates. Pair it with the alpha pass. Requires 3D Relighting to be on (a request without it is rejected, not exported as black frames). |
 
 Normal/depth sequences require **mesh blend** pose correction. Geometry and camera
 are estimated canonical proxies, not a calibrated identity reconstruction.
@@ -61,6 +62,8 @@ clips. All ranges are half-open; no guessed rates or approximate second-based
 timecodes are used. The source is decoded to verify CFR before interchange;
 variable-rate footage and changed source/render files fail with an explanation.
 Conform VFR footage before rendering if you need frame-based interchange.
+
+DaVinci Resolve imports the FCPXML, OTIO or EDL files through *File > Import > Timeline*.
 
 Assign V3 as the V2 track matte in the receiving NLE. Track-matte effects and blend
 modes are application-specific and are not synthesized into interchange files.

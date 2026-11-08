@@ -6,10 +6,10 @@ from functools import lru_cache
 from pydantic import Field, model_validator, PrivateAttr
 from roop_3d.core.settings import Contract
 
-CurveName = Literal['swap_weight', 'restorer_opacity', 'mask_feather', 'mask_erosion', 'pose_correction_strength', 'tps_expression_weight', 'pose_frontalization', 'swap_opacity', 'mask_feather_radius', 'fidelity_weight', 'identity_blend_t']
-BOUNDS = {'fidelity_weight': (0,1), 'identity_blend_t': (0,1), 'swap_weight': (0, 1), 'restorer_opacity': (0, 1), 'mask_feather': (0, 64),
+CurveName = Literal['swap_weight', 'restorer_opacity', 'mask_feather', 'mask_erosion', 'pose_correction_strength', 'tps_expression_weight', 'pose_frontalization', 'swap_opacity', 'mask_feather_radius', 'fidelity_weight', 'identity_blend_t', 'relight_strength', 'occlusion_threshold']
+BOUNDS = {'relight_strength': (0, 1), 'occlusion_threshold': (0, 1), 'fidelity_weight': (0,1), 'identity_blend_t': (0,1), 'swap_weight': (0, 1), 'restorer_opacity': (0, 1), 'mask_feather': (0, 64),
           'mask_erosion': (-32, 32), 'pose_correction_strength': (0, 1), 'tps_expression_weight': (0,1), 'pose_frontalization': (0,1), 'swap_opacity': (0,1), 'mask_feather_radius': (0,64)}
-FIELDS = {'fidelity_weight': 'fidelity_weight', 'identity_blend_t': 'identity_blend_t', 'swap_weight': 'swap_weight', 'restorer_opacity': 'restoration_blend',
+FIELDS = {'relight_strength': 'relight_strength', 'occlusion_threshold': 'occlusion_threshold', 'fidelity_weight': 'fidelity_weight', 'identity_blend_t': 'identity_blend_t', 'swap_weight': 'swap_weight', 'restorer_opacity': 'restoration_blend',
           'mask_feather': 'feather_px', 'mask_erosion': 'erosion_px', 'pose_correction_strength': 'pose_strength', 'tps_expression_weight': 'tps_expression_weight', 'pose_frontalization': 'pose_frontalization', 'swap_opacity': 'swap_weight', 'mask_feather_radius': 'feather_px'}
 
 

@@ -5,6 +5,7 @@ import { rackStore, setRack, useRack } from '../stores/rackSelection';
 import EngineModelRack from '../components/modelhub/EngineModelRack';
 import { featureReason } from '../state';
 import NumericInput from '../components/controls/NumericInput';
+import { SKIP_KEY, describeLint, lintBatch } from '../components/diagnostics/batchLint';
 
 export const BUILTIN_RECIPES = [
   {
@@ -169,8 +170,16 @@ export default function BatchMatrixScreen({
     setErrorMessage('');
     let queuedCount = 0;
     const trackedSegmentBatches = {};
+    let lintNote = '';
 
     try {
+      // Pre-flight the distinct targets once: a FAIL (e.g. not enough disk for the estimated render) stops the whole batch before any job
+      // is created; warnings are reported with the result. The same session opt-out as the single-job linter applies.
+      const rack0 = rackStore.get();
+      const lint = await lintBatch(post, jobPayloads, { rackParameters: rack0.batchParameters, swapperId: rack0.swapper });
+      const verdict = describeLint(lint);
+      if (lint.failures.length && sessionStorage.getItem(SKIP_KEY) !== 'true') { setErrorMessage(verdict.block); return; }
+      lintNote = verdict.note;
       for (const payload of jobPayloads) {
         const targetPath = payload.target_path;
         const subRequests = await prepareJobSegments(targetPath, payload);
@@ -206,7 +215,7 @@ export default function BatchMatrixScreen({
         }
       }
 
-      setStatusMessage(`Successfully queued ${queuedCount} ${label} render jobs to the local engine.`);
+      setStatusMessage(`Successfully queued ${queuedCount} ${label} render jobs to the local engine.${lintNote ? ` ${lintNote}` : ''}`);
       if (Object.keys(trackedSegmentBatches).length > 0 && autoConcat) {
         setSplitProgress(`${Object.keys(trackedSegmentBatches).length} multi-segment video render(s) active. FFmpeg stream-copy concatenation will merge segments when completed.`);
       }

@@ -60,8 +60,13 @@ def test_destination_face_side_is_measured_in_frame_pixels_not_crop_pixels():
 
 
 # ------------------------------------------------------------------------------------------ GPU primitives
-torch = pytest.importorskip("torch")
-cuda = pytest.mark.skipif(not torch.cuda.is_available(), reason="Real CUDA hardware required")
+# Only the @cuda tests below need PyTorch. A module-level importorskip would also skip the CPU compositor sharpness
+# tests (and hide them) in any environment without torch, so the guard is per test.
+try:
+    import torch
+except ImportError:
+    torch = None
+cuda = pytest.mark.skipif(torch is None or not torch.cuda.is_available(), reason="Real CUDA hardware (PyTorch with CUDA) required")
 
 
 @cuda

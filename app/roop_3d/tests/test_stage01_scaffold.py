@@ -44,7 +44,9 @@ def test_socket_binds_real_loopback_and_collision_does_not_kill_owner() -> None:
             assert owner.getsockname()[0] == "127.0.0.1"
 
 
-def test_real_server_advertises_readiness_after_socket_start_and_shuts_down(capsys) -> None:
+def test_real_server_advertises_readiness_after_socket_start_and_shuts_down(capsys, tmp_path) -> None:
+    # An isolated root: startup reconciliation scans the whole runtime tree, so against a real, large `.runtime` the 1 s readiness window
+    # below measured the machine's job history instead of the readiness contract.
     import httpx
     import uvicorn
 
@@ -54,7 +56,7 @@ def test_real_server_advertises_readiness_after_socket_start_and_shuts_down(caps
             listener.listen(128)
             listener.setblocking(False)
             settings = Settings(port=listener.getsockname()[1])
-            server = ReadyServer(uvicorn.Config(create_app(settings), port=settings.port, log_config=None, access_log=False))
+            server = ReadyServer(uvicorn.Config(create_app(settings, repo_root=tmp_path), port=settings.port, log_config=None, access_log=False))
             task = asyncio.create_task(server.serve(sockets=[listener]))
             try:
                 for _ in range(100):

@@ -80,7 +80,7 @@ class JobRequest(Contract):
             value.pop("engine_id", None)
         if self.workstation_parameters:
             # Preserve fingerprints of requests saved before these opt-in controls existed.
-            for field in ('swap_weight', 'erosion_px', 'pose_frontalization', 'tps_expression_weight', 'linear_light', 'blend_transfer', 'ambient_fill', 'hairline_offset_px'):
+            for field in ('swap_weight', 'erosion_px', 'pose_frontalization', 'tps_expression_weight', 'linear_light', 'blend_transfer', 'ambient_fill', 'hairline_offset_px', 'occlusion_threshold'):
                 if field not in self.workstation_parameters.model_fields_set:
                     value['workstation_parameters'].pop(field, None)
         if isinstance(value.get('export'), dict):
@@ -114,6 +114,8 @@ class JobRequest(Contract):
             raise ValueError("Each target track may have only one FaceSet mapping")
         if self.processing == "remote" and not self.remote_consent:
             raise ValueError("Remote processing requires explicit per-job consent")
+        if self.export is not None and 'relit' in self.export.passes and not (self.workstation_parameters and self.workstation_parameters.relight):
+            raise ValueError('The clean relit face pass requires SH relighting to be enabled in the workstation parameters')
         return self
 
     def parameters_at(self, frame: int):
@@ -170,7 +172,7 @@ class JobOutput(Contract):
     @field_validator('passes')
     @classmethod
     def pass_paths(cls, value):
-        if set(value) - {'alpha', 'occluder', 'uv', 'normal', 'depth'}:
+        if set(value) - {'alpha', 'occluder', 'uv', 'normal', 'depth', 'relit'}:
             raise ValueError('Unsupported output pass')
         return {name: cls.owned_relative_path(path) for name, path in value.items()}
 

@@ -15,6 +15,7 @@ import type { JobRequest } from './contracts';
 import { post } from './api';
 import PipelineNodeFlowBar from './components/workstation/PipelineNodeFlowBar';
 import ContactSheetModal, { type Patch } from './components/workstation/ContactSheetModal';
+import { applySweepPatch } from './components/workstation/sweepPatch';
 import SettingControl from './components/controls/SettingControl';
 import { PANELS, settingValue, settingsOf, type PanelId } from './components/controls/settingsRegistry';
 import Modal from './components/controls/Modal';
@@ -1069,12 +1070,10 @@ export function VideoViewport({
       </Modal>}
       {sweepPanel && <ContactSheetModal panel={sweepPanel} parameters={parameters} frameLabel={`Frame ${currentFrame} · ${time.toFixed(3)} s`}
         payloadFor={(patch: Patch) => {
-          const { fidelity_weight: _inactive, ...applied } = patch;
-          const sweeping = 'restoration_blend' in applied;
           return buildLivePayload({ timestampSelection: true, request: previewRequest, time, fps, restorerAvailable, maskBase64, solo: 'final',
-            parameters: { ...parameters, ...applied, bypass: sweeping ? parameters.bypass.filter(item => item !== 'restorer') : parameters.bypass } });
+            parameters: applySweepPatch(parameters, patch) });
         }}
-        onApply={(patch: Patch) => { const { fidelity_weight: _inactive, ...applied } = patch; setParameters({ ...parameters, ...applied }); }} onClose={() => setSweepPanel(null)}/>}
+        onApply={(patch: Patch) => setParameters(applySweepPatch(parameters, patch))} onClose={() => setSweepPanel(null)}/>}
       {(() => { const timeline = <TimelineWorkstation
         parameters={parameters}
         target={target}

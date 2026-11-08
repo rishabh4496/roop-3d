@@ -19,6 +19,8 @@ export type WorkstationParameters = {
   /** Stage 17 3D Relighting: off unless enabled; the strength / light controls below only apply while it is on. */
   relight?: boolean;
   relight_strength?: number;
+  /** Confidence the semantic face parser must reach before its mask is trusted (0..1, engine default 0.55). Omitted until touched. */
+  occlusion_threshold?: number;
   specular_sheen?: number;
   shadow_preservation?: number;
   ultramax_small_face_mode?: 'bypass' | 'adaptive' | 'off';

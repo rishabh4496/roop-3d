@@ -6,6 +6,14 @@ All notable changes to the Roop 3D project are documented in this file.
 
 ## [Unreleased]
 
+### Final workstation stage: curves, sweep, linter, stream lanes, relit pass, certification
+- **New:** curves for SH relighting intensity and an occlusion (semantic-parser) confidence threshold, both evaluated per frame into real engine fields; `occlusion_threshold` is opt-in on the wire. See `docs/STAGE27_FINAL_WORKSTATION.md`.
+- **UI:** 3x3 sweep gains an Enhancer axis (None / GPEN Realistic / UltraMax), an SH relighting axis (25 / 60 / 100%) and a native-pixel tile zoom; flamegraph gains a Stream Overlap & PCIe tab (measured stage lanes, ORT-boundary copy ledger, frame ring buffers).
+- **Linter:** FaceSet extreme-yaw coverage vs the target, built TensorRT engines, size-aware disk estimate, UltraMax off on 4K; batch submission is now linted per distinct target.
+- **New pass:** `relit` (clean relit face).
+- **Fixed:** `test_hires_handoff.py` was skipped entirely without PyTorch, hiding the CPU sharpness tests; the guard is now per CUDA test.
+- **Certification:** `app/tests/test_stage27_certification.py`, `e2e/certification.e2e.ts`, `roop_3d/tools/gpu_saturation.py`; standalone/offline checks extended to `app/env`, `app/models`, `app/facesets` and the whole UI source and bundle.
+
 ### Stage 5: Timeline scrubbing, filmstrip and on-canvas face selection
 - **New:** `GET /media/info`, `/media/frame` (JPEG + `X-Frame-Meta`, optional faces) and `/media/filmstrip`, served by a persistent LRU `VideoFrameService`: ~88 frames/s consecutive, ~30 ms random seek, one container for a whole session.
 - **UI:** latest-frame-wins scrubbing, a one-request filmstrip, per-frame face boxes (dashed cyan `#n` + pose pill, hover glow, emerald `TARGET LOCKED`), a Detected Faces in Frame strip above the timeline, and a one-click Live Frame Swap Preview (split wipe). Locking a face creates its track, maps it to the active source and drives the 3D viewer's Live Pose.

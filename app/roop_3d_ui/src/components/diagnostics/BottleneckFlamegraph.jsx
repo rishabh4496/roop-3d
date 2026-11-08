@@ -1,5 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { FLAME_STAGES, resolveStageTimings } from './stageTimings';
+import StreamOverlapPanel from './StreamOverlapPanel';
 
 // Measured stages come from the backend (see stageTimings.js); nothing is defaulted.
 export const PIPELINE_STAGES = FLAME_STAGES;
@@ -124,6 +125,12 @@ export default function BottleneckFlamegraph({
             onClick={() => setActiveTab('flamegraph')}
           >
             Flamegraph & Stacked Timeline
+          </button>
+          <button
+            className={`tab-btn ${activeTab === 'streams' ? 'active' : ''}`}
+            onClick={() => setActiveTab('streams')}
+          >
+            Stream Overlap & PCIe
           </button>
           <button
             className={`tab-btn ${activeTab === 'temporal' ? 'active' : ''}`}
@@ -279,6 +286,8 @@ export default function BottleneckFlamegraph({
           )}
         </div>
       )}
+
+      {activeTab === 'streams' && <StreamOverlapPanel />}
 
       {activeTab === 'temporal' && (
         <div className="temporal-controls-body" data-testid="temporal-controls-panel">

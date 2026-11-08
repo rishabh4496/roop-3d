@@ -152,7 +152,7 @@ def test_documented_defaults_match_settings():
 def test_launcher_and_cli_statements_match_the_scripts():
     install, start, reset, update = (read(ROOT / name) for name in ("install.js", "start.js", "reset.js", "update.js"))
     guide = doc("INSTALLATION_GUIDE")
-    for statement, source in (("uv pip sync --require-hashes app/roop_3d/requirements.lock", install), ("npm ci", install), ("npm run build", install), ("mark-ready", install),
+    for statement, source in (("uv pip sync --require-hashes app/roop_3d/requirements.lock", install), ("npm ci", install), ("vite build", install), ("mark-ready", install),
                               ("torch.js", install), ("python -B app/serve.py", start), ("requirements.txt", start), ("requirements.lock", start),
                               ("git pull --ff-only", update), ("app/roop_3d/.venv", reset), ("cache/install-ready.json", reset)):
         assert statement in source, f"{statement} is no longer in the launcher scripts"
@@ -199,7 +199,7 @@ def test_shortcut_tables_match_the_defaults():
 
 def test_screen_labels_quoted_in_the_docs_exist_in_the_interface():
     source = ui_source().lower()          # small buttons are capitalised by CSS: compare what a person reads, not the source casing
-    labels = ["Verify Offline Health", "Re-Run Preflight", "Environment & Offline Manager", "Model Hub & TRT Engine Manager", "Diagnostics Suite",
+    labels = ["Verify Offline Health", "Re-Run Preflight", "Environment & Offline Manager", "Models & Engines Manager", "Diagnostics Suite",
               "Keyboard shortcut remapper", "Workstation Preferences", "Queue render", "Inspect target faces", "Import target video", "Use Face From Frame",
               "Fill Missing Angles from Current Target Video", "Save to FaceSet Library", "Download .Fsz", "Import Source Photos", "Skip to main content",
               "Purge VRAM", "Inspect output", "Export video", "Render manifest", "Verify & open", "Import .r3dp", "Reset Range", "Edit Mask", "Split Comparison Wipe",

@@ -27,13 +27,13 @@ inside its own folder, `<Pinokio home>/api/roop-3d`. It never touches other Pino
    1. runs the project preflight (`tools/project_admin.py preflight`): checks the folder identity (`.roop3d-project.json`) and the repository guard, so the tools only ever act on this app;
    2. creates `app/roop_3d/.venv` and installs the pinned, hash-checked packages (`uv pip sync --require-hashes app/roop_3d/requirements.lock`);
    3. runs `torch.js` (the AI libraries Pinokio provides);
-   4. in `app/roop_3d_ui`, runs `npm ci` and `npm run build` (the interface is built once and served by the app itself);
+   4. in `app/roop_3d_ui`, runs `npm ci` and `npx --no-install vite build` (the interface is built once and served by the app itself);
    5. writes `cache/install-ready.json` (`mark-ready`) only when every step above succeeded.
 3. Wait until the sidebar offers **Start Roop 3D**. If any step prints an error, the install stops there; fix the cause and press *Reinstall environment*.
 
 ## 3. Start
 
-1. Press **Start Roop 3D**. `start.js` runs the preflight, rebuilds the interface (`npm run build`), makes sure the Python packages match the
+1. Press **Start Roop 3D**. `start.js` runs the preflight, rebuilds the interface (`vite build`), makes sure the Python packages match the
    lock (an NVIDIA GPU on Windows or Linux uses `requirements.txt`, everything else `requirements.lock`), then starts the server
    (`python -B app/serve.py`).
 2. When the server reports its address (`http://127.0.0.1:<port>`) and its health check answers, the sidebar changes to **Open Roop 3D**.

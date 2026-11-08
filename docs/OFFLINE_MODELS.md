@@ -19,7 +19,7 @@ The core models Roop 3D needs to inspect faces and swap them are:
 
 For each missing file the report prints the exact name, its registered ID, the **expected SHA-256 and size**, and where to put it. Optional
 models (for example the face restorers `gpen_bfr_512.onnx` and `CodeFormerv0.1.onnx`, or the face-parsing and 3D models) are listed in
-**Settings → Model Hub & TRT Engine Manager** with their status.
+**Settings → Models & Engines Manager** with their status.
 
 ## 2. Get the files (on a computer with a network)
 
@@ -84,7 +84,7 @@ and retrying does not change it.
 
 ## 4a. Reading the Model Hub
 
-**Settings → Model Hub & TRT Engine Manager** lists every registered model and engine with a status:
+**Settings → Models & Engines Manager** lists every registered model and engine with a status:
 
 | Status | Meaning |
 |---|---|

@@ -137,6 +137,7 @@ class LivePreviewPayload(Contract):
     manual_light_yaw: float | None = Field(default=None, ge=-180, le=180)
     manual_light_pitch: float | None = Field(default=None, ge=-90, le=90)
     ambient_fill: float | None = Field(default=None, ge=0, le=1)
+    occlusion_threshold: float | None = Field(default=None, ge=0, le=1)
     hairline_offset_px: float | None = Field(default=None, ge=-32, le=32)
     # job-request pass-through so the preview matches what Start would render
     face_segments: tuple[FaceSegment, ...] | None = Field(default=None, max_length=256)
@@ -195,7 +196,7 @@ class LivePreviewPayload(Contract):
     def config_digest(self) -> dict[str, Any]:
         """Everything that changes the pixels, nothing that selects the frame."""
         value = self.model_dump(mode="json", exclude={"frame_index", "timestamp"})
-        for key in ("identity_lock_id", "pose_strength", "ambient_fill", "hairline_offset_px"):
+        for key in ("identity_lock_id", "pose_strength", "ambient_fill", "hairline_offset_px", "occlusion_threshold"):
             if value[key] is None:
                 value.pop(key)
         if value.get("mask_base64"):
@@ -556,6 +557,8 @@ class LivePreviewService:
             values['manual_light_pitch'] = payload.manual_light_pitch
         if payload.ambient_fill is not None:
             values['ambient_fill'] = payload.ambient_fill
+        if payload.occlusion_threshold is not None:
+            values['occlusion_threshold'] = payload.occlusion_threshold
         if payload.hairline_offset_px is not None:
             values['hairline_offset_px'] = payload.hairline_offset_px
         if payload.render_mode is not None:
@@ -621,6 +624,8 @@ class LivePreviewService:
             applied.append("custom_mask")
         if payload.relight_strength is not None:
             applied.append("relight_strength")
+        if payload.occlusion_threshold is not None:
+            applied.append("occlusion_threshold")
         if payload.specular_sheen is not None:
             applied.append("specular_sheen")
         if payload.shadow_preservation is not None:

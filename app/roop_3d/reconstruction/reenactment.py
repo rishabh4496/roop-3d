@@ -46,7 +46,7 @@ from roop_3d.reconstruction.multiview_fit import (
     solve_view_pose,
 )
 from roop_3d.reconstruction.pose_blend import rasterize
-from roop_3d.temporal import TrackTemporalStabilizer
+from roop_3d.temporal import OneEuroFilter
 
 RenderMode = Literal["standard", "pose_3d", "reenactment_3d"]
 RENDER_MODES: tuple[str, ...] = ("standard", "pose_3d", "reenactment_3d")
@@ -132,6 +132,21 @@ class ExpressionParams:
             smile=float(np.clip(self.smile, -0.12, 0.22)), blink_a=float(np.clip(self.blink_a, 0.0, 1.0)),
             blink_b=float(np.clip(self.blink_b, 0.0, 1.0)), brow_a=float(np.clip(self.brow_a, -0.12, 0.16)),
             brow_b=float(np.clip(self.brow_b, -0.12, 0.16)))
+
+
+class _EuroSmoother:
+    """Velocity-adaptive One-Euro smoothing of one array-valued channel (the engine tracks a single head, so there is one track).
+
+    The Kalman predictor that de1e3ad put behind these channels extrapolated every step a second time and overshot a 70 degree yaw
+    step to 88 degrees, so the engine could not engage on a quick turn; smoothing is a pure low-pass again, as it was when the engine's
+    lag, jump and recovery bounds were set.
+    """
+
+    def __init__(self, min_cutoff: float, beta: float, derivative_cutoff: float) -> None:
+        self._filter = OneEuroFilter(min_cutoff, beta, derivative_cutoff)
+
+    def filter(self, track_id: int, channel: str, value, timestamp: float) -> np.ndarray:
+        return self._filter.update(value, timestamp)
 
 
 @dataclass
@@ -421,8 +436,7 @@ class ReenactmentEngine:
         self.frame_index = 0
         self.calibrator = NeutralCalibrator(s.calibration_window, s.calibration_frames)
         def temporal(min_cutoff, beta, derivative_cutoff):
-            return TrackTemporalStabilizer(min_cutoff=min_cutoff, beta=beta, derivative_cutoff=derivative_cutoff,
-                                           process_noise=8.0, measurement_noise=1.0)
+            return _EuroSmoother(min_cutoff, beta, derivative_cutoff)
         self.pose_temporal = temporal(s.pose_min_cutoff, s.pose_beta, s.pose_d_cutoff)
         self.expression_temporal = temporal(s.expression_min_cutoff, s.expression_beta, s.expression_d_cutoff)
         self.anchor_temporal = temporal(s.anchor_min_cutoff, s.anchor_beta, s.anchor_d_cutoff)

@@ -2,6 +2,9 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useDialogA11y } from '../controls/useDialogA11y';
 import { post } from '../../api';
 
+// A module-level default: a fresh [] per render would re-trigger the lint effect on every render.
+const NO_PASSES = [];
+
 export default function PreFlightLinterModal({
   isOpen = false,
   onClose = () => {},
@@ -10,6 +13,8 @@ export default function PreFlightLinterModal({
   inspectionId = '',
   faceMappings = [],
   workstationParameters = null,
+  swapperModelId = null,
+  exportPasses = NO_PASSES,
   maskBase64 = null,
   onApplySettings = null,
   onApplyParameter = null,
@@ -32,6 +37,8 @@ export default function PreFlightLinterModal({
       inspection_id: inspectionId || null,
       face_mappings: faceMappings,
       workstation_parameters: workstationParameters,
+      swapper_model_id: swapperModelId || null,
+      export_passes: exportPasses,
       mask_base64: maskBase64,
     })
       .then(res => {
@@ -50,7 +57,7 @@ export default function PreFlightLinterModal({
       });
 
     return () => { active = false; };
-  }, [isOpen, targetPath, inspectionId, faceMappings, workstationParameters, maskBase64, refreshKey]);
+  }, [isOpen, targetPath, inspectionId, faceMappings, workstationParameters, swapperModelId, exportPasses, maskBase64, refreshKey]);
 
   // One-click fixes offered by individual checks; the lint re-runs afterwards so the result is verified, not assumed.
   const runAction = async check => {
