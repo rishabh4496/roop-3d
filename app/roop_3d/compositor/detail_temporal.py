@@ -1,10 +1,10 @@
 """Causal, confidence-gated stabilization of restoration-only high-frequency detail.
 
-The compositor exchanges NumPy/OpenCV images with the restorer. NVIDIA OF 2.0 may
-accelerate flow estimation when the custom CUDA bindings and runtime are available,
-but flow vectors are downloaded and residual warping/fusion remain on CPU. DIS is the
-portable fallback. State is bounded per track and never carries detail across a scene
-cut, frame gap, shape change, or invalid/occluded pixel.
+The compositor/restorer boundary uses NumPy images. When NVIDIA OF 2.0 is available,
+the small flow guides, flow vectors, temporal residual state, warping and fusion stay on
+CUDA. Only the final correction crosses back to the host for OpenCV composition. DIS
+is the portable CPU fallback. State is bounded per track and never carries detail
+across a scene cut, frame gap, shape change, or invalid/occluded pixel.
 """
 from __future__ import annotations
 
@@ -17,8 +17,8 @@ import numpy as np
 
 @dataclass
 class _DetailState:
-    guide: np.ndarray
-    residual: np.ndarray
+    guide: object
+    residual: object
     frame_index: int | None
 
     @property
@@ -29,8 +29,8 @@ class _DetailState:
 class TemporalDetailStabilizer:
     """Flow-warp enhancement residuals, using CUDA OF when available and CPU DIS otherwise.
 
-    The OpenCV hardware path accelerates flow estimation only. Residual warping and
-    fusion still run on CPU because the compositor/restorer exchange NumPy images.
+    With NVIDIA OF 2.0, internal state, flow consistency, residual warping and fusion
+    remain on CUDA. The returned face crop is NumPy because that is the compositor API.
     ``temporal_alpha`` follows the conventional current-frame coefficient in
     ``alpha * current + (1-alpha) * warped_previous``. Confidence, visibility,
     and scene-cut gates still prevent stale or occluded history from leaking.
@@ -111,6 +111,95 @@ class TemporalDetailStabilizer:
         forward = self._flow.calc(previous, current, None)
         backward = self._flow.calc(current, previous, None)
         return forward, backward, "opencv_dis_cpu", self._gpu_flow_error
+
+    @staticmethod
+    def _cuda_available() -> bool:
+        """Avoid treating lightweight flow-test doubles as real CUDA tensor runtimes."""
+        try:
+            import torch
+            return hasattr(torch, "Tensor") and torch.cuda.is_available()
+        except (ImportError, AttributeError, RuntimeError):
+            return False
+
+    def _cuda_inputs(self, guide: np.ndarray, residual: np.ndarray):
+        import torch
+        device = f"cuda:{self._gpu_flow.device}"
+        guide_device = torch.from_numpy(np.ascontiguousarray(guide)).to(device).contiguous()
+        residual_device = torch.from_numpy(np.ascontiguousarray(residual.transpose(2, 0, 1)[None])).to(
+            device=device, dtype=torch.float16).contiguous()
+        return guide_device, residual_device
+
+    def _fuse_cuda(self, state: _DetailState, current_guide, raw: np.ndarray, valid_work: np.ndarray,
+                   valid_full: np.ndarray, work_size: tuple[int, int], output_size: tuple[int, int]):
+        """GPU flow consistency, backward residual warp, and visibility-gated fusion."""
+        import torch
+        import torch.nn.functional as F
+
+        device = current_guide.device
+        forward, backward = self._gpu_flow.pair(state.guide, current_guide)
+        backward = backward.float()
+        forward = forward.float()
+        side = self.flow_side
+        grid_y, grid_x = torch.meshgrid(
+            torch.arange(side, device=device, dtype=torch.float32),
+            torch.arange(side, device=device, dtype=torch.float32), indexing="ij")
+        map_x, map_y = grid_x[None] + backward[..., 0], grid_y[None] + backward[..., 1]
+        sample_grid = torch.stack((map_x * (2.0 / max(side - 1, 1)) - 1.0,
+                                   map_y * (2.0 / max(side - 1, 1)) - 1.0), -1)
+        forward_at = F.grid_sample(forward.permute(0, 3, 1, 2), sample_grid,
+                                   mode="bilinear", padding_mode="zeros", align_corners=True).permute(0, 2, 3, 1)
+        fb_error = torch.linalg.vector_norm(backward + forward_at, dim=-1)
+        magnitude = torch.linalg.vector_norm(backward, dim=-1)
+        in_bounds = ((map_x >= 0) & (map_x <= side - 1) & (map_y >= 0) & (map_y <= side - 1))
+        fb_limit = .75 + .05 * magnitude
+        fb_confidence = torch.exp(-torch.square(fb_error / fb_limit.clamp_min(.25))) * in_bounds
+
+        guide = current_guide.float()[None, None]
+        warped_guide = F.grid_sample(state.guide.float()[None, None], sample_grid,
+                                     mode="bilinear", padding_mode="zeros", align_corners=True)
+        photo_confidence = torch.exp(-torch.square((warped_guide - guide).abs() / 24.0))
+        confidence_small = fb_confidence[:, None] * photo_confidence
+        confidence_mean = float(confidence_small.mean().item())
+        af, bf = warped_guide.flatten(), guide.flatten()
+        af, bf = af - af.mean(), bf - bf.mean()
+        denom = torch.linalg.vector_norm(af) * torch.linalg.vector_norm(bf)
+        denom_value = float(denom.item())
+        correlation = (float(((af * bf).sum() / denom).item()) if denom_value > 1e-6
+                       else (1.0 if torch.equal(warped_guide, guide) else 0.0))
+        if correlation < self.cut_correlation:
+            return None, confidence_mean, 0.0, None, "APPEARANCE_CUT"
+        if confidence_mean < self.min_flow_confidence:
+            return None, confidence_mean, 0.0, None, "FLOW_UNRELIABLE"
+
+        work_w, work_h = work_size
+        resized_flow = F.interpolate(backward.permute(0, 3, 1, 2), size=(work_h, work_w),
+                                     mode="bilinear", align_corners=False)
+        resized_flow[:, 0] *= work_w / side
+        resized_flow[:, 1] *= work_h / side
+        confidence = F.interpolate(confidence_small, size=(work_h, work_w), mode="bilinear", align_corners=False)
+        y, x = torch.meshgrid(torch.arange(work_h, device=device, dtype=torch.float32),
+                              torch.arange(work_w, device=device, dtype=torch.float32), indexing="ij")
+        src_x = x[None] + resized_flow[:, 0]
+        src_y = y[None] + resized_flow[:, 1]
+        residual_h, residual_w = state.residual.shape[-2:]
+        residual_grid = torch.stack((src_x * (2.0 / max(residual_w - 1, 1)) - 1.0,
+                                     src_y * (2.0 / max(residual_h - 1, 1)) - 1.0), -1)
+        previous = F.grid_sample(state.residual.float(), residual_grid, mode="bilinear",
+                                 padding_mode="zeros", align_corners=True)
+        current = torch.from_numpy(np.ascontiguousarray(raw.transpose(2, 0, 1)[None])).to(
+            device=device, dtype=torch.float32)
+        valid_device = torch.from_numpy(np.ascontiguousarray(valid_work[None, None])).to(device=device)
+        weight = (1.0 - self.temporal_alpha) * confidence * valid_device
+        fused = current * (1.0 - weight) + previous * weight
+        correction = fused - current
+        output_w, output_h = output_size
+        if (work_w, work_h) != (output_w, output_h):
+            correction = F.interpolate(correction, size=(output_h, output_w),
+                                       mode="bicubic", align_corners=False)
+        correction = correction * torch.from_numpy(np.ascontiguousarray(valid_full[None, None])).to(device=device)
+        correction_host = correction[0].permute(1, 2, 0).contiguous().float().cpu().numpy()
+        return fused.detach().to(dtype=torch.float16), confidence_mean, float((weight > .01).float().mean().item()), \
+            float(weight.mean().item()), correction_host, None
 
     @property
     def cache_bytes(self) -> int:
@@ -204,7 +293,22 @@ class TemporalDetailStabilizer:
             valid_work = cv2.resize(valid, size, interpolation=cv2.INTER_AREA)
         raw = self._highpass(enhanced_work) - self._highpass(base_work)
         guide_small = self._gray(target, self.flow_side)
-        current = _DetailState(guide_small, raw.astype(np.float16), frame_index)
+        self._try_create_gpu_flow()
+        cuda_state = self._gpu_flow is not None and self._cuda_available()
+        if cuda_state:
+            try:
+                guide_state, residual_state = self._cuda_inputs(guide_small, raw)
+            except (ImportError, AttributeError, OSError, RuntimeError, ValueError, cv2.error) as error:
+                self._gpu_flow_error = f"{type(error).__name__}: {error}"
+                try:
+                    self._gpu_flow.close()
+                except Exception:
+                    pass
+                self._gpu_flow = None
+                cuda_state = False
+        if not cuda_state:
+            guide_state, residual_state = guide_small, raw.astype(np.float16)
+        current = _DetailState(guide_state, residual_state, frame_index)
         state = self._tracks.get(track_id)
         reason = None
         if scene_cut:
@@ -220,59 +324,90 @@ class TemporalDetailStabilizer:
                 state, reason = None, "SHAPE_CHANGED"
 
         result = output.copy()
-        confidence_mean, influenced_fraction = 0.0, 0.0
+        confidence_mean, influenced_fraction, gpu_history_weight = 0.0, 0.0, 0.0
         backend, backend_fallback = "none_no_history", self._gpu_flow_error
         if state is not None:
-            forward, backward, backend, backend_fallback = self._flow_pair(state.guide, guide_small)
-            side = self.flow_side
-            grid_x, grid_y = np.meshgrid(np.arange(side, dtype=np.float32), np.arange(side, dtype=np.float32))
-            map_x, map_y = grid_x + backward[..., 0], grid_y + backward[..., 1]
-            forward_at = cv2.remap(forward, map_x, map_y, cv2.INTER_LINEAR,
-                                   borderMode=cv2.BORDER_CONSTANT, borderValue=0)
-            fb_error = np.linalg.norm(backward + forward_at, axis=2)
-            magnitude = np.linalg.norm(backward, axis=2)
-            in_bounds = ((map_x >= 0) & (map_x <= side - 1) & (map_y >= 0) & (map_y <= side - 1))
-            fb_limit = 0.75 + .05 * magnitude
-            fb_confidence = np.exp(-np.square(fb_error / np.maximum(fb_limit, .25))) * in_bounds
-            warped_guide = cv2.remap(state.guide, map_x, map_y, cv2.INTER_LINEAR,
-                                     borderMode=cv2.BORDER_CONSTANT, borderValue=0)
-            photo_error = np.abs(warped_guide.astype(np.float32) - guide_small.astype(np.float32))
-            photo_confidence = np.exp(-np.square(photo_error / 24.0))
-            confidence_small = (fb_confidence * photo_confidence).astype(np.float32)
-            confidence_mean = float(confidence_small.mean())
-            registered_correlation = self._correlation(warped_guide, guide_small)
-            if registered_correlation < self.cut_correlation:
-                self._tracks.pop(track_id, None)
-                state, reason = None, "APPEARANCE_CUT"
-            elif confidence_mean < self.min_flow_confidence:
-                self._tracks.pop(track_id, None)
-                state, reason = None, "FLOW_UNRELIABLE"
-            else:
-                flow_x = cv2.resize(backward[..., 0], (work_w, work_h), interpolation=cv2.INTER_LINEAR) * (work_w / side)
-                flow_y = cv2.resize(backward[..., 1], (work_w, work_h), interpolation=cv2.INTER_LINEAR) * (work_h / side)
-                confidence = cv2.resize(confidence_small, (work_w, work_h), interpolation=cv2.INTER_LINEAR)
-                xx, yy = np.meshgrid(np.arange(work_w, dtype=np.float32), np.arange(work_h, dtype=np.float32))
-                previous = cv2.remap(state.residual.astype(np.float32), xx + flow_x, yy + flow_y,
-                                     cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=0)
-                weight = ((1.0 - self.temporal_alpha) * confidence * valid_work).astype(np.float32)
-                old_residual = raw.astype(np.float32)
-                fused = old_residual * (1.0 - weight[..., None]) + previous * weight[..., None]
-                correction = fused - old_residual
-                if (work_w, work_h) != (w, h):
-                    correction = cv2.resize(correction, (w, h), interpolation=cv2.INTER_CUBIC)
-                # Resampling the whole corrected image would blur even invalid/occluded pixels.
-                correction *= valid[..., None]
-                result = np.clip(output.astype(np.float32) + correction, 0, 255).round().astype(np.uint8)
-                influenced_fraction = float((weight > .01).mean())
-                current = _DetailState(guide_small, fused.astype(np.float16), frame_index)
-                self._tracks.move_to_end(track_id)
+            if cuda_state and hasattr(state.guide, "is_cuda") and state.guide.is_cuda:
+                try:
+                    fused_device, confidence_mean, influenced_fraction, gpu_history_weight, correction, reason = self._fuse_cuda(
+                        state, guide_state, raw, valid_work, valid, (work_w, work_h), (w, h))
+                    backend = "opencv_nvidia_of_2_0_cuda_fusion"
+                    backend_fallback = None
+                    if reason is None:
+                        result = np.clip(output.astype(np.float32) + correction, 0, 255).round().astype(np.uint8)
+                        current = _DetailState(guide_state, fused_device, frame_index)
+                        self._tracks.move_to_end(track_id)
+                    else:
+                        self._tracks.pop(track_id, None)
+                        state = None
+                except (ImportError, AttributeError, OSError, RuntimeError, ValueError, cv2.error) as error:
+                    self._gpu_flow_error = f"{type(error).__name__}: {error}"
+                    try:
+                        self._gpu_flow.close()
+                    except Exception:
+                        pass
+                    self._gpu_flow = None
+                    cuda_state = False
+                    state = _DetailState(state.guide.detach().cpu().numpy(),
+                                         state.residual[0].permute(1, 2, 0).detach().cpu().numpy(),
+                                         state.frame_index)
+                    current = _DetailState(guide_small, raw.astype(np.float16), frame_index)
+                    backend = "opencv_dis_cpu"
+                    backend_fallback = self._gpu_flow_error
+                    reason = None
+            if state is not None and backend != "opencv_nvidia_of_2_0_cuda_fusion":
+                forward, backward, backend, backend_fallback = self._flow_pair(state.guide, guide_small)
+                side = self.flow_side
+                grid_x, grid_y = np.meshgrid(np.arange(side, dtype=np.float32), np.arange(side, dtype=np.float32))
+                map_x, map_y = grid_x + backward[..., 0], grid_y + backward[..., 1]
+                forward_at = cv2.remap(forward, map_x, map_y, cv2.INTER_LINEAR,
+                                       borderMode=cv2.BORDER_CONSTANT, borderValue=0)
+                fb_error = np.linalg.norm(backward + forward_at, axis=2)
+                magnitude = np.linalg.norm(backward, axis=2)
+                in_bounds = ((map_x >= 0) & (map_x <= side - 1) & (map_y >= 0) & (map_y <= side - 1))
+                fb_limit = 0.75 + .05 * magnitude
+                fb_confidence = np.exp(-np.square(fb_error / np.maximum(fb_limit, .25))) * in_bounds
+                warped_guide = cv2.remap(state.guide, map_x, map_y, cv2.INTER_LINEAR,
+                                         borderMode=cv2.BORDER_CONSTANT, borderValue=0)
+                photo_error = np.abs(warped_guide.astype(np.float32) - guide_small.astype(np.float32))
+                photo_confidence = np.exp(-np.square(photo_error / 24.0))
+                confidence_small = (fb_confidence * photo_confidence).astype(np.float32)
+                confidence_mean = float(confidence_small.mean())
+                registered_correlation = self._correlation(warped_guide, guide_small)
+                if registered_correlation < self.cut_correlation:
+                    self._tracks.pop(track_id, None)
+                    state, reason = None, "APPEARANCE_CUT"
+                elif confidence_mean < self.min_flow_confidence:
+                    self._tracks.pop(track_id, None)
+                    state, reason = None, "FLOW_UNRELIABLE"
+                else:
+                    flow_x = cv2.resize(backward[..., 0], (work_w, work_h), interpolation=cv2.INTER_LINEAR) * (work_w / side)
+                    flow_y = cv2.resize(backward[..., 1], (work_w, work_h), interpolation=cv2.INTER_LINEAR) * (work_h / side)
+                    confidence = cv2.resize(confidence_small, (work_w, work_h), interpolation=cv2.INTER_LINEAR)
+                    xx, yy = np.meshgrid(np.arange(work_w, dtype=np.float32), np.arange(work_h, dtype=np.float32))
+                    previous = cv2.remap(state.residual.astype(np.float32), xx + flow_x, yy + flow_y,
+                                         cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=0)
+                    weight = ((1.0 - self.temporal_alpha) * confidence * valid_work).astype(np.float32)
+                    old_residual = raw.astype(np.float32)
+                    fused = old_residual * (1.0 - weight[..., None]) + previous * weight[..., None]
+                    correction = fused - old_residual
+                    if (work_w, work_h) != (w, h):
+                        correction = cv2.resize(correction, (w, h), interpolation=cv2.INTER_CUBIC)
+                    # Resampling the whole corrected image would blur even invalid/occluded pixels.
+                    correction *= valid[..., None]
+                    result = np.clip(output.astype(np.float32) + correction, 0, 255).round().astype(np.uint8)
+                    influenced_fraction = float((weight > .01).mean())
+                    current = _DetailState(guide_small, fused.astype(np.float16), frame_index)
+                    self._tracks.move_to_end(track_id)
 
         self._tracks[track_id] = current
         self._evict(track_id)
         report = {
             "backend": backend,
             "temporal_alpha": self.temporal_alpha,
-            "history_weight": float(weight.mean()) if state is not None and reason is None else 0.0,
+            "history_weight": (gpu_history_weight if backend == "opencv_nvidia_of_2_0_cuda_fusion"
+                               else (float(weight.mean()) if state is not None and reason is None and 'weight' in locals()
+                                     else 0.0)),
             "flow_confidence": confidence_mean,
             "influenced_fraction": influenced_fraction,
             "reset_reason": reason,

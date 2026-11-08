@@ -399,17 +399,35 @@ class FrameCompositor:
         return self.detail_temporal.update(track_id, enhanced, base, guide, valid_mask=validity,
                                            frame_index=frame_index, scene_cut=scene_cut)
 
+    @staticmethod
+    def _apply_recovered_alpha(recovered, swap_weight, coverage=None):
+        """Reapply compositor controls to a matte interpolated from neighboring frames."""
+        alpha = np.asarray(recovered, np.float32) * float(swap_weight)
+        if coverage is not None:
+            alpha = np.minimum(alpha, np.asarray(coverage, np.float32) * float(swap_weight))
+        return alpha
+
     def compose(self, frame: np.ndarray, replacements, landmarks_by_track: Mapping[int, np.ndarray] | None = None,
                 *, scene_cut: bool = False, frame_index: int | None = None,
                 occluder_masks: Mapping[int, np.ndarray] | None = None,
+                mask_temporal_context: Mapping[int, Mapping[str, np.ndarray]] | None = None,
                 lip_sync_results: Mapping[int, object] | None = None,
                 options: CompositeOptions = CompositeOptions(),
                 observer: Callable | None = None) -> np.ndarray:
+        """Composite one frame with optional per-track one-frame mask lookahead.
+
+        Each context entry needs ``previous_mask``, ``next_mask``, ``previous_guide``
+        and ``next_guide`` in the same face-crop coordinate system as this frame.
+        The current guide and current foreground-occluder veto are taken from the
+        active compositor call. Realtime callers can omit the context and remain
+        causal; buffered/offline callers may supply it to repair a verified dropout.
+        """
         image_bgr(frame)
         if any(getattr(item, "full_head", False) for item in replacements) and options.occlusion_mode == "standard":
             options = replace(options, occlusion_mode="robust")
         landmarks_by_track = landmarks_by_track or {}
         occluder_masks = occluder_masks or {}
+        mask_temporal_context = mask_temporal_context or {}
         lip_sync_results = lip_sync_results or {}
         active_tracks = set(landmarks_by_track) | {item.track_id for item in replacements}
         self.last_relighting = {key:value for key,value in self.last_relighting.items() if key in active_tracks}
@@ -425,7 +443,7 @@ class FrameCompositor:
         self.last_reports = {}
         if options.occlusion_mode == "robust":
             return self._compose_robust(frame, replacements, landmarks_by_track, active_tracks, scene_cut, frame_index,
-                                        occluder_masks, lip_sync_results, options, observer)
+                                        occluder_masks, mask_temporal_context, lip_sync_results, options, observer)
         output = frame.copy()
         compose_began, restorer_seconds = time.perf_counter(), 0.0
         for replacement in sorted(replacements, key=lambda item: item.track_id):
@@ -479,8 +497,25 @@ class FrameCompositor:
                 if coverage.shape != alpha.shape or not np.isfinite(coverage).all() or np.any((coverage < 0) | (coverage > 1)):
                     raise DomainError('PROJECTION_COVERAGE_INVALID', 'Projected coverage must be finite crop-space values in 0..1', 422)
                 alpha *= coverage
-            mask_report = self.watchdog.observe_temporal(
-                replacement.track_id, alpha, frame_index=frame_index, scene_cut=scene_cut)
+            recovery_context = mask_temporal_context.get(replacement.track_id)
+            if recovery_context is not None:
+                recovery_context = dict(recovery_context)
+                recovery_context.setdefault("current_guide", target_crop)
+                if front is not None:
+                    recovery_context["occluder_mask"] = front
+                else:
+                    recovery_context.pop("occluder_mask", None)
+            mask_report, recovered_alpha = self.watchdog.observe_and_recover(
+                replacement.track_id, alpha, frame_index=frame_index, scene_cut=scene_cut,
+                context=recovery_context)
+            if mask_report["recovery"] == "bidirectional_optical_flow":
+                # The watchdog interpolates a matte, but the compositor alpha also
+                # carries the user-selected swap strength. Reapply it after replacing
+                # the anomalous current matte so a recovery cannot silently force a
+                # full-strength swap.
+                alpha = self._apply_recovered_alpha(recovered_alpha, options.swap_weight, coverage)
+                log.info("Temporal mask recovery track=%s frame=%s diagnostics=%s",
+                         replacement.track_id, frame_index, mask_report)
             if mask_report["anomaly"]:
                 log.warning("Temporal mask anomaly track=%s frame=%s diagnostics=%s", replacement.track_id,
                             frame_index, mask_report)
@@ -643,7 +678,7 @@ class FrameCompositor:
         return total
 
     def _compose_robust(self, frame, replacements, landmarks_by_track, active_tracks, scene_cut, frame_index,
-                        occluder_masks, lip_sync_results, options, observer) -> np.ndarray:
+                        occluder_masks, mask_temporal_context, lip_sync_results, options, observer) -> np.ndarray:
         from roop_3d.compositor.robust_fusion import RobustFusionOptions, fuse_robust
         robust = options.robust
         self.occlusion_tracker.retain(active_tracks)
@@ -692,8 +727,24 @@ class FrameCompositor:
                 visible_alpha *= (1.0 - front)
             if coverage is not None:
                 visible_alpha = visible_alpha * coverage
-            mask_report = self.watchdog.observe_temporal(
-                replacement.track_id, visible_alpha, frame_index=frame_index, scene_cut=scene_cut)
+            recovery_context = mask_temporal_context.get(replacement.track_id)
+            if recovery_context is not None:
+                recovery_context = dict(recovery_context)
+                recovery_context.setdefault("current_guide", context.target_crop)
+                if front is not None:
+                    recovery_context["occluder_mask"] = front
+                else:
+                    recovery_context.pop("occluder_mask", None)
+            mask_report, recovered_alpha = self.watchdog.observe_and_recover(
+                replacement.track_id, visible_alpha, frame_index=frame_index, scene_cut=scene_cut,
+                context=recovery_context)
+            if mask_report["recovery"] == "bidirectional_optical_flow":
+                # Keep recovery from overriding the global blend control. The input
+                # to the watchdog contains swap_weight, while its interpolated
+                # context masks may be unweighted matte probabilities.
+                visible_alpha = self._apply_recovered_alpha(recovered_alpha, options.swap_weight, coverage)
+                log.info("Temporal mask recovery track=%s frame=%s diagnostics=%s",
+                         replacement.track_id, frame_index, mask_report)
             if mask_report["anomaly"]:
                 log.warning("Temporal mask anomaly track=%s frame=%s diagnostics=%s", replacement.track_id,
                             frame_index, mask_report)

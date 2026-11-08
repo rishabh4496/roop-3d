@@ -4,6 +4,7 @@ import cv2
 import numpy as np
 
 from roop_3d.compositor.detail_temporal import TemporalDetailStabilizer
+from roop_3d.compositor.pipeline import FrameCompositor
 from roop_3d.compositor.stream_restoration import MaskSeamWatchdog
 from roop_3d.core.pose import rotation_from_euler
 from roop_3d.temporal import TrackTemporalStabilizer
@@ -104,6 +105,33 @@ def test_cuda_flow_unavailable_falls_back_to_cpu_dis(monkeypatch):
     assert report["gpu_fallback_reason"].startswith(expected_reason)
 
 
+def test_torch_flow_fusion_keeps_warp_and_history_on_tensor_device():
+    import pytest
+    torch = pytest.importorskip("torch")
+
+    class _TensorFlow:
+        def pair(self, previous, current):
+            assert previous.device == current.device
+            flow = torch.zeros((1, 16, 16, 2), device=previous.device, dtype=torch.float32)
+            return flow, flow
+
+    stabilizer = TemporalDetailStabilizer(flow_side=16, max_side=16, use_cuda_flow=False)
+    stabilizer._gpu_flow = _TensorFlow()
+    guide = torch.arange(16 * 16, dtype=torch.uint8).reshape(16, 16)
+    previous_residual = torch.ones((1, 3, 16, 16), dtype=torch.float16)
+    state = type("State", (), {"guide": guide, "residual": previous_residual})()
+    current = np.zeros((16, 16, 3), np.float32)
+    valid_work = np.ones((16, 16), np.float32)
+    valid_full = np.ones((32, 32), np.float32)
+    fused, confidence, influenced, history, correction, reason = stabilizer._fuse_cuda(
+        state, guide, current, valid_work, valid_full, (16, 16), (32, 32))
+    assert reason is None and confidence > .99 and influenced == 1.0
+    assert history == pytest.approx(.75, abs=1e-5)
+    assert fused.device.type == "cpu" and fused.shape == (1, 3, 16, 16)
+    assert correction.shape == (32, 32, 3)
+    assert np.mean(correction) == pytest.approx(.75, abs=.02)
+
+
 def test_nvidia_flow_bridge_uses_gpu_pair_contract_and_releases(monkeypatch):
     import sys
     from types import SimpleNamespace
@@ -156,15 +184,12 @@ def test_nvidia_flow_bridge_uses_gpu_pair_contract_and_releases(monkeypatch):
     )
     monkeypatch.setitem(sys.modules, "torch", fake_torch)
     monkeypatch.setattr(flow_module, "NvidiaHardwareFlow", FakeNvidiaFlow)
-    side = 96
-    base = np.full((side, side, 3), 128, np.uint8)
-    guide = _texture(side, 21)
     stabilizer = TemporalDetailStabilizer(flow_side=96, max_side=96)
-    stabilizer.update(8, base, base, guide, frame_index=0)
-    _, report = stabilizer.update(8, base, base, guide, frame_index=1)
-    assert report["backend"] == "opencv_nvidia_of_2_0_cpu_warp"
-    assert "gpu_fallback_reason" not in report
-    assert stabilizer.capability()["backend"] == report["backend"]
+    image = np.zeros((96, 96), np.uint8)
+    forward, backward, backend, fallback = stabilizer._flow_pair(image, image)
+    assert forward.shape == backward.shape == (96, 96, 2)
+    assert backend == "opencv_nvidia_of_2_0_cpu_warp" and fallback is None
+    assert stabilizer.capability()["backend_policy"] == "nvidia_of_2_0_if_available_else_cpu_dis"
     stabilizer.release()
     assert created[0].closed is True
     assert stabilizer.capability()["backend"] == "none_no_history"
@@ -184,6 +209,74 @@ def test_mask_watchdog_reports_single_frame_drop_with_per_face_thread_isolation(
     cut = watchdog.observe_temporal(5, face, frame_index=2, scene_cut=True)
     assert other["reset_reason"] == "INITIAL"
     assert cut["reset_reason"] == "SCENE_CUT" and cut["anomaly"] is False
+
+
+def test_mask_watchdog_recovers_anomalous_frame_from_bidirectional_flow_context():
+    watchdog = MaskSeamWatchdog()
+    side = 128
+    guide = np.random.default_rng(42).integers(0, 256, (side, side), dtype=np.uint8)
+    face = np.zeros((side, side), np.float32)
+    cv2.ellipse(face, (64, 64), (38, 46), 0, 0, 360, 1.0, -1)
+    watchdog.observe_temporal(12, face, frame_index=0)
+    context = {"previous_mask": face, "next_mask": face,
+               "previous_guide": guide, "current_guide": guide, "next_guide": guide}
+    report, repaired = watchdog.observe_and_recover(
+        12, np.zeros_like(face), frame_index=1, context=context)
+    assert report["anomaly"] is True
+    assert report["recovery"] == "bidirectional_optical_flow"
+    assert report["recovery_metrics"]["context_iou"] > .9
+    assert np.mean(np.abs(repaired - face)) < .02
+
+
+def test_mask_recovery_respects_current_occluder_and_scene_cut():
+    watchdog = MaskSeamWatchdog()
+    side = 128
+    guide = _texture(side, 31)[:, :, 0]
+    face = np.zeros((side, side), np.float32)
+    cv2.ellipse(face, (64, 64), (38, 46), 0, 0, 360, 1.0, -1)
+    watchdog.observe_temporal(13, face, frame_index=0)
+    occluder = np.zeros_like(face)
+    occluder[:, 62:70] = 1
+    context = {"previous_mask": face, "next_mask": face,
+               "previous_guide": guide, "current_guide": guide, "next_guide": guide,
+               "occluder_mask": occluder}
+    report, repaired = watchdog.observe_and_recover(
+        13, np.zeros_like(face), frame_index=1, context=context)
+    assert report["recovery"] == "bidirectional_optical_flow"
+    assert np.max(repaired[:, 62:70]) == 0
+    cut, unchanged = watchdog.observe_and_recover(
+        13, np.zeros_like(face), frame_index=2, scene_cut=True, context=context)
+    assert cut["recovery"] is None
+    assert np.count_nonzero(unchanged) == 0
+
+
+def test_mask_recovery_rejects_lookahead_across_appearance_cut():
+    watchdog = MaskSeamWatchdog()
+    face = np.zeros((128, 128), np.float32)
+    cv2.ellipse(face, (64, 64), (38, 46), 0, 0, 360, 1.0, -1)
+    watchdog.observe_temporal(14, face, frame_index=0)
+    context = {
+        "previous_mask": face,
+        "next_mask": face,
+        "previous_guide": np.full((128, 128), 32, np.uint8),
+        "current_guide": np.full((128, 128), 224, np.uint8),
+        "next_guide": np.full((128, 128), 32, np.uint8),
+    }
+    report, unchanged = watchdog.observe_and_recover(
+        14, np.zeros_like(face), frame_index=1, context=context)
+    assert report["anomaly"] is True
+    assert report["recovery"] == "rejected_context"
+    assert report["recovery_metrics"]["appearance_correlation_previous"] == 0.0
+    assert np.count_nonzero(unchanged) == 0
+
+
+def test_recovered_mask_preserves_swap_weight_and_projection_coverage():
+    recovered = np.ones((8, 8), np.float32)
+    coverage = np.full((8, 8), .5, np.float32)
+    weighted = FrameCompositor._apply_recovered_alpha(recovered, .3, coverage)
+    np.testing.assert_allclose(weighted, .15)
+    zero = FrameCompositor._apply_recovered_alpha(recovered, 0.0)
+    assert np.count_nonzero(zero) == 0
 
 
 def test_120_frame_temporal_benchmark_reports_real_metrics_and_zero_cut_ghosting():

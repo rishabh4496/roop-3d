@@ -816,6 +816,7 @@ class ReferencePipeline:
     def composite_frame(self, image: np.ndarray, result: FrameResult, *,
                         options: CompositeOptions = CompositeOptions(),
                         occluder_masks: dict[int, np.ndarray] | None = None,
+                        mask_temporal_context: Mapping[int, Mapping[str, np.ndarray]] | None = None,
                         lip_sync_enabled: bool = False,
                         lip_sync_inputs: Mapping[int, LipSyncFrameInput] | None = None,
                         observer=None, frame_index: int | None = None,
@@ -824,7 +825,9 @@ class ReferencePipeline:
 
         ``frame_index`` / ``timestamp_seconds`` make the call independent of how far Stage 2 has advanced, which the
         asynchronous pipeline needs (defaults reproduce the inline behaviour).  Uses ``composite_lock`` so it can
-        overlap :meth:`infer_frame` on another thread.
+        overlap :meth:`infer_frame` on another thread. ``mask_temporal_context`` is an optional per-track buffered
+        lookahead supplied by offline callers; it contains previous/next masks and their guide images so the
+        compositor can repair a verified one-frame matte dropout. The realtime path does not add one-frame latency.
         """
         with self.composite_lock:
             if timestamp_seconds is not None:
@@ -847,7 +850,8 @@ class ReferencePipeline:
             return self.compositor.compose(image, result.replacements, landmarks,
                                            scene_cut=result.scene_cut,
                                            frame_index=max(0, self.frames_processed - 1) if frame_index is None else frame_index,
-                                           occluder_masks=occluder_masks, lip_sync_results=lip_results,
+                                           occluder_masks=occluder_masks, mask_temporal_context=mask_temporal_context,
+                                           lip_sync_results=lip_results,
                                            options=options, observer=observer)
 
     @guarded
