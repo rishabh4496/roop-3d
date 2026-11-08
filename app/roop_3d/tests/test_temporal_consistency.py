@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier
+
 import cv2
 import numpy as np
 
@@ -209,6 +212,25 @@ def test_mask_watchdog_reports_single_frame_drop_with_per_face_thread_isolation(
     cut = watchdog.observe_temporal(5, face, frame_index=2, scene_cut=True)
     assert other["reset_reason"] == "INITIAL"
     assert cut["reset_reason"] == "SCENE_CUT" and cut["anomaly"] is False
+
+
+def test_mask_watchdog_baselines_are_isolated_between_concurrent_threads():
+    watchdog = MaskSeamWatchdog()
+    face = np.zeros((128, 128), np.float32)
+    cv2.ellipse(face, (64, 64), (38, 46), 0, 0, 360, 1.0, -1)
+    barrier = Barrier(2)
+
+    def sequence(drop: bool):
+        watchdog.observe_temporal(21, face, frame_index=0)
+        barrier.wait(timeout=5)
+        current = np.zeros_like(face) if drop else face
+        return watchdog.observe_temporal(21, current, frame_index=1)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        dropped, stable = list(pool.map(sequence, (True, False)))
+    assert dropped["anomaly"] is True
+    assert stable["anomaly"] is False
+    assert stable["iou"] == 1.0 and stable["area_jump"] == 0.0
 
 
 def test_mask_watchdog_recovers_anomalous_frame_from_bidirectional_flow_context():
