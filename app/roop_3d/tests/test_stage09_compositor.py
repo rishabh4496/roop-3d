@@ -9,6 +9,7 @@ import pytest
 
 from roop_3d.compositor.boundary_fusion import BlendMode, fuse_crop, warp_crop
 from roop_3d.compositor.color_match import ColorStats, apply_lab_stats
+from roop_3d.compositor.detail_temporal import TemporalDetailStabilizer
 from roop_3d.compositor.masks import build_face_mask, landmark_hull_mask
 from roop_3d.compositor.occlusion import subtract_occluders
 from roop_3d.compositor.pipeline import CompositeOptions, FrameCompositor
@@ -168,6 +169,53 @@ def test_frame_compositor_fuses_replacement_and_protects_explicit_foreground():
     assert compositor.last_reports[3]["temporal_detail"]["backend"] in {
         "none_no_history", "opencv_dis_cpu", "opencv_nvidia_of_2_0_cpu_warp"}
     assert compositor.last_reports[3]["mask_watchdog"]["reset_reason"] == "INITIAL"
+
+
+def test_frame_compositor_temporal_detail_reduces_laplacian_flicker():
+    class _FrameRestorer:
+        def __init__(self, outputs):
+            self.outputs = outputs
+            self.index = 0
+
+        def restore_aligned(self, _crop, _landmarks):
+            result = self.outputs[self.index]
+            self.index += 1
+            return result
+
+    side = 64
+    rng = np.random.default_rng(23)
+    base = np.full((side, side, 3), 128, np.uint8)
+    restored = [np.clip(base.astype(np.float32) + rng.normal(0, 12, base.shape), 0, 255)
+                .round().astype(np.uint8) for _ in range(12)]
+    target = rng.integers(40, 216, (96, 96, 3), dtype=np.uint8)
+    inverse = np.array(((1, 0, 16), (0, 1, 16)), np.float32)
+    replacement = SimpleNamespace(track_id=9, image=base, inverse=inverse)
+    points = np.array(((12, 12), (52, 12), (52, 52), (12, 52), (32, 10)), np.float32)
+    options = CompositeOptions(feather_px=2, color_strength=0, restoration_blend=1)
+
+    def render(temporal_alpha):
+        compositor = FrameCompositor(parser=_SyntheticParser(), restorer=_FrameRestorer(restored),
+                                     temporal=TemporalSmoother())
+        compositor.detail_temporal = TemporalDetailStabilizer(
+            temporal_alpha=temporal_alpha, flow_side=64, max_side=64, use_cuda_flow=False)
+        outputs = []
+        for index in range(len(restored)):
+            outputs.append(compositor.compose(target, (replacement,), {9: points},
+                                              frame_index=index, options=options))
+        assert compositor.last_reports[9]["temporal_detail"]["backend"] == "opencv_dis_cpu"
+        return outputs
+
+    raw, stabilized = render(0), render(.25)
+    region = np.s_[36:60, 36:60]
+
+    def laplacian_flicker(sequence):
+        laplacians = [cv2.Laplacian(frame[region], cv2.CV_32F, ksize=3) for frame in sequence]
+        return float(np.mean([np.abs(laplacians[i] - laplacians[i - 1]).mean()
+                              for i in range(1, len(laplacians))]))
+
+    raw_flicker, stabilized_flicker = laplacian_flicker(raw), laplacian_flicker(stabilized)
+    assert stabilized_flicker < raw_flicker
+    assert stabilized_flicker <= raw_flicker * .9
 
 
 def test_reference_pipeline_exposes_full_frame_compositing_hook():
