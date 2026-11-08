@@ -270,6 +270,8 @@ def _static_model_path(path: Path, cache_path: Path, name: str):
 
 def _profiles(nodes, name: str):
     channels, height, width = _image_size(name)
+    folded_name = name.casefold()
+    batch_sizes = (1, 4, 8) if "inswapper_128" in folded_name else (1, 2, 4)
     result = [{}, {}, {}]
     for node in nodes:
         if not node.shape or not any(not isinstance(d, int) or d <= 0 for d in node.shape):
@@ -279,7 +281,7 @@ def _profiles(nodes, name: str):
             if isinstance(dim, int) and dim > 0:
                 choices = (dim, dim, dim)
             elif axis == 0:
-                choices = (1, 2, 4)
+                choices = batch_sizes
             elif len(node.shape) == 4 and axis == 1:
                 choices = (channels,) * 3
             elif len(node.shape) == 4 and axis in (2, 3):

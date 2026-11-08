@@ -17,7 +17,7 @@ from fastapi.testclient import TestClient
 from roop_3d.models.dynamic_shapes import (DynamicShapeError, StaticBatchRequired, convert, input_shapes,
                                           static_batch_reason, surgery, validate_conversion)
 from roop_3d.models.owned_files import owned_path
-from roop_3d.core.ort_session import (_static_model_path, _trt_excluded_ops,
+from roop_3d.core.ort_session import (_profiles, _static_model_path, _trt_excluded_ops,
                                      GpuIoBinding, SessionManager)
 from roop_3d.trt_session_builder import (BatchProfile, StaticBatchError, TensorRTBuildError,
                                         TensorRTSessionBuilder, auto_shape_profiles, precision_for)
@@ -343,6 +343,24 @@ def test_detector_dynamic_spatial_profiles_are_explicit():
         opset_imports=[h.make_opsetid("", 17)])
     assert auto_shape_profiles(model, "retinaface_r50.onnx") == [
         {"input": (1, 3, 640, 640)}, {"input": (2, 3, 640, 640)}, {"input": (4, 3, 640, 640)}]
+
+
+def test_production_dynamic_swapper_profile_matches_stream_batch_range():
+    class Node:
+        def __init__(self, name, shape):
+            self.name, self.shape = name, shape
+
+    nodes = [Node("target", ["batch", 3, 128, 128]), Node("source", ["batch", 512])]
+    assert _profiles(nodes, "inswapper_128.batch.onnx") == [
+        {"target": (1, 3, 128, 128), "source": (1, 512)},
+        {"target": (4, 3, 128, 128), "source": (4, 512)},
+        {"target": (8, 3, 128, 128), "source": (8, 512)},
+    ]
+    assert _profiles(nodes, "other_swapper.batch.onnx") == [
+        {"target": (1, 3, 128, 128), "source": (1, 512)},
+        {"target": (2, 3, 128, 128), "source": (2, 512)},
+        {"target": (4, 3, 128, 128), "source": (4, 512)},
+    ]
 
 
 def test_detector_shape_subgraphs_are_specialized_without_mutating_source(tmp_path):
