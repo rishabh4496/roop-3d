@@ -37,7 +37,7 @@ class TemporalDetailStabilizer:
                  max_tracks: int = 12, max_cache_bytes: int = 32 * 1024 * 1024,
                  cut_correlation: float = .35, min_flow_confidence: float = .12,
                  use_cuda_flow: bool = True):
-        if (not 0 <= temporal_alpha <= .5 or flow_side < 16 or max_side < flow_side or max_tracks < 1
+        if (not 0 <= temporal_alpha <= .5 or flow_side < 16 or max_side < 16 or max_tracks < 1
                 or max_cache_bytes < 1024 or not -1 <= cut_correlation <= 1
                 or not 0 <= min_flow_confidence <= 1 or type(use_cuda_flow) is not bool):
             raise ValueError("Invalid temporal detail stabilizer configuration")

@@ -23,9 +23,11 @@ def _highpass(image: np.ndarray) -> np.ndarray:
 
 
 def benchmark_temporal_stability(*, frames: int = 120, seed: int = 7, side: int = 128,
-                                 cut_frame: int = 60) -> dict:
-    if frames < 3 or side < 32 or not 0 <= cut_frame < frames:
-        raise ValueError("Use at least three frames, side >= 32, and an in-range cut frame")
+                                 cut_frame: int = 60, flow_side: int = 96,
+                                 history_weight: float = .25) -> dict:
+    if (frames < 3 or side < 32 or flow_side < 16 or not 0 <= cut_frame < frames
+            or not 0 <= history_weight <= .5):
+        raise ValueError("Use >=3 frames, side >= 32, flow_side >= 16, history_weight in 0..0.5, and an in-range cut frame")
     rng = np.random.default_rng(seed)
     # Smooth facial guide with a stable fine texture for measurable subpixel flow.
     guide_noise = rng.normal(128, 32, (side, side)).clip(0, 255).astype(np.uint8)
@@ -36,7 +38,7 @@ def benchmark_temporal_stability(*, frames: int = 120, seed: int = 7, side: int 
     cut_guide_base = cv2.cvtColor(cv2.GaussianBlur(cut_guide_noise, (0, 0), 1.0), cv2.COLOR_GRAY2BGR)
     cut_pore_field = rng.normal(0, 8, (side, side, 3)).astype(np.float32)
     base = np.full((side, side, 3), 128, np.uint8)
-    stabilizer = TemporalDetailStabilizer(temporal_alpha=.25, flow_side=96, max_side=side,
+    stabilizer = TemporalDetailStabilizer(temporal_alpha=history_weight, flow_side=flow_side, max_side=side,
                                           use_cuda_flow=False)
     raw_residuals, filtered_residuals, outputs, inputs, reports = [], [], [], [], []
     for index in range(frames):
@@ -89,7 +91,8 @@ def benchmark_temporal_stability(*, frames: int = 120, seed: int = 7, side: int 
         "synthetic_only": True,
         "backend": next((item["backend"] for item in reports
                           if item["backend"] != "none_no_history"), "none"),
-        "history_weight": .25,
+        "history_weight": history_weight,
+        "flow_side": flow_side,
         "cut_frame": cut_frame,
         "flow_confidence_mean": float(np.mean([item["flow_confidence"] for item in reports])),
         "history_influenced_frames": int(sum(item["influenced_fraction"] > 0 for item in reports)),
@@ -111,9 +114,13 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=7)
     parser.add_argument("--side", type=int, default=128)
     parser.add_argument("--cut-frame", type=int, default=60)
+    parser.add_argument("--flow-side", type=int, default=96)
+    parser.add_argument("--history-weight", type=float, default=.25)
     args = parser.parse_args()
     print(json.dumps(benchmark_temporal_stability(frames=args.frames, seed=args.seed,
-                                                   side=args.side, cut_frame=args.cut_frame), indent=2))
+                                                   side=args.side, cut_frame=args.cut_frame,
+                                                   flow_side=args.flow_side,
+                                                   history_weight=args.history_weight), indent=2))
 
 
 if __name__ == "__main__":

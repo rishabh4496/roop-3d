@@ -74,6 +74,16 @@ def test_detail_stabilizer_never_imports_history_under_current_occluder():
     assert report["influenced_fraction"] > 0
 
 
+def test_detail_flow_resolution_can_exceed_residual_storage_cap():
+    side = 96
+    base = np.full((side, side, 3), 128, np.uint8)
+    guide = _texture(side, 18)
+    stabilizer = TemporalDetailStabilizer(flow_side=128, max_side=96, use_cuda_flow=False)
+    stabilizer.update(4, base, base, guide, frame_index=0)
+    _, report = stabilizer.update(4, base, base, guide, frame_index=1)
+    assert report["backend"] == "opencv_dis_cpu"
+
+
 def test_cuda_flow_unavailable_falls_back_to_cpu_dis(monkeypatch):
     try:
         import torch
@@ -179,8 +189,20 @@ def test_120_frame_temporal_benchmark_reports_real_metrics_and_zero_cut_ghosting
 
     result = benchmark_temporal_stability(frames=120, seed=7, side=128, cut_frame=60)
     assert result["frames"] == 120 and result["synthetic_only"] is True
+    assert result["history_weight"] == .25 and result["flow_side"] == 96
     assert result["scene_cut_ghosting_free"] is True
     assert result["scene_cut_max_pixel_delta"] == 0
     assert result["laplacian_flicker"]["stabilized"] < result["laplacian_flicker"]["raw"]
     assert result["requested_70_percent_gate_met"] == (
         result["laplacian_flicker"]["reduction_percent"] >= 70.0)
+
+
+def test_weight_sensitivity_benchmark_keeps_gate_and_cut_results_explicit():
+    from roop_3d.tools.temporal_stability import benchmark_temporal_stability
+
+    result = benchmark_temporal_stability(frames=120, seed=7, side=128, cut_frame=60,
+                                          history_weight=.5)
+    assert result["history_weight"] == .5
+    assert result["laplacian_flicker"]["reduction_percent"] < 70.0
+    assert result["requested_70_percent_gate_met"] is False
+    assert result["scene_cut_max_pixel_delta"] == 0
