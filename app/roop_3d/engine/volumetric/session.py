@@ -171,6 +171,7 @@ class ReferencePipeline:
         self.pose_projectors: dict[str, PoseBlendProjector] = {}
         self.full_head_engines = {}
         self.head_landmarks = None
+        self.neural_face = None
         self.angle_trajectories: dict[int, tuple[Any, ...]] = {}
         self.angle_frame_index: int | None = None
         self.reenactment_settings = ReenactmentSettings()
@@ -203,8 +204,7 @@ class ReferencePipeline:
                 raise ValueError("Mapped FaceSets must use selected nonnegative track IDs")
             self.release_session()
             try:
-                if render_mode == "standard":
-                    self.swapper.prepare_session(source, sources_by_track=mapped_sources)
+                self.swapper.prepare_session(source, sources_by_track=mapped_sources)
                 self.tracker = FaceTracker(self.catalog, config=self.config, threshold=detection_threshold,
                                            policy=track_policy)
                 self.selected_ids = frozenset(track_ids) if track_ids is not None else None
@@ -213,7 +213,9 @@ class ReferencePipeline:
                 self.reenactment_settings = reenactment_settings or ReenactmentSettings()
                 if render_mode != "standard":
                     self._prepare_identity_rigs(source, mapped_sources, identity_store)
-                if retarget != "off":
+                if render_mode != "standard":
+                    self.portrait.fallback_reason = "Three-tier reconstruction supplies target expressions; dense warp uses neural swapper and UltraMax"
+                elif retarget != "off":
                     self.portrait.prepare_session(required=retarget == "required")
                 else:
                     self.portrait.fallback_reason = "LivePortrait disabled explicitly; identity-only path selected"
@@ -224,34 +226,13 @@ class ReferencePipeline:
                 raise
 
     def _prepare_identity_rigs(self, source: FaceSetDocument, mapped: Mapping[int, FaceSetDocument], store=None) -> None:
-        """Build each full-head identity asset; reject unavailable prerequisites explicitly."""
-        from roop_3d.reconstruction.identity_asset import IdentityAssetStore, IdentityAssetSettings
-        from roop_3d.faceset_loader import LandmarkEngine
-        from roop_3d.audit.project_paths import application_root
-        from roop_3d.reconstruction.full_head import GPUHeadRasterizer
-        self.head_landmarks = LandmarkEngine(application_root())
-        if not self.head_landmarks.has_68:
-            raise DomainError("DENSE_HEAD_LANDMARKS_REQUIRED", "Install local 1k3d68.onnx for full-head 3D modes", 503)
-        probe = GPUHeadRasterizer()
-        try:
-            probe._context()
-        finally:
-            probe.release()
-        store = store or IdentityAssetStore()
+        """Prepare face-only 3D correspondence; no MakeHuman render path."""
+        from roop_3d.reconstruction.neural_face import NeuralFaceEngine
+        if self.neural_face is None:
+            self.neural_face = NeuralFaceEngine.load(self.catalog, self.config)
         for document in {d.faceset_id: d for d in (source, *mapped.values())}.values():
-            try:
-                from roop_3d.faceset_loader import enrich_document
-                document = enrich_document(document, self.head_landmarks).document
-                asset, reused = store.get_or_build(document, IdentityAssetSettings(
-                    template="makehuman", uv_size=2048 if self.config.hardware_profile == "12gb" else 1024,
-                    max_views=32))
-                self.rigs[document.faceset_id] = IdentityRig(asset)
-                self.rig_status[document.faceset_id] = {"available": True, "reused": reused, "build_key": asset.build_key,
-                                                        "level": asset.manifest.reconstruction_level,
-                                                        "layout": asset.manifest.landmark_layout}
-            except DomainError as error:
-                self.rig_status[document.faceset_id] = {"available": False, "reason": f"{error.code}: {error.message}"[:300]}
-                raise
+            self.neural_face.prepare(document)
+            self.rig_status[document.faceset_id] = self.neural_face.capability()
 
     def _document_for(self, track_id: int) -> FaceSetDocument | None:
         return self.sources_by_track.get(track_id, self.default_source)
@@ -631,49 +612,17 @@ class ReferencePipeline:
                 extreme = abs(face.pose[0]) > 30 or abs(face.pose[1]) > 25
                 face_mode = "pose_3d" if mode == "standard" and extreme else mode
                 if face_mode != "standard":
-                    from roop_3d.reconstruction.full_head import FullHeadEngine
-                    rig = self._rig_for(tracked.track_id)
-                    if mode == "standard" and (rig is None or self.head_landmarks is None):
-                        # A standard session may first encounter a profile midway
-                        # through a shot. Prepare its real 3D prerequisites rather
-                        # than driving that frame through a frontal affine crop.
-                        document = self._document_for(tracked.track_id)
-                        if document is None:
-                            raise DomainError("FULL_HEAD_NOT_PREPARED", "Extreme poses require a full-head source identity", 409)
+                    document = self._document_for(tracked.track_id)
+                    if document is None:
+                        raise DomainError("DENSE_FACE_SOURCE_REQUIRED", "3D correspondence requires a source identity", 409)
+                    if self.neural_face is None or document.faceset_id not in self.neural_face.sources:
                         self._prepare_identity_rigs(document, {})
-                        rig = self._rig_for(tracked.track_id)
-                    if rig is None or self.head_landmarks is None:
-                        raise DomainError("FULL_HEAD_NOT_PREPARED", "Prepare the session in a 3D mode before rendering", 409)
-                    engine = self.full_head_engines.get(tracked.track_id)
-                    if engine is None:
-                        engine = self.full_head_engines[tracked.track_id] = FullHeadEngine(
-                            rig, side=1024 if self.config.hardware_profile == "12gb" else 512)
-                    dense = face.landmarks68
-                    if dense is None:
-                        dense = self.head_landmarks.landmarks68(image, face.box)
-                    if dense is None:
-                        raise DomainError("DENSE_HEAD_LANDMARKS_REQUIRED", "Target has no measured dense head landmarks", 422)
-                    generated, coverage, inverse = engine.process(image, face, dense, frame_time,
-                        scene_cut=scene_cut, animate=face_mode == "reenactment_3d")
-                    head_method = "full_head_gpu_uv_only"
-                    if callable(getattr(getattr(self.swapper, "model", None), "infer", None)):
-                        from roop_3d.core.pose import Pose3D
-                        generated = self.swapper.refine_head_texture(generated,
-                            engine.rasterizer.last_buffers.coverage,
-                            pose=Pose3D(yaw=engine.last_angles[0], pitch=engine.last_angles[1], roll=engine.last_angles[2]),
-                            track_id=tracked.track_id)
-                        head_method = "full_head_gpu_texture_residual"
-                    if self.portrait.available:
-                        generated = self._refine_full_head(tracked, image, generated, coverage, inverse, strength)
-                        head_method = "full_head_gpu_liveportrait"
+                    generated = self.neural_face.process(image, face, document, self.swapper,
+                                                         track_id=tracked.track_id)
                     projection_seconds += time.perf_counter() - at
-                    replacements.append(Replacement(tracked.track_id, generated, inverse, -1,
-                        head_method, coverage=coverage,
-                        landmarks5=transform_points(face.landmarks5, cv2.invertAffineTransform(inverse)),
-                        render_mode=face_mode, full_head=True,
-                        target_silhouette=engine.target_silhouette,
-                        source_silhouette=engine.source_silhouette,
-                        photometry=engine.photometry, face_detail=engine.detail))
+                    replacements.append(Replacement(tracked.track_id, generated.image, generated.inverse, -1,
+                        "dense_3d_correspondence_neural_ultramax", coverage=generated.coverage,
+                        landmarks5=generated.landmarks5, render_mode=face_mode))
                     continue
                 swap = self.swapper.infer_frame(image, face.landmarks5, pose=face.pose,
                                                 track_id=tracked.track_id, frontalization=frontalization,
@@ -850,28 +799,19 @@ class ReferencePipeline:
                 "identity_swapper": self.swapper.model.capability() if self.swapper.model else None,
                 "portrait": self.portrait.capability(), "profile": self.config.hardware_profile,
                 "selected_track_ids": sorted(self.selected_ids) if self.selected_ids is not None else None,
-                "pose_method": "dense_68_pnp" if self.render_mode != "standard" or self.full_head_engines else "five_point_geometric_estimate", "dense_landmarks": (68, 106, 203),
-                "full_head": {"active": self.render_mode != "standard" or bool(self.full_head_engines), "renderer": "hardware_opengl",
-                              "neural_refinement": self.portrait.available,
-                              "unobserved_texture": "diffuse_source_color_prior", "metric_scale": "source_template_prior",
-                              "visibility": "gpu_depth_tested_vertices_and_uv_texels",
-                              "texture_bank": "nine_buckets_top_two_spherical_arc_weights",
-                              "silhouette_completion": "gpu_jump_flood_background_propagation",
-                              "extreme_pose_policy": "auto_3d_above_30_yaw_or_25_pitch_no_affine_fallback",
-                              "calibration": "estimated_intrinsics_unless_supplied"},
-                "photometric_detail": {"relighting": "gpu_mesh_normals_linear_rgb_sh_order_2",
-                    "albedo": "single_image_reflectance_prior_not_measured_intrinsics",
-                    "target_depth": "MakeHuman_prior_fitted_to_measured_landmark_xy",
-                    "shadows": "visible_geometry_screen_space_ao_and_key_rays",
-                    "gaze": "geometric_iris_vectors_when_verified_478_task_installed",
-                    "conditioning": "image_space_iris_lock_and_depth_preserving_mouth",
-                    "iris_task_active": bool(getattr(getattr(self.tracker, 'dense', None), 'mesh478', None))},
-                "pose_projection": {"state": "AVAILABLE", "geometry": "MAKEHUMAN_FULL_HEAD" if self.render_mode != "standard" else "ESTIMATED_CANONICAL_PROXY_68",
-                                    "camera": "ESTIMATED_CROP_PINHOLE", "active": self.pose_projector is not None},
+                "pose_method": "three_tier_morphable_model" if self.neural_face is not None else "five_point_geometric_estimate", "dense_landmarks": (68, 106, 203),
+                "full_head": {"active": False, "renderer": "disabled_legacy_cg"},
+                "dense_face": self.neural_face.capability() if self.neural_face is not None else {
+                    "available": False, "active": False, "reason": "Dense face bundle has not been loaded",
+                    "raw_mesh_compositing": False},
+                "pose_projection": {"state": "AVAILABLE" if self.neural_face is not None or self.pose_projector is not None else "NOT_LOADED",
+                                    "geometry": "SEMANTIC_ANATOMICAL_FACE" if self.neural_face is not None else "ESTIMATED_CANONICAL_PROXY_68",
+                                    "camera": "FITTED_EXPORT_PINHOLE" if self.neural_face is not None else "ESTIMATED_CROP_PINHOLE",
+                                    "active": self.neural_face is not None or self.pose_projector is not None},
                 "full_frame_compositor": self.compositor.capability(),
                 "lip_sync": self.lip_sync.capability(),
                 "render_modes": {"available": list(RENDER_MODES), "default": self.render_mode,
-                                 "fallback": "3D modes require full-head assets and hardware rasterization; unavailable inputs raise explicit errors",
+                                 "fallback": "3D modes require a compatible dense facial model bundle, hardware geometry rasterization, neural swapper and UltraMax; unavailable inputs raise explicit errors",
                                  "identity_assets": dict(self.rig_status),
                                  "active_reenactors": len(self.reenactors)}}
 
@@ -944,6 +884,9 @@ class ReferencePipeline:
                 engine.rasterizer.release()
             self.full_head_engines.clear()
             self.head_landmarks = None
+            if self.neural_face is not None:
+                self.neural_face.release()
+                self.neural_face = None
             self.angle_trajectories.clear()
             self.angle_frame_index = None
 

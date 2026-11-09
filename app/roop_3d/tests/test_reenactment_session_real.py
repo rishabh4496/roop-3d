@@ -58,6 +58,14 @@ def session_for(document, tmp_path, **kwargs):
     return session, capability
 
 
+@pytest.fixture
+def dense_bundle():
+    bundle = application_root() / "roop_3d/.runtime/models/dense_face/bundle.json"
+    if not bundle.is_file():
+        pytest.skip("three-tier dense face export bundle is not installed; no pretrained inference claimed")
+    return bundle
+
+
 def test_standard_mode_is_the_unchanged_proven_path(real, tmp_path):
     document, video = real
     session, capability = session_for(document, tmp_path)
@@ -86,14 +94,15 @@ def test_invalid_render_mode_is_rejected(real, tmp_path):
         session.release_session()
 
 
-def test_full_head_3d_modes_on_real_video(real, tmp_path):
+def test_full_head_3d_modes_on_real_video(real, dense_bundle, tmp_path):
     document, video = real
     for mode in ("pose_3d", "reenactment_3d"):
         session, capability = session_for(document, tmp_path, render_mode=mode)
         try:
-            assert capability["full_head"]["active"]
+            assert not capability["full_head"]["active"]
+            assert capability["dense_face"]["available"]
             status = capability["render_modes"]["identity_assets"][document.faceset_id]
-            assert status["available"] and status["layout"] in ("5pt", "68pt")
+            assert status["available"] and status["geometry_tiers"] == 3
             seen = []
             for image, timestamp in frames(video, SEGMENT_A, 4):
                 session.set_frame_timestamp(timestamp)
@@ -103,40 +112,35 @@ def test_full_head_3d_modes_on_real_video(real, tmp_path):
                 assert output.shape == image.shape and output.dtype == np.uint8
             assert seen
             for replacement in seen:
-                assert replacement.full_head and replacement.render_mode == mode
-                assert replacement.method == "full_head_gpu_uv_only"
+                assert not replacement.full_head and replacement.render_mode == mode
+                assert replacement.method == "dense_3d_correspondence_neural_ultramax"
                 assert replacement.fallback_reason is None
                 assert replacement.image.shape[0] >= 512
                 assert replacement.coverage.shape == replacement.image.shape[:2]
                 assert 0 <= replacement.coverage.min() <= replacement.coverage.max() <= 1
-            assert session.full_head_engines
+            assert session.neural_face is not None
         finally:
             session.release_session()
 
 
-def test_unbuildable_identity_never_falls_back_to_an_inner_crop(real, tmp_path):
+def test_missing_dense_bundle_never_falls_back_to_a_cg_head(real, tmp_path):
     document, _ = real
-    blurred = []
-    for view in document.views:
-        image = cv2.imdecode(np.frombuffer(view.image_bytes, np.uint8), cv2.IMREAD_COLOR)
-        ok, png = cv2.imencode(".png", cv2.GaussianBlur(image, (0, 0), 30))
-        assert ok
-        blurred.append(view.model_copy(update={"image_bytes": png.tobytes()}))
-    unusable = document.model_copy(update={"views": tuple(blurred)})
+    if (application_root() / "roop_3d/.runtime/models/dense_face/bundle.json").exists():
+        pytest.skip("missing-bundle test requires no installed bundle")
     with pytest.raises(DomainError) as error:
-        session_for(unusable, tmp_path, render_mode="reenactment_3d")
-    assert error.value.code == "IDENTITY_ASSET_NOT_BUILDABLE"
+        session_for(document, tmp_path, render_mode="reenactment_3d")
+    assert error.value.code == "DENSE_FACE_ASSETS_MISSING"
 
 
-def test_full_head_neural_refinement_on_real_frame(real, tmp_path):
+def test_full_head_neural_refinement_on_real_frame(real, dense_bundle, tmp_path):
     document, video = real
     session, capability = session_for(document, tmp_path, render_mode="pose_3d", retarget="required")
     try:
-        assert capability["full_head"]["neural_refinement"]
+        assert capability["dense_face"]["available"]
         image, timestamp = frames(video, SEGMENT_A, 1)[0]
         session.set_frame_timestamp(timestamp)
         replacements = session.infer_frame(image).replacements
         assert replacements
-        assert all(item.method == "full_head_gpu_liveportrait" and item.full_head for item in replacements)
+        assert all(item.method == "dense_3d_correspondence_neural_ultramax" and not item.full_head for item in replacements)
     finally:
         session.release_session()

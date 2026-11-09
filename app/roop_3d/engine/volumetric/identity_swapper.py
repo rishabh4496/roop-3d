@@ -301,22 +301,26 @@ class IdentitySwapper:
         self._logged_cells.clear()
 
     def refine_head_texture(self, rendered, coverage, *, pose, track_id=None):
-        """Run the selected native swapper on a pose-matched complete head ROI.
-
-        This adapter intentionally bypasses target 5-point alignment. Only a
-        high-frequency texture residual is accepted; the mesh owns low-frequency
-        anatomy, perspective and all silhouette/occlusion decisions.
-        """
+        """Legacy entry point: return full neural synthesis, never a CG residual."""
         import cv2
-        from roop_3d.reconstruction.full_head import bridge_neural_detail
+        if self.model is None:
+            raise DomainError("SESSION_NOT_PREPARED", "Prepare a neural swapper before refinement", 409)
+        size = self.model.resolution
+        neural = self.synthesize_correspondence(cv2.resize(rendered, (size, size), interpolation=cv2.INTER_AREA),
+                                               pose=pose, track_id=track_id)
+        return cv2.resize(neural, (rendered.shape[1], rendered.shape[0]), interpolation=cv2.INTER_LINEAR)
+
+    def synthesize_correspondence(self, conditioned_bgr, *, pose, track_id=None):
+        """Native aligned photographic warp + identity embedding -> full neural face."""
         if self.model is None or self.source is None:
-            raise DomainError("SESSION_NOT_PREPARED", "Prepare identity source before texture refinement", 409)
+            raise DomainError("SESSION_NOT_PREPARED", "Prepare identity source before neural synthesis", 409)
         embedding, index, _ = self.reference_embedding(track_id, pose, .15)
         projected = unit_embedding(embedding @ self.projection) if self.projection is not None else unit_embedding(embedding)
         document = self.sources_by_track.get(track_id, self.source)
         view = next((v for v in document.views if v.index == index), document.views[0])
-        size = self.model.resolution
-        neural = self.model.infer(cv2.resize(rendered, (size, size), interpolation=cv2.INTER_AREA),
-                                  projected, source_view=view)
-        neural = cv2.resize(neural, (rendered.shape[1], rendered.shape[0]), interpolation=cv2.INTER_LINEAR)
-        return bridge_neural_detail(rendered, neural, coverage)
+        if conditioned_bgr.shape != (self.model.resolution, self.model.resolution, 3):
+            raise ValueError("Correspondence image must match the selected swapper's native alignment and resolution")
+        neural = self.model.infer(conditioned_bgr, projected, source_view=view)
+        if neural.shape != conditioned_bgr.shape or neural.dtype != np.uint8:
+            raise DomainError("DENSE_FACE_NEURAL_OUTPUT_INVALID", "Neural swapper output has an invalid image contract", 503)
+        return neural

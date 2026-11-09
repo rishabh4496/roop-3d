@@ -1,5 +1,10 @@
 # Roop 3D
 
+The live 3D swap path now uses face-only dense correspondence conditioning followed
+by the selected neural swapper and UltraMax. It requires compatible local model
+assets; native checkpoint exporters are included, while FLAME and registered mappings still need preparation. See
+[dense facial backbone setup and current limits](docs/dense-face-backbone.md).
+
 **New to Roop 3D?** Start with the [installation guide](docs/INSTALLATION_GUIDE.md) and the [user manual](docs/USER_MANUAL.md); in the app, press **Guide**. All guides are indexed in [docs/README.md](docs/README.md); problems: [common problems and solutions](docs/COMMON_PROBLEMS.md).
 
 Post-production controls are available in **Extras** (`#/extras`): compositing

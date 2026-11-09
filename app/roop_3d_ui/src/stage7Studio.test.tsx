@@ -201,10 +201,10 @@ describe('StudioInspector', () => {
     const engine = host.querySelector('select[aria-label="Swap engine"]') as HTMLSelectElement;
     expect((engine.querySelector('option[value="x"]') as HTMLOptionElement).disabled).toBe(true);
     const radio = (label: string) => Array.from(host.querySelectorAll('[role="radiogroup"][aria-label="3D render mode"] [role="radio"]')).find(item => item.textContent === label) as HTMLButtonElement;
-    await act(async () => radio('2.5D Pose-Aware Warp').click());
+    await act(async () => radio('3D Facial Warp').click());
     expect(parameters.render_mode).toBe('pose_3d');
     await mount();
-    expect(radio('2.5D Pose-Aware Warp').getAttribute('aria-checked')).toBe('true');
+    expect(radio('3D Facial Warp').getAttribute('aria-checked')).toBe('true');
     await act(async () => radio('Standard 2D Identity Swap').click());
     expect('render_mode' in parameters).toBe(false);
     expect(host.querySelector('[data-testid="light-probe"]')).toBeNull();

@@ -746,6 +746,7 @@ export default function PoseGeometryViewer({
   const estimatedMesh = useMemo(() => payloadToReconstruction(coverage?.mesh_2_5d, 'tps_2_5d'), [coverage]);
   const payloadFullMesh = useMemo(() => payloadToReconstruction(coverage?.mesh_full_3d, 'identity_asset', coverage?.uv_texture_data_url), [coverage]);
   const fullMesh = mesh ?? payloadFullMesh;
+  const denseFace = fullMesh?.provenance === 'three_tier_facial_surface';
   const displayedMesh = viewMode === 'estimated_2_5d' ? (estimatedMesh ?? fullMesh) : fullMesh;
   const volumetric = viewMode === 'reconstruction' && !!fullMesh;
 
@@ -761,7 +762,7 @@ export default function PoseGeometryViewer({
 
   // Render mode picks the tab (and so does a newly supplied explicit mesh, or a new source arriving).
   const modeInfo = useMemo(() => renderModeInfo(renderMode), [renderMode]);
-  const intent = renderMode === undefined ? (mesh ? 'reconstruction' : 'estimated_2_5d') : (mesh ? 'reconstruction' : modeInfo.preview);
+  const intent = mesh || denseFace ? 'reconstruction' : renderMode === undefined ? 'estimated_2_5d' : modeInfo.preview;
   const hasFullMesh = !!fullMesh;
   const sourceKey = coverage?.faceset_id;
   useEffect(() => {
@@ -804,7 +805,7 @@ export default function PoseGeometryViewer({
     : !hasGeometry ? { kind: 'idle', text: IDLE_MESSAGE } : null;
 
   const resetCamera = useCallback(() => setResetSignal(value => value + 1), []);
-  const info = displayedMesh?.provenance ? `${volumetric ? 'Full 3D' : 'Estimated 2.5D'} · ${String(displayedMesh.provenance).replaceAll('_', ' ')}` : '';
+  const info = displayedMesh?.provenance ? `${volumetric ? (denseFace ? 'Facial surface' : 'Full 3D') : 'Estimated 2.5D'} · ${String(displayedMesh.provenance).replaceAll('_', ' ')}` : '';
   const limitation = (viewMode === 'reconstruction' ? coverage?.mesh_full_3d : coverage?.mesh_2_5d)?.limitations?.[0] ?? '';
 
   const tab = (id, label, disabled, title) => (
@@ -828,8 +829,8 @@ export default function PoseGeometryViewer({
       <div className="pose-viewer-toolbar">
         <div className="pose-mode-toggle">
           {tab('estimated_2_5d', 'Estimated 2.5D', false, 'Single-view estimate: the FaceSet\'s best frontal photo draped over a depth-prior face mesh')}
-          {tab('reconstruction', 'Full 3D Reconstructed', !fullMesh,
-            fullMesh ? `Stitched multi-view head: ${fullMesh.provenance ?? fullMesh.method}` : 'No full 3D head yet: load a FaceSet or build a 3D identity asset')}
+          {tab('reconstruction', denseFace ? 'Fitted facial surface' : 'Full 3D Reconstructed', !fullMesh,
+            fullMesh ? (denseFace ? 'Anatomical face fitted from observed photographs' : `Legacy preview: ${fullMesh.provenance ?? fullMesh.method}`) : 'Load a FaceSet to reconstruct its facial surface')}
         </div>
       </div>
       <div className="pose-viewer-options" role="group" aria-label="3D viewer overlays">

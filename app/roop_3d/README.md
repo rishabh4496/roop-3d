@@ -11,12 +11,20 @@ From this project app/ directory:
 External model source locations are read-only and separately hashed. No legacy
 application code or environment is imported.
 
-Full-head GPU SH relighting, optional iris tracking, oral detail and neck seam
-handling are documented in [Photometric head synthesis](../../docs/photometric-head.md),
-including local model setup and the real ArcFace acceptance fixture.
+The live 3D swap branch uses [dense facial correspondence and neural synthesis](../../docs/dense-face-backbone.md).
+It requires a compatible reconstruction bundle. Native 3DDFA/SMIRK/HRN checkpoint
+exporters and public-asset fetching are included; FLAME Open and validated surface/expression
+mappings still need preparation. Geometry never supplies a raw CG replacement image.
+
+The earlier full-head SH renderer and its offline utilities are documented in
+[Photometric head synthesis](../../docs/photometric-head.md). They are retained for
+historical assets and regression fixtures, and are not the live 3D swap path.
 
 
 ## Open head model (MakeHuman, CC0) - FLAME alternative
+
+This section describes the legacy offline asset builder. Live 3D swapping and the
+preferred FaceSet preview no longer select this head/neck template.
 
 `reconstruction/makehuman_head.py` is a licence-clean parametric head (4,289 vertices, 50 identity + 10 expression axes) built from
 MakeHuman CC0 data. Build once (downloads ~130 small files from a pinned commit, SHA-256 verified against

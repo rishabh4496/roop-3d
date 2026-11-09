@@ -1,15 +1,15 @@
 import { useEffect, useState } from 'react';
 import { api } from '../../api';
-import type { Reconstruction } from '../../contracts';
+import type { Coverage } from '../../contracts';
 import { prepareFromBuffers, prepareHeadMesh } from './headMesh';
 
 export type PreparedHead = NonNullable<ReturnType<typeof prepareHeadMesh>>;
 export type HeadMeshState = {
   head: PreparedHead | null;
-  /** `makehuman`: the dense CC0 head fitted to the active FaceSet; `canonical`: the built-in low-poly head; null while nothing is loaded. */
-  kind: 'makehuman' | 'canonical' | null;
+  /** The fitted anatomical face, an explicitly labelled orientation proxy, or nothing. */
+  kind: 'dense_face' | 'canonical' | null;
   loading: boolean;
-  /** Why the dense MakeHuman topology is not shown (no FaceSet, not built yet, ...). Empty when it is. */
+  /** Why the fitted anatomical face is not shown. */
   note: string;
 };
 const NONE: HeadMeshState = { head: null, kind: null, loading: false, note: '' };
@@ -32,11 +32,10 @@ function loadCanonical(): Promise<PreparedHead | null> {
 export function clearHeadMeshCache() { dense.clear(); canonical = null; }
 
 /**
- * The head topology for the canvas wireframe overlay. With an active FaceSet it asks for that FaceSet's MakeHuman identity asset
- * (`GET /facesets/{id}/identity-asset/mesh?template=makehuman`, which never builds anything); when that is missing it falls back to the
- * canonical head and says why, so the overlay is never silently different from what was asked for.
+ * Use the same fitted anatomical surface as the FaceSet reconstruction viewer.
+ * Reading a cached reconstruction never builds a legacy full-head identity asset.
  */
-export function useHeadMesh(facesetId: string | null | undefined, enabled: boolean): HeadMeshState {
+export function useHeadMesh(facesetId: string | null | undefined, enabled: boolean, coverage?: Coverage | null): HeadMeshState {
   const [state, setState] = useState<HeadMeshState>(NONE);
   useEffect(() => {
     if (!enabled) { setState(NONE); return undefined; }
@@ -46,17 +45,33 @@ export function useHeadMesh(facesetId: string | null | undefined, enabled: boole
       const head = await loadCanonical();
       if (live) setState({ head, kind: head ? 'canonical' : null, loading: false, note });
     };
-    if (!facesetId) { void fallback('Select a source FaceSet to see its MakeHuman topology.'); return () => { live = false; }; }
+    if (!facesetId) { void fallback('Select a source FaceSet to see its fitted facial surface.'); return () => { live = false; }; }
+    const prepare = (payload: Coverage) => {
+      const mesh = payload.mesh_full_3d;
+      if (mesh?.reconstruction_level !== 'three_tier_facial_surface') throw new Error('Dense face is unavailable');
+      const head = prepareHeadMesh({ ...mesh, faces: mesh.indices, coordinate_system: 'mesh' });
+      if (!head) throw new Error('empty facial surface');
+      return head;
+    };
+    if (coverage !== undefined) {
+      try {
+        if (!coverage || coverage.faceset_id !== facesetId) throw new Error('Reconstruction is not ready');
+        setState({ head: prepare(coverage), kind: 'dense_face', loading: false, note: '' });
+      } catch {
+        void fallback('Fitted facial surface is unavailable. This wireframe is a canonical orientation preview.');
+      }
+      return () => { live = false; };
+    }
     let pending = dense.get(facesetId);
     if (!pending) {
-      pending = api<Reconstruction>(`/facesets/${encodeURIComponent(facesetId)}/identity-asset/mesh?template=makehuman`)
-        .then(mesh => { const head = prepareHeadMesh(mesh); if (!head) throw new Error('empty mesh'); return head; });
+      pending = api<Coverage>(`/faceset/3d-state?faceset_id=${encodeURIComponent(facesetId)}`)
+        .then(prepare);
       dense.set(facesetId, pending);
       pending.catch(() => { if (dense.get(facesetId) === pending) dense.delete(facesetId); });
     }
-    pending.then(head => { if (live) setState({ head, kind: 'makehuman', loading: false, note: '' }); })
-      .catch(() => fallback('MakeHuman topology is not built for this FaceSet (build it from the FaceSet panel): showing the canonical head.'));
+    pending.then(head => { if (live) setState({ head, kind: 'dense_face', loading: false, note: '' }); })
+      .catch(() => fallback('Fitted facial surface is unavailable. Refresh the FaceSet reconstruction; this wireframe is a canonical orientation preview.'));
     return () => { live = false; };
-  }, [facesetId, enabled]);
+  }, [facesetId, enabled, coverage]);
   return state;
 }

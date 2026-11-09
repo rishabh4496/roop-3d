@@ -141,15 +141,18 @@ def test_session_3d_route_never_calls_inner_face_swapper(monkeypatch):
     session.prepared = True
     session.render_mode = "pose_3d"
     session.default_source = SimpleNamespace(faceset_id="test")
-    session.rigs["test"] = rig
-    session.head_landmarks = object()
+    session.neural_face = SimpleNamespace(sources={"test": ()}, release=lambda: None,
+        process=lambda *a, **k: SimpleNamespace(image=np.full((512, 512, 3), 210, np.uint8),
+            inverse=np.eye(2, 3), coverage=np.ones((512, 512), np.float32), landmarks5=face.landmarks5))
     def inner_crop_forbidden(*args, **kwargs):
         pytest.fail("3D mode called the inner-face swapper")
     monkeypatch.setattr(session.swapper, "infer_frame", inner_crop_forbidden)
     try:
         result = session.infer_frame(np.zeros((640, 640, 3), np.uint8))
         replacement, = result.replacements
-        assert replacement.full_head and replacement.fallback_reason is None
+        assert not replacement.full_head and replacement.fallback_reason is None
+        assert replacement.method == "dense_3d_correspondence_neural_ultramax"
+        assert np.all(replacement.image == 210)
         assert replacement.image.shape == (512, 512, 3)
     finally:
         session.release_session()

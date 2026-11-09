@@ -102,7 +102,8 @@ def _reconstruct(request: Request, value: Reconstruct3DRequest):
         engine = request.app.state.landmark_engine = LandmarkEngine(request.app.state.root)
     # Stage 11: 68/106-point landmarks, aligned crops and both pose indexes for every sample (cached per archive + model).
     loaded = enrich_document(document, engine)
-    signature = engine.signature()
+    from roop_3d.reconstruction.morphable_backbone import bundle_signature
+    signature = (engine.signature(), bundle_signature())
     state: dict[str, Any] = getattr(request.app.state, "faceset_3d_state", None)
     if state is None:
         state = request.app.state.faceset_3d_state = {"lock": threading.RLock(), "values": {}, "latest": None}

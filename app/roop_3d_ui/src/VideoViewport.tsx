@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { renderProbe } from './utils/renderProbe';
 import { mediaURL, postLivePreview } from './api';
 import { PreviewURL } from './state';
-import type { FaceSet, Probe, Inspection, FrameFaceDetectionResponse } from './contracts';
+import type { Coverage, FaceSet, Probe, Inspection, FrameFaceDetectionResponse } from './contracts';
 import { useFaceSelectionStore } from './useFaceSelectionStore';
 import FaceOverlayCanvas from './components/canvas/FaceOverlayCanvas';
 import FaceSelectionTray from './components/tray/FaceSelectionTray';
@@ -111,7 +111,7 @@ export function VideoViewport({
   active = true, parameters = DEFAULT_PARAMETERS, setParameters = () => {}, previewRequest = null,
   inspector, posePanel, restorerAvailable = false, onPreviewLatency,
   maskBase64 = null, captureWorkspace = () => ({}), restoreWorkspace = () => {},
-  onInspectionUpdate, onSourceExtracted, activeSourceId = '', studio = null,
+  onInspectionUpdate, onSourceExtracted, activeSourceId = '', faceCoverage, studio = null,
   previewView, onPreviewViewChange,
 }: {
   target: string;
@@ -144,6 +144,7 @@ export function VideoViewport({
   onSourceExtracted?: (faceset: FaceSet) => void;
   /** Source FaceSet currently selected in the workspace: "Add to .fsz Faceset" extends it. */
   activeSourceId?: string;
+  faceCoverage?: Coverage | null;
   /**
    * Stage 7 studio layout: the parameter panels, timeline and face tray render (through portals, so all their state
    * stays here) into the workstation's inspector / bottom dock instead of below the viewport. Null keeps the classic
@@ -394,7 +395,7 @@ export function VideoViewport({
   const [showLandmarks, setShowLandmarks] = preference('show_landmarks'), [showPose, setShowPose] = preference('show_pose');
   // 6DoF head-mesh layer (view-only toggles, deliberately not saved in the project): dense wireframe + gimbal, and head-gaze arrows.
   const [showMesh, setShowMesh] = useState(false), [showGaze, setShowGaze] = useState(false);
-  const headMesh = useHeadMesh(activeSourceId || null, showMesh);
+  const headMesh = useHeadMesh(activeSourceId || null, showMesh, faceCoverage);
   const faceState = useStoreSelector(faceFlags, state => state);
   const [faceMenu, setFaceMenu] = useState<FaceMenuTarget | null>(null);
   const extraction = useFaceExtraction({ target, frameIndex: currentFrame, activeSourceId: activeSourceId || null, onSourceExtracted, onRefreshPreview: live.retry });
@@ -948,7 +949,7 @@ export function VideoViewport({
           <button type="button" className={`hud-btn ${showPose ? 'active' : ''}`} aria-pressed={showPose} onClick={() => setShowPose(value => !value)}
             title="Live yaw / pitch / roll in degrees (pitch + = looking up) on every detected face"><span>↻</span> Pose</button>
           <button type="button" className={`hud-btn ${showMesh ? 'active' : ''}`} aria-pressed={showMesh} onClick={() => setShowMesh(value => !value)}
-            title={showMesh && headMesh.note ? headMesh.note : `6DoF wireframe of the head topology with a yaw / pitch / roll gimbal on every detected face${headMesh.kind === 'makehuman' ? ' (MakeHuman CC0 topology)' : ''}. Registered to the nose tip: an orientation overlay, not a per-vertex fit.`}><span>⌗</span> Mesh{showMesh && headMesh.loading ? '…' : ''}</button>
+            title={showMesh && headMesh.note ? headMesh.note : `6DoF wireframe of the facial surface with a yaw / pitch / roll gimbal on every detected face${headMesh.kind === 'dense_face' ? ' (fitted anatomical face)' : ''}. Registered to the nose tip: an orientation overlay, not a per-vertex fit.`}><span>⌗</span> Mesh{showMesh && headMesh.loading ? '…' : ''}</button>
           <button type="button" className={`hud-btn ${showGaze ? 'active' : ''}`} aria-pressed={showGaze} onClick={() => setShowGaze(value => !value)}
             title="Head-gaze arrows from each eye along the direction the head faces (head pose, not iris tracking)"><span>➚</span> Gaze</button>
           <button type="button" className={`hud-btn compare-toggle ${viewMode === 'compare' ? 'active' : ''}`} aria-pressed={viewMode === 'compare'} disabled={playing}

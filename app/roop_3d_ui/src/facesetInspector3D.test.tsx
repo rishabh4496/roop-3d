@@ -6,14 +6,13 @@ import FacesetInspector3D from './components/facemgr/FacesetInspector3D';
 
 // The R3F viewer needs WebGL: replace it with a probe that records the mesh it is handed.
 vi.mock('./components/three/PoseGeometryViewer', () => ({
-  default: (props: { mesh: { provenance?: string } | null }) => <div data-testid="head-viewer">{props.mesh?.provenance ?? 'no mesh'}</div>,
+  default: (props: { coverage: { mesh_full_3d?: { reconstruction_level?: string } } | null }) => <div data-testid="head-viewer">{props.coverage?.mesh_full_3d?.reconstruction_level ?? 'no mesh'}</div>,
 }));
 
 const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status, headers: { 'Content-Type': 'application/json' } });
 const VIEWS = [{ index: 0, yaw: 0, pitch: 0, roll: 0 }, { index: 1, yaw: -45, pitch: 10, roll: 0 }, { index: 2, yaw: 44, pitch: -15, roll: 0 }];
-const status = (built: boolean, template: string) => ({ faceset_id: 'alice', name: 'Alice', state: built ? 'built' : 'not_built', template, build_key: 'k', note: '', flame: {},
-  coverage: { readiness: 'partial_coverage', view_count: 3, usable_count: 3, yaw_range_deg: [-45, 44], yaw_span_deg: 89, pitch_span_deg: 25, yaw_coverage: {}, pitch_coverage: {}, missing: [], requests: [], duplicate_groups: [], capabilities: {} },
-  asset: built ? { build_key: 'k', vertex_count: 4, face_count: 4 } : null });
+const surface = () => ({ faceset_id: 'alice', views: [], bins: {},
+  mesh_full_3d: { reconstruction_level: 'three_tier_facial_surface', vertices: [[0, 0, 0], [1, 0, 0], [0, 1, 0]], indices: [[0, 1, 2]], uvs: [], normals: [], texture_base64: '', limitations: [], backbone: { available: true } } });
 const SOURCES = [{ faceset_id: 'alice', name: 'Alice' }, { faceset_id: 'bob', name: 'Bob' }];
 
 let calls: { url: string; method: string }[] = [];
@@ -25,8 +24,8 @@ beforeEach(() => {
     const method = init?.method ?? 'GET'; calls.push({ url: String(url), method });
     const path = String(url).replace('/api/v1', '');
     if (/\/views$/.test(path)) return json(VIEWS);
-    if (/identity-asset\/mesh/.test(path)) return json({ method: 'identity_asset', coordinate_system: 'opengl', vertices: [], faces: [], uvs: null, texture: null, provenance: `mesh for ${path}` });
-    if (/identity-asset/.test(path)) { if (method === 'POST') built = true; return json(status(built, path.includes('makehuman') ? 'makehuman' : 'canonical'), method === 'POST' ? 201 : 200); }
+    if (path === '/faceset/reconstruct-3d' && method === 'POST') { built = true; return json(surface()); }
+    if (path.startsWith('/faceset/3d-state')) return built ? json(surface()) : json({ error: { message: 'No fitted facial surface for this FaceSet yet.' } }, 404);
     return new Response('', { status: 404 });
   }));
 });
@@ -42,26 +41,26 @@ it('shows the radar for the stored views (pitch converted to the standard frame)
     // legacy pitch +10 is looking down: it must land in the standard pitch -10 row (0 .. -15 = row 3), not +10 (row 4).
     expect(host.querySelector('[data-cell="' + (3 * 12 + 3) + '"]')?.getAttribute('data-count')).toBe('1');          // yaw -45 starts column 3, standard pitch -10 is row 3
     expect(host.querySelector('[data-testid="head-viewer"]')).toBeNull();
-    expect(host.textContent).toContain('No 3D canonical head for this FaceSet yet.');
+    expect(host.textContent).toContain('No fitted facial surface for this FaceSet yet.');
     expect(calls.some(call => call.method === 'POST')).toBe(false);
     await act(async () => host.querySelector<HTMLButtonElement>('.fsz-inspector-placeholder .button')!.click()); await flush(); await flush(); await flush();
-    expect(calls.filter(call => call.method === 'POST').map(call => call.url)).toEqual(['/api/v1/facesets/alice/identity-asset']);
-    expect(host.querySelector('[data-testid="head-viewer"]')?.textContent).toBe('mesh for /facesets/alice/identity-asset/mesh');
+    expect(calls.filter(call => call.method === 'POST').map(call => call.url)).toEqual(['/api/v1/faceset/reconstruct-3d']);
+    expect(host.querySelector('[data-testid="head-viewer"]')?.textContent).toBe('three_tier_facial_surface');
   } finally { await act(async () => root.unmount()); host.remove(); }
 });
 
-it('asks for the MakeHuman template when that head model is chosen, remembers the choice, and follows the FaceSet picker', async () => {
+it('uses the facial reconstruction regardless of a saved legacy template and follows the FaceSet picker', async () => {
   const host = document.createElement('div'); document.body.append(host); const root = createRoot(host);
   try {
-    await act(async () => root.render(<FacesetInspector3D sources={SOURCES} />)); await flush();
-    await act(async () => [...host.querySelectorAll<HTMLButtonElement>('[role="radio"]')].find(button => button.textContent === 'MakeHuman CC0 head')!.click()); await flush(); await flush();
-    expect(calls.some(call => call.url === '/api/v1/facesets/alice/identity-asset?template=makehuman')).toBe(true);
-    expect(localStorage.getItem('roop3d-head-template')).toBe('makehuman');
-    expect(host.textContent).toContain('No 3D MakeHuman head for this FaceSet yet.');
+    localStorage.setItem('roop3d-head-template', 'makehuman');
+    await act(async () => root.render(<FacesetInspector3D sources={SOURCES} />)); await flush(); await flush();
+    expect(calls.some(call => call.url === '/api/v1/faceset/3d-state?faceset_id=alice')).toBe(true);
+    expect(calls.some(call => call.url.includes('identity-asset'))).toBe(false);
+    expect(host.textContent).toContain('Anatomical facial surface');
     const select = host.querySelector<HTMLSelectElement>('[aria-label="FaceSet to inspect in 3D"]')!;
     await act(async () => { Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')!.set!.call(select, 'bob'); select.dispatchEvent(new Event('change', { bubbles: true })); }); await flush(); await flush();
     expect(calls.some(call => call.url === '/api/v1/facesets/bob/views')).toBe(true);
-    expect(calls.some(call => call.url === '/api/v1/facesets/bob/identity-asset?template=makehuman')).toBe(true);
+    expect(calls.some(call => call.url === '/api/v1/faceset/3d-state?faceset_id=bob')).toBe(true);
   } finally { await act(async () => root.unmount()); host.remove(); }
 });
 

@@ -159,17 +159,47 @@ def _deformation_report(asset, settings) -> dict[str, Any]:
 def _full_mesh(document: FaceSetDocument, estimated: Mesh3D, fallback_texture: np.ndarray):
     from roop_3d.reconstruction.identity_asset import IdentityAssetSettings, build_identity_asset
     errors = []
-    # Prefer the bundled CC0 head+neck template when present. Its geometry includes the full head volume;
-    # identity variation outside the observed landmarks remains explicitly marked as template prior.
-    for template in ("makehuman", "canonical"):
+    from roop_3d.reconstruction.morphable_backbone import MorphableBackbone
+    from roop_3d.reconstruction.dense_correspondence import project
+    from roop_3d.engine.runtime import RuntimeConfig
+    from roop_3d.models.catalog import ModelCatalog
+    backbone = None
+    try:
+        backbone = MorphableBackbone.load(ModelCatalog(), RuntimeConfig())
+        observed = [v for v in document.views if not v.is_synthetic and v.landmarks_trusted]
+        if not observed:
+            raise ValueError("No observed source photographs with measured landmarks")
+        view = min(observed, key=lambda v: (abs(v.yaw)+abs(v.pitch), -v.quality.score))
+        photograph = cv2.imdecode(np.frombuffer(view.image_bytes, np.uint8), cv2.IMREAD_COLOR)
+        fit = backbone.fit(photograph, view.landmarks)
+        points = project(fit.camera_vertices, fit.intrinsics) * (128/224)
+        points = points @ fit.alignment.inverse[:, :2].T + fit.alignment.inverse[:, 2]
+        h, w = photograph.shape[:2]
+        uv = np.column_stack((points[:, 0]/max(w-1, 1), 1-points[:, 1]/max(h-1, 1)))
+        vertices = fit.vertices * (1, 1, -1)  # viewer's existing +z-toward-camera frame
+        surface = getattr(backbone, "surface", backbone.topology)
+        mesh = Mesh3D(vertices, surface.faces[:, [0, 2, 1]], uvs=uv)
+        return mesh, photograph, "three_tier_facial_surface", [
+            "Preview uses one observed photograph; hidden-side appearance is not recovered.",
+            "High-frequency displacement is sampled on a refined facial surface; relief below its triangle or UV-map resolution is unresolved."
+        ], {"template": backbone.topology.family, "backbone": backbone.capability()}
+    except (DomainError, ValueError, OSError) as error:
+        errors.append(f"dense_face: {str(error)[:300]}")
+    finally:
+        if backbone is not None:
+            backbone.release()
+    # A preview may show the explicitly labelled canonical facial fallback.
+    # The live swap path instead requires a complete dense model bundle.
+    for template in ("canonical",):
         try:
             settings = IdentityAssetSettings(uv_size=512, subdivisions=2, max_views=32,
                                              holdout_validation=False, template=template)
             asset = build_identity_asset(document, settings)
             mesh = asset.mesh()
-            limitations = list(asset.manifest.limitations) + list(asset.manifest.missing_information)
+            limitations = list(asset.manifest.limitations) + list(asset.manifest.missing_information) + errors
             texture, completion = _display_texture(asset, mesh)
-            extra = {"template": template, "deformation": _deformation_report(asset, settings), "texture_completion": completion}
+            extra = {"template": template, "deformation": _deformation_report(asset, settings), "texture_completion": completion,
+                     "backbone": {"available": False, "reason": "; ".join(errors), "raw_mesh_compositing": False}}
             return mesh, texture, asset.manifest.reconstruction_level, limitations, extra
         except Exception as error:
             errors.append(f"{template}: {str(error)[:160]}")

@@ -219,13 +219,15 @@ def test_standard_session_routes_extreme_pose_to_mesh(monkeypatch, yaw, pitch):
         scene_cut=False, timestamp_seconds=0., release=lambda: None)
     session.prepared = True
     session.default_source = SimpleNamespace(faceset_id="test")
-    session.rigs["test"] = rig
-    session.head_landmarks = object()
+    session.neural_face = SimpleNamespace(sources={"test": ()}, release=lambda: None,
+        process=lambda *a, **k: SimpleNamespace(image=np.full((512, 512, 3), 210, np.uint8),
+            inverse=np.eye(2, 3), coverage=np.ones((512, 512), np.float32), landmarks5=face.landmarks5))
     monkeypatch.setattr(session.swapper, "infer_frame", lambda *a, **k: pytest.fail("extreme target reached 5pt swapper"))
     try:
         result = session.infer_frame(np.zeros((640, 640, 3), np.uint8))
         item, = result.replacements
-        assert item.full_head and item.render_mode == "pose_3d"
+        assert not item.full_head and item.render_mode == "pose_3d"
+        assert item.method == "dense_3d_correspondence_neural_ultramax"
     finally:
         session.release_session()
 

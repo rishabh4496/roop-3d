@@ -22,6 +22,7 @@ from roop_3d.reconstruction.native_backbone import (
 )
 from roop_3d.reconstruction.morphable_backbone import FaceTopology
 from roop_3d.reconstruction.native_face_geometry import FlameExpressionRig
+from roop_3d.reconstruction.displaced_surface import detail_levels
 
 SCOPE = ("CPU asset structure and encoder contracts only; no inference, GPU context, "
          "or end-to-end reconstruction/identity/expression/appearance quality validation. "
@@ -123,6 +124,7 @@ def _cpu_session(path):
 
 def validate_bundle(bundle, spec):
     """Use runtime validators directly, but never call load() or a renderer."""
+    levels = detail_levels(spec.get("detail_subdivisions", 1), "12gb")
     for key in ("mask_provenance", "expression_mapping_evidence", "registration_evidence"):
         if not isinstance(spec.get(key), str) or not spec[key].strip():
             raise ValueError(f"{key}: supply nonempty genuine preparation evidence, not inferred provenance")
@@ -133,7 +135,8 @@ def validate_bundle(bundle, spec):
     # Constructor checks BFM dimensions, both surface transfers, registration
     # similarity and UV charts. Its UVSurfaceMap is NumPy-only, not GPU rendering.
     NativeMorphableBackbone(topology, bfm_topology, _arrays(paths["bfm"]), rig,
-                           _arrays(paths["registration"]), {}, None, spec)
+                           _arrays(paths["registration"]), {}, None, spec,
+                           detail_subdivisions=levels)
     for role in GRAPH_CONTRACTS:
         try:
             session = _cpu_session(paths[role])

@@ -134,6 +134,23 @@ def test_flame_topology_publication(synthetic):
     assert tool.readiness(output)["ready"]
 
 
+@pytest.mark.parametrize("levels", [-1, 3, True, 1.5, "1"])
+def test_invalid_detail_budget_never_publishes(synthetic, levels):
+    config, output, spec = synthetic
+    spec["detail_subdivisions"] = levels
+    config.write_text(json.dumps(spec), encoding="utf-8")
+    with pytest.raises(ValueError, match="subdivisions"):
+        tool.assemble(config, output)
+    assert not output.exists()
+
+
+def test_legacy_assembly_cli_uses_validated_publisher(synthetic):
+    from roop_3d.tools.prepare_dense_face import assemble
+    config, output, _ = synthetic
+    assemble(SimpleNamespace(config=str(config), output=str(output)))
+    assert tool.readiness(output)["ready"]
+
+
 def test_hardlinked_asset_rejected(synthetic):
     config, output, _ = synthetic
     alias = config.parent / "hardlinked.onnx"
