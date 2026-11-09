@@ -6,6 +6,7 @@ import { modelStatus, useModelCatalog } from '../../stores/modelCatalog';
 import { setRack, useRack } from '../../stores/rackSelection';
 import ModelSelect, { StatusPill, type RackOption } from './ModelSelect';
 import PersonModelPicker from './PersonModelPicker';
+import ActiveModelBadge from './ActiveModelBadge';
 
 type Params = Partial<WorkstationParameters>;
 export type RackProps = {
@@ -82,10 +83,16 @@ export default function EngineModelRack({ params, onParams, config, caps, onSave
   const blend = params.restoration_blend ?? 0;
   const engine = params.restorer_model ?? 'gpen';
   const enhancerValue = blend > 0 ? ENGINE_ENHANCER[engine] ?? 'gpen_bfr_512' : 'none';
+  /** Every model dropdown also persists to the backend config at once, so previews, renders and the read-back follow it. */
+  const persist = (patch: Config) => {
+    if (!config || !onSaveConfig) return;
+    if (Object.entries(patch).every(([key, value]) => config[key] === value)) return;
+    onSaveConfig({ ...config, ...patch });
+  };
   const pickEnhancer = (id: string) => {
-    if (id === 'none') { onParams({ restoration_blend: 0 }); return; }
+    if (id === 'none') { onParams({ restoration_blend: 0 }); persist({ face_restoration_policy: 'off' }); return; }
     const model = ENHANCER_ENGINE[id];
-    if (model) onParams({ restorer_model: model, restoration_blend: blend > 0 ? blend : 0.7 });
+    if (model) { onParams({ restorer_model: model, restoration_blend: blend > 0 ? blend : 0.7 }); persist({ face_restoration_policy: model }); }
   };
   const usesFidelity = engine === 'codeformer' || engine === 'ultramax';
   const mode = params.render_mode ?? 'standard';
@@ -96,12 +103,14 @@ export default function EngineModelRack({ params, onParams, config, caps, onSave
   };
 
   const provider = typeof config?.preferred_provider === 'string' ? config.preferred_provider : 'auto';
-  const precision = typeof config?.precision_policy === 'string' ? config.precision_policy : 'auto';
+  const configuredPrecision = typeof config?.precision_policy === 'string' ? config.precision_policy : 'auto';
+  const precision = configuredPrecision === 'auto' && provider === 'TensorrtExecutionProvider' ? 'fp16'
+    : configuredPrecision === 'auto' && provider === 'CUDAExecutionProvider' ? 'fp32' : configuredPrecision;
   const runtimeValue = (RUNTIMES.find(item => item.provider === provider && item.precision === precision) ?? RUNTIMES.find(item => item.provider === provider && item.precision === 'auto') ?? RUNTIMES[0]).id;
   const runtimeReason = (item: (typeof RUNTIMES)[number]): string | null => {
     const controls = caps?.workstation.controls;
     if (!controls) return null;
-    return controls.preferred_provider?.[item.provider] ?? (item.precision === 'fp16' ? controls.precision_policy?.fp16 ?? null : null);
+    return controls.preferred_provider?.[item.provider] ?? (item.precision === 'fp16' && item.provider !== 'TensorrtExecutionProvider' ? 'CUDA uses the selected model’s graph precision; use TensorRT for mixed precision.' : null);
   };
   const pickRuntime = (id: string) => {
     const item = RUNTIMES.find(entry => entry.id === id);
@@ -110,16 +119,19 @@ export default function EngineModelRack({ params, onParams, config, caps, onSave
   const rebuildTrt = async () => {
     setTrtBusy(true); setTrtMessage('');
     try {
-      const result = await post<{ status?: string }>('/models/compile_trt', { model_id: swapperValue, precision: precision === 'fp32' ? 'fp32' : 'fp16' });
-      setTrtMessage(`TensorRT engine request for ${swapperValue}: ${result.status ?? 'accepted'}.`);
+      const result = await post<{ status?: string; results?: { fp16_enabled: boolean; canary_verified: boolean }[] }>('/models/compile_trt', { model_id: swapperValue, precision: precision === 'fp32' ? 'fp32' : 'fp16' });
+      const built = result.results?.[0];
+      setTrtMessage(`TensorRT engine for ${swapperValue}: ${result.status ?? 'accepted'}.${built ? ` ${built.fp16_enabled ? 'FP16 mixed precision' : 'FP32 (model safety policy)'}.${built.canary_verified ? ' Canary passed.' : ''}` : ''}`);
     } catch (reason) { setTrtMessage(reason instanceof Error ? reason.message : 'The TensorRT rebuild could not start.'); } finally { setTrtBusy(false); }
   };
 
   return (
     <div className="rack" data-testid="engine-model-rack" data-variant={variant}>
+      <ActiveModelBadge selected={{ swapper: swapperValue, detector: typeof config?.detector_model_id === 'string' ? config.detector_model_id : rack.detector,
+        enhancer: blend > 0 ? engine : 'off' }} />
       <section className="rack-section" aria-label="Face swapper model">
         <h4>Face swapper <Wiring live /></h4>
-        <ModelSelect label="Swapper model" category="swapper" value={swapperValue} onChange={id => setRack({ swapper: id })} options={swapperOptions}
+        <ModelSelect label="Swapper model" category="swapper" value={swapperValue} onChange={id => { setRack({ swapper: id }); persist({ swapper_model_id: id }); }} options={swapperOptions}
           registeredDisabledReason="Registered artifact without a render adapter: the engine cannot run it yet." testId="rack-swapper"
           hint="Sent with every preview and render job. Choosing a model that is not installed offers to download or locate it first." />
       </section>
@@ -152,8 +164,8 @@ export default function EngineModelRack({ params, onParams, config, caps, onSave
       </section>
 
       <section className="rack-section" aria-label="Face detector and landmarker">
-        <h4>Detector &amp; 3D landmarker <Wiring live={false} /></h4>
-        <ModelSelect label="Face detector" category="detector" value={rack.detector} onChange={id => setRack({ detector: id })} options={DETECTORS} testId="rack-detector" />
+        <h4>Detector &amp; 3D landmarker <Wiring live /></h4>
+        <ModelSelect label="Face detector" category="detector" value={typeof config?.detector_model_id === 'string' ? config.detector_model_id : rack.detector} onChange={id => { setRack({ detector: id }); persist({ detector_model_id: id }); }} options={DETECTORS.map(option => !onSaveConfig ? { ...option, disabledReason: 'Change the detector from the Faceswap workspace or Settings.' } : option)} testId="rack-detector" />
         <ModelSelect label="3D landmarker" category="landmarker" value={rack.landmarker} onChange={id => setRack({ landmarker: id })} options={LANDMARKERS} includeRegistered={false} testId="rack-landmarker" />
       </section>
 

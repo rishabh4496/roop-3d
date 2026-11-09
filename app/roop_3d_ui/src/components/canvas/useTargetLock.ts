@@ -28,8 +28,9 @@ export function useTargetLock({ target, frameIndex, lock = lockTargetFromFrame, 
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState<Toast | null>(null);
   const timers = useRef<{ toast?: ReturnType<typeof setTimeout>; poll?: ReturnType<typeof setTimeout> }>({});
-  useEffect(() => () => { clearTimeout(timers.current.toast); clearTimeout(timers.current.poll); }, []);
-  useEffect(() => { setCurrent(null); }, [target]);
+  useEffect(() => () => { generation.current += 1; clearTimeout(timers.current.toast); clearTimeout(timers.current.poll); }, []);
+  const generation = useRef(0);
+  useEffect(() => { generation.current += 1; clearTimeout(timers.current.poll); setCurrent(null); }, [target]);
   const show = useCallback((next: Toast) => {
     setToast(next);
     clearTimeout(timers.current.toast);
@@ -37,21 +38,24 @@ export function useTargetLock({ target, frameIndex, lock = lockTargetFromFrame, 
   }, [toastMs]);
 
   const watchScan = useCallback((first: TargetLock) => {
-    let remaining = 40;
+    clearTimeout(timers.current.poll);
+    const version = generation.current;
     const tick = async (value: TargetLock) => {
-      if (value.scan?.state !== 'running' || remaining-- <= 0) return;
+      if (value.scan?.state !== 'running' || generation.current !== version) return;
       timers.current.poll = setTimeout(async () => {
-        try { const next = await refresh(value.lock_id); setCurrent(prev => (prev?.lock_id === next.lock_id ? next : prev)); void tick(next); } catch { /* the lock stays usable */ }
+        try { const next = await refresh(value.lock_id); if (generation.current !== version) return; setCurrent(prev => (prev?.lock_id === next.lock_id ? next : prev)); if (next.scan?.state === 'done') window.dispatchEvent(new Event('target-angle-scan-completed')); void tick(next); } catch { void tick(value); }
       }, pollMs);
     };
     void tick(first);
   }, [refresh, pollMs]);
 
-  const lockFace = useCallback(async (faceIndex: number) => {
+  const lockFace = useCallback(async (faceIndex: number, trackId?: string) => {
     if (!target || busy) return null;
     setBusy(true);
     try {
-      const result = await lock({ path: target, frame_index: frameIndex, face_index: faceIndex, sample_count: 16, wait: false });
+      const version = ++generation.current;
+      const result = await lock({ path: target, frame_index: frameIndex, face_index: faceIndex, sample_count: 192, wait: false, ...(trackId ? { track_id: trackId } : {}) });
+      if (version !== generation.current) return null;
       setCurrent(result);
       show({ kind: 'ok', text: `TARGET LOCKED ✓ ${label(result)}` });
       watchScan(result);

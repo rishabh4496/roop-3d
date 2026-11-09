@@ -70,6 +70,8 @@ export default function BatchMatrixScreen({
   const [strategy, setStrategy] = useState('one-to-many'); // 'one-to-many' | 'grouped' | 'matrix' | 'recipe'
   const batchParameters = useRack(state => state.batchParameters);
   const [engineConfig, setEngineConfig] = useState(null);
+  // The batch detector is the saved global choice (the rack persists it on change); sent with every queued job.
+  const batchDetector = ['scrfd', 'retinaface', 'yoloface'].includes(engineConfig?.detector_model_id) ? engineConfig.detector_model_id : null;
   useEffect(() => { let alive = true; api('/config').then(value => { if (alive) setEngineConfig(value); }).catch(() => undefined); return () => { alive = false; }; }, []);
   const [batchBusy, setBatchBusy] = useState(false);
   const [statusMessage, setStatusMessage] = useState('');
@@ -191,6 +193,7 @@ export default function BatchMatrixScreen({
           // Engine & Model Rack: the chosen swapper and any touched enhancer / 3D / mask fields apply to every queued job.
           const rack = rackStore.get();
           if (rack.swapper) cleanRequest.swapper_model_id = rack.swapper;
+          if (batchDetector) cleanRequest.detector_model_id = batchDetector;
           if (Object.keys(rack.batchParameters).length) cleanRequest.workstation_parameters = { ...(cleanRequest.workstation_parameters || {}), ...rack.batchParameters };
           const segIdx = cleanRequest._segment_index;
           const totalSegs = cleanRequest._total_segments;

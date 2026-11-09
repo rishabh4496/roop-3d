@@ -2,9 +2,9 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { FaceSet, Job, Track } from './contracts';
+import type { FaceSet, Job, JobRequest, Track } from './contracts';
 import { RENDER_FRAME_EVENT, buildLivePayload } from './livePreview';
-import { DEFAULT_PARAMETERS, restorerWeights } from './components/workstation/pipeline';
+import { DEFAULT_PARAMETERS, restorerAvailable, restorerWeights } from './components/workstation/pipeline';
 import FaceMapping from './components/studio/FaceMapping';
 import RenderFooter from './components/studio/RenderFooter';
 import { publishHardware, resetTelemetry } from './stores/telemetryStore';
@@ -69,14 +69,26 @@ describe('FaceMapping', () => {
 });
 
 describe('UltraMax in the live payload', () => {
-  const request = { target_path: 't.mp4', inspection_id: 'a'.repeat(32), face_mappings: [{ track_id: 'track_0000', faceset_id: 'alice' }], processing: 'local' as const, remote_consent: false as const, trim_start_seconds: null, trim_end_seconds: null } as never;
+  const request = { target_path: 't.mp4', inspection_id: 'a'.repeat(32), face_mappings: [{ track_id: 'track_0000', faceset_id: 'alice' }], processing: 'local' as const, remote_consent: false as const, trim_start_seconds: null, trim_end_seconds: null } as JobRequest;
   it('sends ultramax, and checks the CodeFormer weights it shares', () => {
     const payload = buildLivePayload({ request, time: 1, fps: 25, parameters: { ...DEFAULT_PARAMETERS, restorer_model: 'ultramax', restoration_blend: 0.6 }, restorerAvailable: true })!;
     expect(payload.restorer).toBe('ultramax');
     expect(payload.restoration_blend).toBe(0.6);
-    expect(restorerWeights('ultramax')).toBe('CodeFormerv0.1.onnx');
+    expect(restorerWeights('ultramax')).toBe('codeformer.fp16.onnx');
     expect(restorerWeights('gpen')).toBe('gpen_bfr_512.onnx');
     const off = buildLivePayload({ request, time: 1, fps: 25, parameters: { ...DEFAULT_PARAMETERS, restorer_model: 'ultramax', restoration_blend: 0 }, restorerAvailable: true })!;
     expect(off.restorer).toBe('off');
+  });
+  it('sends the selected swapper and GFPGAN to live inference', () => {
+    const payload = buildLivePayload({ request: { ...request, swapper_model_id: 'hyperswap_1c_256' }, time: 1, fps: 25,
+      parameters: { ...DEFAULT_PARAMETERS, restorer_model: 'gfpgan', restoration_blend: .7 }, restorerAvailable: true })!;
+    expect(payload.swapper_model_id).toBe('hyperswap_1c_256');
+    expect(payload.restorer).toBe('gfpgan');
+  });
+  it('uses catalog IDs for readiness and requires the actual UltraMax fp16 weights', () => {
+    expect(restorerAvailable([{ id: 'gpen_bfr_512', name: 'GPEN-BFR-512', state: 'VERIFIED_LOCAL', installed: true }], 'gpen')).toBe(true);
+    expect(restorerAvailable([{ id: 'codeformer', name: 'CodeFormer', state: 'VERIFIED_LOCAL', installed: true }], 'ultramax')).toBe(false);
+    expect(restorerAvailable([{ name: 'codeformer.fp16.onnx', state: 'VERIFIED_LOCAL', installed: true }], 'ultramax')).toBe(true);
+    expect(restorerAvailable([{ id: 'gpen_bfr_512', name: 'GPEN-BFR-512', state: 'VERIFIED_LOCAL', installed: false }], 'gpen')).toBe(false);
   });
 });

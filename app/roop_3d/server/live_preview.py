@@ -89,6 +89,8 @@ class LivePreviewPayload(Contract):
     expression_restore_factor: float | None = Field(default=None, ge=0, le=1)
     face_expression_overrides: FaceExpressionOverrides = Field(default_factory=dict, max_length=64)
     engine_id: str = Field(default="reference_onnx", pattern=r"^[a-z0-9][a-z0-9_]{0,95}$")
+    swapper_model_id: str | None = Field(default=None, pattern=r'^[a-z0-9][a-z0-9_]{0,95}$')
+    detector_model_id: Literal['scrfd', 'retinaface', 'yoloface'] | None = None
     # media + frame
     target_path: str = Field(min_length=1, max_length=1024)
     inspection_id: str = Field(pattern=r"^[0-9a-f]{32}$")
@@ -572,6 +574,7 @@ class LivePreviewService:
             info = self.media_info(payload.target_path)
             mask = rasterize_strokes(payload.mask_strokes, info.width, info.height, mask)
         job = JobRequest(engine_id=payload.engine_id, target_path=payload.target_path, inspection_id=payload.inspection_id, face_mappings=mappings,
+                         swapper_model_id=payload.swapper_model_id, detector_model_id=payload.detector_model_id,
                          identity_lock_id=payload.identity_lock_id,
                          processing="local", mask_base64=mask, workstation_parameters=parameters,
                          parameter_curves=payload.parameter_curves, identity_blend=blend, face_segments=payload.face_segments,

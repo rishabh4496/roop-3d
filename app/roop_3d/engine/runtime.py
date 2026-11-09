@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from functools import cached_property
+import logging
 from typing import Any
 
 import numpy as np
@@ -16,6 +17,8 @@ from roop_3d.engine.resources import guarded, inference, register
 # This additive adapter keeps the verified catalog as the only model path source.
 from roop_3d.core.ort_session import GpuIoBinding, SessionManager, SessionInfo
 
+log = logging.getLogger(__name__)
+
 
 @dataclass(frozen=True)
 class RuntimeConfig:
@@ -25,6 +28,8 @@ class RuntimeConfig:
     cpu_threads: int = 2
     model_factory: Any = field(default=None, compare=False, repr=False)
     graph_optimization: str = "all"
+    precision_policy: str = 'auto'
+    detector_model_id: str = 'scrfd'
 
     def __post_init__(self) -> None:
         if self.provider not in ("CPUExecutionProvider", "CUDAExecutionProvider", "TensorrtExecutionProvider"):
@@ -37,6 +42,8 @@ class RuntimeConfig:
             raise ValueError("CPU thread budget must be within 1..8")
         if self.graph_optimization not in ("all", "extended"):
             raise ValueError("Unsupported graph optimization policy")
+        if self.precision_policy not in ('auto', 'fp16', 'fp32') or self.detector_model_id not in ('scrfd', 'retinaface', 'yoloface'):
+            raise ValueError('Unsupported precision or detector selection')
 
     @cached_property
     def gpu_budget_bytes(self) -> int:
@@ -112,10 +119,21 @@ class OrtModel:
 
         self.catalog, self.record = catalog, record_named(catalog, name)
         self.config = config
-        authorize(catalog.registry.get(self.record["model_id"]), action="activate")
+        registered = catalog.registry.get(self.record["model_id"])
+        try:
+            authorize(registered, action="activate")
+        except DomainError:
+            # A weight the user placed in app/models is never switched off by a registry license/status gate.
+            if catalog.provider.trusted_path(registered) is None:
+                raise
         if self.record["graph"].get("external_data"):
             raise DomainError("MODEL_GRAPH_UNSUPPORTED", "External tensor references are not supported by this adapter", 422)
         self.path = catalog.resolve_for_inference(self.record["model_id"])
+        trusted = catalog.provider.trusted_identity(self.path)
+        # Auto-trusted local weights (FP16 / custom exports) carry their own digest and relaxed tensor checks.
+        self.local_trust = trusted is not None
+        if trusted is not None:
+            self.record = {**self.record, "sha256": trusted[0], "size_bytes": trusted[1]}
         if config.provider in ("CUDAExecutionProvider", "TensorrtExecutionProvider") and name == "liveportrait_warping_spade.onnx":
             try:
                 from roop_3d.models.stage16 import prepare_generator
@@ -162,7 +180,7 @@ class OrtModel:
             if "CUDAExecutionProvider" not in ort.get_available_providers():
                 raise DomainError("PROVIDER_UNAVAILABLE", "CUDAExecutionProvider is required for TensorRT graph partitions", 503)
             try:
-                info = SessionManager(fp16=True, hardware_profile=config.hardware_profile,
+                info = SessionManager(fp16=config.precision_policy != 'fp32', hardware_profile=config.hardware_profile,
                     gpu_memory_limit=self._gpu_memory_limit).create(self.path, model_name=name,
                         providers=("TensorrtExecutionProvider", "CUDAExecutionProvider"))
                 self.session = info.session
@@ -208,6 +226,13 @@ class OrtModel:
         catalog.verify(self.record)
         self._check_graph()
         self._io_binder = GpuIoBinding(self.session)
+        # Restorers report themselves to the active-model read-back (swapper/detector report from their own holders).
+        self._active_key = None
+        if self.record.get("role") == "face_restorer":
+            from roop_3d.engine import active_models
+            entry = active_models.activate("enhancer", self.record["model_id"], self.path, self.provider,
+                                           config.precision_policy, self.record.get("sha256"))
+            self._active_key = entry.key
         register(self, "release")
 
     @guarded
@@ -249,6 +274,24 @@ class OrtModel:
         return stat.st_size, stat.st_mtime_ns, stat.st_ino
 
     def _check_graph(self) -> None:
+        if getattr(self, "local_trust", False):
+            # A user-supplied export (for instance FP16, or dynamic instead of static axes) legitimately differs
+            # from the pinned graph in dtype and extents. Names and ranks are what the adapters feed by, so a
+            # mismatch there is logged and surfaces as an explicit input-name error on the first run, not as a refusal here.
+            dtypes = {"tensor(float)": "FLOAT", "tensor(float16)": "FLOAT16", "tensor(double)": "DOUBLE",
+                      "tensor(int64)": "INT64", "tensor(int32)": "INT32", "tensor(uint8)": "UINT8"}
+            observed = dict(self.record["graph"])
+            for kind, actual in (("inputs", self.session.get_inputs()), ("outputs", self.session.get_outputs())):
+                expected = self.record["graph"][kind]
+                if len(actual) != len(expected) or any(node.name != declared["name"] or len(node.shape) != len(declared["shape"])
+                                                       for node, declared in zip(actual, expected)):
+                    log.warning("Local weight %s differs from the registered %s layout; running it as supplied",
+                                self.path.name, kind)
+                # Adapters build their feeds from record["graph"], so it must describe the file that actually runs.
+                observed[kind] = [{"name": node.name, "shape": list(node.shape), "dtype": dtypes.get(node.type, "FLOAT")}
+                                  for node in actual]
+            self.record = {**self.record, "graph": observed}
+            return
         for kind, actual in (("inputs", self.session.get_inputs()), ("outputs", self.session.get_outputs())):
             expected = self.record["graph"][kind]
             if len(actual) != len(expected):
@@ -277,6 +320,10 @@ class OrtModel:
         nodes = self.session.get_inputs()
         if set(values) != {node.name for node in nodes}:
             raise DomainError("INFERENCE_INPUT_NAMES", "Input names do not match the verified graph", 422)
+        # Adapters feed float32; an FP16 export is fed half precision so it runs instead of being refused.
+        values = {node.name: (values[node.name].astype(np.float16) if node.type == "tensor(float16)"
+                              and getattr(values[node.name], "dtype", None) == np.float32 else values[node.name])
+                  for node in nodes}
         for node in nodes:
             value = values[node.name]
             contract_array(value, node.shape, batch_one=True,
@@ -317,8 +364,10 @@ class OrtModel:
                 raise DomainError("MODEL_INFERENCE_FAILED", message, 503) from None
         outputs = {}
         for node, value in zip(self.session.get_outputs(), arrays):
-            outputs[node.name] = contract_array(value, node.shape,
+            checked = contract_array(value, node.shape,
                 dtype=np.dtype({"tensor(float16)": "float16", "tensor(double)": "float64"}.get(node.type, "float32")))
+            # Callers consume float32 regardless of the graph's storage precision.
+            outputs[node.name] = checked.astype(np.float32) if checked.dtype == np.float16 else checked
         self.executions += 1
         return outputs
 
@@ -326,6 +375,10 @@ class OrtModel:
     def release(self) -> None:
         self.session = None
         self._io_binder = None
+        if getattr(self, "_active_key", None) is not None:
+            from roop_3d.engine import active_models
+            active_models.release("enhancer", self._active_key)
+            self._active_key = None
 
     def capability(self) -> dict:
         return {"model_id": self.record["model_id"], "sha256": self.record["sha256"],

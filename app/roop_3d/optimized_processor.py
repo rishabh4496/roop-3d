@@ -275,7 +275,7 @@ def make_stream_runner(root, catalog, media, settings_provider, *, pipeline_trac
             accelerator = resolve_accelerator(settings.preferred_provider, hardware.advertised_providers, bool(hardware.gpus))
             if admission.profile == "cpu":
                 accelerator = "CPUExecutionProvider"
-            config = replace(self._runtime_config(admission, settings), provider=accelerator)
+            config = replace(self._runtime_config(admission, self.settings_for(record.request, settings)), provider=accelerator)
             context = CudaWorkerContext(enabled=admission.profile != "cpu")
             tracker = detector = model = restorer = None
             def check():
@@ -287,7 +287,7 @@ def make_stream_runner(root, catalog, media, settings_provider, *, pipeline_trac
                     pipeline_tracker.render_event(record.job_id, value)
             try:
                 with context.activate():
-                    detector = Detector(catalog, session_factory(catalog, config))
+                    detector = Detector(catalog, session_factory(catalog, config), model_id=config.detector_model_id, provider=config.provider, precision=config.precision_policy)
                     tracker = FaceTracker(catalog, config=config, stabilize=False)
                     static = record_named(catalog, "inswapper_128.onnx")
                     projection = cached_emap(catalog._path(static), embedding_map, source_sha256=static["sha256"])

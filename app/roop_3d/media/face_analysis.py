@@ -99,7 +99,9 @@ class FaceAnalyzer:
         self.primary, self.tolerant = primary, tolerant
 
     def signature(self) -> str:
-        return f"{self.primary}:{self.tolerant}:{self.engine.signature() if self.engine else 'none'}"
+        selection = getattr(self.detector, '_model_id', 'scrfd')
+        selection = selection() if callable(selection) else selection
+        return f"{selection}:{self.primary}:{self.tolerant}:{self.engine.signature() if self.engine else 'none'}"
 
     def analyze(self, image: np.ndarray, threshold: float | None = None, *, thumbnails: bool = True,
                 detector: Any = None) -> list[AnalyzedFace]:

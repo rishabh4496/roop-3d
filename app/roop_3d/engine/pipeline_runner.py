@@ -18,7 +18,7 @@ import zipfile
 
 import cv2
 import numpy as np
-from pydantic import Field
+from pydantic import Field, model_validator
 
 from roop_3d.async_pipeline import AsyncPipeline, Item, PinnedFramePool
 from roop_3d.async_pipeline.config import async_pipeline_enabled, async_queue_depth, pinned_enabled
@@ -44,7 +44,20 @@ from roop_3d.engine.edit_plan import FrameEditPlan
 from roop_3d.engine.detection.track_policy import POLICY_VERSION, TrackPolicy
 
 
+# Written next to the checkpoint by `_write_checkpoint` (GOP resume point, cadence, journal). They describe the file,
+# not the job, so reading ignores them; `checkpoint.bin` / `.npz` never contain them.
+CHECKPOINT_FILE_METADATA = ("resume_frame", "checkpoint_every", "gop_aligned", "journal")
+
+
 class PipelineCheckpoint(Contract):
+    @model_validator(mode="before")
+    @classmethod
+    def _drop_file_metadata(cls, value):
+        """Accept `checkpoint.json` exactly as `_write_checkpoint` writes it; every other unknown key still fails."""
+        if isinstance(value, dict) and any(key in value for key in CHECKPOINT_FILE_METADATA):
+            return {key: item for key, item in value.items() if key not in CHECKPOINT_FILE_METADATA}
+        return value
+
     schema_version: Literal[1] = 1
     job_id: str = Field(pattern=r"^[0-9a-f]{32}$")
     input_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
@@ -225,7 +238,7 @@ class MasterPipelineRunner:
         data = checkpoint.model_dump(mode="json")
         resume_frame = checkpoint.completed_frame + 1 if checkpoint.completed_frame >= 0 else 0
         data["resume_frame"] = resume_frame
-        data["checkpoint_every"] = self.checkpoint_every
+        data["checkpoint_every"] = getattr(self, "checkpoint_every", self.CHECKPOINT_EVERY)
         data["gop_aligned"] = True
 
         # Lightweight journal entry
@@ -412,6 +425,12 @@ class MasterPipelineRunner:
         return target, digest, total_frames, documents, track_ids, [item.faceset_id for item in request.face_mappings]
 
     @staticmethod
+    def settings_for(request, settings: Settings) -> Settings:
+        """The request's own detector choice wins over the saved global one (preview, render and batch alike)."""
+        selected = getattr(request, "detector_model_id", None)
+        return settings.model_copy(update={"detector_model_id": selected}) if selected else settings
+
+    @staticmethod
     def _runtime_config(admission: Admission, settings: Settings) -> RuntimeConfig:
         provider = admission.provider
         if admission.profile != "cpu":
@@ -422,7 +441,8 @@ class MasterPipelineRunner:
                 hardware = probe_hardware(settings)
                 provider = resolve_accelerator("auto", hardware.advertised_providers, bool(hardware.gpus))
         return RuntimeConfig(provider=provider, hardware_profile=admission.profile,
-                             reserve_mib=settings.memory_safety_reserve_mb)
+                             reserve_mib=settings.memory_safety_reserve_mb,
+                             precision_policy=settings.precision_policy, detector_model_id=settings.detector_model_id)
 
     def prepare(self, record: JobRecord, settings: Settings | None = None) -> PreparedPipeline:
         """Validate media, probe timing, load read-only FaceSets and check resume data."""
@@ -631,7 +651,7 @@ class MasterPipelineRunner:
         numeric_ids = set(labels_to_ids.values())
         source_by_track = sources
         base_source = next(iter(source_by_track.values()))
-        runtime_config = self._runtime_config(admission, settings)
+        runtime_config = self._runtime_config(admission, self.settings_for(record.request, settings))
         session = self.pipeline_factory(self.catalog, runtime_config)
         select_swapper = getattr(session, "select_swapper", None)
         if callable(select_swapper):

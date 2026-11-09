@@ -24,7 +24,6 @@ from roop_3d.core.settings import Contract
 from roop_3d.core.workstation import WorkstationParameters
 from roop_3d.faceset.identity_blend import IdentityBlendSpec, blend_documents
 from roop_3d.engine.pipeline_runner import MasterPipelineRunner
-from roop_3d.engine.runtime import RuntimeConfig
 from roop_3d.engine.scheduler import RuntimeScheduler
 from roop_3d.engine.volumetric.session import ReferencePipeline
 from roop_3d.compositor.restoration import GpenRestorer
@@ -203,8 +202,7 @@ class PreviewService:
                                            for item in blend.source_face_ids], blend)
                 sources = {track: blended for track in sources}
             edit_plan = FrameEditPlan(runner, value.request, sources)
-            runtime = RuntimeConfig(provider=admission.provider, hardware_profile=admission.profile,
-                                    reserve_mib=settings.memory_safety_reserve_mb)
+            runtime = runner._runtime_config(admission, runner.settings_for(value.request, settings))
             session = ReferencePipeline(self.state.models, runtime)
             select_swapper = getattr(session, "select_swapper", None)
             if callable(select_swapper):

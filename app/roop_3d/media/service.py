@@ -8,6 +8,7 @@ import json
 import math
 from pathlib import Path
 import time
+import threading
 from typing import Callable, Iterator
 import uuid
 
@@ -39,9 +40,12 @@ VIDEO_SUFFIXES = {".mp4", ".mov", ".mkv", ".avi", ".webm", ".m4v", ".ts"}
 class MediaService:
     def __init__(self, root: Path, catalog: ModelCatalog, settings: Callable[[], Settings] = Settings):
         self.root = root
-        self.detector = Detector(catalog)
+        self.detector = Detector(catalog, model_id=lambda: settings().detector_model_id)
         self.settings = settings
         self._color_cache: dict = {}
+        from roop_3d.identity.target_lock import TargetLockStore
+        self.target_locks = TargetLockStore()
+        self._face_edit_lock = threading.RLock()
         # Persistent decoders + frame/detection caches for timeline scrubbing (see media/frame_service.py).
         from roop_3d.faceset.recognizer import Recognizer
         from roop_3d.faceset_loader import LandmarkEngine
@@ -256,6 +260,11 @@ class MediaService:
 
     def detect_frame_faces(self, value: str, timestamp: float | None = None,
                            frame_index: int | None = None, threshold: float = 0.5) -> dict:
+        with self._face_edit_lock:
+            return self._detect_frame_faces(value, timestamp, frame_index, threshold)
+
+    def _detect_frame_faces(self, value: str, timestamp: float | None,
+                            frame_index: int | None, threshold: float) -> dict:
         path = self.path(value)
         _, digest = sha256_file(path)
 
@@ -300,7 +309,15 @@ class MediaService:
 
         faces_output = []
         new_tracks = list(existing_inspection.tracks) if existing_inspection else []
-        track_start_idx = len(new_tracks)
+        from roop_3d.identity.target_lock import FaceRef
+        registry = self.target_locks.registry(value)
+        refs = []
+        for box, points in retained:
+            pose = as_pose3d(geometric_pose(points))
+            embedding = self.analyzer.recognizer.embed(image, points)
+            refs.append(FaceRef(embedding, pose.yaw, pose.pitch, pose.roll, box.tolist()))
+        associations = registry.associate(refs, frame_index, learn=True)
+        next_track = max((t.persistent_id or 0 for t in new_tracks), default=-1) + 1
 
         for idx, (box, points) in enumerate(retained):
             x1, y1, x2, y2 = box.astype(int)
@@ -316,7 +333,17 @@ class MediaService:
             yaw, pitch, roll = geometric_pose(points)
             pose3d = as_pose3d((yaw, pitch, roll))
 
-            track_id = f"track_{track_start_idx + idx:04d}"
+            cluster = registry.clusters[associations[idx].cluster_id]
+            if cluster.track_id is None:
+                # Reuse an inspection track only with an observation at this frame.
+                from roop_3d.media.detector import iou
+                exact = [t for t in new_tracks if t.first_frame == frame_index and iou(
+                    np.array([t.bounding_box.x1, t.bounding_box.y1, t.bounding_box.x2, t.bounding_box.y2]), box) >= .6]
+                cluster.track_id = exact[0].track_id if len(exact) == 1 else f'track_{next_track:04d}'
+                if not exact:
+                    next_track += 1
+            track_id = cluster.track_id
+            existing = next((t for t in new_tracks if t.track_id == track_id), None)
             bbox_norm = [float(x1 / width), float(y1 / height), float(x2 / width), float(y2 / height)]
             landmarks5_norm = [[float(p[0] / width), float(p[1] / height)] for p in points]
 
@@ -336,7 +363,7 @@ class MediaService:
 
             track_obj = FaceTrack(
                 track_id=track_id,
-                persistent_id=track_start_idx + idx,
+                persistent_id=existing.persistent_id if existing else int(track_id.removeprefix('track_')),
                 scene_id=0,
                 landmark_count=5,
                 first_frame=frame_index,
@@ -354,7 +381,20 @@ class MediaService:
                 thumbnail_base64=thumb_b64,
                 sampled_detections=1,
             )
-            new_tracks.append(track_obj)
+            if existing is None:
+                new_tracks.append(track_obj)
+            else:
+                pose_range = existing.pose_range.model_copy(update={
+                    'yaw_degrees': (min(existing.pose_range.yaw_degrees[0], yaw), max(existing.pose_range.yaw_degrees[1], yaw)),
+                    'pitch_degrees': (min(existing.pose_range.pitch_degrees[0], pitch), max(existing.pose_range.pitch_degrees[1], pitch)),
+                    'roll_degrees': (min(existing.pose_range.roll_degrees[0], roll), max(existing.pose_range.roll_degrees[1], roll)),
+                })
+                new_tracks[new_tracks.index(existing)] = existing.model_copy(update={
+                    'first_frame': min(existing.first_frame, frame_index), 'last_frame': max(existing.last_frame, frame_index),
+                    'first_timestamp_seconds': min(existing.first_timestamp_seconds, timestamp),
+                    'last_timestamp_seconds': max(existing.last_timestamp_seconds, timestamp),
+                    'sampled_detections': len(cluster.seen), 'pose_range': pose_range,
+                })
 
         inspection_id = existing_inspection.inspection_id if existing_inspection else uuid.uuid4().hex
         inspection_obj = FaceInspection(
@@ -364,8 +404,8 @@ class MediaService:
             detector_sha256=detector_record["sha256"],
             recognizer_model_id=recognizer_record["model_id"],
             recognizer_sha256=recognizer_record["sha256"],
-            decoded_frames=max(1, frame_index + 1),
-            sampled_frames=1,
+            decoded_frames=max(1, frame_index + 1, existing_inspection.decoded_frames if existing_inspection else 0),
+            sampled_frames=max(1, existing_inspection.sampled_frames if existing_inspection else 0),
             truncated=False,
             tracking_method="iou_arcface_hungarian",
             scene_cut_frames=(),

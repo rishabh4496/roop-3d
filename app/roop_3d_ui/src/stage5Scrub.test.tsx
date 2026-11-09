@@ -74,6 +74,17 @@ describe('FrameScrubber: latest frame wins, one request in flight', () => {
     expect(pending).toHaveLength(2);
     expect(scrubber.requests.length).toBe(2);
   });
+  it('refreshes the same frame after detector settings change', async () => {
+    const { fetcher, pending } = manualFetcher();
+    const scrubber = make(fetcher);
+    scrubber.setTarget('a.mp4', 4, true, false); await tick(); pending[0].resolve(); await tick();
+    scrubber.invalidate(); await tick();
+    expect(pending).toHaveLength(2);
+    expect(pending[1].index).toBe(4);
+    pending[1].resolve(); await tick();
+    expect(scrubber.getState().shown?.index).toBe(4);
+    scrubber.reset();
+  });
 
   it('does not request detection when it is off, nor anything while playback is running', async () => {
     const { fetcher, pending } = manualFetcher();
@@ -165,6 +176,14 @@ describe('matching detected faces to stored target faces', () => {
     expect(matches[0]).toMatchObject({ id: 'track_0000_10', clusterId: 'track_0000', locked: false });
     expect(matches[1]).toMatchObject({ id: 'frame:10:1', clusterId: null, stored: null, locked: false });
     expect(matches[1].landmarks5[2]).toEqual([0.65, 0.28]);       // native pixels -> fractions of the frame
+  });
+  it('keeps identity when people exchange screen positions', () => {
+    const faces = [{ ...face(0, [100, 100, 200, 220]), track_id: 'track_0001' },
+      { ...face(1, [600, 100, 700, 220]), track_id: 'track_0000' }];
+    const matches = matchFrameFaces(faces, frame, [stored('a', 'track_0000', [.1, .2, .2, .44]),
+      stored('b', 'track_0001', [.6, .2, .7, .44])], 'a');
+    expect(matches.map(item => item.clusterId)).toEqual(['track_0001', 'track_0000']);
+    expect(matches[1].locked).toBe(true);
   });
 
   it('the active face, and any face of the active track, is the locked target', () => {

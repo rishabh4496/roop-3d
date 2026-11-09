@@ -50,6 +50,7 @@ class Settings(Contract):
     hardware_profile: Literal["auto", "cpu", "6gb", "12gb"] = "auto"
     preferred_provider: Literal["auto", "TensorrtExecutionProvider", "CUDAExecutionProvider", "CPUExecutionProvider"] = "auto"
     precision_policy: Literal["auto", "fp32", "fp16"] = "auto"
+    detector_model_id: Literal['scrfd', 'retinaface', 'yoloface'] = 'scrfd'
     swapper_model_id: str = Field(default="inswapper_128", pattern=r"^[a-z0-9][a-z0-9_]{0,95}$")
     dfm_morph_factor: float = Field(default=0.75, ge=0, le=1)
     vram_limit_mb: int = Field(default=0, ge=0, le=131072, strict=True, description="0 uses available VRAM")

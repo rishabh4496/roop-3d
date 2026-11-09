@@ -73,7 +73,17 @@ reviewed**:
 
 If any of these is unknown the model's state is **`LICENSE_RESTRICTED`** (licence gaps) or **`INCOMPATIBLE`** (other gaps) and the operation
 stops with **`LICENSE_UNVERIFIED`** or **`MODEL_INCOMPATIBLE`** and a list of exactly what is unknown. There is no setting that skips this check
-and retrying does not change it.
+for registry or downloaded models, and retrying does not change it.
+
+### Weights you place yourself
+
+A model file that physically sits in `app/models/` (over 1 MB, not in `.trt_cache`, not a link) is **auto-trusted**. This covers FP16 or custom
+exports whose bytes can never match a registry hash. Roop 3D finds the file by a case- and punctuation-blind name match (`GPEN-BFR-512.onnx`,
+`gpen_bfr_512.fp16.onnx`, `CodeFormer.fp16.onnx`, `GFPGANv1.4.onnx`, `hyperswap_1a_256.onnx`, `scrfd_10g_bnkps.onnx`, ...), computes its SHA-256
+itself, logs `Auto-trusted local weight file: <name>`, and treats it as verified, governance-approved and not blocked, so restoration is never
+switched off for it and the licence/compatibility gate does not apply to it. Only ONNX files can run (a `.pth` is listed but needs a PyTorch
+loader this build does not have). The file is your responsibility: nothing checks its provenance or licence. The Inspector's **Loaded in VRAM**
+badge (`GET /api/v1/models/active`) shows the exact file each stage is using.
 
 > **Known limitation on the build this guide was written against (checked 2026-11-05).** The model registry shipped with this checkout records
 > the licence, security, precision and provenance fields of the core models as `UNKNOWN`. On that build, **inspecting faces and rendering are

@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Body, Header, Query, Request, Response
 from fastapi.responses import FileResponse
@@ -63,14 +63,15 @@ def capabilities(request: Request) -> Capabilities:
     from roop_3d.server.workstation import CHUNK_BYTES, MAX_ASSET_BYTES
     state = request.app.state
     hardware = probe_hardware(state.settings)
-    available = {item["name"] for item in state.models.public()}
+    model_rows = state.models.public()
+    available = {item['id'] for item in model_rows if item.get('installed') and item.get('state') == 'VERIFIED_LOCAL'}
+    available.update(item['name'] for item in model_rows if item.get('installed') and item.get('state') == 'VERIFIED_LOCAL')
     gpu = bool(hardware.gpus) and "CUDAExecutionProvider" in hardware.advertised_providers
     lp = all(name in available for name in ("liveportrait_appearance_feature_extractor.onnx", "liveportrait_motion_extractor.onnx", "liveportrait_warping_spade.onnx"))
-    stream = state.settings.render_backend == "stream" or state.settings.render_backend == "auto" and gpu
     import importlib.metadata
     try:
         importlib.metadata.version("tensorrt-cu12-libs")
-        trt = gpu and stream
+        trt = gpu and 'TensorrtExecutionProvider' in hardware.advertised_providers
     except importlib.metadata.PackageNotFoundError:
         trt = False
     try:
@@ -81,13 +82,14 @@ def capabilities(request: Request) -> Capabilities:
     options = {
         "swapper_model_id": {item["id"]: None for item in state.models.public() if item["category"] == "swapper"},
         "execution_mode": {"swap": None, "volumetric": None if lp else "LivePortrait weights are unavailable", "hybrid": "No verified diffusion loader is configured", "diffusion_vfx": "No verified diffusion loader is configured"},
-        "preferred_provider": {"auto": None, "CPUExecutionProvider": None, "CUDAExecutionProvider": None if gpu else "CUDA is unavailable", "TensorrtExecutionProvider": None if trt else "TensorRT requires the stream backend, NVIDIA GPU and packaged TensorRT libraries"},
+        "preferred_provider": {"auto": None, "CPUExecutionProvider": None, "CUDAExecutionProvider": None if gpu else "CUDA is unavailable", "TensorrtExecutionProvider": None if trt else "TensorRT requires an NVIDIA GPU, its execution provider and packaged TensorRT libraries"},
         "hardware_profile": {"auto": None, "cpu": None, "6gb": None if gpu else "No CUDA GPU is available", "12gb": None if gpu and hardware.gpus[0].total_vram_mib >= MIN_12GB_PROFILE_VRAM_MIB else "A CUDA GPU with at least 10 GB of video memory is required"},
-        "precision_policy": {"auto": None, "fp32": None, "fp16": "The reference session uses observed FP32 graph contracts"},
-        "face_restoration_policy": {"off": None, "auto": None, "gfpgan": None if stream and "GFPGANv1.4.onnx" in available else "GFPGAN requires the stream backend and registered weights",
-            "gpen": None if stream and "gpen_bfr_512.onnx" in available else "GPEN requires the stream backend and registered weights",
-            "codeformer": None if stream and "CodeFormerv0.1.onnx" in available else "CodeFormer requires the stream backend and registered weights",
-            "ultramax": None if stream and ultramax else "UltraMax requires an explicit registered model and preprocessing contract"},
+        "precision_policy": {"auto": None, "fp32": None, "fp16": None if trt and state.settings.preferred_provider in ('auto', 'TensorrtExecutionProvider') else "FP16 mixed precision requires TensorRT; CUDA uses the model's graph precision"},
+        "detector_model_id": {key: None for key in ('scrfd', 'retinaface', 'yoloface')},
+        "face_restoration_policy": {"off": None, "auto": None, "gfpgan": None if 'gfpgan_v14' in available else "GFPGAN weights are unavailable",
+            "gpen": None if 'gpen_bfr_512' in available else "GPEN weights are unavailable",
+            "codeformer": None if 'codeformer' in available else "CodeFormer weights are unavailable",
+            "ultramax": None if ultramax else "UltraMax requires an installed model and preprocessing contract"},
         "render_backend": {"auto": None, "reference": None, "stream": None},
         "lip_sync_mode": {"off": None, "wav2lip": None, "wav2lip_gan_fp16": None,
                           "musetalk": "Whisper/VAE engine bundle unavailable", "edtalk": "Pose/emotion engine bundle unavailable"},
@@ -131,12 +133,26 @@ class ModelVerifyRequest(Contract):
 class ModelCompileTrtRequest(Contract):
     model_id: str | None = None
     models: list[str] = Field(default_factory=list)
-    precision: str = "fp16"
+    precision: Literal['fp16', 'fp32'] = "fp16"
 
 
 @router.get("/models", response_model=list[ModelSummary])
 def models(request: Request) -> list[dict]:
     return request.app.state.models.public()
+
+
+@router.get("/models/active")
+def active_model_readback(request: Request) -> dict[str, Any]:
+    """The model file each stage has loaded right now, next to what the saved settings select.
+
+    ``active`` is null for a stage that has no session in memory (nothing rendered or previewed yet, or its
+    session was released); ``selected`` is what the next preview/render will load.
+    """
+    from roop_3d.engine import active_models
+    settings = request.app.state.settings
+    return {"selected": {"swapper_model": settings.swapper_model_id, "detector_model": settings.detector_model_id,
+                         "enhancer_model": settings.face_restoration_policy},
+            "active": active_models.snapshot()}
 
 
 @router.post("/models/rescan")
@@ -284,7 +300,35 @@ def compile_trt_models(
     request: Request,
     value: Annotated[ModelCompileTrtRequest | None, Body()] = None,
 ) -> dict[str, Any]:
-    raise DomainError("TRT_BUILD_UNAVAILABLE", "No verified TensorRT build adapter is configured for these models", 409)
+    state = request.app.state
+    if state.worker is None:
+        raise DomainError('TRT_BUILD_UNAVAILABLE', 'TensorRT compilation requires the rendering worker', 409)
+    req = value or ModelCompileTrtRequest()
+    ids = list(dict.fromkeys(([req.model_id] if req.model_id else []) + req.models))
+    if not ids or len(ids) > 16:
+        raise DomainError('MODEL_SELECTION_REQUIRED', 'Select between one and sixteen local models to compile', 422)
+    from roop_3d.core.hardware import probe_hardware
+    from roop_3d.engine.runtime import RuntimeConfig
+    from roop_3d.server.engine_gate import EngineBusy
+    from roop_3d.server.model_runtime import compile_model
+    from roop_3d.server.app import release_media_models
+    hardware = probe_hardware(state.settings)
+    if not hardware.gpus or 'TensorrtExecutionProvider' not in hardware.advertised_providers or state.settings.hardware_profile == 'cpu':
+        raise DomainError('TRT_BUILD_UNAVAILABLE', 'TensorRT compilation requires an available NVIDIA GPU and TensorRT execution provider', 409)
+    if state.engine_gate.busy_reason():
+        raise EngineBusy(state.engine_gate.busy_reason())
+    config = RuntimeConfig(provider='TensorrtExecutionProvider', hardware_profile=hardware.resolved_hardware_profile,
+        precision_policy=req.precision, reserve_mib=state.settings.memory_safety_reserve_mb)
+    results = []
+    with state.engine_gate.owner('TENSORRT_COMPILATION'):
+        release_media_models(state.media, state.worker)
+        try:
+            for model_id in ids:
+                state.pipeline.set_engine('COMPILING_TRT', label=f'{model_id} {req.precision}', model=model_id, precision=req.precision)
+                results.append(compile_model(state.models, model_id, config))
+        finally:
+            state.pipeline.set_engine('IDLE')
+    return {'status': 'compiled', 'results': results}
 
 
 @router.get("/models/{model_id}/license", response_model=ModelLicenseNotice)

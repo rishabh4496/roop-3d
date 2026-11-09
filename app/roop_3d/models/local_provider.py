@@ -11,6 +11,7 @@ from roop_3d.audit.project_paths import application_root, legacy_root
 from roop_3d.core.errors import DomainError
 from roop_3d.core.settings import runtime_path
 from roop_3d.models.downloader import Downloader
+from roop_3d.models.local_trust import LocalTrust
 from roop_3d.models.registry import ModelRecord, ModelRegistry, authorize
 from roop_3d.models.verifier import verified_stream, verify_file
 
@@ -18,11 +19,14 @@ from roop_3d.models.verifier import verified_stream, verify_file
 class LocalWeightProvider:
     def __init__(self, registry: ModelRegistry, *, root: Path | None = None,
                  scopes: dict[str, Path] | None = None,
-                 search_paths: Callable[[], tuple[str, ...]] | None = None):
+                 search_paths: Callable[[], tuple[str, ...]] | None = None,
+                 trust: LocalTrust | None = None):
         self.root = root or application_root()
         self.registry = registry
         self._scopes = scopes
         self.search_paths = search_paths or (lambda: ())
+        # Files the user placed in app/models that the registry digest cannot describe (see local_trust.py).
+        self.trust = trust
 
     def scopes(self) -> dict[str, Path]:
         if self._scopes is not None:
@@ -66,8 +70,40 @@ class LocalWeightProvider:
                     if name in record.filenames:
                         yield safe_path(base, (Path(parent) / name).relative_to(base).as_posix())
 
+    def trusted_path(self, record: ModelRecord) -> Path | None:
+        """A physical weight in app/models that matches ``record`` by name, trusted by its own digest.
+
+        Used only when the pinned lookup fails (missing, different export, FP16 variant, renamed file).
+        """
+        if self.trust is None:
+            return None
+        names = [*record.filenames, record.model_id, getattr(record, "name", "")]
+        path = self.trust.locate(names)
+        if path is None:
+            return None
+        try:
+            self.trust.trust(path)
+        except OSError:
+            return None
+        return path
+
+    def trusted_identity(self, path: Path | None) -> tuple[str, int] | None:
+        """``(sha256, size)`` of an auto-trusted file, else ``None`` (the registry digest applies)."""
+        entry = self.trust.lookup(path) if self.trust is not None else None
+        return (entry.sha256, entry.size) if entry else None
+
     def resolve(self, model: str | ModelRecord) -> Path:
         record = self.registry.get(model) if isinstance(model, str) else model
+        try:
+            return self._resolve_pinned(record)
+        except DomainError:
+            # A weight the user put in app/models is never refused for lacking the pinned digest.
+            trusted = self.trusted_path(record)
+            if trusted is None:
+                raise
+            return trusted
+
+    def _resolve_pinned(self, record: ModelRecord) -> Path:
         # The locator iterator returns immediately after its first authoritative
         # path; a mutated preserved source can never fall through to another copy.
         mismatch = None
@@ -84,8 +120,19 @@ class LocalWeightProvider:
     def open(self, model: str | ModelRecord, *, accepted_license: bool = False,
              commercial: bool = False) -> Iterator[BinaryIO]:
         record = self.registry.get(model) if isinstance(model, str) else model
-        authorize(record, action="activate", accepted_license=accepted_license, commercial=commercial)
-        path = self.resolve(record)
+        path = None
+        try:
+            authorize(record, action="activate", accepted_license=accepted_license, commercial=commercial)
+            path = self.resolve(record)
+        except DomainError:
+            path = self.trusted_path(record)
+            if path is None:
+                raise
+        identity = self.trusted_identity(path)
+        if identity is not None:
+            with verified_stream(path, identity[0], identity[1]) as stream:
+                yield stream
+            return
         from roop_3d.models.governance import ModelCompatibilityScanner
         governance = ModelCompatibilityScanner().scan(record, installed=True, integrity_verified=True)
         if governance["lifecycle_state"] != "READY":

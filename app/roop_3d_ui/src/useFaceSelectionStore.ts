@@ -144,7 +144,7 @@ export function clusterFaces(
     results.push({
       ...prev,
       id: clusterId,
-      name: prev?.name ?? `Identity ${clusterIndex}`,
+      name: prev?.name ?? `Face ${clusterId.startsWith('track_') ? Number(clusterId.slice(6)) : clusterIndex - 1}`,
       faceIds: group.map(f => f.id),
       frameCount: uniqueFrames.size,
       avgPose,

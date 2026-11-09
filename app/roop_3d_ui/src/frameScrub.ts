@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { RUNTIME_SETTINGS_CHANGED } from './runtimeSettings';
 
 /**
  * Timeline scrubbing client for `GET /api/v1/media/{info,frame,filmstrip}`.
@@ -153,6 +154,12 @@ export class FrameScrubber {
 
   retry() { this.set({ error: '' }); this.queuePump(); }
 
+  invalidate() {
+    const path = this.path, index = this.wanted, enabled = this.enabled, detect = this.detect;
+    this.reset();
+    this.setTarget(path, index, enabled, detect);
+  }
+
   /** Aborts the request, frees every cached frame and forgets the clip. */
   reset() {
     this.generation++;
@@ -246,6 +253,12 @@ export function useScrubFrame({ path, time, fps, maxIndex, enabled, detect = tru
   const index = Math.max(0, Math.min(Math.max(0, maxIndex), Math.round(time * Math.max(1, fps))));
   useEffect(() => { scrubber.setTarget(path, index, enabled, detect); }, [scrubber, path, index, enabled, detect]);
   useEffect(() => () => scrubber.reset(), [scrubber]);
+  useEffect(() => {
+    const refresh = () => scrubber.invalidate();
+    window.addEventListener(RUNTIME_SETTINGS_CHANGED, refresh);
+    window.addEventListener('target-angle-scan-completed', refresh);
+    return () => { window.removeEventListener(RUNTIME_SETTINGS_CHANGED, refresh); window.removeEventListener('target-angle-scan-completed', refresh); };
+  }, [scrubber]);
   const shown = state.shown;
   return {
     source: shown?.url ?? '', error: state.error, loading: state.loading, detecting: state.detecting,

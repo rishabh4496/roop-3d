@@ -34,7 +34,7 @@ The 3D viewer under the selector previews the geometry each mode works from: *St
 | **CodeFormer** (`CodeFormerv0.1.onnx`) | must be installed and verified | Has a *fidelity* control (low = more restored detail, high = stays true to the input face; default 0.5, recommended 0.4–0.7). **In the current build CodeFormer is not wired into the preview compositor, and the app marks this control inactive: it currently changes nothing in the preview.** Prefer GPEN |
 | GFPGAN, UltraMax | — | GFPGAN has no verified adapter; UltraMax needs an explicitly registered model and preprocessing contract |
 
-The Inspector says *Weights verified locally* or *Weights not verified locally: restoration stays off*. Restoration never runs without verified weights.
+The Inspector says *Weights verified locally* or *No usable weight file in app/models: restoration stays off*. Restoration never runs without weights; any enhancer file you place in `app/models` counts as verified (see OFFLINE_MODELS.md, “Weights you place yourself”).
 
 ## 4. Where it runs: hardware profile and provider
 

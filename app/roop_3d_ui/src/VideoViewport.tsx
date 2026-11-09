@@ -277,14 +277,16 @@ export function VideoViewport({
     // Selecting an existing track must not create a second persistent target lock.
     if (match.stored) {
       store.setActiveSelection(match.stored.id);
+      await targetLock.lockFace(match.face.face_index, match.clusterId ?? undefined);
       // "Bind .fsz identity" on a face that is already a target: map its track to the chosen FaceSet.
       const chosen = sourceOverrideId ? sources.find(item => item.faceset_id === sourceOverrideId) : undefined;
       if (chosen && match.clusterId) { store.assignSource(match.clusterId, chosen.faceset_id); onAssignSource?.(match.clusterId, chosen.faceset_id); noticeLater(`Face #${match.face.face_index + 1} is now mapped to ${chosen.name}.`); }
       return;
     }
-    void targetLock.lockFace(match.face.face_index);        // Stage 12: a new candidate also locks the PERSON (reference bank + cluster id)
     setLockingId(match.id);
     try {
+      const locked = await targetLock.lockFace(match.face.face_index);
+      if (!locked) return;
       // The frame's own presentation time (minus a hair, so rounding can never select the next frame).
       const result = await post<FrameFaceDetectionResponse>('/media/detect-frame-faces', { path: target, timestamp: Math.max(0, meta.timestamp_sec - 0.0005) });
       const server = bestOverlap(match.face, result?.faces ?? []);
@@ -761,7 +763,7 @@ export function VideoViewport({
         {detectionNotice && <span className="detection-inline-notice">{detectionNotice}</span>}
         {extraction.toast && <span className={`face-toast ${extraction.toast.kind}`} role="status">{extraction.toast.text}</span>}
         {targetLock.toast && <span className={`face-toast ${targetLock.toast.kind}`} role="status">{targetLock.toast.text}</span>}
-        {targetLock.lock && <span className="target-lock-chip" title={`${targetLock.lock.bank_size} reference angles · scan ${targetLock.lock.scan?.state ?? 'not started'}`}>TARGET LOCKED ✓ {targetLock.lock.label}</span>}
+        {targetLock.lock && <span className="target-lock-chip" title={`${targetLock.lock.bank_size} reference angles · scan ${targetLock.lock.scan?.state ?? 'not started'}`}>TARGET LOCKED ✓ {targetLock.lock.track_id?.replace('track_', 'Face ').replace(/ 0+(\d)/, ' $1') ?? targetLock.lock.label} · {targetLock.lock.bank_size} angles{targetLock.lock.scan?.state === 'running' ? ' · capturing…' : ''}</span>}
         {solo && <button className="button small" onClick={() => setSolo(null)}>Exit solo · {solo}</button>}
 
         {/* Mask Editing Mode Toggle */}

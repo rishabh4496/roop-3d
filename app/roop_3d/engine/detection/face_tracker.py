@@ -98,7 +98,7 @@ class FaceTracker:
             raise ValueError("Invalid tracker bounds")
         self.catalog = catalog or ModelCatalog()
         factory = session_factory(self.catalog, config)
-        self.detector, self.recognizer = detector or Detector(self.catalog, factory), Recognizer(self.catalog, factory)
+        self.detector, self.recognizer = detector or Detector(self.catalog, factory, model_id=config.detector_model_id, provider=config.provider, precision=config.precision_policy), Recognizer(self.catalog, factory)
         self._owns_detector = detector is None
         self.dense = DenseLandmarks(self.catalog, config)
         self.max_tracks, self.max_missed, self.threshold = max_tracks, max_missed, threshold

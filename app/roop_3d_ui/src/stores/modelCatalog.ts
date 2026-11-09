@@ -11,6 +11,8 @@ export type CatalogModel = {
   download_url: string | null; state: string; sha256: string | null; size_bytes: number | null;
   license_id?: string; license_notice?: string; commercial_use?: string; manual_acceptance_required?: boolean;
   local_format?: string | null; supports_3d_hybrid?: boolean;
+  /** A weight present in app/models is verified, approved and never blocked (server models/local_trust.py). */
+  verified?: boolean; governance_approved?: boolean | null; blocked?: boolean; local_trust?: boolean;
 };
 export type DownloadJob = { download_id: string; model_id: string; state: string; bytes_downloaded: number; total_bytes: number; percent: number; error_code: string | null };
 export type ImportReport = { status: string; imported?: { name: string; model_id: string }[]; skipped?: { name: string; reason: string }[]; corrupted?: { name: string; file: string; error: string }[] };
@@ -32,7 +34,7 @@ export const ACTIVE_DOWNLOAD = ['queued', 'downloading', 'cancelling'];
 export const isInstalled = (status: ModelStatus) => status === 'ready' || status === 'trt' || status === 'disk';
 
 export function modelStatus(model: CatalogModel): ModelStatus {
-  if (model.state === 'BLOCKED') return 'blocked';
+  if (model.state === 'BLOCKED' && !model.installed) return 'blocked';
   if (model.installed) return model.trt_cached ? 'trt' : (model.vram_loaded || model.state === 'VERIFIED_LOCAL') ? 'ready' : 'disk';
   return model.download_url ? 'download' : 'locate';
 }

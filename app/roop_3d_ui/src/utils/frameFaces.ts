@@ -38,6 +38,10 @@ export function matchFrameFaces(
 ): MatchedFrameFace[] {
   const pairs: { frame: number; stored: number; score: number }[] = [];
   faces.forEach((face, f) => stored.forEach((candidate, s) => {
+    if (face.track_id && typeof face.track_id === 'string') {
+      if (face.track_id === candidate.clusterId) pairs.push({ frame: f, stored: s, score: 2 });
+      return;
+    }
     const score = iou(face.bbox_norm, candidate.bbox);
     if (score >= minIou) pairs.push({ frame: f, stored: s, score });
   }));

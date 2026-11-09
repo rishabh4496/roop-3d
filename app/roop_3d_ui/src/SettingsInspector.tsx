@@ -35,6 +35,7 @@ const SETTING_DOMAINS: Record<string, DomainId> = {
 
   face_restoration_policy: 'pipeline',
   swapper_model_id: 'pipeline',
+  detector_model_id: 'pipeline',
   lip_sync_mode: 'pipeline',
   lip_sync_audio_path: 'pipeline',
   lip_sync_audio_stream: 'pipeline',

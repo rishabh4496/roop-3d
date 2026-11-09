@@ -97,6 +97,11 @@ export default function FaceManager({
   const [assignedSource, setAssignedSource] = useState('');
   const [bank, setBank] = useState(null), [bankTarget, setBankTarget] = useState('');
   const [archiveMatrix, setArchiveMatrix] = useState(null), [matrixRevision, setMatrixRevision] = useState(0), [bankRevision, setBankRevision] = useState(0);
+  useEffect(() => {
+    const refresh = () => setBankRevision(value => value + 1);
+    window.addEventListener('target-angle-scan-completed', refresh);
+    return () => window.removeEventListener('target-angle-scan-completed', refresh);
+  }, []);
   const bankRef = useRef(null), assignSourceRef = useRef(onAssignSource);
   assignSourceRef.current = onAssignSource;
   bankRef.current = bank;

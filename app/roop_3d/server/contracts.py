@@ -64,6 +64,12 @@ class ModelSummary(Contract):
     commercial_use: Literal["allow", "deny", "unknown"] = "unknown"
     license_notice: str = ""
     manual_acceptance_required: bool = False
+    # A weight physically present in app/models is verified, governance-approved and never blocked
+    # (models/local_trust.py). ``governance_approved`` is None where the governance gate was not evaluated.
+    verified: bool = False
+    governance_approved: bool | None = None
+    blocked: bool = False
+    local_trust: bool = False
 
 
 class Capabilities(Contract):

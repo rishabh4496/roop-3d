@@ -53,7 +53,7 @@ def load_local_session(catalog, model_id: str, path: Path, config: RuntimeConfig
     if config.provider in (TRT, CUDA):
         # SessionManager disables CPU EP fallback and keeps unsupported nodes on CUDA.
         manager = SessionManager(hardware_profile=config.hardware_profile,
-            fp16=config.provider == TRT, gpu_memory_limit=config.gpu_budget_bytes)
+            fp16=config.provider == TRT and config.precision_policy != 'fp32', gpu_memory_limit=config.gpu_budget_bytes)
     else:
         manager = SessionManager(hardware_profile="6gb", fp16=False)
     try:
@@ -114,6 +114,17 @@ class SwapperEngineAdapter:
             from roop_3d.core.ort_session import GpuIoBinding
             self._binding = GpuIoBinding(self.session)
             self._runner = lambda feeds: self._binding.run(feeds)
+        # Read-back of the file now in VRAM, keyed by (stage, model_id, path, provider, precision).
+        self._active_key = None
+        if session is None:
+            from roop_3d.engine import active_models
+            path = self.path or getattr(self.model, "path", None)
+            provider = ((self.session.get_providers() or [config.provider])[0]
+                        if hasattr(self.session, "get_providers") else config.provider)
+            record = getattr(self.model, "record", None)
+            self._active_key = active_models.activate(
+                "swapper", model_id, path, provider, config.precision_policy,
+                record.get("sha256") if isinstance(record, dict) else None).key
 
     def _inspect_dfm(self) -> None:
         names = {node.name for node in self._inputs}
@@ -342,6 +353,10 @@ class SwapperEngineAdapter:
     def release(self) -> None:
         if self.model is not None:
             self.model.release()
+        if getattr(self, "_active_key", None) is not None:
+            from roop_3d.engine import active_models
+            active_models.release("swapper", self._active_key)
+            self._active_key = None
         if self.catalog:
             self.catalog.set_vram_loaded(self.model_id, False)
         self.session = None

@@ -90,13 +90,40 @@ class FaceBank:
             known={track for cluster in store['clusters'] for track in cluster['track_ids']}
             unresolved=[]
             for track in inspection.tracks[:64]:
-                if track.track_id in known: continue
                 observations=[]
+                # The canvas lock already learned identity-matched views across
+                # the video. Reuse those measurements in the durable angle bank.
+                locks = getattr(self.service.state.media, 'target_locks', None)
+                registry = locks.registry(value.target_media_path) if locks is not None else None
+                entries = []
+                if registry is not None:
+                    with registry.lock:
+                        entries = [entry for cluster in registry.clusters.values() if cluster.track_id == track.track_id
+                                   for entry in cluster.bank]
+                for entry in entries:
+                    result = self.service.state.media.frames.read(value.target_media_path, frame_index=entry.frame_index)
+                    image = result.image
+                    h,w=image.shape[:2]
+                    x1,y1,x2,y2=map(int,entry.bbox)
+                    crop=image[max(0,y1):min(h,y2),max(0,x1):min(w,x2)]
+                    if crop.size == 0: continue
+                    sharpness=float(min(1,cv2.Laplacian(cv2.cvtColor(crop,cv2.COLOR_BGR2GRAY),cv2.CV_64F).var()/500))
+                    ok,thumbnail=cv2.imencode('.jpg',cv2.resize(crop,(128,128)))
+                    if not ok: continue
+                    observations.append((entry.embedding,{'id':f'{track.track_id}_{entry.frame_index}', 'trackId':track.track_id,
+                        'frame':entry.frame_index, 'yaw':entry.yaw,'pitch':-entry.pitch,'roll':entry.roll,
+                        'sharpness':sharpness,'quality':sharpness,
+                        'thumbnailUrl':'data:image/jpeg;base64,'+base64.b64encode(thumbnail).decode()}))
+                if track.track_id in known:
+                    cluster=next(c for c in store['clusters'] if track.track_id in c['track_ids'])
+                    existing_ids={f['id'] for f in cluster['faces']}
+                    cluster['faces'].extend(item[1] for item in observations if item[1]['id'] not in existing_ids)
+                    continue
                 box=track.bounding_box
                 reference=np.array([box.x1,box.y1,box.x2,box.y2])
-                sample_frames={track.first_frame,track.last_frame}
+                sample_frames=set() if observations else {track.first_frame,track.last_frame}
                 middle=(track.first_frame+track.last_frame)//2
-                if middle<10000: sample_frames.add(middle)
+                if middle<10000 and not observations: sample_frames.add(middle)
                 for frame in sorted(sample_frames):
                     if frame<10000:
                         image=self.service.state.media.frame(value.target_media_path,None,frame)

@@ -63,6 +63,7 @@ class PersonCluster:
     cluster_id: int
     bank: list[BankEntry] = field(default_factory=list)
     locked: bool = False
+    track_id: str | None = None
     seen: dict[int, list[float]] = field(default_factory=dict)       # frame_index -> bbox (trajectory samples)
 
     def score(self, embedding: np.ndarray) -> tuple[float, BankEntry | None]:
@@ -119,6 +120,7 @@ class ClusterRegistry:
         self.next_id += 1
         self.clusters[cluster.cluster_id] = cluster
         cluster.bank.append(BankEntry(_unit(ref.embedding), ref.yaw, ref.pitch, ref.roll, frame_index, ref.bbox, "auto"))
+        cluster.seen[frame_index] = list(ref.bbox)
         return cluster
 
     def associate(self, refs: list[FaceRef], frame_index: int, *, learn: bool = True,
@@ -183,6 +185,7 @@ class TargetIdentityLock:
     def public(self, registry: ClusterRegistry) -> dict:
         cluster = registry.clusters[self.cluster_id]
         return {"lock_id": self.lock_id, "target_number": self.target_number, "label": f"Target #{self.target_number}",
+                'track_id': cluster.track_id,
                 "media_path": self.media_path, "cluster_id": self.cluster_id, "anchor_frame_index": self.anchor_frame_index,
                 "anchor_bbox": [round(v, 3) for v in self.anchor_bbox],
                 "anchor_pose": {"yaw": round(self.anchor_pose[0], 2), "pitch": round(self.anchor_pose[1], 2),

@@ -1,6 +1,12 @@
 export type RestorerModel = 'gpen' | 'codeformer' | 'ultramax' | 'gfpgan';
 /** Weight file each enhancer needs. UltraMax is CodeFormer weights + Laplacian detail fusion, so it shares CodeFormer's file. */
-export const restorerWeights = (model: RestorerModel | undefined): string => (model === 'codeformer' || model === 'ultramax' ? 'CodeFormerv0.1.onnx' : model === 'gfpgan' ? 'GFPGANv1.4.onnx' : 'gpen_bfr_512.onnx');
+export const restorerWeights = (model: RestorerModel | undefined): string => (model === 'ultramax' ? 'codeformer.fp16.onnx' : model === 'codeformer' ? 'CodeFormerv0.1.onnx' : model === 'gfpgan' ? 'GFPGANv1.4.onnx' : 'gpen_bfr_512.onnx');
+/** Catalog names are display labels; readiness is keyed by stable model ID. */
+export function restorerAvailable(models: readonly { id?: string; model_id?: string; name: string; state: string; installed?: boolean }[] | undefined, model: RestorerModel | undefined): boolean {
+  const id = model === 'gfpgan' ? 'gfpgan_v14' : model === 'gpen' || !model ? 'gpen_bfr_512' : model;
+  return !!models?.some(item => item.installed !== false && item.state === 'VERIFIED_LOCAL' &&
+    ((model !== 'ultramax' && (item.id === id || item.model_id === id)) || item.name === restorerWeights(model)));
+}
 export type WorkstationParameters = {
   expression_restore_factor?: number;
   face_expression_overrides?: Record<string, FaceEditor>;

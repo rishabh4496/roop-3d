@@ -104,7 +104,8 @@ class LiveStudio:
                 source = reader.read(runner._faceset_path(config.source_faceset_id), faceset_id=config.source_faceset_id)
                 provider = settings.preferred_provider if admission.profile != "cpu" and settings.preferred_provider != "auto" else admission.provider
                 runtime = RuntimeConfig(provider=provider, hardware_profile=admission.profile,
-                                        reserve_mib=settings.memory_safety_reserve_mb)
+                                        reserve_mib=settings.memory_safety_reserve_mb,
+                                        precision_policy=settings.precision_policy, detector_model_id=settings.detector_model_id)
                 session = ReferencePipeline(self.state.models, runtime)
                 stack.callback(session.release_session)
                 session.select_swapper(config.swapper_model_id or settings.swapper_model_id)

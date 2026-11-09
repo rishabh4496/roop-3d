@@ -7,8 +7,9 @@ export type PersonModels = { swapper?: string; enhancer?: string };
  * Engine & Model Rack choices that are not already part of `WorkstationParameters`.
  *
  * `swapper` is sent as the job's `swapper_model_id` (the one model knob the render engine has). The others
- * (detector, landmarker, upscaler, cranial silhouette, per-person overrides) have no render-engine setting yet: they are
+ * (landmarker, upscaler, cranial silhouette, per-person overrides) have no render-engine setting yet: they are
  * remembered here so the choice survives a reload, and the Rack labels them "saved preference" instead of pretending they apply.
+ * The detector mirrors the persisted global detector_model_id for frame analysis and rendering.
  */
 export type RackState = {
   swapper: string | null;

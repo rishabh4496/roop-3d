@@ -4,8 +4,9 @@ import type { Capabilities, Config, Coverage, FaceSet, IdentitySheet, Reconstruc
 import EngineModelRack from '../modelhub/EngineModelRack';
 import { PREVIEW_TAB_LABEL, RENDER_MODES, renderModeInfo } from '../workstation/renderModes';
 import { useFaceSelectionStore } from '../../useFaceSelectionStore';
+import { useModelCatalog } from '../../stores/modelCatalog';
 import { selectEngine, useSelectedEngine } from '../../stores/engineSelection';
-import { restorerWeights, type RestorerModel, type WorkstationParameters } from '../workstation/pipeline';
+import { restorerAvailable, type RestorerModel, type WorkstationParameters } from '../workstation/pipeline';
 import { ErrorRetry } from './FaceSetDetail';
 import { formatClock, trackLabel } from './TargetPanel';
 import EngineExplainer from '../guide/EngineExplainer';
@@ -79,7 +80,8 @@ export default function StudioInspector({ caps, config, onSaveConfig, track, she
   const cluster = useFaceSelectionStore(state => (track ? state.targetClusters.find(item => item.id === track.track_id) ?? null : null));
   const sheetTrack = track ? sheet?.tracks.find(item => item.track_id === track.track_id) : undefined;
   const enhancer = activeEnhancer(parameters);
-  const restorerReady = !!caps?.models.some(item => item.name === restorerWeights(parameters.restorer_model) && item.state === 'VERIFIED_LOCAL');
+  const catalog = useModelCatalog();
+  const restorerReady = restorerAvailable(catalog.loaded ? catalog.models : caps?.models, parameters.restorer_model);
   const renderMode = parameters.render_mode ?? 'standard';
   const robust = parameters.occlusion_mode === 'robust';
   const set = (patch: Partial<WorkstationParameters>) => setParameters({ ...parameters, ...patch });
@@ -140,7 +142,7 @@ export default function StudioInspector({ caps, config, onSaveConfig, track, she
               {ENHANCERS.map(item => <option key={item.id} value={item.id}>{item.label}</option>)}
             </select>
             <small className={enhancer === 'none' || restorerReady ? 'muted' : 'identity-warn'}>
-              {enhancer !== 'none' && !restorerReady ? 'Weights not verified locally: restoration stays off.' : ENHANCERS.find(item => item.id === enhancer)?.hint}
+              {enhancer !== 'none' && !restorerReady ? 'No usable weight file in app/models: restoration stays off.' : ENHANCERS.find(item => item.id === enhancer)?.hint}
             </small>
           </label>
           <label className="inspector-field">Blend amount <output>{Math.round(parameters.restoration_blend * 100)}%</output>
@@ -203,7 +205,7 @@ export default function StudioInspector({ caps, config, onSaveConfig, track, she
               <select aria-label="Restoration model" value={parameters.restorer_model ?? 'gpen'} onChange={event => set({ restorer_model: event.target.value as RestorerModel })}>
                 <option value="gpen">GPEN</option><option value="ultramax">UltraMax</option><option value="codeformer">CodeFormer</option>
               </select>
-              <small className={restorerReady ? 'muted' : 'identity-warn'}>{restorerReady ? 'Weights verified locally.' : 'Weights not verified locally: restoration stays off.'}</small>
+              <small className={restorerReady ? 'muted' : 'identity-warn'}>{restorerReady ? 'Weights verified locally.' : 'No usable weight file in app/models: restoration stays off.'}</small>
             </label>
           </Section>
 

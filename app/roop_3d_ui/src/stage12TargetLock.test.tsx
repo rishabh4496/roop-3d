@@ -43,7 +43,7 @@ describe('useTargetLock', () => {
     const lock = vi.fn(async () => lockOf({ bank_size: 4, scan: { state: 'done' } }));
     const { box } = mount({ target: 'm.mp4', frameIndex: 17, lock });
     await act(async () => { await box.current!.lockFace(1); });
-    expect(lock).toHaveBeenCalledWith({ path: 'm.mp4', frame_index: 17, face_index: 1, sample_count: 16, wait: false });
+    expect(lock).toHaveBeenCalledWith({ path: 'm.mp4', frame_index: 17, face_index: 1, sample_count: 192, wait: false });
     expect(box.current!.lock?.label).toBe('Target #1');
     expect(box.current!.toast?.text).toBe('TARGET LOCKED ✓ Target #1 · 4 angles');
   });

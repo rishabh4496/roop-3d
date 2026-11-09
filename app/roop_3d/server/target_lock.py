@@ -27,14 +27,14 @@ from roop_3d.identity.target_lock import BankEntry, FaceRef, TargetIdentityLock,
 
 log = logging.getLogger("roop3d.target_lock")
 router = APIRouter(prefix="/api/v1")
-MAX_SCAN_SAMPLES = 48
+MAX_SCAN_SAMPLES = 512
 MIN_ANGLE_SIMILARITY = 0.30      # measured: different people average 0.13 (p99 0.37); same person, any pose, >= 0.49
 
 
 def store(request: Request) -> TargetLockStore:
     state = request.app.state
     if getattr(state, "target_locks", None) is None:
-        state.target_locks = TargetLockStore()
+        state.target_locks = getattr(state.media, 'target_locks', None) or TargetLockStore()
     return state.target_locks
 
 
@@ -55,7 +55,7 @@ def annotate(request: Request, path: str, frame_index: int, analyzed: list, face
         face["cluster_id"] = assoc.cluster_id
         face["cluster_match"] = {"score": round(assoc.score, 4), "margin": round(assoc.margin, 4), "reason": assoc.reason}
         # A single-frame read has no tracker: the track id is the person's persistent cluster id (appearance-linked).
-        face["track_id"] = assoc.cluster_id
+        face["track_id"] = registry.clusters[assoc.cluster_id].track_id
         face["track_source"] = "appearance_cluster"
         lock = by_cluster.get(assoc.cluster_id)
         face["is_target"] = lock is not None
@@ -93,6 +93,7 @@ class FaceSelector(Contract):
 class LockFromFrame(FaceSelector):
     sample_count: int = Field(default=16, ge=0, le=MAX_SCAN_SAMPLES)
     wait: bool = True
+    track_id: str | None = Field(default=None, pattern=r'^track_[0-9]{4}$')
 
 
 class AddAngle(Contract):
@@ -124,9 +125,9 @@ def scan_keyframes(request: Request, lock: TargetIdentityLock, sample_count: int
     locks = store(request)
     registry = locks.registry(lock.media_path)
     frames = request.app.state.media.frames
-    total = frames.info(lock.media_path).total_frames
     lock.scan = {"state": "running", "requested": sample_count, "sampled": 0, "matched": 0}
     try:
+        total = frames.info(lock.media_path).total_frames
         slots = sorted({min(total - 1, int((k + 0.5) / max(sample_count, 1) * total)) for k in range(sample_count)},
                        key=lambda i: abs(i - lock.anchor_frame_index))
         matched = 0
@@ -164,16 +165,20 @@ def lock_from_frame(value: LockFromFrame, request: Request) -> dict:
         lock = locks.create(value.path, result.frame_index, ref_of(face))
     except ValueError as error:
         raise DomainError("EMBEDDING_UNAVAILABLE", str(error), 503) from error
+    if value.track_id is not None:
+        registry = locks.registry(value.path)
+        with registry.lock:
+            registry.clusters[lock.cluster_id].track_id = value.track_id
     # Faces of the anchor frame join their clusters too, so the other people on screen are competitors from the start.
     annotate(request, value.path, result.frame_index, analyzed, dicts)
-    if value.sample_count > 0:
+    if value.sample_count > 0 and lock.scan.get('state') not in ('running', 'done'):
         if value.wait:
             scan_keyframes(request, lock, value.sample_count, value.threshold)
         else:
             lock.scan = {"state": "running", "requested": value.sample_count, "sampled": 0, "matched": 0}
             threading.Thread(target=scan_keyframes, args=(request, lock, value.sample_count, value.threshold),
                              name=f"target-scan-{lock.lock_id[:6]}", daemon=True).start()
-    else:
+    elif value.sample_count == 0 and lock.scan.get('state') not in ('running', 'done'):
         lock.scan = {"state": "skipped"}
     return {**lock.public(locks.registry(value.path)), "selected_face_index": chosen, "frame_faces": dicts}
 

@@ -57,6 +57,8 @@ def require_transition(before: JobState, after: JobState) -> None:
 class JobRequest(Contract):
     engine_id: str = Field(default="reference_onnx", pattern=r"^[a-z0-9][a-z0-9_]{0,95}$")
     swapper_model_id: str | None = Field(default=None, pattern=r"^[a-z0-9][a-z0-9_-]{0,95}$")
+    # Per-job face detector; None follows the saved global setting. Part of the job's identity when set.
+    detector_model_id: Literal["scrfd", "retinaface", "yoloface"] | None = None
     target_path: str = Field(min_length=1, max_length=1024)
     inspection_id: str = Field(pattern=r"^[0-9a-f]{32}$")
     face_mappings: tuple[TrackToFaceSetMap, ...] = Field(min_length=1, max_length=64)
@@ -88,7 +90,7 @@ class JobRequest(Contract):
             for key, default in (('profile', None), ('hdr_policy', 'tonemap_sdr'), ('subtitles', 'copy'), ('sequence_format', 'png')):
                 if value['export'].get(key) == default:
                     value['export'].pop(key, None)
-        for name in ("swapper_model_id", "identity_blend", "trim_start_seconds", "trim_end_seconds", "mask_base64", "workstation_parameters", "parameter_curves", "face_segments", "export", "identity_lock_id"):
+        for name in ("swapper_model_id", "detector_model_id", "identity_blend", "trim_start_seconds", "trim_end_seconds", "mask_base64", "workstation_parameters", "parameter_curves", "face_segments", "export", "identity_lock_id"):
             if value.get(name) is None:
                 value.pop(name, None)
         return value

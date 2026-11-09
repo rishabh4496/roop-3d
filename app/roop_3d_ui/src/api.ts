@@ -75,6 +75,7 @@ export const extractFaceFromFrame = (body: {
 }) => post<ExtractFromFrameResult>('/faces/extract_from_frame', body);
 /** Stage 12: a person locked from a frame, with the multi-angle reference bank that keeps the lock through head turns. */
 export type TargetLock = {
+  track_id?: string | null;
   lock_id: string; target_number: number; label: string; media_path: string; cluster_id: number;
   anchor_frame_index: number; bank_size: number; observed_frames: number[];
   reference_bank: { yaw: number; pitch: number; roll: number; frame_index: number; source: 'anchor' | 'auto' | 'user'; match_score: number }[];
@@ -83,7 +84,7 @@ export type TargetLock = {
 };
 type FaceSelector = { face_index: number } | { point: [number, number] };
 /** Click a face on any frame: locks that person and (in the background) samples the video for more angles of them. */
-export const lockTargetFromFrame = (body: { path: string; frame_index: number; sample_count?: number; wait?: boolean } & FaceSelector) =>
+export const lockTargetFromFrame = (body: { path: string; frame_index: number; sample_count?: number; wait?: boolean; track_id?: string } & FaceSelector) =>
   post<TargetLock>('/target/lock-from-frame', body);
 /** "Add This Angle to Target #n": e.g. an extreme profile that the scan could not link by itself. */
 export const addTargetAngleSample = (body: { lock_id: string; frame_index: number; force?: boolean } & FaceSelector) =>

@@ -3,6 +3,7 @@ import { PreviewBusyError, postLivePreview, type LivePreviewMeta } from './api';
 import { PreviewURL } from './state';
 import type { JobRequest } from './contracts';
 import type { WorkstationParameters } from './components/workstation/pipeline';
+import { RUNTIME_SETTINGS_CHANGED } from './runtimeSettings';
 
 /** Slider drags coalesce into one request per pause of this length. */
 export const LIVE_DEBOUNCE_MS = 150;
@@ -24,6 +25,8 @@ export function buildLivePayload({ request, time, fps, parameters, maskBase64, r
   const restoring = restorerAvailable && (parameters.restoration_blend > 0 || request.parameter_curves?.tracks.restorer_opacity?.some(key=>key.value>0)) && !parameters.bypass.includes('restorer');
   return {
     engine_id: request.engine_id ?? 'reference_onnx',
+    swapper_model_id: request.swapper_model_id ?? undefined,
+    detector_model_id: request.detector_model_id ?? undefined,
     target_path: request.target_path,
     inspection_id: request.inspection_id,
     ...(timestampSelection ? { timestamp: Math.max(0, time) } : { frame_index: Math.max(0, Math.round(time * fps)) }),
@@ -38,7 +41,7 @@ export function buildLivePayload({ request, time, fps, parameters, maskBase64, r
     solo_node: solo || undefined,
     occlusion: { erosion_px: parameters.erosion_px ?? 0, feather_px: parameters.feather_px },
     mask_base64: maskBase64 || request.mask_base64 || undefined,
-    restorer: restoring ? (parameters.restorer_model === 'codeformer' || parameters.restorer_model === 'ultramax' ? parameters.restorer_model : 'gpen') : 'off',
+    restorer: restoring ? parameters.restorer_model ?? 'gpen' : 'off',
     identity_blend: request.identity_blend ?? undefined,
     identity_blend_t: parameters.identity_blend_t,
     fidelity_weight: parameters.fidelity_weight,
@@ -119,7 +122,8 @@ export function useLiveSwapPreview(payload: LivePayload | null, debounceMs: numb
   useEffect(() => {
     const restart = () => setNonce(value => value + 1);
     window.addEventListener(JOB_START_EVENT, restart);
-    return () => window.removeEventListener(JOB_START_EVENT, restart);
+    window.addEventListener(RUNTIME_SETTINGS_CHANGED, restart);
+    return () => { window.removeEventListener(JOB_START_EVENT, restart); window.removeEventListener(RUNTIME_SETTINGS_CHANGED, restart); };
   }, []);
 
   useEffect(() => {

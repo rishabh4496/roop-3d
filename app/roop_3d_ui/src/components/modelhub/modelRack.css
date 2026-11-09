@@ -38,3 +38,11 @@
 .model-manager-table th,.model-manager-table td{text-align:left;padding:6px 8px;border-bottom:1px solid var(--line);vertical-align:middle}
 .sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap}
 .rack .button,.rack-acquire .button,.model-manager .button{text-transform:none;letter-spacing:normal}
+.active-model-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:4px}
+.active-model-row{display:flex;flex-wrap:wrap;align-items:center;gap:6px;padding:5px 8px;border:1px solid var(--line);border-radius:8px;font-size:11px}
+.active-model-row.loaded{border-color:#2f9e60}
+.active-model-stage{font-size:9px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:var(--muted);min-width:56px}
+.active-model-file{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:11px;overflow-wrap:anywhere}
+.active-model-meta{color:var(--muted);font-size:10px}
+.active-model-none{color:var(--muted)}
+.active-model-pending{flex-basis:100%;color:#b8860b;font-size:10px}

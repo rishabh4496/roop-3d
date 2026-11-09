@@ -75,7 +75,7 @@ export default function ModelManager() {
 
       <div className="notice-box" data-testid="sha-policy">
         <label className="inspector-toggle"><input type="checkbox" checked disabled readOnly aria-label="SHA-256 verification" /> SHA-256 verification: always on</label>
-        <small className="muted">The model provider opens only files whose SHA-256 and size match a registry record, so there is no “force unblock” switch: a UI toggle could not lift a check the server enforces, and the project deliberately has no setting that skips it. A weight that fails the check has to be added to the registry with its hash and licence review.</small>
+        <small className="muted">The model provider opens only files whose SHA-256 and size match a registry record, so there is no “force unblock” switch for registry or downloaded models. The exception is a weight you place yourself in app/models: any file there over 1 MB is trusted by its own SHA-256 (logged as “Auto-trusted local weight file”), shown as verified and never blocked.</small>
       </div>
 
       {error && <div role="alert" className="notice-box">Model list unavailable: {error}</div>}

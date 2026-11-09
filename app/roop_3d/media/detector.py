@@ -1,7 +1,7 @@
-"""SCRFD 3-level/2-anchor decoder; ONNX data loaded only on inspection.
+"""Selectable SCRFD, RetinaFace-10G and YOLOFace decoders, loaded on inspection.
 
-Tensor layout/preprocessing: official InsightFace model_zoo/scrfd.py.
-This adapter imports no legacy application code and always uses the CPU provider.
+Tensor contracts: InsightFace SCRFD and FaceFusion face_detector.py.
+Inspection uses CPU; render trackers supply their selected GPU session factory.
 """
 from __future__ import annotations
 
@@ -16,14 +16,26 @@ from roop_3d.engine.resources import guarded, inference, register
 
 
 class Detector:
-    def __init__(self, catalog: ModelCatalog, session_factory=None):
+    def __init__(self, catalog: ModelCatalog, session_factory=None, *, model_id='scrfd',
+                 provider: str = 'CPUExecutionProvider', precision: str = 'auto'):
         self.catalog = catalog
         self._lock = threading.Lock()
         self._session: Any = None
         self._io_runner: Any = None
         self._session_sha: str | None = None
+        # (stage, model_id, model_path, execution_provider, precision_mode): the session is only reused for this exact key.
+        self._session_key: tuple | None = None
         self._session_factory = session_factory
+        self._model_id = model_id
+        self._provider, self._precision = provider, precision
         register(self, "release_for_build")
+
+    def _model_path(self, record: dict):
+        """The file the selected detector resolves to (cached by file identity; test doubles may not have one)."""
+        try:
+            return self.catalog._provider_path(self.catalog.registry.get(record["model_id"]))
+        except (AttributeError, KeyError, DomainError):
+            return None
 
     @inference
     def detect(self, image: np.ndarray, threshold: float) -> tuple[list[tuple[np.ndarray, np.ndarray]], dict]:
@@ -36,10 +48,17 @@ class Detector:
         return self._detect(image, threshold)
 
     def _detect(self, image: np.ndarray, threshold: float) -> tuple[list[tuple[np.ndarray, np.ndarray, float]], dict]:
-        record = self.catalog.detector()
+        selected = self._model_id() if callable(self._model_id) else self._model_id
+        record = self.catalog.detector() if selected == 'scrfd' else self.catalog.detector(selected)
         # Rehash cached model inputs; never continue inference after artifact drift.
+        from roop_3d.engine import active_models
+        path = self._model_path(record)
+        key = active_models.cache_key('detector', selected, path or record.get('name') or record['model_id'],
+                                      self._provider, self._precision)
         with self._lock:
-            if self._session is None or self._session_sha != record["sha256"]:
+            if self._session is None or self._session_key != key or self._session_sha != record["sha256"]:
+                # A different detector/file/provider/precision: drop the old session before building the new one.
+                self._session = self._io_runner = None
                 if self._session_factory is not None:
                     self._session = self._session_factory(record)
                 else:
@@ -54,6 +73,9 @@ class Detector:
                     from roop_3d.core.ort_session import GpuIoBinding
                     self._io_runner = GpuIoBinding(self._session)
                 self._session_sha = record["sha256"]
+                self._session_key = key
+                active_models.activate('detector', selected, path or record.get('name'), self._provider,
+                                       self._precision, record["sha256"])
             session, io_runner = self._session, self._io_runner
         height, width = image.shape[:2]
         shape = session.get_inputs()[0].shape
@@ -64,7 +86,11 @@ class Detector:
         scaled_w, scaled_h = max(1, int(width * scale)), max(1, int(height * scale))
         canvas = np.zeros((size, size, 3), dtype=np.uint8)
         canvas[:scaled_h, :scaled_w] = cv2.resize(image, (scaled_w, scaled_h))
-        blob = cv2.dnn.blobFromImage(canvas, 1 / 128.0, (size, size), (127.5, 127.5, 127.5), swapRB=True)
+        blob = cv2.dnn.blobFromImage(canvas, 1 / (255.0 if selected == 'yoloface' else 128.0),
+            (size, size), (0, 0, 0) if selected == 'yoloface' else (127.5, 127.5, 127.5),
+            swapRB=selected == 'scrfd')
+        if getattr(session.get_inputs()[0], 'type', '') == 'tensor(float16)':
+            blob = blob.astype(np.float16)
         feeds = {session.get_inputs()[0].name: blob}
         if io_runner is not None:
             names = tuple(node.name for node in session.get_outputs())
@@ -74,6 +100,23 @@ class Detector:
             # SessionFacade routes through OrtModel's persistent I/O binding;
             # this branch remains for lightweight test doubles.
             outputs = session.run(None, feeds)
+        if selected == 'yoloface':
+            if len(outputs) != 1:
+                raise DomainError('DETECTOR_LAYOUT_UNSUPPORTED', 'YOLOFace requires one output tensor')
+            values = np.asarray(outputs[0])
+            if values.ndim != 3 or values.shape[0] != 1 or values.shape[1] != 20:
+                raise DomainError('DETECTOR_LAYOUT_UNSUPPORTED', 'YOLOFace requires [1,20,anchors] output')
+            detections = values[0].T
+            kept = []
+            for row in sorted(detections[detections[:, 4] >= threshold], key=lambda r: -float(r[4])):
+                center, half = row[:2], row[2:4] / 2
+                box = np.concatenate((center - half, center + half)) / scale
+                points = row[5:].reshape(5, 3)[:, :2] / scale
+                if np.isfinite(row).all() and not any(iou(box, other[0]) >= .4 for other in kept):
+                    kept.append((box, points, float(row[4])))
+                if len(kept) >= 32:
+                    break
+            return kept, record
         if len(outputs) != 9:
             raise DomainError("DETECTOR_LAYOUT_UNSUPPORTED", "SCRFD output count is unsupported")
         boxes, points, scores = [], [], []
@@ -106,9 +149,13 @@ class Detector:
     @guarded
     def release_for_build(self) -> None:
         with self._lock:
+            if self._session_key is not None:
+                from roop_3d.engine import active_models
+                active_models.release('detector', self._session_key)
             self._session = None
             self._io_runner = None
             self._session_sha = None
+            self._session_key = None
 
 
 def iou(left: np.ndarray, right: np.ndarray) -> float:
