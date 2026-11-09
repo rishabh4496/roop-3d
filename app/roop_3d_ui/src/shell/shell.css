@@ -98,7 +98,10 @@ body { background: var(--bg-gradient, var(--bg)); background-attachment: fixed; 
 .topbar .button.small { text-transform: none; font-size: 12px; min-height: 32px; padding: 0 12px; gap: 7px; border-radius: 9px; }
 .topbar .ui-zoom-group { border-radius: 12px; }
 .topbar .tour-button.fresh { border-color: var(--accent); color: var(--accent); }
-@media (max-width: 1560px) { .topbar .layout-toggle, .topbar .tour-button { display: none; } }
+/* The zoom buttons duplicate Ctrl + / - / 0, so they go first when the bar runs out of room (it is nowrap and must never widen the page). */
+/* The bar is nowrap and must never widen the page: tighten it before it overflows, and drop the group whose only button is hidden. */
+@media (max-width: 1700px) { .app-header.topbar { gap: 6px; } }
+@media (max-width: 1560px) { .topbar .layout-toggle, .topbar .tour-button { display: none; } .topbar .topbar-group:has(> .layout-toggle) { display: none; } header.app-header.topbar .project-name { min-width: 120px; } .topbar .project-name input { width: 100px; min-width: 60px; } }
 @media (max-width: 1200px) { .topbar .local-status, .topbar .ui-zoom-group { display: none; } }
 
 /* ── Controls: buttons, inputs ───────────────────────────────────────── */

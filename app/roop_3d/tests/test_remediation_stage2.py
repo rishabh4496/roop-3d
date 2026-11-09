@@ -261,8 +261,9 @@ def test_session_manager_retries_mixed_static_graph_without_cuda_graph(tmp_path,
 
     class Session:
         def __init__(self, path, sess_options, providers):
+            # ORT's C API takes string options, so the flag arrives as "True" / "False".
             attempts.append(providers[0][1]["trt_cuda_graph_enable"])
-            if providers[0][1]["trt_cuda_graph_enable"]:
+            if providers[0][1]["trt_cuda_graph_enable"].casefold() in ("1", "true"):
                 raise RuntimeError("CUDA Graph requires all graph nodes assigned to TensorRT")
 
         def get_providers(self):
@@ -275,7 +276,7 @@ def test_session_manager_retries_mixed_static_graph_without_cuda_graph(tmp_path,
     result = SessionManager(cache_path=tmp_path / "cache", hardware_profile="12gb").create(
         source, model_name=source.name, providers=(module.TRT, module.CUDA))
     assert result.provider == module.TRT
-    assert attempts == [True, False]
+    assert attempts == ["True", "False"]
 
 
 def test_enhancer_exclusions_do_not_fragment_residual_operator_types():

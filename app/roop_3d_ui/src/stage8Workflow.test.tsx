@@ -32,7 +32,8 @@ it('offers legal controls and exports only successful completed output', async (
   await act(async () => button('Pause').click());
   expect(post).toHaveBeenLastCalledWith('/jobs/running/pause', {});
   await render([job('paused')]);
-  await act(async () => button('Resume').click());
+  expect(host.querySelector('[data-testid="resume-interrupted-btn"]')!.textContent).toBe('Resume Interrupted Render (from Frame 2)');
+  await act(async () => (host.querySelector('[data-testid="resume-interrupted-btn"]') as HTMLButtonElement).click());
   expect(post).toHaveBeenLastCalledWith('/jobs/paused/resume', {});
   await render([job('failed')]);
   expect(host.querySelectorAll('a')).toHaveLength(0);

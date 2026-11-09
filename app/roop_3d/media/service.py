@@ -384,10 +384,13 @@ class MediaService:
             if existing is None:
                 new_tracks.append(track_obj)
             else:
+                def widen(current, value):
+                    # A track whose pose was never measured has no range yet: this observation starts it.
+                    return (value, value) if current is None else (min(current[0], value), max(current[1], value))
                 pose_range = existing.pose_range.model_copy(update={
-                    'yaw_degrees': (min(existing.pose_range.yaw_degrees[0], yaw), max(existing.pose_range.yaw_degrees[1], yaw)),
-                    'pitch_degrees': (min(existing.pose_range.pitch_degrees[0], pitch), max(existing.pose_range.pitch_degrees[1], pitch)),
-                    'roll_degrees': (min(existing.pose_range.roll_degrees[0], roll), max(existing.pose_range.roll_degrees[1], roll)),
+                    'yaw_degrees': widen(existing.pose_range.yaw_degrees, yaw),
+                    'pitch_degrees': widen(existing.pose_range.pitch_degrees, pitch),
+                    'roll_degrees': widen(existing.pose_range.roll_degrees, roll),
                 })
                 new_tracks[new_tracks.index(existing)] = existing.model_copy(update={
                     'first_frame': min(existing.first_frame, frame_index), 'last_frame': max(existing.last_frame, frame_index),

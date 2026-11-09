@@ -35,6 +35,9 @@ class LocalCatalog:
     def get(self, model_id):
         assert model_id == "fixture"
         return self.record
+    def resolve_local_model(self, model_id):
+        # The runner binds the selected swapper when one is installed; this fixture has none, which it tolerates.
+        raise DomainError("MODEL_NOT_INSTALLED", "Selected swapper has no installed local ONNX weights", 404)
     def verify(self, record):
         if sha256_file(self.path)[1] != record["sha256"]:
             raise DomainError("MODEL_DRIFT", "Fixture model bytes changed", 409)

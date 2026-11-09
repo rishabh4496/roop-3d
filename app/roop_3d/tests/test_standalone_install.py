@@ -183,7 +183,10 @@ def test_full_head_3d_makehuman_and_sh_relighting() -> None:
 
     from roop_3d.relighting_3d import SphericalHarmonicsLighting, SurfaceNormalEstimator
     sh = SphericalHarmonicsLighting()
-    assert hasattr(sh, "extract_sh_coefficients") or hasattr(sh, "compute_irradiance")
+    assert callable(sh.estimate_lighting) and callable(sh.evaluate_shading)
+    import numpy as np
+    normals = np.array([[0.0, 0.0, 1.0], [1.0, 0.0, 0.0]], np.float32)
+    assert sh.evaluate_basis(normals).shape == (2, 9)                      # the 9 second-order SH terms per normal
     estimator = SurfaceNormalEstimator()
     assert hasattr(estimator, "estimate_from_depth") or hasattr(estimator, "estimate_geometric_normals")
 

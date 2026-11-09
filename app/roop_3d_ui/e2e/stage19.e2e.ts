@@ -206,8 +206,9 @@ test.describe('in-place guidance', () => {
 test.describe('accessibility', () => {
   test('skip link is the first tab stop, becomes visible and moves focus to the workspace', async ({ page }) => {
     await boot(page, { route: '/#/home' });
-    await page.keyboard.press('Tab');
     const skip = page.getByRole('button', { name: 'Skip to main content' });
+    await expect(skip).toBeAttached();                      // Tab before the app has mounted would start from the wrong place
+    await page.keyboard.press('Tab');
     await expect(skip).toBeFocused();
     const box = (await skip.boundingBox())!;
     expect(box.y).toBeGreaterThanOrEqual(0);

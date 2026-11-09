@@ -51,6 +51,14 @@ test('the stream overlap tab draws the measured lanes, the copy verdict and the 
 
 test('the sweep compares enhancers across relighting strengths and zooms a tile to native pixels', async ({ page }) => {
   const { seen, errors } = await boot(page, { openProject: true });
+  // The UI reads enhancer readiness from the model catalog (GET /models), not from the capabilities list; boot()'s catch-all answers [] there.
+  const enhancer = (id: string, name: string) => ({ id, model_id: id, name, category: 'enhancer', native_resolution: null, installed: true, selectable: true, vram_loaded: false,
+    trt_cached: false, download_url: null, state: 'VERIFIED_LOCAL', sha256: null, size_bytes: null });
+  await page.route('**/api/v1/models', route => route.fulfill({ json: [enhancer('gpen_bfr_512', 'gpen_bfr_512.onnx'), enhancer('codeformer', 'codeformer.fp16.onnx')] }));
+  await page.reload();
+  await page.getByRole('button', { name: 'Projects' }).click();
+  await page.getByRole('dialog').getByRole('button', { name: 'Verify & open' }).click();
+  await expect(page.locator('[data-track-id="track_0001"]')).toBeVisible();
   await page.getByRole('button', { name: '3×3 Sweep' }).first().click();
   const dialog = page.getByRole('dialog');
   await dialog.getByLabel('X axis setting').selectOption('enhancer');

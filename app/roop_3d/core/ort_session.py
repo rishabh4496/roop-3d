@@ -501,7 +501,8 @@ class SessionManager:
                             or not _is_cuda_graph_partition_error(error)):
                         raise
                     errors.append("TensorRT CUDA graph capture disabled for a mixed-provider partition")
-                    retry_options = [(ep, dict(options)) for ep, options in provider_options]
+                    # Provider entries are (name, options) pairs, except a bare provider name such as the CPU fallback.
+                    retry_options = [(entry[0], dict(entry[1])) if isinstance(entry, tuple) else entry for entry in provider_options]
                     retry_options[0][1]["trt_cuda_graph_enable"] = "False"
                     session = ort.InferenceSession(str(session_path), sess_options=session_options,
                                                    providers=retry_options)
