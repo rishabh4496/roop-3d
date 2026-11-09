@@ -290,6 +290,29 @@ class TargetLockStore:
         with self._lock:
             return self._locks.get(lock_id)
 
+    def remove(self, lock_id: str) -> TargetIdentityLock | None:
+        """Unlock a target. Its person cluster (and so its immutable ``face N`` slot and reference bank) is kept: the face
+        simply stops being a locked target, and locking it again attaches a new lock to the same cluster."""
+        registry_lock = None
+        with self._lock:
+            lock = self._locks.get(lock_id)
+            if lock is None:
+                return None
+            registry = self._registries.get(lock.media_path)
+            registry_lock = registry.lock if registry is not None else None
+        if registry_lock is not None:
+            with registry_lock, self._lock:
+                self._locks.pop(lock_id, None)
+                cluster = registry.clusters.get(lock.cluster_id)
+                if cluster is not None and not any(l.cluster_id == lock.cluster_id and l.media_path == lock.media_path
+                                                   for l in self._locks.values()):
+                    cluster.locked = False
+        else:
+            with self._lock:
+                self._locks.pop(lock_id, None)
+        lock.scan = {**lock.scan, "state": "cancelled"}
+        return lock
+
     def create(self, media_path: str, frame_index: int, ref: FaceRef, *, cluster_id: int | None = None) -> TargetIdentityLock:
         """Lock the clicked face: it joins the cluster it already belongs to (or starts one) and that cluster is flagged."""
         registry = self.registry(media_path)

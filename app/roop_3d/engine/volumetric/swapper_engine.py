@@ -80,6 +80,13 @@ class SwapperEngineAdapter:
 
     def __init__(self, catalog: ModelCatalog, model_id: str, config: RuntimeConfig = RuntimeConfig(), *,
                  session=None, runner: Callable[[Mapping[str, np.ndarray]], Mapping[str, Any]] | None = None):
+        from roop_3d.engine import active_models
+        # A swapper that cannot be built is reported with the backend's exact reason (the UI shows it as an error).
+        with active_models.switch_guard("swapper", model_id):
+            self._construct(catalog, model_id, config, session=session, runner=runner)
+
+    def _construct(self, catalog: ModelCatalog, model_id: str, config: RuntimeConfig, *,
+                   session=None, runner: Callable[[Mapping[str, np.ndarray]], Mapping[str, Any]] | None = None):
         spec = catalog.swapper_spec(model_id)
         if spec is None or spec.get("category") != "swapper":
             raise DomainError("SWAPPER_MODEL_UNSUPPORTED", "Selected model is not a registered swapper", 422)
@@ -369,14 +376,30 @@ class SwapperEngineAdapter:
         self._binding = None
         self._source_cache.clear()
 
+    def _loaded_file_sha256(self) -> str | None:
+        """Digest of the weight file this adapter loaded directly (no catalog-pinned record), computed once.
+
+        Render manifests record it as the swapper's identity; without it a locally loaded swapper would be missing from them."""
+        if self.path is None:
+            return None
+        cached = getattr(self, "_path_sha256", None)
+        if cached is None:
+            try:
+                from roop_3d.audit.isolation import sha256_file
+                cached = sha256_file(Path(self.path))[1]
+            except (OSError, ValueError):
+                return None
+            self._path_sha256 = cached
+        return cached
+
     def capability(self) -> dict[str, Any]:
         if self.model is not None:
             return {**self.model.capability(), "native_resolution": self.resolution,
                     "identity_mode": self.spec.get("identity_mode", "source_crop")}
         providers = tuple(self.session.get_providers()) if self.session is not None and hasattr(self.session, "get_providers") else ()
         provider = providers[0] if providers else self.config.provider
-        return {"model_id": self.model_id, "sha256": None, "artifact_state": "LOCAL_UNVERIFIED" if self.path else "REGISTERED",
-                "inference_state": "LOCAL_INFERENCE" if self.executions else "UNKNOWN", "provider": provider,
+        return {"model_id": self.model_id, "sha256": self._loaded_file_sha256(), "artifact_state": "LOCAL_UNVERIFIED" if self.path else "REGISTERED",
+                "inference_state": "VERIFIED_LOCAL" if self.executions else "UNKNOWN", "provider": provider,
                 "executions": self.executions, "requested_provider": self.config.provider,
                 "fallback_reason": None, "native_resolution": self.resolution,
                 "identity_mode": self.spec.get("identity_mode", "source_crop")}

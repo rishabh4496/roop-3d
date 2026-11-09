@@ -152,10 +152,57 @@ def active_model_readback(request: Request) -> dict[str, Any]:
     session was released); ``selected`` is what the next preview/render will load.
     """
     from roop_3d.engine import active_models
-    settings = request.app.state.settings
-    return {"selected": {"swapper_model": settings.swapper_model_id, "detector_model": settings.detector_model_id,
-                         "enhancer_model": settings.face_restoration_policy},
-            "active": active_models.snapshot()}
+    return {"selected": _selected_models(request.app.state.settings), "active": active_models.snapshot()}
+
+
+def _selected_models(settings: Settings) -> dict[str, str]:
+    return {"swapper_model": settings.swapper_model_id, "detector_model": settings.detector_model_id,
+            "enhancer_model": settings.face_restoration_policy}
+
+
+_PROVIDER_NAMES = {"TensorrtExecutionProvider": "TensorRT", "CUDAExecutionProvider": "CUDA", "CPUExecutionProvider": "CPU",
+                   "DmlExecutionProvider": "DirectML", "ROCMExecutionProvider": "ROCm", "CoreMLExecutionProvider": "CoreML"}
+
+
+def precision_label(provider: str | None, policy: str | None) -> str | None:
+    """What a loaded session really runs as, from its execution provider and the precision policy it was built with.
+
+    TensorRT with the ``fp16`` policy is built through ``tensorrt_mixed`` (FP16 mixed precision); with ``auto`` it still builds
+    FP16 engines but without the mixed-precision options, and the policy is named rather than guessed."""
+    if not provider:
+        return None
+    name = _PROVIDER_NAMES.get(provider, provider.replace("ExecutionProvider", ""))
+    policy = policy or "auto"
+    if provider == "CPUExecutionProvider":
+        return "CPU FP32"
+    if policy == "fp32":
+        return f"{name} FP32"
+    if provider == "TensorrtExecutionProvider" and policy == "fp16":
+        return "TensorRT FP16 Mixed"
+    if policy == "fp16":
+        return f"{name} FP16"
+    return f"{name} (auto precision)"
+
+
+@router.get("/pipeline/status")
+def pipeline_status(request: Request) -> dict[str, Any]:
+    """Live engine read-back for the pipeline bar (`GET /api/pipeline/status`).
+
+    ``active`` is what each stage has loaded right now, ``precision`` is derived from those sessions' real provider and
+    precision policy, and ``failures`` carries the exact backend code and reason of the latest model that could not be
+    loaded for a stage (the previous model is not kept silently). ``pipeline`` is the same frame the WebSocket streams."""
+    from roop_3d.engine import active_models
+    state = request.app.state
+    active = active_models.snapshot()
+    loaded = [active[stage] for stage in ("swapper", "enhancer", "detector") if active.get(stage)]
+    primary = loaded[0] if loaded else None
+    return {"pipeline": state.pipeline.snapshot().model_dump(mode="json"),
+            "selected": _selected_models(state.settings), "active": active,
+            "precision": {"label": precision_label(primary["provider"], primary["precision"]) if primary else None,
+                          "stage": primary["stage"] if primary else None,
+                          "stages": {item["stage"]: precision_label(item["provider"], item["precision"]) for item in loaded},
+                          "policy": state.settings.precision_policy},
+            "failures": active_models.failures()}
 
 
 @router.post("/models/rescan")

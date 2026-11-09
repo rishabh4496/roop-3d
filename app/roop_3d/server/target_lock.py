@@ -18,13 +18,13 @@ import threading
 from typing import Annotated, Any
 
 import numpy as np
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, Path, Query, Request, Response
 from pydantic import Field, model_validator
 
 from roop_3d.core.errors import DomainError
 from roop_3d.core.pose import as_pose3d
 from roop_3d.core.settings import Contract
-from roop_3d.identity.target_lock import BankEntry, FaceRef, TargetIdentityLock, TargetLockStore
+from roop_3d.identity.target_lock import BankEntry, FaceRef, TargetIdentityLock, TargetLockStore, pose_bucket
 
 log = logging.getLogger("roop3d.target_lock")
 router = APIRouter(prefix="/api/v1")
@@ -176,6 +176,9 @@ def _scan_keyframes(request: Request, lock: TargetIdentityLock, sample_count: in
                 log.info("keyframe %s skipped: %s", index, error.code)
             lock.scan.update(sampled=done, matched=matched,
                              phase="keyframes" if done < len(slots) else "coverage")
+            if locks.get(lock.lock_id) is None:               # unlocked while scanning: stop harvesting for it
+                lock.scan.update(state="cancelled")
+                return
             if registry.clusters[lock.cluster_id].coverage()["quality_locked"] == 15:
                 exhaustive = done == total
                 break
@@ -270,6 +273,66 @@ def read_target(lock_id: str, request: Request) -> dict:
     if lock is None:
         raise DomainError("TARGET_LOCK_NOT_FOUND", "Unknown target lock", 404)
     return lock.public(locks.registry(lock.media_path))
+
+
+class Rescan(Contract):
+    sample_count: int = Field(default=192, ge=0, le=MAX_SCAN_SAMPLES)
+    threshold: float = Field(default=0.5, ge=0.1, le=0.99)
+
+
+@router.post("/target/{lock_id}/rescan")
+def rescan_target(lock_id: str, request: Request, value: Rescan | None = None) -> dict:
+    """"Re-Scan All Angles": forget the automatically harvested references and harvest the video again.
+
+    The anchor (the face the user clicked) and angles the user added by hand are kept: a rescan cannot re-find those and
+    must never leave the lock without a reference."""
+    value = value or Rescan()
+    locks = store(request)
+    lock = locks.get(lock_id)
+    if lock is None:
+        raise DomainError("TARGET_LOCK_NOT_FOUND", "Unknown target lock", 404)
+    registry = locks.registry(lock.media_path)
+    with registry.lock:
+        if lock.scan.get("state") == "running":
+            raise DomainError("TARGET_SCAN_RUNNING", "An angle scan is already running for this target", 409)
+        cluster = registry.clusters[lock.cluster_id]
+        cluster.bank = [e for e in cluster.bank if e.source != "auto"]
+        lock.scan = {"state": "running", "requested": value.sample_count, "sampled": 0, "matched": 0} if value.sample_count else {"state": "skipped"}
+    if value.sample_count:
+        threading.Thread(target=scan_keyframes, args=(request, lock, value.sample_count, value.threshold),
+                         name=f"target-rescan-{lock.lock_id[:6]}", daemon=True).start()
+    return lock.public(registry)
+
+
+@router.delete("/target/{lock_id}")
+def unlock_target(lock_id: str, request: Request) -> dict:
+    """Unlock a target (the `face N` slot and its reference bank stay; only the lock goes)."""
+    locks = store(request)
+    lock = locks.remove(lock_id)
+    if lock is None:
+        raise DomainError("TARGET_LOCK_NOT_FOUND", "Unknown target lock", 404)
+    return {"lock_id": lock_id, "face_id": lock.cluster_id - 1, "unlocked": True}
+
+
+@router.get("/target/{lock_id}/angle/{yaw_bin}/{pitch_bin}/crop.jpg")
+def angle_crop(lock_id: str, yaw_bin: Annotated[int, Path(ge=0, le=4)], pitch_bin: Annotated[int, Path(ge=0, le=2)],
+               request: Request) -> Response:
+    """The 256 px crop kept for one cell of the 5 x 3 angle grid (the face that best represents that angle)."""
+    locks = store(request)
+    lock = locks.get(lock_id)
+    if lock is None:
+        raise DomainError("TARGET_LOCK_NOT_FOUND", "Unknown target lock", 404)
+    registry = locks.registry(lock.media_path)
+    with registry.lock:
+        entry = next((e for e in registry.clusters[lock.cluster_id].bank if pose_bucket(e.yaw, e.pitch) == (yaw_bin, pitch_bin)), None)
+        crop = None if entry is None or entry.crop is None else entry.crop.copy()
+    if crop is None:
+        raise DomainError("ANGLE_NOT_CAPTURED", "No face crop is stored for that angle yet", 404)
+    import cv2
+    ok, encoded = cv2.imencode(".jpg", crop, [cv2.IMWRITE_JPEG_QUALITY, 88])
+    if not ok:
+        raise DomainError("ANGLE_CROP_ENCODE_FAILED", "The stored crop could not be encoded", 500)
+    return Response(encoded.tobytes(), media_type="image/jpeg", headers={"Cache-Control": "private, max-age=30"})
 
 
 @router.get("/target")

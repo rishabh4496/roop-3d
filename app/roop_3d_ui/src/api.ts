@@ -74,13 +74,20 @@ export const extractFaceFromFrame = (body: {
   norm_cy?: number;
 }) => post<ExtractFromFrameResult>('/faces/extract_from_frame', body);
 /** Stage 12: a person locked from a frame, with the multi-angle reference bank that keeps the lock through head turns. */
+/** One cell of the 5 x 3 angle grid: the best face the harvester kept for that yaw / pitch bin. `bucket` is [yaw bin, pitch bin]. */
+export type AngleBucket = {
+  bucket: [number, number]; quality: number; quality_locked: boolean; has_crop: boolean; yaw: number; pitch: number; roll: number;
+  frame_index: number; source: 'anchor' | 'auto' | 'user'; match_score: number;
+};
 export type TargetLock = {
-  coverage?: { captured: number; quality_locked: number; total: number };
+  coverage?: { captured: number; quality_locked: number; total: number; buckets?: AngleBucket[] };
+  /** Persistent, zero-based `face N` slot of the person (never reused, unchanged when the left-to-right order swaps). */
+  face_id?: number;
   track_id?: string | null;
   lock_id: string; target_number: number; label: string; media_path: string; cluster_id: number;
   anchor_frame_index: number; bank_size: number; observed_frames: number[];
   reference_bank: { yaw: number; pitch: number; roll: number; frame_index: number; source: 'anchor' | 'auto' | 'user'; match_score: number }[];
-  scan: { state: 'idle' | 'running' | 'done' | 'error' | 'skipped'; sampled?: number; requested?: number; matched?: number; message?: string; exhaustive?: boolean };
+  scan: { state: 'idle' | 'running' | 'done' | 'error' | 'skipped' | 'cancelled'; sampled?: number; requested?: number; matched?: number; message?: string; exhaustive?: boolean; skipped?: number };
   selected_face_index?: number; added?: boolean; similarity_to_bank?: number;
 };
 type FaceSelector = { face_index: number } | { point: [number, number] };
@@ -90,6 +97,13 @@ export const lockTargetFromFrame = (body: { path: string; frame_index: number; s
 /** "Add This Angle to Target #n": e.g. an extreme profile that the scan could not link by itself. */
 export const addTargetAngleSample = (body: { lock_id: string; frame_index: number; force?: boolean } & FaceSelector) =>
   post<TargetLock>('/target/add-angle-sample', body);
+/** Unlock a target; the `face N` slot and its reference bank are kept. */
+export const unlockTarget = (lockId: string) => api<{ lock_id: string; face_id: number; unlocked: boolean }>(`/target/${lockId}`, { method: 'DELETE' });
+/** "Re-Scan All Angles": drop the automatically harvested references and harvest the video again (409 while a scan runs). */
+export const rescanTargetAngles = (lockId: string, body: { sample_count?: number } = {}) => post<TargetLock>(`/target/${lockId}/rescan`, body);
+/** The stored 256 px crop of one angle cell. `version` busts the cache when a better face replaces the cell's crop. */
+export const angleCropURL = (lockId: string, bucket: readonly [number, number], version: string | number = '') =>
+  `/api/v1/target/${lockId}/angle/${bucket[0]}/${bucket[1]}/crop.jpg${version === '' ? '' : `?v=${encodeURIComponent(String(version))}`}`;
 export const mediaURL = (path: string) => `/api/v1/media/content?${new URLSearchParams({ path })}`;
 export async function upload(file: File, capabilities: Capabilities, progress: (value: number) => void, signal: AbortSignal) {
   if (file.size > capabilities.workstation.max_asset_bytes) throw new Error('This file exceeds the advertised upload limit.');

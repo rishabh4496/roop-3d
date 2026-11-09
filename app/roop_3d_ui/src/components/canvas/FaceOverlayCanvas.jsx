@@ -7,6 +7,7 @@ import { faceFlags, faceKey } from './faceFlags';
 import { useStoreSelector } from '../../stores/atomicStore';
 import { leftToRightRank } from '../../utils/poseCells';
 import { reducedMotion } from '../../utils/motionPrefs';
+import { faceColor, faceTag } from '../../utils/faceIdentity';
 export const FACE_ROLES = { swap: { label: 'Swap Target', color: '#91e6c9' }, ignore: { label: 'Reference Guide', color: '#60a5fa' }, exclude: { label: 'Exclude (Never Swap)', color: '#fb7185' } };
 
 import { calculateLetterbox, mapBoxToPixels, mapPointToPixels } from '../../utils/letterbox';
@@ -410,8 +411,15 @@ export default function FaceOverlayCanvas({
         }
       }
 
+      if (hit && frameMode && onLockFace) {
+        // Clicking a face of the frame on screen toggles its Target Lock: an unlocked face is locked (the server creates its
+        // track and starts harvesting angles), a locked one is unlocked. Its source identity is bound from the face bank card.
+        setPopover(null);
+        onLockFace(frameFaces.find(match => match.id === hit.id));
+        return;
+      }
+
       if (hit?.candidate) {
-        // A detected face that is not a target yet: clicking it locks it (the server creates its track).
         setPopover(null);
         onLockFace?.(frameFaces.find(match => match.id === hit.id));
         return;
@@ -433,7 +441,7 @@ export default function FaceOverlayCanvas({
         setPopover(null);
       }
     },
-    [interactiveFaces, letterbox, targetClusters, setActiveSelection, onLockFace, frameFaces]
+    [interactiveFaces, letterbox, targetClusters, setActiveSelection, onLockFace, frameFaces, frameMode]
   );
 
   // Close popover on Escape
@@ -773,6 +781,16 @@ export function poseAxes(pose) {
   };
 }
 
+/** A small padlock (closed body, shackle) at the left of a pill row: drawn, so it never depends on an emoji font. */
+function drawPadlock(ctx, x, y, color) {
+  ctx.save();
+  ctx.fillStyle = 'rgba(8, 14, 16, 0.92)'; ctx.strokeStyle = color; ctx.lineWidth = 1;
+  drawRoundedRect(ctx, x, y, 14, 16, 3); ctx.fill(); ctx.stroke();
+  ctx.lineWidth = 1.6; ctx.beginPath(); ctx.arc(x + 7, y + 6.2, 2.7, Math.PI, 0); ctx.stroke();
+  ctx.fillStyle = color; ctx.fillRect(x + 3.5, y + 7.2, 7, 5.2);
+  ctx.restore();
+}
+
 function pill(ctx, text, x, y, { fill, stroke, color, font = '600 10px ui-monospace, Menlo, Consolas, monospace' }) {
   ctx.save();
   ctx.font = font;
@@ -792,7 +810,8 @@ function drawFrameFaces(ctx, faces, { letterbox, hoveredFaceId, lockingId, showL
   for (const face of faces) {
     const box = mapBoxToPixels(face.bbox, letterbox);
     const locked = face.locked, hovered = hoveredFaceId === face.id && !locked, locking = lockingId === face.id;
-    const accent = locked ? FRAME_LOCKED : FRAME_CYAN;
+    // One colour per persistent `face N` (the same colour as its bank card); unidentified faces keep the neutral cyan.
+    const accent = face.persistentFaceId != null ? faceColor(face.persistentFaceId) : (locked ? FRAME_LOCKED : FRAME_CYAN);
 
     ctx.save();
     ctx.strokeStyle = accent;
@@ -801,19 +820,23 @@ function drawFrameFaces(ctx, faces, { letterbox, hoveredFaceId, lockingId, showL
     ctx.setLineDash(locked || hovered ? [] : [6, 4]);
     drawRoundedRect(ctx, box.x, box.y, box.w, box.h, 4);
     ctx.stroke();
-    if (locked || hovered) { ctx.shadowBlur = 0; ctx.fillStyle = locked ? 'rgba(52, 211, 153, 0.08)' : 'rgba(34, 211, 238, 0.10)'; ctx.fill(); }
+    if (locked || hovered) { ctx.shadowBlur = 0; ctx.globalAlpha = locked ? 0.09 : 0.11; ctx.fillStyle = accent; ctx.fill(); }
     ctx.restore();
 
     // `#n` badge, then TARGET LOCKED / Locking… beside it; above the box unless that leaves the frame.
     const top = box.y - 20 >= letterbox.offsetY ? box.y - 20 : box.y + 4;
-    const badge = pill(ctx, face.persistentFaceId != null ? `face ${face.persistentFaceId}` : `#${face.rank + 1}`, box.x, top, { fill: 'rgba(8, 14, 16, 0.92)', stroke: accent, color: accent });
-    if (locked) pill(ctx, 'TARGET LOCKED', box.x + badge + 4, top, { fill: FRAME_LOCKED, stroke: FRAME_LOCKED, color: '#04130d' });
-    else if (locking) pill(ctx, 'Locking…', box.x + badge + 4, top, { fill: 'rgba(8, 14, 16, 0.92)', stroke: accent, color: '#e8f1f2' });
+    // The persistent ID pill: a filled `FACE 0` chip in the person's colour, with a padlock once the target is locked.
+    const idText = faceTag(face.persistentFaceId, face.rank);
+    const badge = pill(ctx, idText, box.x + (locked ? 16 : 0), top, { fill: accent, stroke: accent, color: '#06100f' });
+    if (locked) {
+      drawPadlock(ctx, box.x, top, accent);
+      pill(ctx, 'TARGET LOCKED', box.x + 16 + badge + 4, top, { fill: 'rgba(8, 14, 16, 0.92)', stroke: accent, color: accent });
+    } else if (locking) pill(ctx, 'Locking…', box.x + badge + 4, top, { fill: 'rgba(8, 14, 16, 0.92)', stroke: accent, color: '#e8f1f2' });
 
     if (showPose) {
       const attitude = facePose(face);
       if (attitude) {
-        const text = `${face.persistentFaceId != null ? `face ${face.persistentFaceId}` : `#${face.rank + 1}`} · Y: ${signed1(attitude.yaw)}° P: ${signed1(attitude.pitch)}° R: ${signed1(attitude.roll)}°`;
+        const text = `${faceTag(face.persistentFaceId, face.rank)} · Y: ${signed1(attitude.yaw)}° P: ${signed1(attitude.pitch)}° R: ${signed1(attitude.roll)}°`;
         ctx.save(); ctx.font = '600 10px ui-monospace, Menlo, Consolas, monospace';
         const width = ctx.measureText(text).width + 10;
         ctx.restore();

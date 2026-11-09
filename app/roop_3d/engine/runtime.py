@@ -115,6 +115,18 @@ class OrtModel:
 
     @guarded
     def __init__(self, catalog: ModelCatalog, name: str, config: RuntimeConfig = RuntimeConfig()):
+        try:
+            self._construct(catalog, name, config)
+        except Exception as error:
+            # An enhancer that cannot be built is reported with the backend's exact reason, so the UI can say why the
+            # old model is still in use instead of silently keeping it.
+            record = getattr(self, "record", None)
+            if isinstance(record, dict) and record.get("role") == "face_restorer":
+                from roop_3d.engine import active_models
+                active_models.report_failure("enhancer", record.get("model_id") or name, error)
+            raise
+
+    def _construct(self, catalog: ModelCatalog, name: str, config: RuntimeConfig):
         import onnxruntime as ort
 
         self.catalog, self.record = catalog, record_named(catalog, name)

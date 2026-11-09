@@ -49,34 +49,39 @@ class Detector:
 
     def _detect(self, image: np.ndarray, threshold: float) -> tuple[list[tuple[np.ndarray, np.ndarray, float]], dict]:
         selected = self._model_id() if callable(self._model_id) else self._model_id
-        record = self.catalog.detector() if selected == 'scrfd' else self.catalog.detector(selected)
-        # Rehash cached model inputs; never continue inference after artifact drift.
         from roop_3d.engine import active_models
-        path = self._model_path(record)
-        key = active_models.cache_key('detector', selected, path or record.get('name') or record['model_id'],
-                                      self._provider, self._precision)
-        with self._lock:
-            if self._session is None or self._session_key != key or self._session_sha != record["sha256"]:
-                # A different detector/file/provider/precision: drop the old session before building the new one.
-                self._session = self._io_runner = None
-                if self._session_factory is not None:
-                    self._session = self._session_factory(record)
+        # A selected detector that cannot be resolved or loaded is reported with the backend's exact reason (the UI
+        # raises it as an error) instead of leaving the previous detector silently in place; its session is forgotten.
+        with active_models.switch_guard('detector', selected, on_fail=self._forget_session):
+            record = self.catalog.detector() if selected == 'scrfd' else self.catalog.detector(selected)
+            # Rehash cached model inputs; never continue inference after artifact drift.
+            path = self._model_path(record)
+            key = active_models.cache_key('detector', selected, path or record.get('name') or record['model_id'],
+                                          self._provider, self._precision)
+            with self._lock:
+                if self._session is None or self._session_key != key or self._session_sha != record["sha256"]:
+                    # A different detector/file/provider/precision: drop the old session before building the new one.
+                    self._session = self._io_runner = None
+                    if self._session_factory is not None:
+                        self._session = self._session_factory(record)
+                    else:
+                        data = self.catalog.verified_bytes(record)
+                        import onnxruntime as ort
+                        options = ort.SessionOptions()
+                        options.intra_op_num_threads = 2
+                        from roop_3d.engine.resources import build_fence
+                        with build_fence():
+                            self._session = ort.InferenceSession(data, sess_options=options, providers=["CPUExecutionProvider"])
+                    if hasattr(self._session, "io_binding"):
+                        from roop_3d.core.ort_session import GpuIoBinding
+                        self._io_runner = GpuIoBinding(self._session)
+                    self._session_sha = record["sha256"]
+                    self._session_key = key
+                    active_models.activate('detector', selected, path or record.get('name'), self._provider,
+                                           self._precision, record["sha256"])
                 else:
-                    data = self.catalog.verified_bytes(record)
-                    import onnxruntime as ort
-                    options = ort.SessionOptions()
-                    options.intra_op_num_threads = 2
-                    from roop_3d.engine.resources import build_fence
-                    with build_fence():
-                        self._session = ort.InferenceSession(data, sess_options=options, providers=["CPUExecutionProvider"])
-                if hasattr(self._session, "io_binding"):
-                    from roop_3d.core.ort_session import GpuIoBinding
-                    self._io_runner = GpuIoBinding(self._session)
-                self._session_sha = record["sha256"]
-                self._session_key = key
-                active_models.activate('detector', selected, path or record.get('name'), self._provider,
-                                       self._precision, record["sha256"])
-            session, io_runner = self._session, self._io_runner
+                    active_models.clear_failure('detector')      # the loaded detector served this request
+                session, io_runner = self._session, self._io_runner
         height, width = image.shape[:2]
         shape = session.get_inputs()[0].shape
         size = int(shape[2]) if isinstance(shape[2], int) else 640
@@ -145,6 +150,17 @@ class Detector:
             retained.append((box, points[index], float(scores[index])))
             order = [other for other in order if iou(box, boxes[other]) < 0.4]
         return retained, record
+
+    def _forget_session(self) -> None:
+        """After a failed switch no session of the previous detector is kept or reported as loaded.
+
+        Runs inside ``@inference`` (shared fence), so it must not take the exclusive ``@guarded`` fence that
+        ``release_for_build`` uses; dropping the references under the instance lock is all a release does."""
+        from roop_3d.engine import active_models
+        with self._lock:
+            if self._session_key is not None:
+                active_models.release('detector', self._session_key)
+            self._session = self._io_runner = self._session_sha = self._session_key = None
 
     @guarded
     def release_for_build(self) -> None:

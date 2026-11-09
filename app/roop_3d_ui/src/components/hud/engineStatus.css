@@ -1,0 +1,15 @@
+.engine-bar { display: flex; align-items: center; gap: 10px; padding: 4px 18px; border-bottom: 1px solid var(--line); background: var(--surface); min-height: 30px; }
+.engine-chips { display: flex; flex-wrap: wrap; gap: 6px 8px; margin: 0; padding: 0; list-style: none; }
+.engine-chip { display: inline-flex; align-items: center; gap: 5px; padding: 2px 9px; border: 1px solid var(--line); border-radius: 999px; background: var(--bg);
+  font: 600 11px ui-monospace, Menlo, Consolas, monospace; color: var(--muted); white-space: nowrap; cursor: help; }
+.engine-chip.loaded { color: var(--text); border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); }
+.engine-chip-label { color: var(--muted); font-weight: 500; }
+.engine-chip-value { font-weight: 700; }
+.engine-chip-verify.ok { color: #34d399; }
+.engine-chip-verify.warn { color: #fbbf24; }
+.engine-chip.failed { border-color: var(--danger); }
+.engine-chip-fail { color: var(--danger); }
+.engine-chip.precision.loaded .engine-chip-value { color: var(--accent); }
+.engine-bar-note { color: var(--muted); font-size: 11px; }
+/* Tablet widths: the bar would push the preview below the fold. It stays mounted (polling, failure toasts and the rack's "Loaded in VRAM" list keep working); only the strip is hidden. */
+@media (max-width: 1100px) { .engine-bar { display: none; } }

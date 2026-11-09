@@ -114,6 +114,11 @@ export async function boot(page: Page, options: BootOptions = {}) {
     if (path === '/media/keyframes') return json({ timestamps: [0, 2] });
     if (path === '/media/preview-frame') { seen.previewFrames.push(url.pathname + url.search); return route.fulfill({ status: 200, contentType: 'image/jpeg', body: tinyJpeg }); }
     if (path === '/media/frame') { seen.frames.push(url.search); return route.fulfill(mockFrame(url)); }
+    if (path === '/target/lock-from-frame' && method === 'POST') {
+      const body = route.request().postDataJSON() as { face_index?: number; frame_index?: number };
+      return json({ lock_id: '9'.repeat(32), target_number: 1, label: `face ${body.face_index ?? 0}`, face_id: body.face_index ?? 0, media_path: TARGET, cluster_id: 1, anchor_frame_index: body.frame_index ?? 0,
+        bank_size: 1, observed_frames: [], reference_bank: [], coverage: { captured: 1, quality_locked: 1, total: 15, buckets: [] }, scan: { state: 'done' } }, 201);
+    }
     if (path === '/media/info') return json(MEDIA_INFO);
     if (path === '/media/filmstrip') { seen.filmstrips.push(url.search); return json(mockFilmstrip(url)); }
     if (path === '/media/content') return route.fulfill({ status: 204 });

@@ -31,6 +31,8 @@ import FaceMapping from './components/studio/FaceMapping';
 import WorkstationScreens from './components/workstation/WorkstationScreens';
 import PipelinePill from './components/hud/PipelinePill';
 import RunPill from './components/faceswap/PipelinePill';
+import EngineStatusBar from './components/hud/EngineStatusBar';
+import ToastHost from './components/common/ToastHost';
 import QueueDrawer from './components/queue/QueueDrawer';
 import PreFlightLinterModalComponent from './components/diagnostics/PreFlightLinterModal';
 import { DEFAULT_EXPORT } from './components/export/VfxExportPanel';
@@ -560,7 +562,9 @@ export default function App() {
       layoutMode={layoutMode} onLayout={() => setLayoutMode(mode => (mode === 'studio' ? 'classic' : 'studio'))}
       projectsDisabled={!!reason('projects')} projectsReason={reason('projects')} busy={!!busy} canSave={!!inspection}
       onPalette={() => setPaletteOpen(true)} onProjects={() => { setProjectsOpen(true); void refreshProjects(); }} onSave={saveProject} onSaveCopy={() => void run('Saving project copy', async () => { await persistProject(true); })} />
+    {(route === '#/faceswap' || route === '#/facemgr') && <EngineStatusBar />}
     <RunPill />
+    <ToastHost />
     {route === '#/faceswap' && <NextStepBar progress={workflow} onAction={guideAction} onGuide={() => openGuide()} blockedReason={workflow.next?.id === 'target' ? reason('uploads') : workflow.next?.id === 'inspect' && target ? reason('face_inspection') : null} busy={!!busy} />}
     {(error || notice || busy) && <div className={`notification ${error ? 'error' : ''}`} role={error ? 'alert' : 'status'}>{error ? <RecoveryNotice message={error} code={errorInfo?.message === error ? errorInfo.code : null} requestId={errorInfo?.message === error ? errorInfo.requestId : null} onGuide={() => openGuide('queue')} /> : <span>{busy || notice}</span>}{busy === 'Importing asset' && <><progress value={uploadProgress} max={1}/><button onClick={() => uploadAbort.current?.abort()}>Cancel import</button></>}{error && isOfflineError({ code: errorInfo?.message === error ? errorInfo.code : null, message: error }) && <button onClick={() => void connect()}>Reconnect</button>}{!busy && <button aria-label="Dismiss message" onClick={() => { setError(''); setNotice(''); }}>×</button>}</div>}
     <div id="workspace" ref={workspaceRef} tabIndex={-1} className="workspace-root">

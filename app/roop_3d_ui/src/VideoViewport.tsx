@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { renderProbe } from './utils/renderProbe';
 import { mediaURL, postLivePreview } from './api';
@@ -23,6 +23,7 @@ import PersonModelPicker from './components/modelhub/PersonModelPicker';
 import { SWAPPERS, ENHANCERS } from './components/modelhub/EngineModelRack';
 import FaceContextMenu, { type FaceMenuTarget, type TargetAction, type TargetActionExtra } from './components/canvas/FaceContextMenu';
 import { useTargetLock } from './components/canvas/useTargetLock';
+import { faceColor } from './utils/faceIdentity';
 import { useFaceExtraction } from './components/canvas/useFaceExtraction';
 import { useHeadMesh } from './components/canvas/useHeadMesh';
 import { faceFlags, faceKey, togglePoseLock, toggleSoloFace } from './components/canvas/faceFlags';
@@ -256,13 +257,20 @@ export function VideoViewport({
   const totalFrames = mediaInfo.data?.total_frames ?? Math.max(1, Math.round(duration * fps));
   const scrub = useScrubFrame({ path: frameSource, time, fps, maxIndex: totalFrames - 1, enabled: !playing, detect: showFaceOverlays });
   const sourcePreview = { source: scrub.source, error: scrub.error };
-  const matchedFaces = useMatchedFrameFaces(scrub.current && !playing ? scrub.faces : null, scrub.meta, fps);
-  /** Faces of this exact frame, or null until detection has run for it (then the track boxes are drawn instead). */
-  const frameFaces = !playing && scrub.current && scrub.faces ? matchedFaces : null;
-  const [lockingId, setLockingId] = useState<string | null>(null);
-  // Stage 12: the person locked from a frame (multi-angle reference bank, persistent cluster id); keyed to the native frame on screen.
+  // Stage 12: the people locked from a frame (multi-angle reference banks, persistent `face N` ids); keyed to the native frame on screen.
   const getPlaybackFrame = useCallback(() => Math.max(0, Math.min(totalFrames - 1, Math.round(getPlayhead() * fps))), [totalFrames, fps]);
   const targetLock = useTargetLock({ target, frameIndex: scrub.meta?.frame_index ?? 0, playing, getPlaybackFrame });
+  const matchedFaces = useMatchedFrameFaces(scrub.current && !playing ? scrub.faces : null, scrub.meta, fps);
+  // A face with a persistent id is a locked target exactly when the UI holds a lock for that id: unlocking must show at once,
+  // although the cached detection of this frame still says `is_target`. Faces without an id keep the selection-based flag.
+  const lockedFaceIds = useMemo(() => new Set(targetLock.locks.flatMap(item => (item.face_id == null ? [] : [item.face_id]))), [targetLock.locks]);
+  const lockAwareFaces = useMemo(() => matchedFaces.map(match => {
+    const id = match.face.persistent_face_id;
+    return id == null || match.locked === lockedFaceIds.has(id) ? match : { ...match, locked: lockedFaceIds.has(id) };
+  }), [matchedFaces, lockedFaceIds]);
+  /** Faces of this exact frame, or null until detection has run for it (then the track boxes are drawn instead). */
+  const frameFaces = !playing && scrub.current && scrub.faces ? lockAwareFaces : null;
+  const [lockingId, setLockingId] = useState<string | null>(null);
   const outputPreview = usePreview(enabled && previewLive ? output : '', time, duration, fps, playing);
   // The real swapped frame (or, when a node is soloed, that stage's buffer) from POST /api/preview: debounced, 503-aware.
   const [liveSwap, setLiveSwap] = preference('live_swap');
@@ -301,6 +309,22 @@ export function VideoViewport({
     } catch (error) { noticeLater((error as Error).message || 'Locking the face failed.'); }
     finally { setLockingId(null); }
   }, [scrub.meta, lockingId, target, sources, activeSourceId, onAssignSource, onInspectionUpdate, noticeLater, targetLock]);
+  /** Click on a face (canvas box or bank card): lock an unlocked face, unlock a locked one. Its source is bound from the bank card. */
+  const toggleFaceLock = useCallback(async (match?: MatchedFrameFace) => {
+    if (!match) return;
+    const id = match.face.persistent_face_id;
+    const held = id == null ? undefined : targetLock.locks.find(item => item.face_id === id);
+    if (held) { await targetLock.unlockFace(held.lock_id); return; }
+    await lockFrameFace(match);
+  }, [targetLock, lockFrameFace]);
+  const assignments = useFaceSelectionStore(state => state.assignments);
+  /** Bind a source identity (.fsz FaceSet or image-built FaceSet) to the track of one persistent face. */
+  const bindFaceSource = useCallback((trackKey: string, facesetId: string | null, faceId: number | null) => {
+    useFaceSelectionStore.getState().assignSource(trackKey, facesetId);
+    onAssignSource?.(trackKey, facesetId);
+    const name = facesetId ? sources.find(item => item.faceset_id === facesetId)?.name : null;
+    noticeLater(facesetId ? `face ${faceId ?? '?'} is now mapped to ${name ?? 'the chosen identity'}.` : `face ${faceId ?? '?'} keeps its original face.`);
+  }, [onAssignSource, sources, noticeLater]);
   /** Right-click menu: lock as primary target / add this angle / bind the active source / exclude, for the face with this left-to-right rank. */
   const showMatteRef = useRef<() => void>(() => {});
   // Per-person model pinning (right-click menu): which person the dialog is editing.
@@ -690,7 +714,7 @@ export function VideoViewport({
                 headMesh={headMesh.head}
                 frameFaces={frameFaces}
                 frameMeta={scrub.meta}
-                onLockFace={lockFrameFace}
+                onLockFace={toggleFaceLock}
                 lockingId={lockingId}
               />}</LiveTime>
             )}
@@ -764,7 +788,7 @@ export function VideoViewport({
         {detectionNotice && <span className="detection-inline-notice">{detectionNotice}</span>}
         {extraction.toast && <span className={`face-toast ${extraction.toast.kind}`} role="status">{extraction.toast.text}</span>}
         {targetLock.toast && <span className={`face-toast ${targetLock.toast.kind}`} role="status">{targetLock.toast.text}</span>}
-        {targetLock.lock && <span className="target-lock-chip" title={`${targetLock.lock.bank_size} reference angles · scan ${targetLock.lock.scan?.state ?? 'not started'}`}>TARGET LOCKED ✓ {targetLock.lock.label} · {targetLock.lock.scan?.message ?? `${targetLock.lock.coverage?.captured ?? targetLock.lock.bank_size}/15 angles`}{targetLock.lock.scan?.state === 'running' ? ' · capturing…' : ''}</span>}
+        {targetLock.locks.map(item => <span key={item.lock_id} className="target-lock-chip" style={{ background: faceColor(item.face_id), borderColor: faceColor(item.face_id) }} title={`${item.bank_size} reference angles · scan ${item.scan?.state ?? 'not started'}`}>TARGET LOCKED ✓ {item.label} · {item.scan?.message ?? `${item.coverage?.captured ?? item.bank_size}/15 angles`}{item.scan?.state === 'running' ? ' · capturing…' : ''}</span>)}
         {solo && <button className="button small" onClick={() => setSolo(null)}>Exit solo · {solo}</button>}
 
         {/* Mask Editing Mode Toggle */}
@@ -1108,7 +1132,8 @@ export function VideoViewport({
         onUseFaceFromFrame={openMenuFromBar}
         canUseFaceFromFrame={!!target}
       />}</LiveTime>;
-      const faceStrip = <FrameFaceStrip imageUrl={scrub.source} meta={scrub.meta} faces={frameFaces} detecting={scrub.detecting} lockingId={lockingId} onLock={match => void lockFrameFace(match)} disabled={playing || !target}/>;
+      const faceStrip = <FrameFaceStrip imageUrl={scrub.source} meta={scrub.meta} faces={frameFaces} detecting={scrub.detecting} lockingId={lockingId} onLock={match => void toggleFaceLock(match)} disabled={playing || !target}
+        locks={targetLock.locks} sources={sources} assignments={assignments} onAssign={bindFaceSource} onUnlock={id => void targetLock.unlockFace(id)} onRescan={id => void targetLock.rescanAngles(id)}/>;
       if (studio) return <>{studio.timeline && createPortal(<>{faceStrip}{timeline}</>, studio.timeline)}{studio.tray && createPortal(tray, studio.tray)}</>;
       return <DockArea>
       {/* Video Editor-Grade Workstation Timeline */}

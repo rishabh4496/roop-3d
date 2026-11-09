@@ -42,7 +42,7 @@ test('the playhead frame is requested without faces while moving and with faces 
   await expect(strip.locator('.frame-face-card')).toHaveCount(2);
   expect(seen.frames.some(query => /detect_faces=true/.test(query))).toBe(true);
   expect(seen.frames[0]).not.toMatch(/detect_faces/);                  // the first frame is shown before any detection
-  await expect(strip.locator('.frame-face-card').first()).toContainText('#1');
+  await expect(strip.locator('.frame-face-card').first()).toContainText('face 0');
   await expect(strip.locator('.frame-face-card').first()).toContainText('Y -12° P -3°');
   await expect(page.locator('canvas[aria-label="Detected face bounding boxes"]').first()).toBeVisible();
   expect(errors).toEqual([]);
@@ -85,9 +85,9 @@ test('a face that is already a target is selected, never locked twice; Live Pose
   await page.route('**/api/v1/media/detect-frame-faces', route => { locks++; return lockResponse(route); });
   const strip = page.getByTestId('frame-face-strip');
   await expect(strip.locator('.frame-face-card')).toHaveCount(2);
-  await expect(strip.locator('.frame-face-card.locked')).toContainText('#1');          // the inspection's first track is the initial target
+  await expect(strip.locator('.frame-face-card.locked')).toContainText('face 0');          // the inspection's first track is the initial target
   await strip.locator('.frame-face-card').nth(1).click();
-  await expect(strip.locator('.frame-face-card.locked')).toContainText('#2');
+  await expect(strip.locator('.frame-face-card.locked')).toContainText('face 1');
   await expect(page.getByTestId('live-pose')).toHaveText('+25.0° Y · +0.0° P');          // face #2's own pose in this frame, standard frame
   await expect(page.getByTestId('live-pose')).toHaveAttribute('data-source', 'target');
   await page.waitForTimeout(300);
@@ -109,7 +109,7 @@ test('clicking a card of a new face locks it: its track is created, it is mapped
   expect(locks[0].path).toBe('roop_3d/.runtime/media/t.mp4');
   expect(locks[0].timestamp).toBeGreaterThanOrEqual(0);
   await expect(strip.locator('.frame-face-card.locked')).toHaveCount(1);
-  await expect(strip.locator('.frame-face-card.locked')).toContainText('#2');
+  await expect(strip.locator('.frame-face-card.locked')).toContainText('face 1');
   await expect(strip.locator('.frame-face-card.locked')).toContainText('TARGET LOCKED');
   await expect(page.getByTestId('live-pose')).toHaveText('+25.0° Y · +0.0° P');
   await expect(page.getByText(/locked and mapped to Alice/)).toBeVisible();
@@ -134,7 +134,7 @@ test('clicking a new face box on the canvas locks it (sub-pixel letterbox mappin
   await page.mouse.move(x, y);
   await page.mouse.click(x, y);
   await expect.poll(() => locks).toBe(1);
-  await expect(page.getByTestId('frame-face-strip').locator('.frame-face-card.locked')).toContainText('#1');
+  await expect(page.getByTestId('frame-face-strip').locator('.frame-face-card.locked')).toContainText('face 0');
   expect(errors).toEqual([]);
 });
 
