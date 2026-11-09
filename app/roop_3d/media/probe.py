@@ -22,13 +22,14 @@ OPTIONS = {"protocol_whitelist": "", "enable_drefs": "0", "use_absolute_path": "
 
 
 @contextmanager
-def open_media(path: Path, **kwargs) -> Iterator[av.container.InputContainer]:
+def open_media(path: Path, *, require_video: bool = True, **kwargs) -> Iterator[av.container.InputContainer]:
     path = Path(path).absolute()
     try:
         if any(is_link(p) for p in (*reversed(path.parents), path)):
             raise DomainError("MEDIA_PATH_DENIED", "Linked input media is forbidden", 422)
-        with path.open("rb") as handle, av.open(handle, mode="r", options=OPTIONS, **kwargs) as container:
-            if not container.streams.video:
+        options = OPTIONS if require_video else {**OPTIONS, "format_whitelist": OPTIONS["format_whitelist"] + ",wav,mp3"}
+        with path.open("rb") as handle, av.open(handle, mode="r", options=options, **kwargs) as container:
+            if require_video and not container.streams.video:
                 raise DomainError("VIDEO_STREAM_MISSING", "Container has no video stream", 422)
             for stream in container.streams.video:
                 if not 0 < stream.width * stream.height <= 16777216:

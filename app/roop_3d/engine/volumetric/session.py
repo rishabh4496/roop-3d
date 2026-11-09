@@ -180,8 +180,7 @@ class ReferencePipeline:
         """Select a registered swapper before source preparation/model activation."""
         if self.prepared:
             raise DomainError("SESSION_ALREADY_PREPARED", "Swapper selection is fixed for a prepared render session", 409)
-        if not any(item["id"] == model_id and item.get("category") == "swapper"
-                   for item in self.catalog._supported):
+        if self.catalog.swapper_spec(model_id) is None:
             raise DomainError("SWAPPER_MODEL_UNSUPPORTED", "Selected model is not a registered swapper", 422)
         self.swapper.model_id = model_id
 

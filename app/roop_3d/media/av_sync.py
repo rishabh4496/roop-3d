@@ -32,7 +32,7 @@ SEARCH_SECONDS = 0.5
 def _open_audio_source(path: Path):
     """Open a media file or an audio-only sidecar, always through a handle with remote protocols disabled."""
     path = Path(path)
-    with path.open("rb") as handle, av.open(handle, mode="r", options=OPTIONS) as container:
+    with path.open("rb") as handle, av.open(handle, mode="r", options={**OPTIONS, "format_whitelist": OPTIONS["format_whitelist"] + ",wav,mp3"}) as container:
         yield container
 
 

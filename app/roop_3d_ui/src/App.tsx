@@ -1,3 +1,4 @@
+import LiveStudio from "./components/workstation/LiveStudio";
 import FacesetBuilder from './components/facemgr/FacesetBuilder';
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ComponentType } from 'react';
 import { api, post, upload, type ApiError } from './api';
@@ -546,7 +547,7 @@ export default function App() {
     <button type="button" className="skip-link" onClick={() => workspaceRef.current?.focus()}>Skip to main content</button>
     <Rail route={route} />
     <div className="app-main">
-    <TopBar title={SCREENS.find(([id]: string[]) => `#/${id}` === route)?.[1] ?? 'Workstation'} projectName={projectName} onProjectName={setProjectName} dirty={projectDirty} connection={connection}
+    <TopBar liveStudio={route === "#/faceswap" ? <LiveStudio sourceId={sourceId} /> : null} title={SCREENS.find(([id]: string[]) => `#/${id}` === route)?.[1] ?? 'Workstation'} projectName={projectName} onProjectName={setProjectName} dirty={projectDirty} connection={connection}
       pill={<PipelinePill activeJob={currentJob} />} zoom={zoom} onZoom={bumpZoom} onZoomReset={resetZoom}
       themeMode={themeByName(themeName).mode} onToggleMode={() => setThemeName(themeByName(themeName).mode === 'dark' ? 'Glass Light' : 'Default')} onThemes={() => setThemeGalleryOpen(true)}
       tourFresh={!tourSeen()} onTour={() => setTourOpen(true)} onGuide={() => openGuide()}

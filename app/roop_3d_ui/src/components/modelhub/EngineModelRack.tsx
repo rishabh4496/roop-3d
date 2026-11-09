@@ -69,14 +69,15 @@ function CatalogPill({ modelId }: { modelId: string }) {
 
 export default function EngineModelRack({ params, onParams, config, caps, onSaveConfig, people = [], variant = 'workspace' }: RackProps) {
   const rack = useRack(state => state);
+  const { models } = useModelCatalog();
   const [trtMessage, setTrtMessage] = useState('');
   const [trtBusy, setTrtBusy] = useState(false);
 
   const swapperValue = rack.swapper ?? (typeof config?.swapper_model_id === 'string' ? config.swapper_model_id : 'inswapper_128');
-  const swapperOptions = useMemo(() => SWAPPERS.map(option => {
+  const swapperOptions = useMemo(() => [...SWAPPERS, ...models.filter(model => model.category === "swapper" && model.local_format === "dfm").map(model => ({ id: model.id, label: `${model.name} (DFM)` }))].map(option => {
     const reason = caps?.workstation.controls.swapper_model_id?.[option.id];
     return reason ? { ...option, disabledReason: reason } : option;
-  }), [caps]);
+  }), [caps, models]);
 
   const blend = params.restoration_blend ?? 0;
   const engine = params.restorer_model ?? 'gpen';

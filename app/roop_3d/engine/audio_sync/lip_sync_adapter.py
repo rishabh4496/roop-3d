@@ -1,10 +1,4 @@
-"""Evidence-gated 2D lip-sync interface with silence/confidence decay fallback.
-
-The current Stage 03 registry contains only a Wav2Lip CANDIDATE record with no
-local hash, locator or tensor contract. This adapter therefore never fabricates
-mouth frames or activates/downloads weights; its unavailable path returns the
-post-swap crop byte-for-byte unchanged.
-"""
+"""Local Wav2Lip ONNX mouth inference; unavailable models preserve the swapped crop."""
 from __future__ import annotations
 
 from collections import OrderedDict
@@ -109,7 +103,7 @@ class LipSyncGate:
 
 
 class LipSyncAdapter:
-    """2D lower-face adapter boundary; unavailable unless a verified model contract exists."""
+    """2D lower-face adapter with explicit local ONNX graph contracts."""
 
     def __init__(self, catalog=None, *, gate: LipSyncGate | None = None):
         from roop_3d.models.catalog import ModelCatalog
@@ -122,9 +116,38 @@ class LipSyncAdapter:
         self.available = False
         self.reason = "No verified local 2D lip-sync weights and supported tensor contract are registered"
 
+    def prepare(self, mode: str, config) -> None:
+        """Activate only a known architecture; TensorRT is selected through RuntimeConfig."""
+        self.release()
+        self.session = None
+        if mode not in ("wav2lip", "wav2lip_gan_fp16"):
+            raise DomainError("LIPSYNC_ARCHITECTURE_UNSUPPORTED",
+                              "MuseTalk requires Whisper/VAE conditioning; EDTalk requires its pose/emotion encoder bundle", 422)
+        from roop_3d.engine.volumetric.swapper_engine import load_local_session
+        candidates = [row for row in self.catalog.public()
+                      if row.get("installed") and "wav2lip" in row["name"].casefold()
+                      and row.get("local_format") == "onnx"
+                      and (mode != "wav2lip_gan_fp16" or "gan" in row["name"].casefold())]
+        if not candidates:
+            raise DomainError("LIPSYNC_MODEL_UNAVAILABLE", "Install a Wav2Lip ONNX export in app/models", 404)
+        path = self.catalog.resolve_local_model(candidates[0]["id"])
+        # Reuse graph validation and the profile-aware session factory.
+        self.loaded_model_id = candidates[0]["id"]
+        self.session = load_local_session(self.catalog, self.loaded_model_id, path, config)
+        inputs = self.session.get_inputs()
+        self.image_node = next((n for n in inputs if len(n.shape) == 4 and tuple(n.shape[1:]) == (6, 96, 96)), None)
+        self.mel_node = next((n for n in inputs if len(n.shape) == 4 and tuple(n.shape[1:]) == (1, 80, 16)), None)
+        if len(inputs) != 2 or self.image_node is None or self.mel_node is None:
+            self.release()
+            raise DomainError("LIPSYNC_GRAPH_UNSUPPORTED", "Expected Wav2Lip NCHW [N,6,96,96] and [N,1,80,16] inputs", 422)
+        if mode == "wav2lip_gan_fp16" and any(n.type != "tensor(float16)" for n in inputs):
+            self.release()
+            raise DomainError("LIPSYNC_PRECISION", "Wav2Lip-GAN FP16 requires float16 graph inputs", 422)
+        self.available, self.reason = True, None
+
     def process_frame(self, face_crop: np.ndarray, track_id: int, frame_input: LipSyncFrameInput, *,
                       scene_cut: bool = False) -> LipSyncResult:
-        """Run a verified adapter when one exists; otherwise return a strict identity fallback."""
+        """Run a prepared local adapter; unprepared previews retain their original crop."""
         image_bgr(face_crop)
         mel = np.asarray(frame_input.mel_window, dtype=np.float32)
         if mel.ndim != 2 or not mel.shape[0] or not mel.shape[1] or not np.isfinite(mel).all():
@@ -134,20 +157,37 @@ class LipSyncAdapter:
         if not self.available:
             return LipSyncResult(face_crop.copy(), np.zeros(face_crop.shape[:2], np.float32), 0.0,
                                  False, "LIPSYNC_MODEL_UNAVAILABLE")
-        # A local architecture-specific runner must be implemented and parity-tested
-        # before `available` can be enabled. No generic ONNX shape is treated as Wav2Lip.
-        raise DomainError("LIPSYNC_ADAPTER_UNSUPPORTED", self.reason, 503)
+        import cv2
+        if mel.shape != (80, 16):
+            raise DomainError("LIPSYNC_FEATURES_INVALID", "Wav2Lip needs an 80 by 16 mel window", 422)
+        crop = cv2.resize(face_crop, (96, 96)).astype(np.float32) / 255
+        masked = crop.copy()
+        masked[48:] = 0
+        packed = np.concatenate((masked, crop), axis=2).transpose(2, 0, 1)[None]
+        dtype = lambda node: np.float16 if node.type == "tensor(float16)" else np.float32
+        values = self.session.run(None, {self.image_node.name: packed.astype(dtype(self.image_node)),
+                                       self.mel_node.name: mel[None, None].astype(dtype(self.mel_node))})
+        output = np.asarray(values[0])
+        if output.shape != (1, 3, 96, 96) or not np.isfinite(output).all():
+            raise DomainError("LIPSYNC_OUTPUT_INVALID", "Wav2Lip returned an invalid image", 503)
+        image = cv2.resize(np.clip(output[0].transpose(1, 2, 0) * 255, 0, 255).astype(np.uint8),
+                           (face_crop.shape[1], face_crop.shape[0]))
+        mask = np.zeros(face_crop.shape[:2], np.float32)
+        mask[int(mask.shape[0] * .5):] = 1
+        mask = cv2.GaussianBlur(mask, (0, 0), max(1, mask.shape[0] * .015))
+        # Do not gate closures on RMS: silent consonants still need the model's mouth prediction.
+        return LipSyncResult(image, mask, float(np.clip(frame_input.face_confidence, 0, 1)), True, None)
 
     def capability(self) -> dict:
         record = self.record
         weights = record.status.upper() if record is not None else "UNKNOWN"
-        return {"state": "UNSUPPORTED" if not self.available else "VERIFIED_LOCAL",
+        return {"state": "UNSUPPORTED" if not self.available else "LOCAL_INFERENCE",
                 "model": record.name if record is not None else None,
                 "weights": weights,
                 "sha256": record.expected_sha256 if record is not None else None,
                 "provenance": record.provenance_state if record is not None else "UNKNOWN",
                 "license": record.license_id if record is not None else "UNKNOWN",
-                "inference": "UNKNOWN", "three_d_visemes": "UNSUPPORTED",
+                "inference": "LOCAL_ONNX" if self.available else "UNKNOWN", "three_d_visemes": "UNSUPPORTED",
                 # Pixels only: this feature has no path to any audio track, enabled or not.
                 "audio_modification": "never", "default": "off", "selection": "explicit (lip_sync_mode setting)",
                 "reason": self.reason,
@@ -155,3 +195,8 @@ class LipSyncAdapter:
 
     def release(self) -> None:
         self.gate.clear()
+        if getattr(self, "loaded_model_id", None):
+            self.catalog.set_vram_loaded(self.loaded_model_id, False)
+            self.loaded_model_id = None
+        self.session = None
+        self.available = False

@@ -5,7 +5,7 @@ export interface TopBarProps {
   title: string;
   projectName: string; onProjectName: (value: string) => void; dirty: boolean;
   connection: string;
-  pill?: ReactNode;
+  pill?: ReactNode; liveStudio?: ReactNode;
   zoom: number; onZoom: (delta: number) => void; onZoomReset: () => void;
   themeMode: 'dark' | 'light'; onToggleMode: () => void; onThemes: () => void;
   tourFresh: boolean; onTour: () => void; onGuide: () => void;
@@ -25,6 +25,7 @@ export default function TopBar(p: TopBarProps) {
       <span className={`local-status ${online ? 'online' : ''}`} role="status" aria-label={online ? 'Local service connected' : `Local service ${p.connection}`} title={online ? 'Connected to the local service' : `Local service: ${p.connection}`}><i className={`dot ${online ? 'mint' : 'amber'}`} />{!online && p.connection}</span>
       <span className="topbar-spacer" />
       {p.pill}
+      {p.liveStudio}
       <button type="button" className="palette-trigger" aria-haspopup="dialog" aria-label="Open command palette" title="Search screens and actions (Ctrl K)" onClick={p.onPalette}><IconSearch size={15} /><span>Search</span><kbd>Ctrl K</kbd></button>
       <div className="topbar-group">
         <button type="button" className="button small layout-toggle" aria-pressed={p.layoutMode === 'studio'} title="Switch between the four-panel studio and the classic stacked workstation" onClick={p.onLayout}>{p.layoutMode === 'studio' ? 'Studio layout' : 'Classic layout'}</button>

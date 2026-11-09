@@ -50,6 +50,10 @@ def choose_track(tracks: Sequence, *, stream_index: int | None = None, language:
 def decode_selected(path: Path, *, stream_index: int | None = None, language: str | None = None, target_rate: int = 16_000):
     """Probe the file's audio tracks, require an explicit choice when there are several, and decode that one."""
     from roop_3d.engine.audio_sync.audio_features import decode_audio
-    from roop_3d.media.probe import probe
-    choice = choose_track(probe(Path(path)).audio, stream_index=stream_index, language=language)
+    from roop_3d.media.probe import open_media
+    from types import SimpleNamespace
+    with open_media(Path(path), require_video=False) as container:
+        tracks = [SimpleNamespace(index=s.index, codec=s.codec_context.name,
+                                  language=s.metadata.get("language")) for s in container.streams.audio]
+        choice = choose_track(tracks, stream_index=stream_index, language=language)
     return choice, decode_audio(Path(path), stream_index=choice.stream_index, target_rate=target_rate)

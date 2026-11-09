@@ -50,16 +50,17 @@ class Settings(Contract):
     hardware_profile: Literal["auto", "cpu", "6gb", "12gb"] = "auto"
     preferred_provider: Literal["auto", "TensorrtExecutionProvider", "CUDAExecutionProvider", "CPUExecutionProvider"] = "auto"
     precision_policy: Literal["auto", "fp32", "fp16"] = "auto"
-    swapper_model_id: Literal["inswapper_128", "inswapper_128_fp16", "hyperswap_1a_256", "hyperswap_1b_256",
-        "hyperswap_1c_256", "realswap_256", "realswap_512", "simswap_256", "simswap_512_unofficial",
-        "ghost_256_unet_1", "ghost_256_unet_2", "ghost_256_unet_3", "blendswap_256", "uniface_256"] = "inswapper_128"
+    swapper_model_id: str = Field(default="inswapper_128", pattern=r"^[a-z0-9][a-z0-9_]{0,95}$")
+    dfm_morph_factor: float = Field(default=0.75, ge=0, le=1)
     vram_limit_mb: int = Field(default=0, ge=0, le=131072, strict=True, description="0 uses available VRAM")
     memory_safety_reserve_mb: int = Field(default=768, ge=0, le=131072, strict=True)
     max_concurrent_jobs: int = Field(default=1, ge=1, le=8, strict=True)
     face_restoration_policy: Literal["off", "auto", "gpen", "gfpgan", "codeformer", "ultramax"] = "off"
     video_timing_policy: Literal["preserve", "cfr"] = "preserve"
     audio_policy: Literal["copy", "transcode", "drop"] = "copy"
-    lip_sync_mode: Literal["off", "wav2lip"] = "off"
+    lip_sync_mode: Literal["off", "wav2lip", "wav2lip_gan_fp16", "musetalk", "edtalk"] = "off"
+    lip_sync_audio_path: str | None = Field(default=None, max_length=1024)
+    lip_sync_audio_stream: int | None = Field(default=None, ge=0)
     model_search_paths: tuple[str, ...] = ()
     output_root: str = "roop_3d/.runtime/outputs"
     cache_root: str = "roop_3d/.runtime/cache"

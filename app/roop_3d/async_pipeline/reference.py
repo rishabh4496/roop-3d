@@ -25,10 +25,11 @@ STAGE_NAMES = ("track", "swap", "composite", "write")
 
 class ReferenceStages:
     def __init__(self, session, *, request, edit_plan=None, export=None, identity_report=None,
-                 lip_sync: bool = False, working_transfer: Any = None, resume_after: int = -1,
+                 lip_sync: bool = False, lip_syncer=None, working_transfer: Any = None, resume_after: int = -1,
                  write_frame: Callable[[int, Any, tuple], None] | None = None,
                  save_passes: Callable[[Any, Any, int], None] | None = None,
                  scene_cuts: list | None = None, swapped_ranges: list | None = None):
+        self.lip_syncer = lip_syncer
         self.session, self.request, self.edit_plan, self.export = session, request, edit_plan, export
         self.identity_report, self.lip_sync, self.working_transfer = identity_report, lip_sync, working_transfer
         self.resume_after, self.write_frame, self.save_passes = resume_after, write_frame, save_passes
@@ -107,6 +108,8 @@ class ReferenceStages:
             occluder_masks=(edit_plan.occluders(decoded.image, result)
                             if edit_plan and edit_plan.mask is not None else None),
             lip_sync_enabled=self.lip_sync,
+            **({"lip_sync_inputs": {replacement.track_id: self.lip_syncer.frame_input(decoded.timestamp.seconds, confidence=next((getattr(face, "confidence", 1.0) for face in result.observations if face.track_id == replacement.track_id), 1.0))
+                                   for replacement in result.replacements}} if self.lip_syncer else {}),
             **({"observer": collector.observe} if collector else {}), **explicit)
         if collector is not None and decoded.index > self.resume_after and self.save_passes is not None:
             self.save_passes(collector, result, decoded.index)

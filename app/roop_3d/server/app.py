@@ -130,6 +130,7 @@ def create_app(settings: Settings | None = None, *, repo_root: Path | None = Non
         finally:
             # Jobs share the decoder pool, model catalog and live-frame hub. Let
             # active jobs finish before tearing down any resource they can use.
+            await run_in_threadpool(app.state.live_studio.stop)
             if worker is not None:
                 await run_in_threadpool(worker.stop)
             await run_in_threadpool(model_downloads.close)
@@ -174,6 +175,9 @@ def create_app(settings: Settings | None = None, *, repo_root: Path | None = Non
     app.state.live_previews = LivePreviewService(app.state)
     from roop_3d.server.live_stream import make_hub
     app.state.live_hub = make_hub()
+    from roop_3d.server.live_studio import LiveStudio, router as studio_router
+    app.state.live_studio = LiveStudio(app.state)
+    app.include_router(studio_router)
     if worker is not None and hasattr(worker.runner, "live_hub"):
         worker.runner.live_hub = app.state.live_hub       # finished render frames are offered to the binary stream
     app.state.face_extract = FaceExtractService(app.state)

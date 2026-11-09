@@ -364,6 +364,18 @@ class FrameCompositor:
                 observer('expression', crop, replacement.inverse, alpha)
         else:
             self.expression_reports.pop(replacement.track_id, None)
+        if lip_result is not None and bool(getattr(lip_result, "applied", False)):
+            lip_image = np.asarray(getattr(lip_result, "image", None))
+            lip_blend = float(getattr(lip_result, "blend", 0.0))
+            lip_mask = getattr(lip_result, "mouth_mask", None)
+            if lip_mask is None:
+                lip_mask = mouth_mask if mouth_mask is not None else lower_face_soft_mask(
+                    crop.shape, probabilities, feather_px=options.feather_px)
+            if lip_image.shape[0] != crop.shape[0]:
+                lip_image = cv2.resize(lip_image, (crop.shape[0], crop.shape[0]), interpolation=cv2.INTER_CUBIC)
+            lip_mask = self._resize_plane(np.asarray(lip_mask, np.float32), crop.shape[0])
+            crop = composite_mouth_region(crop, lip_image, lip_mask, lip_blend)
+
         enhanced = crop
         side = crop.shape[0]
         current_alpha, current_target, current_skin, current_protect, current_mouth = alpha, target_crop, skin, protect, mouth_mask
@@ -396,17 +408,6 @@ class FrameCompositor:
 
         if observer is not None:
             observer('restorer', enhanced, current_inverse, current_alpha)
-        if lip_result is not None and bool(getattr(lip_result, "applied", False)):
-            lip_image = np.asarray(getattr(lip_result, "image", None))
-            lip_blend = float(getattr(lip_result, "blend", 0.0))
-            lip_mask = getattr(lip_result, "mouth_mask", None)
-            if lip_mask is None:
-                lip_mask = current_mouth if current_mouth is not None else lower_face_soft_mask(
-                    crop.shape, probabilities, feather_px=options.feather_px)
-            if lip_image.shape[0] != size:
-                lip_image = cv2.resize(lip_image, (size, size), interpolation=cv2.INTER_CUBIC)
-            lip_mask = self._resize_plane(np.asarray(lip_mask, np.float32), size)
-            enhanced = composite_mouth_region(enhanced, lip_image, lip_mask, lip_blend)
 
         stats_mask = None
         if current_skin is not None and current_skin is not current_alpha:

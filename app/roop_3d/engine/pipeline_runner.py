@@ -375,6 +375,21 @@ class MasterPipelineRunner:
         self._require_disk_space(record, target, total, checkpoint)
         # Bind actual verified local dependencies, not registry presence. Missing optional models stay optional.
         models = render_dependencies(self.catalog)
+        selected_model = record.request.swapper_model_id or settings.swapper_model_id
+        try:
+            selected_path = self.catalog.resolve_local_model(selected_model)
+        except DomainError as error:
+            if error.code != "MODEL_NOT_INSTALLED":
+                raise
+        else:
+            models[f"selected_swapper:{selected_model}"] = sha256_file(selected_path)[1]
+        if settings.lip_sync_mode != "off":
+            candidates = [row for row in self.catalog.public() if row.get("installed")
+                          and row.get("local_format") == "onnx" and "wav2lip" in row["name"].casefold()
+                          and (settings.lip_sync_mode != "wav2lip_gan_fp16" or "gan" in row["name"].casefold())]
+            if candidates:
+                path = self.catalog.resolve_local_model(candidates[0]["id"])
+                models["lip_sync"] = sha256_file(path)[1]
         inspection_digest = sha256_file(owned(self.root,
             f"roop_3d/.runtime/inspections/{record.request.inspection_id}.json"))[1]
         if checkpoint.completed_frame >= 0 and not checkpoint.model_digests:
@@ -396,6 +411,13 @@ class MasterPipelineRunner:
             raise DomainError("JOB_SETTINGS_CHANGED", "Restore the job's effective settings before resuming", 409)
         curves_dict = record.request.parameter_curves.model_dump(mode="json") if record.request.parameter_curves else {}
         input_hashes_dict = {"target": digest, "target_path": record.request.target_path, "inspection_id": record.request.inspection_id}
+        if settings.lip_sync_mode != "off" and settings.lip_sync_audio_path:
+            audio_path = safe_path(self.root, settings.lip_sync_audio_path)
+            audio_digest = sha256_file(audio_path)[1]
+            previous = checkpoint.input_hashes.get("lip_sync_audio_sha256")
+            if checkpoint.completed_frame >= 0 and previous != audio_digest:
+                raise DomainError("JOB_AUDIO_CHANGED", "Voiceover changed since the saved checkpoint", 409)
+            input_hashes_dict["lip_sync_audio_sha256"] = audio_digest
         input_hashes_dict.update(source_fingerprints)
         if record.request.identity_lock_id:
             input_hashes_dict["identity_lock_id"] = record.request.identity_lock_id
@@ -656,9 +678,24 @@ class MasterPipelineRunner:
                 collector.geometry(result.replacements, request.parameters_at(index).pose_strength)
                 collector.save(self.root, record.job_id, index)
 
+            lip_syncer = None
+            stage15_audio_source = None
+            if settings.lip_sync_mode != "off":
+                from roop_3d.engine.audio_sync.audio_features import LipSyncer
+                from roop_3d.audit.isolation import safe_path
+                audio_path = safe_path(self.root, settings.lip_sync_audio_path) if settings.lip_sync_audio_path else target
+                if settings.lip_sync_audio_path:
+                    if audio_path.suffix.casefold() not in {".wav", ".mp3"}:
+                        raise DomainError("LIPSYNC_AUDIO_FORMAT", "Voiceover must be WAV or MP3", 422)
+                    stage15_audio_source = audio_path
+                lip_syncer = LipSyncer(audio_path, stream_index=settings.lip_sync_audio_stream)
+                session.lip_sync.prepare(settings.lip_sync_mode, session.config)
+            if getattr(getattr(session, "swapper", None), "model", None) is not None:
+                session.swapper.model.morph_factor = settings.dfm_morph_factor
+
             frame_stages = ReferenceStages(
                 session, request=request, edit_plan=prepared.edit_plan, export=export, identity_report=identity_report,
-                lip_sync=settings.lip_sync_mode == "wav2lip", working_transfer=lambda: reader.working.transfer,
+                lip_sync=settings.lip_sync_mode != "off", lip_syncer=lip_syncer, working_transfer=lambda: reader.working.transfer,
                 resume_after=resume_after, scene_cuts=scene_cuts, swapped_ranges=swapped_ranges, save_passes=save_passes,
                 write_frame=lambda index, image, shape: self._save_frame(record.job_id, index, image, shape))
             stages = frame_stages.stages()
@@ -871,6 +908,7 @@ class MasterPipelineRunner:
                 hardware="software" if admission.profile == "cpu" else "auto", timing=timing,
                 rate=output_rate, audio_policy=settings.audio_policy, transform=completed_frame,
                 output_dir=settings.output_root, manifest_metadata=metadata,
+                **({"audio_source": stage15_audio_source} if stage15_audio_source is not None else {}),
                 start=Fraction(str(record.request.trim_start_seconds)) if record.request.trim_start_seconds is not None else None,
                 end=Fraction(str(record.request.trim_end_seconds)) if record.request.trim_end_seconds is not None else None,
                 before_publish=lambda: self._check_control(control, checkpoint, last_completed),

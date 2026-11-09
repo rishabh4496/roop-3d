@@ -104,7 +104,7 @@ class ModelCatalog:
                     if count > 50000:
                         raise DomainError("MODEL_SEARCH_LIMIT", "Local model scan exceeds 50000 files", 413)
                     candidate = parent_path / name
-                    if candidate.suffix.casefold() not in {".onnx", ".pth", ".trt"} or is_link(candidate):
+                    if candidate.suffix.casefold() not in {".onnx", ".pth", ".trt", ".dfm"} or is_link(candidate):
                         continue
                     try:
                         if candidate.is_file() and candidate.stat().st_size > 0:
@@ -121,9 +121,9 @@ class ModelCatalog:
         matched: set[Path] = set()
         for path in found:
             key = self._stem(path)
-            for spec in aliases.get(key, ()):
+            for spec in (() if path.suffix.casefold() == ".dfm" else aliases.get(key, ())):
                 existing = local.get(spec["id"])
-                priority = {".onnx": 0, ".trt": 1, ".pth": 2}
+                priority = {".onnx": 0, ".dfm": 0, ".trt": 1, ".pth": 2}
                 if existing is None or priority[path.suffix.casefold()] < priority[existing.suffix.casefold()]:
                     local[spec["id"]] = path
                 matched.add(path)
@@ -137,7 +137,7 @@ class ModelCatalog:
             model_id = f"local_{slug}_{suffix}"
             local[model_id] = path
             custom_rows.append({"id": model_id, "model_id": model_id, "name": path.stem,
-                "category": "custom", "native_resolution": None, "installed": True, "selectable": True,
+                "category": "swapper" if path.suffix.casefold() == ".dfm" else "custom", "native_resolution": None, "installed": True, "selectable": True,
                 "vram_loaded": False, "trt_cached": path.suffix.casefold() == ".trt", "download_url": None,
                 "supports_3d_hybrid": False, "filename": path.name,
                 "local_format": path.suffix[1:].casefold(), "state": "CANDIDATE",
@@ -155,6 +155,18 @@ class ModelCatalog:
         return {"scanned_files": len(found), "registered_local_models": len(local),
                 "custom_local_models": custom_rows, "unblock_local_models": self.unblock_local_models}
 
+    def swapper_spec(self, model_id: str) -> dict | None:
+        spec = next((item for item in self._supported if item["id"] == model_id), None)
+        if spec is not None:
+            return spec if spec.get("category") == "swapper" else None
+        if not self._scan_complete:
+            self.rescan_local()
+        path = self.local_path(model_id)
+        if path is not None and path.suffix.casefold() == ".dfm":
+            return {"id": model_id, "category": "swapper", "native_resolution": 0,
+                    "identity_mode": "dfm", "input_range": "zero1", "output_range": "zero1"}
+        return None
+
     def local_path(self, model_id: str) -> Path | None:
         with self._scan_lock:
             return self._local_files.get(model_id)
@@ -167,7 +179,7 @@ class ModelCatalog:
         if path is None and not self._scan_complete:
             self.rescan_local()
             path = self.local_path(model_id)
-        if path is None or path.suffix.casefold() != ".onnx":
+        if path is None or path.suffix.casefold() not in {".onnx", ".dfm"}:
             raise DomainError("MODEL_NOT_INSTALLED", "A local ONNX weight for this model is unavailable", 404)
         try:
             resolved = path.resolve(strict=True)
@@ -263,7 +275,7 @@ class ModelCatalog:
             relative = path.relative_to((self.root / "models").resolve()).as_posix()
             slug = re.sub(r"[^a-z0-9]+", "_", path.stem.casefold()).strip("_")[:64] or "model"
             row_id = f"local_{slug}_{hashlib.sha256(relative.encode()).hexdigest()[:8]}"
-            rows.append({"id": row_id, "model_id": row_id, "name": path.stem, "category": "custom",
+            rows.append({"id": row_id, "model_id": row_id, "name": path.stem, "category": "swapper" if path.suffix.casefold() == ".dfm" else "custom",
                 "native_resolution": None, "installed": True, "selectable": True, "vram_loaded": row_id in self._vram_loaded,
                 "trt_cached": path.suffix.casefold() == ".trt", "download_url": None, "supports_3d_hybrid": False,
                 "sha256": None, "size_bytes": path.stat().st_size, "state": "CANDIDATE",

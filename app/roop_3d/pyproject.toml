@@ -17,6 +17,8 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+lip-sync = ["librosa==0.11.0", "scipy>=1.13,<2"]
+live-studio = ["pyvirtualcam>=0.13,<1", "mss>=10,<11", "SpoutGL>=0.0.7; platform_system == 'Windows'"]
 test = ["pytest==9.1.1"]
 diffusion = ["diffusers==0.30.2"]
 gpu-compositor = ["torch==2.7.1"]

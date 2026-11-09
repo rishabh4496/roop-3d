@@ -191,3 +191,39 @@ def audio_features_from_pcm(samples: np.ndarray, source_rate: int, *, target_rat
     """Convenience path for caller-supplied replacement audio samples."""
     signal = AudioSignal(resample_mono(samples, source_rate, target_rate), target_rate, start_time)
     return extract_log_mel(signal, **mel_options)
+
+
+def extract_wav2lip_mel(signal: AudioSignal) -> AudioFeatures:
+    """Wav2Lip training frontend: preemphasis, Slaney mel amplitude, dB, [-4,4]."""
+    if signal.sample_rate != 16000:
+        raise ValueError("Wav2Lip requires 16 kHz audio")
+    try:
+        import librosa
+        from scipy.signal import lfilter
+    except ImportError as error:
+        raise DomainError("LIPSYNC_DEPENDENCY_MISSING", "Wav2Lip features require librosa and scipy", 503) from error
+    emphasized = lfilter([1, -.97], [1], signal.samples)
+    spectrum = np.abs(librosa.stft(emphasized, n_fft=800, hop_length=200, win_length=800))
+    filters = librosa.filters.mel(sr=16000, n_fft=800, n_mels=80, fmin=55, fmax=7600)
+    db = 20 * np.log10(np.maximum(1e-5, filters @ spectrum)) - 20
+    mel = np.clip(8 * ((db + 100) / 100) - 4, -4, 4).astype(np.float32)
+    return AudioFeatures(signal, mel)
+
+
+class LipSyncer:
+    """Stage 2.8 audio timeline. Each frame is indexed by PTS without accumulated FPS drift."""
+    def __init__(self, path: Path, *, stream_index: int | None = None):
+        from roop_3d.engine.audio_sync.track_selection import decode_selected
+        _, signal = decode_selected(path, stream_index=stream_index)
+        self.features = extract_wav2lip_mel(signal)
+
+    def frame_input(self, timestamp: Fraction, confidence: float = 1.0):
+        from roop_3d.engine.audio_sync.audio_alignment import window_for_timestamp
+        from roop_3d.engine.audio_sync.lip_sync_adapter import LipSyncFrameInput
+        window = window_for_timestamp(self.features.signal, timestamp, window_samples=3200, left_context_samples=0)
+        first = window.center_sample // self.features.hop_length
+        indices = np.arange(first, first + 16)
+        mel = np.full((80, 16), -4, np.float32)
+        valid = (indices >= 0) & (indices < self.features.mel.shape[1])
+        mel[:, valid] = self.features.mel[:, indices[valid]]
+        return LipSyncFrameInput(mel, window.rms, confidence, timestamp)

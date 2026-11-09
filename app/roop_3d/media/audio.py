@@ -53,7 +53,7 @@ def plan_audio(source: Path, suffix: str, policy: AudioPolicy = "copy", *,
         raise ValueError("Unsupported audio/container policy")
     if policy == "pcm" and suffix == ".mp4":
         raise DomainError("AUDIO_POLICY_INCOMPATIBLE", "PCM output requires MOV or MKV", 422)
-    with open_media(source) as container:
+    with open_media(source, require_video=False) as container:
         streams = list(container.streams.audio)
         if policy == "drop" and streams:
             raise DomainError("AUDIO_DROP_DENIED", "Stage 05 preserves every audio track", 422)

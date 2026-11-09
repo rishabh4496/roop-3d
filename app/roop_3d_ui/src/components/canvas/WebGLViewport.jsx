@@ -26,7 +26,7 @@ function link(gl, vertex, fragment) {
 
 /** Native-resolution texture: the image is uploaded at its own size, only downscaled if the GPU cannot hold it. */
 function uploadTexture(gl, texture, image, maxSize) {
-  let source = image, width = image.naturalWidth || image.width, height = image.naturalHeight || image.height;
+  let source = image, width = ('naturalWidth' in image ? image.naturalWidth : 0) || image.width, height = ('naturalHeight' in image ? image.naturalHeight : 0) || image.height;
   if (Math.max(width, height) > maxSize) {
     const scale = maxSize / Math.max(width, height), layer = document.createElement('canvas');
     layer.width = Math.max(1, Math.floor(width * scale)); layer.height = Math.max(1, Math.floor(height * scale));
@@ -81,7 +81,7 @@ function createResources(gl) {
  * WebGL2 or the shaders are unavailable so the caller can fall back to the DOM / 2D path.
  *
  * @param {{
- *   imageA: HTMLImageElement | null; imageB: HTMLImageElement | null;
+ *   imageA: HTMLImageElement | ImageBitmap | null; imageB: HTMLImageElement | ImageBitmap | null;
  *   mode: 'wipe'|'crossfade'|'blend'|'diff'|'loupe'; split?: number; vertical?: boolean; mix?: number; gain?: number;
  *   colormap?: 'inferno'|'viridis'; bicubic?: boolean; pointer?: { x: number; y: number; active: boolean } | null;
  *   faces?: any[]; showGizmo?: boolean; width: number; height: number; pixelRatio?: number; preserveDrawingBuffer?: boolean;

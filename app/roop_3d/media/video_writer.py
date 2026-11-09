@@ -134,6 +134,7 @@ def encode_video(source: Path, filename: str, *, root: Path | None = None,
                  transform: Callable[[DecodedFrame], np.ndarray] | None = None,
                  cancel: Event | None = None, output_dir: str | None = None,
                  manifest_metadata: dict | None = None,
+                 audio_source: Path | None = None,
                  before_publish: Callable[[], None] | None = None,
                  finishing: FinishingOptions | None = None,
                  profile: str | ExportProfile | None = None,
@@ -150,6 +151,8 @@ def encode_video(source: Path, filename: str, *, root: Path | None = None,
     needs an explicit ``sequence_rate``. ``hdr_policy`` governs PQ/HLG input; ``passthrough`` re-encodes
     unmodified media (no ``transform``) on a profile that can carry HDR.
     """
+    audio_input = Path(audio_source) if audio_source is not None else source
+    audio_digest = sha256_file(audio_input)[1] if audio_source is not None else None
     root = Path(os.path.abspath(root or application_root()))
     if not root.is_relative_to(application_root().absolute()):
         from roop_3d.audit.isolation import AuditError
@@ -235,7 +238,7 @@ def encode_video(source: Path, filename: str, *, root: Path | None = None,
                 raise DomainError("HDR_PASSTHROUGH_UNSUPPORTED", f"HDR passthrough is unavailable: {reason}", 422)
             native = native_ok and (not desc.is_hdr or hdr_pass)
             working = working_color(desc, "passthrough" if hdr_pass else hdr_policy, (facts.width, facts.height))
-            plans = plan_audio(source, container_suffix, audio_policy, start=start, end=end, cancel=cancel) \
+            plans = plan_audio(audio_input, container_suffix, audio_policy, start=start, end=end, cancel=cancel) \
                 if not is_sequence else ()
             sub_plans = plan_subtitles(facts.subtitles, container_suffix, subtitles) \
                 if not chosen.is_sequence else ()
@@ -404,12 +407,16 @@ def encode_video(source: Path, filename: str, *, root: Path | None = None,
                 if native_tail is not None:
                     native_samples[native_tail[0]] = native_tail[1]
 
+            if audio_digest is not None and sha256_file(audio_input)[1] != audio_digest:
+                raise DomainError("AUDIO_SOURCE_CHANGED", "Voiceover changed during encoding", 409)
             audio_fields = {"audio_tracks": [asdict(p) for p in plans], "audio_sync": [], "audio_integrity": []}
+            if audio_digest is not None:
+                audio_fields["replacement_sha256"] = audio_digest
             sub_report = [asdict(p) for p in sub_plans]
             if chosen.is_sequence:
                 if plans:
                     with ExitStack() as stack:
-                        original = stack.enter_context(open_media(source))
+                        original = stack.enter_context(open_media(audio_input, require_video=False))
                         audio_out = stack.enter_context(av.open(str(audio_sidecar), "w", format="matroska"))
                         audio = audio_packets(original, audio_out, plans, start=start, end=end, cancel=cancel)
                         for packet in audio:
@@ -424,7 +431,7 @@ def encode_video(source: Path, filename: str, *, root: Path | None = None,
                     if claim:
                         # The recipe hash is embedded before computing the final file hash.
                         output.metadata['comment'] += '\n' + json.dumps(claim, sort_keys=True)
-                    audio = (audio_packets(stack.enter_context(open_media(source)), output, plans, start=start, end=end,
+                    audio = (audio_packets(stack.enter_context(open_media(audio_input, require_video=False)), output, plans, start=start, end=end,
                                            cancel=cancel) if plans else iter(()))
                     subtitle_stream = (subtitle_packets(stack.enter_context(open_media(source)), output, sub_plans,
                                                         start=start, end=end, cancel=cancel)
@@ -464,7 +471,7 @@ def encode_video(source: Path, filename: str, *, root: Path | None = None,
                     produced_indices = [s.index for s in produced_container.streams.audio]
                 for plan, produced_index in zip(plans, produced_indices):
                     check = av_sync.check_track(
-                        source, target_path, plan, produced_index, origin=origin, source_start=start, source_end=end,
+                        audio_input, target_path, plan, produced_index, origin=origin, source_start=start, source_end=end,
                         seconds=clip, tolerance=COPY_LAG_TOLERANCE if plan.action == "copy" else TRANSCODE_LAG_TOLERANCE)
                     sync_report.append(check.as_dict())
                     if not check.ok:
@@ -496,7 +503,7 @@ def encode_video(source: Path, filename: str, *, root: Path | None = None,
                 expectation = OutputExpectation(
                     frame_times=expected, video_end=expected_end, width=width, height=height, pix_fmt=out_pix,
                     tags=out_tags, sample_aspect_ratio=output_aspect, display_rotation=display_rotation,
-                    audio_tracks=len(facts.audio), subtitle_tracks=sum(1 for p in sub_plans if p.action == "copy"),
+                    audio_tracks=len(plans) if audio_source is not None else len(facts.audio), subtitle_tracks=sum(1 for p in sub_plans if p.action == "copy"),
                     pts_tolerance=tolerance)
                 wanted = sampler.finish()
 
@@ -568,6 +575,8 @@ def encode_video(source: Path, filename: str, *, root: Path | None = None,
                                     "validation": validation, "fidelity": fidelity_report, "audio_sync": sync_report,
                                     "subtitles": sub_report, "sequence": ({"format": sequence_format, "directory": output_relative}
                                                                           if chosen.is_sequence else None)}}
+            if audio_digest is not None:
+                manifest["stage15"]["replacement_audio_sha256"] = audio_digest
             if metadata:
                 manifest["stage12"] = metadata
                 if "model_hashes" in metadata:
