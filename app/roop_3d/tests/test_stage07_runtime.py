@@ -76,6 +76,20 @@ def test_named_outputs_reorder_without_swapping_values_or_accepting_missing_name
         model.release()
 
 
+def test_expired_weak_proxies_do_not_break_ort_session_accounting(monkeypatch):
+    import weakref
+    from roop_3d.engine import resources
+    from roop_3d.reliability import probe
+    class Owner:
+        pass
+    owner = Owner()
+    expired = weakref.proxy(owner)
+    del owner
+    monkeypatch.setattr(resources.gc, "get_objects", lambda: [expired])
+    assert probe.count_ort_sessions() == 0
+    assert resources.evict_for_build()["remaining_ort_sessions"] == 0
+
+
 def test_actual_ort_sessions_are_evicted_and_aliases_refuse_compilation(graph):
     catalog,name=graph
     model=OrtModel(catalog,name)

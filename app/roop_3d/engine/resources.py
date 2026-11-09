@@ -161,6 +161,18 @@ def build_fence() -> Iterator[None]:
         yield
 
 
+def count_live_ort_sessions() -> int:
+    """Count session objects once, without dereferencing weak proxy aliases.
+
+    isinstance(proxy, ...) consults the referent's class and raises on expired
+    proxies. Live proxy aliases also must not double-count their session.
+    """
+    import onnxruntime as ort
+    return sum(type(obj) not in weakref.ProxyTypes
+               and isinstance(obj, ort.InferenceSession) and getattr(obj, "_sess", None) is not None
+               for obj in gc.get_objects())
+
+
 def evict_for_build() -> dict[str, Any]:
     """Close all owned sessions, collect, empty any loaded torch CUDA allocator.
 
@@ -186,9 +198,7 @@ def evict_for_build() -> dict[str, Any]:
                 torch_state = "CUDA_UNAVAILABLE"
         # The application never imports torch just to create a new CUDA context.
         # No loaded torch module means no process-local torch CUDA allocator.
-        import onnxruntime as ort
-        remaining = sum(isinstance(obj, ort.InferenceSession) and getattr(obj, "_sess", None) is not None
-                        for obj in gc.get_objects())
+        remaining = count_live_ort_sessions()
         if remaining:
             raise DomainError("BUILD_LIVE_ORT_SESSIONS", "An ORT session is still referenced after eviction; compilation refused", 409)
         return {"registered_owners_released": len(_owners), "gc_collected": True,

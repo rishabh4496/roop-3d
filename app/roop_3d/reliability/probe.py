@@ -322,11 +322,10 @@ def count_ort_sessions() -> int:
     collected is *not* counted, a session still referenced after its owner "released" it is.
     """
     try:
-        import onnxruntime as ort
+        from roop_3d.engine.resources import count_live_ort_sessions
     except Exception:
         return 0
-    return sum(1 for obj in gc.get_objects()
-               if isinstance(obj, ort.InferenceSession) and getattr(obj, "_sess", None) is not None)
+    return count_live_ort_sessions()
 
 
 # -------------------------------------------------------------------------------------------------- snapshot
