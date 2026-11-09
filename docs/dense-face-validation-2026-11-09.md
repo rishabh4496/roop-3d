@@ -17,6 +17,11 @@ The outstanding dependencies are the actual FLAME 2023 Open model, the original 
 - Actual local readiness CLI: correctly discovered nested HRN encoder files and supplied export reports, and enumerated all five missing geometry asset roles plus the absent manifest. No inference or GPU context was needed by this command.
 - Full backend suite attempt: reached the 600-second command deadline and exited 124. **The full suite did not pass or complete.** Bounded suites are reported separately, not as a replacement claim.
 
+- Follow-through on actual installed models/media: `test_reenactment_session_real.py -rs` produced **3 passed, 2 skipped in 24.22 seconds**. Standard neural video inference and real missing-bundle refusal passed. The two complete three-tier video cases skipped specifically because the bundle is absent.
+- Follow-through on actual production ASGI routes with an existing loaded local `.fsz`: health, models and FaceSet listing returned HTTP 200; reconstruction and cached-state read returned HTTP 200 with `template=canonical`, `limited_multiview`, `backbone.available=false` and an explicit missing-bundle reason. Both runtime profile configurations rejected loading with `DENSE_FACE_ASSETS_MISSING`, status 503. No model/media mocks were used. Startup recovery and queue workers were disabled to preserve existing jobs.
+
+The [requirement-level acceptance trace](dense-face-acceptance-trace.md) records each explicit requirement, the interpretation choices, exact observations and outstanding real-data checks. Component improvements are demonstrated; **improved real swapped-face appearance has not been demonstrated**.
+
 ## What the checks cover
 
 | Requirement | Concrete observation |
