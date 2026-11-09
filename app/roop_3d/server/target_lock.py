@@ -13,6 +13,7 @@ The locks are in-memory for the life of the server process; this is separate fro
 from __future__ import annotations
 
 import logging
+import itertools
 import threading
 from typing import Annotated, Any
 
@@ -28,7 +29,7 @@ from roop_3d.identity.target_lock import BankEntry, FaceRef, TargetIdentityLock,
 log = logging.getLogger("roop3d.target_lock")
 router = APIRouter(prefix="/api/v1")
 MAX_SCAN_SAMPLES = 512
-MIN_ANGLE_SIMILARITY = 0.30      # measured: different people average 0.13 (p99 0.37); same person, any pose, >= 0.49
+MIN_ANGLE_SIMILARITY = 0.42      # measured: different people average 0.13 (p99 0.37); same person, any pose, >= 0.49
 
 
 def store(request: Request) -> TargetLockStore:
@@ -38,20 +39,40 @@ def store(request: Request) -> TargetLockStore:
     return state.target_locks
 
 
-def ref_of(face) -> FaceRef:
+def ref_of(face, image=None) -> FaceRef:
     pose = as_pose3d(face.pose_legacy)
-    return FaceRef(face.embedding, float(pose.yaw), float(pose.pitch), float(pose.roll), [float(v) for v in face.box])
+    import cv2
+    crop, quality = None, 0.0
+    occlusion = getattr(face, "validity", {}).get("occlusion_ratio")
+    if image is not None:
+        h, w = image.shape[:2]
+        x1,y1,x2,y2 = [int(v) for v in face.box]
+        region = image[max(0,y1):min(h,y2), max(0,x1):min(w,x2)]
+        if region.size and min(region.shape[:2]) > 3:
+            crop = cv2.resize(region, (256,256), interpolation=cv2.INTER_AREA)
+            sharpness = float(cv2.Laplacian(cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY), cv2.CV_64F).var())
+            # Missing occlusion measurements are explicit in the bank; do not report a fabricated ratio.
+            quality = sharpness * float(face.score) * (1 - float(occlusion or 0))
+    landmarks = getattr(face, "kps68_3d", None)
+    return FaceRef(face.embedding, float(pose.yaw), float(pose.pitch), float(pose.roll),
+                   [float(v) for v in face.box], quality, crop,
+                   landmarks.copy() if landmarks is not None else None, occlusion, getattr(face, "pose6dof", None))
 
 
-def annotate(request: Request, path: str, frame_index: int, analyzed: list, faces: list[dict]) -> None:
+def annotate(request: Request, path: str, frame_index: int, analyzed: list, faces: list[dict], image=None) -> None:
     """Fill ``cluster_id`` / ``track_id`` / lock flags of the face dicts from the video's person clusters."""
-    if not analyzed or any(f.embedding is None for f in analyzed):
+    if not analyzed:
         return
     locks = store(request)
     registry = locks.registry(path)
-    associations = registry.associate([ref_of(f) for f in analyzed], frame_index, learn=True)
+    associations = registry.associate([ref_of(f, image) for f in analyzed], frame_index, learn=True)
     by_cluster = {l.cluster_id: l for l in locks.locks_for(path)}
     for face, assoc in zip(faces, associations):
+        if assoc.cluster_id is None:
+            continue
+        cluster = registry.clusters[assoc.cluster_id]
+        face["face_id"] = f"face {cluster.face_id}"
+        face["persistent_face_id"] = cluster.face_id
         face["cluster_id"] = assoc.cluster_id
         face["cluster_match"] = {"score": round(assoc.score, 4), "margin": round(assoc.margin, 4), "reason": assoc.reason}
         # A single-frame read has no tracker: the track id is the person's persistent cluster id (appearance-linked).
@@ -91,8 +112,8 @@ class FaceSelector(Contract):
 
 
 class LockFromFrame(FaceSelector):
-    sample_count: int = Field(default=16, ge=0, le=MAX_SCAN_SAMPLES)
-    wait: bool = True
+    sample_count: int = Field(default=192, ge=0, le=MAX_SCAN_SAMPLES)
+    wait: bool = False
     track_id: str | None = Field(default=None, pattern=r'^track_[0-9]{4}$')
 
 
@@ -121,27 +142,50 @@ def _analyzed(request: Request, path: str, frame_index: int, threshold: float):
 
 
 def scan_keyframes(request: Request, lock: TargetIdentityLock, sample_count: int, threshold: float) -> None:
-    """Expand the reference bank: visit keyframes outward from the anchor and link the person by chained appearance."""
+    """Serialize scans per video to respect the existing local model/GPU budget."""
+    with store(request).registry(lock.media_path).scan_lock:
+        _scan_keyframes(request, lock, sample_count, threshold)
+
+
+def _scan_keyframes(request: Request, lock: TargetIdentityLock, sample_count: int, threshold: float) -> None:
+    """Fast interval coverage followed by an exhaustive sequential pass."""
     locks = store(request)
     registry = locks.registry(lock.media_path)
     frames = request.app.state.media.frames
     lock.scan = {"state": "running", "requested": sample_count, "sampled": 0, "matched": 0}
     try:
         total = frames.info(lock.media_path).total_frames
-        slots = sorted({min(total - 1, int((k + 0.5) / max(sample_count, 1) * total)) for k in range(sample_count)},
-                       key=lambda i: abs(i - lock.anchor_frame_index))
+        slots = sorted({int(v) for v in np.linspace(0, max(0, total - 1), min(total, sample_count))} | {lock.anchor_frame_index})
+        # Fast coverage first, then sequentially inspect the remaining frames. Only a full
+        # pass can claim that an unavailable angle truly never occurs in this video.
+        sampled_slots = set(slots)
+        indices = itertools.chain(slots, (i for i in range(total) if i not in sampled_slots))
+        lock.scan.update(requested=total, phase="keyframes")
         matched = 0
-        for done, index in enumerate(slots, start=1):
+        exhaustive = True
+        skipped = 0
+        for done, index in enumerate(indices, start=1):
             try:
                 result = frames.read(lock.media_path, frame_index=index)
                 analyzed = frames.analyzed_faces(lock.media_path, result, threshold) or []
-                if analyzed and all(f.embedding is not None for f in analyzed):
-                    associations = registry.associate([ref_of(f) for f in analyzed], result.frame_index, learn=True)
+                if analyzed:
+                    associations = registry.associate([ref_of(f, result.image) for f in analyzed], result.frame_index, learn=True)
                     matched += sum(a.cluster_id == lock.cluster_id for a in associations)
             except DomainError as error:
+                skipped += 1
                 log.info("keyframe %s skipped: %s", index, error.code)
-            lock.scan.update(sampled=done, matched=matched)
-        lock.scan.update(state="done", bank_size=len(registry.clusters[lock.cluster_id].bank))
+            lock.scan.update(sampled=done, matched=matched,
+                             phase="keyframes" if done < len(slots) else "coverage")
+            if registry.clusters[lock.cluster_id].coverage()["quality_locked"] == 15:
+                exhaustive = done == total
+                break
+        cluster = registry.clusters[lock.cluster_id]
+        coverage = cluster.coverage()
+        lock.scan.update(state="done", bank_size=len(cluster.bank), exhaustive=exhaustive and skipped == 0, skipped=skipped,
+                         coverage=coverage,
+                         message=("All Angles Achieved (15/15)" if coverage["captured"] == 15 else
+                                  (f'{coverage["captured"]}/{coverage["captured"]} available video angles locked' if not skipped else
+                                   f'{coverage["captured"]}/15 captured; {skipped} frames unavailable')))
     except Exception as error:                        # a scan failure leaves the anchor-only lock usable
         log.exception("target scan failed")
         lock.scan.update(state="error", message=str(error)[:200])
@@ -162,7 +206,9 @@ def lock_from_frame(value: LockFromFrame, request: Request) -> dict:
         raise DomainError("EMBEDDING_UNAVAILABLE", "The selected face could not be embedded (recognizer unavailable)", 503)
     locks = store(request)
     try:
-        lock = locks.create(value.path, result.frame_index, ref_of(face))
+        annotate(request, value.path, result.frame_index, analyzed, dicts, result.image)
+        lock = locks.create(value.path, result.frame_index, ref_of(face, result.image),
+                            cluster_id=dicts[chosen]["cluster_id"])
     except ValueError as error:
         raise DomainError("EMBEDDING_UNAVAILABLE", str(error), 503) from error
     if value.track_id is not None:
@@ -170,16 +216,20 @@ def lock_from_frame(value: LockFromFrame, request: Request) -> dict:
         with registry.lock:
             registry.clusters[lock.cluster_id].track_id = value.track_id
     # Faces of the anchor frame join their clusters too, so the other people on screen are competitors from the start.
-    annotate(request, value.path, result.frame_index, analyzed, dicts)
-    if value.sample_count > 0 and lock.scan.get('state') not in ('running', 'done'):
+    annotate(request, value.path, result.frame_index, analyzed, dicts, result.image)
+    registry = locks.registry(value.path)
+    with registry.lock:
+        start_scan = value.sample_count > 0 and lock.scan.get('state') not in ('running', 'done')
+        if start_scan:
+            lock.scan = {"state": "running", "requested": value.sample_count, "sampled": 0, "matched": 0}
+        elif value.sample_count == 0 and lock.scan.get('state') not in ('running', 'done'):
+            lock.scan = {"state": "skipped"}
+    if start_scan:
         if value.wait:
             scan_keyframes(request, lock, value.sample_count, value.threshold)
         else:
-            lock.scan = {"state": "running", "requested": value.sample_count, "sampled": 0, "matched": 0}
             threading.Thread(target=scan_keyframes, args=(request, lock, value.sample_count, value.threshold),
                              name=f"target-scan-{lock.lock_id[:6]}", daemon=True).start()
-    elif value.sample_count == 0 and lock.scan.get('state') not in ('running', 'done'):
-        lock.scan = {"state": "skipped"}
     return {**lock.public(locks.registry(value.path)), "selected_face_index": chosen, "frame_faces": dicts}
 
 
@@ -204,9 +254,9 @@ def add_angle_sample(value: AddAngle, request: Request) -> dict:
         raise DomainError("ANGLE_SAMPLE_DISSIMILAR",
                           f"That face looks nothing like Target #{lock.target_number} (cosine {similarity:.2f} to its closest "
                           "reference). Send force=true if you are sure it is the same person.", 409)
-    ref = ref_of(face)
+    ref = ref_of(face, result.image)
     with registry.lock:
-        added = cluster.consider(BankEntry(face.embedding, ref.yaw, ref.pitch, ref.roll, result.frame_index, ref.bbox, "user", similarity),
+        added = cluster.consider(ref.entry(result.frame_index, "user", similarity),
                                  force=True)
         cluster.seen[result.frame_index] = ref.bbox
     return {**lock.public(registry), "added": added, "similarity_to_bank": round(similarity, 4),
@@ -240,7 +290,7 @@ def match_frame(lock_id: str, request: Request, frame_index: Annotated[int, Quer
     h, w = result.image.shape[:2]
     from roop_3d.media.face_analysis import face_to_dict
     dicts = [face_to_dict(f, i, result.frame_index, w, h, detail="basic") for i, f in enumerate(analyzed)]
-    annotate(request, lock.media_path, result.frame_index, analyzed, dicts)
+    annotate(request, lock.media_path, result.frame_index, analyzed, dicts, result.image)
     target = next((f["face_index"] for f in dicts if f["cluster_id"] == lock.cluster_id), None)
     return {"lock_id": lock_id, "frame_index": result.frame_index, "target_face_index": target, "faces": dicts}
 
@@ -256,7 +306,7 @@ def media_faces(request: Request, path: Annotated[str, Query(min_length=1, max_l
     faces = frames.faces(path, result, threshold, detail=detail)
     faces = [dict(f) for f in faces]                  # the detection cache is shared: annotate copies
     if analyzed:
-        annotate(request, path, result.frame_index, analyzed, faces)
+        annotate(request, path, result.frame_index, analyzed, faces, result.image)
     h, w = result.image.shape[:2]
     return {"frame_index": result.frame_index, "width": int(w), "height": int(h), "timestamp_sec": round(result.timestamp_sec, 4),
             "faces": faces}

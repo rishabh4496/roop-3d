@@ -549,7 +549,7 @@ export default function FaceOverlayCanvas({
                 aria-pressed={isSel}
               >
                 <span className="pill-status" />
-                <span className="pill-name">{cluster?.name || `Face ${i + 1}`}</span>
+                <span className="pill-name">{cluster?.name || (f.persistentFaceId != null ? `face ${f.persistentFaceId}` : `Face ${i + 1}`)}</span>
                 {assigned && <span className="pill-mapping">→ {assigned.name}</span>}
                 {isSel && <span className="pill-check">✓</span>}
               </button>
@@ -756,7 +756,7 @@ function toOverlayFace(match, meta) {
   return {
     id: match.id, clusterId: match.clusterId, frameIndex: meta.frame_index, bbox: face.bbox_norm, landmarks5: match.landmarks5,
     pose: face.pose, pose3d: face.pose3d, confidence: face.confidence ?? undefined,
-    candidate: !match.stored, locked: match.locked, rank: face.face_index,
+    candidate: !match.stored, locked: match.locked, rank: face.face_index, persistentFaceId: face.persistent_face_id,
   };
 }
 
@@ -806,14 +806,14 @@ function drawFrameFaces(ctx, faces, { letterbox, hoveredFaceId, lockingId, showL
 
     // `#n` badge, then TARGET LOCKED / Locking… beside it; above the box unless that leaves the frame.
     const top = box.y - 20 >= letterbox.offsetY ? box.y - 20 : box.y + 4;
-    const badge = pill(ctx, `#${face.rank + 1}`, box.x, top, { fill: 'rgba(8, 14, 16, 0.92)', stroke: accent, color: accent });
+    const badge = pill(ctx, face.persistentFaceId != null ? `face ${face.persistentFaceId}` : `#${face.rank + 1}`, box.x, top, { fill: 'rgba(8, 14, 16, 0.92)', stroke: accent, color: accent });
     if (locked) pill(ctx, 'TARGET LOCKED', box.x + badge + 4, top, { fill: FRAME_LOCKED, stroke: FRAME_LOCKED, color: '#04130d' });
     else if (locking) pill(ctx, 'Locking…', box.x + badge + 4, top, { fill: 'rgba(8, 14, 16, 0.92)', stroke: accent, color: '#e8f1f2' });
 
     if (showPose) {
       const attitude = facePose(face);
       if (attitude) {
-        const text = `#${face.rank + 1} · Y: ${signed1(attitude.yaw)}° P: ${signed1(attitude.pitch)}° R: ${signed1(attitude.roll)}°`;
+        const text = `${face.persistentFaceId != null ? `face ${face.persistentFaceId}` : `#${face.rank + 1}`} · Y: ${signed1(attitude.yaw)}° P: ${signed1(attitude.pitch)}° R: ${signed1(attitude.roll)}°`;
         ctx.save(); ctx.font = '600 10px ui-monospace, Menlo, Consolas, monospace';
         const width = ctx.measureText(text).width + 10;
         ctx.restore();

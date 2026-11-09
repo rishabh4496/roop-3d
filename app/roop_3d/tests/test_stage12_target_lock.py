@@ -45,7 +45,7 @@ def test_profile_is_bridged_by_margin_when_only_weakly_similar():
     assert out[1].cluster_id == 2                                         # the other person starts their own cluster
 
 
-def test_ambiguous_weak_match_is_not_merged():
+def test_weak_match_uses_global_assignment_above_strict_gate():
     a = person(6)
     reg = ClusterRegistry()
     reg.associate([ref(a)], 0)
@@ -55,7 +55,7 @@ def test_ambiguous_weak_match_is_not_merged():
     both = unit(0.45 * a + 0.45 * c + 0.77 * unit(np.random.default_rng(99).normal(size=512)))
     assert 0.40 <= float(both @ a) and 0.40 <= float(both @ c)
     out = reg.associate([ref(both)], 2)[0]
-    assert out.reason == "new_cluster" and out.cluster_id not in (1, c2)
+    assert out.reason == "pose_bridge" and out.cluster_id in (1, c2)
 
 
 def test_bank_grows_by_chain_linking_and_skips_redundant_poses():

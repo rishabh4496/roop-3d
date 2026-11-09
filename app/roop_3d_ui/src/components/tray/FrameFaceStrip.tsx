@@ -70,11 +70,11 @@ export default function FrameFaceStrip({ imageUrl, meta, faces, detecting, locki
           return (
             <button key={match.id} type="button" className={`frame-face-card ${match.locked ? 'locked' : ''} ${busy ? 'busy' : ''}`}
               aria-pressed={match.locked} disabled={disabled || busy} data-face-rank={match.face.face_index}
-              title={match.locked ? `Face #${match.face.face_index + 1} is the current target` : `Make face #${match.face.face_index + 1} the target`}
+              title={match.locked ? `face ${match.face.persistent_face_id ?? match.face.face_index} is the current target` : `Make face ${match.face.persistent_face_id ?? match.face.face_index} the target`}
               onClick={() => onLock(match)}>
-              <span className="frame-face-thumb">{crops[match.id] ? <img src={crops[match.id]} alt={`Face ${match.face.face_index + 1} crop`} /> : <i aria-hidden="true">◎</i>}</span>
+              <span className="frame-face-thumb">{crops[match.id] ? <img src={crops[match.id]} alt={`Face ${match.face.persistent_face_id ?? match.face.face_index} crop`} /> : <i aria-hidden="true">◎</i>}</span>
               <span className="frame-face-meta">
-                <strong>#{match.face.face_index + 1}</strong>
+                <strong>face {match.face.persistent_face_id ?? match.face.face_index}</strong>
                 <span className="frame-face-pose">Y {signed(pose.yaw)}° P {signed(pose.pitch)}°</span>
                 {match.face.confidence != null && <small>{Math.round(match.face.confidence * 100)}%</small>}
               </span>

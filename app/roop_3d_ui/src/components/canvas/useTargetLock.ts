@@ -7,6 +7,8 @@ type Options = {
   target: string;
   /** Native frame index on screen (the frame whose face is clicked). */
   frameIndex: number;
+  playing?: boolean;
+  getPlaybackFrame?: () => number;
   /** Test seams. */
   lock?: typeof lockTargetFromFrame;
   addAngle?: typeof addTargetAngleSample;
@@ -15,15 +17,19 @@ type Options = {
   pollMs?: number;
 };
 
-const label = (lock: TargetLock) => `${lock.label} · ${lock.bank_size} angle${lock.bank_size === 1 ? '' : 's'}`;
+const refreshTarget = (id: string) => api<TargetLock>(`/target/${id}`);
+
+const label = (lock: TargetLock) => lock.coverage
+  ? `${lock.label} · ${lock.coverage.captured === 15 ? 'All Angles Achieved (15/15)' : `${lock.coverage.captured}/15 angles captured`}`
+  : `${lock.label} · ${lock.bank_size} angle${lock.bank_size === 1 ? '' : 's'}`;
 
 /**
  * Stage 12: lock a face of the frame on screen as the target (`POST /target/lock-from-frame`) and add further angles of the
  * same person to its reference bank (`POST /target/add-angle-sample`). The server keeps one persistent cluster id per person,
  * so the lock survives crossing paths, left/right order swaps and head turns to steep profiles.
  */
-export function useTargetLock({ target, frameIndex, lock = lockTargetFromFrame, addAngle = addTargetAngleSample,
-  refresh = id => api<TargetLock>(`/target/${id}`), toastMs = 4000, pollMs = 1500 }: Options) {
+export function useTargetLock({ target, frameIndex, playing = false, getPlaybackFrame, lock = lockTargetFromFrame, addAngle = addTargetAngleSample,
+  refresh = refreshTarget, toastMs = 4000, pollMs = 1500 }: Options) {
   const [current, setCurrent] = useState<TargetLock | null>(null);
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState<Toast | null>(null);
@@ -48,6 +54,41 @@ export function useTargetLock({ target, frameIndex, lock = lockTargetFromFrame, 
     };
     void tick(first);
   }, [refresh, pollMs]);
+
+  // Scrubbing/playback can improve buckets after the background scan has finished.
+  const currentId = current?.lock_id;
+  const lastHarvestFrame = useRef(frameIndex);
+  useEffect(() => {
+    if (lastHarvestFrame.current === frameIndex) return;
+    lastHarvestFrame.current = frameIndex;
+    if (!currentId) return;
+    const version = generation.current;
+    const timer = setTimeout(() => {
+      void refresh(currentId).then(next => {
+        if (version === generation.current) setCurrent(prev => prev?.lock_id === next.lock_id ? next : prev);
+      }).catch(() => {});
+    }, 250);
+    return () => clearTimeout(timer);
+  }, [currentId, frameIndex, refresh]);
+
+  useEffect(() => {
+    if (!playing || !currentId || !getPlaybackFrame) return;
+    const controller = new AbortController();
+    const version = generation.current;
+    let timer: ReturnType<typeof setTimeout>;
+    const harvest = async () => {
+      try {
+        await api(`/target/${currentId}/match?frame_index=${getPlaybackFrame()}`, { signal: controller.signal });
+        const next = await refresh(currentId);
+        if (!controller.signal.aborted && version === generation.current) {
+          setCurrent(prev => prev?.lock_id === next.lock_id ? next : prev);
+        }
+      } catch { /* Retry on the next playback sample without piling up requests. */ }
+      if (!controller.signal.aborted) timer = setTimeout(() => void harvest(), 500);
+    };
+    void harvest();
+    return () => { controller.abort(); clearTimeout(timer); };
+  }, [playing, currentId, getPlaybackFrame, refresh]);
 
   const lockFace = useCallback(async (faceIndex: number, trackId?: string) => {
     if (!target || busy) return null;

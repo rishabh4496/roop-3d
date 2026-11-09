@@ -201,3 +201,40 @@ def estimate_pose_5pt(landmarks5: Any) -> Pose3D:
 def legacy_pose_5pt(landmarks5: Any) -> tuple[float, float, float]:
     """`estimate_pose_5pt` expressed in the legacy frame (pitch positive = down) for existing callers."""
     return estimate_pose_5pt(landmarks5).legacy_tuple()
+
+
+def estimate_pose_6dof(landmarks5: Any, width: int, height: int) -> dict | None:
+    """Perspective PnP with an estimated camera and canonical metric head model.
+
+    Translation is relative to the canonical head size, not calibrated subject depth.
+    Reject unreliable fits rather than reporting a spurious pose.
+    """
+    import cv2
+    points = np.asarray(landmarks5, np.float64)
+    if points.shape != (5, 2) or not np.isfinite(points).all():
+        return None
+    focal = float(max(width, height))
+    camera = np.array([[focal, 0, width/2], [0, focal, height/2], [0, 0, 1.]])
+    reflection = np.diag([1., 1., -1.])
+    model = _MODEL5 @ reflection
+    seed = estimate_pose_5pt(points)
+    rotation = reflection @ rotation_from_euler(seed.yaw, seed.pitch, seed.roll) @ reflection
+    rvec = cv2.Rodrigues(rotation)[0]
+    spread = max(float(np.linalg.norm(points[1]-points[0])), 1.)
+    depth = focal * .064 / spread
+    center = points.mean(axis=0)
+    tvec = np.array([[(center[0]-width/2)*depth/focal],
+                     [(center[1]-height/2)*depth/focal], [depth]])
+    try:
+        ok, rvec, tvec = cv2.solvePnP(model, points, camera, None, rvec, tvec,
+                                     useExtrinsicGuess=True, flags=cv2.SOLVEPNP_ITERATIVE)
+        projected = cv2.projectPoints(model, rvec, tvec, camera, None)[0].reshape(-1,2)
+        error = float(np.sqrt(np.mean(np.sum((projected-points)**2, axis=1))))
+        angles = euler_from_rotation(reflection @ cv2.Rodrigues(rvec)[0] @ reflection)
+        if not ok or tvec[2,0] <= 0 or error > max(3., spread*.15) or max(abs(v) for v in angles[:2]) > 90:
+            return None
+        return {"yaw": angles[0], "pitch": angles[1], "roll": angles[2],
+                "translation": tvec.ravel().tolist(), "camera_estimated": True,
+                "reprojection_error_px": error}
+    except cv2.error:
+        return None

@@ -27,6 +27,7 @@ export interface FrameFace {
   confidence: number | null;
   /** Stage 12: frame-local id, persistent person cluster (rank-preserved: unchanged when the left-to-right order swaps). */
   face_id?: string;
+  persistent_face_id?: number;
   cluster_id?: number | null;
   is_target?: boolean;
   target_number?: number | null;

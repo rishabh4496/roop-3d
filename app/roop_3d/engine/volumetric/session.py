@@ -281,6 +281,60 @@ class ReferencePipeline:
         gray = cv2.cvtColor(region, cv2.COLOR_BGR2GRAY)
         return float(cv2.Laplacian(cv2.resize(gray, (96, 96), interpolation=cv2.INTER_AREA), cv2.CV_64F).var())
 
+    def set_target_registry(self, registry) -> None:
+        self.target_registry = registry
+        if self.tracker is not None:
+            self.tracker.target_registry = registry
+
+    def _persistent_target_faces(self, faces):
+        registry = getattr(self, "target_registry", None)
+        if registry is None or not faces or getattr(self.tracker, "target_registry", None) is registry:
+            return faces
+        from roop_3d.identity.target_lock import FaceRef
+        from roop_3d.core.pose import as_pose3d
+        refs = []
+        for tracked in faces:
+            face = tracked.observation
+            pose = as_pose3d(face.pose)
+            refs.append(FaceRef(face.embedding, pose.yaw, pose.pitch, pose.roll, list(face.box)))
+        frame = self.angle_frame_index
+        if frame is None:
+            frame = max(0, self.tracker.frame_index - 1)
+        associations = registry.associate(refs, frame, learn=False)
+        result = []
+        with registry.lock:
+            for tracked, assoc in zip(faces, associations):
+                if assoc.cluster_id is None:
+                    continue
+                cluster = registry.clusters[assoc.cluster_id]
+                identity = int(cluster.track_id.removeprefix("track_"))
+                result.append(replace(tracked, track_id=identity))
+        return tuple(result)
+
+    def _target_reference(self, tracked):
+        registry = getattr(self, "target_registry", None)
+        if registry is None:
+            return None
+        from roop_3d.core.pose import as_pose3d
+        pose = as_pose3d(tracked.observation.pose)
+        with registry.lock:
+            cluster = next((c for c in registry.clusters.values()
+                            if c.track_id == f"track_{tracked.track_id:04d}"), None)
+            return cluster.reference_for_pose(pose.yaw, pose.pitch) if cluster and cluster.locked else None
+
+    @staticmethod
+    def _bank_landmarks(reference, box):
+        """Move pose-matched measured landmarks to the current frame's box for a missing-landmark fallback."""
+        if reference is None or reference.landmarks3d is None:
+            return None
+        points = reference.landmarks3d.copy()
+        before, after = np.asarray(reference.bbox), np.asarray(box)
+        scale = (after[2:] - after[:2]) / np.maximum(before[2:] - before[:2], 1e-6)
+        points[:, :2] = (points[:, :2] - before[:2]) * scale + after[:2]
+        if points.shape[1] == 3:
+            points[:, 2] *= float(scale.mean())
+        return points
+
     def set_identity_guard(self, guard) -> None:
         """Install the render-time identity lock check (see roop_3d.identity.guard)."""
         with self.lock:
@@ -318,6 +372,8 @@ class ReferencePipeline:
         if type(frame_index) is not int or frame_index < 0:
             raise ValueError("Angle scan frame index must be a nonnegative integer")
         self.angle_frame_index = frame_index
+        if self.tracker is not None and getattr(self, "target_registry", None) is not None:
+            self.tracker.registry_frame_index = frame_index
 
     def scan_angle_trajectories(self, video_path, track_ids: set[int], *, fps: float = 30.0,
                                 hdr_policy: str = "tonemap_sdr", min_cutoff: float = 0.15,
@@ -357,7 +413,7 @@ class ReferencePipeline:
                                           interpolation=cv2.INTER_AREA)
                               if flow_scale < 1.0 else gray)
                 self.set_frame_timestamp(float(decoded.timestamp.seconds))
-                tracked_faces = self.tracker.process(decoded.image)
+                tracked_faces = self._persistent_target_faces(self.tracker.process(decoded.image))
                 frame_detections: dict[int, AngleDetection] = {}
                 frame_barriers = set(track_ids) if self.tracker.scene_cut else set()
                 if self.tracker.scene_cut:
@@ -533,7 +589,7 @@ class ReferencePipeline:
             if tracked is None:
                 self._frame_context = None
                 faces = self.tracker.process(image, include203=self.portrait.available and pose_blend is None)
-                faces = self._apply_angle_trajectories(faces)
+                faces = self._persistent_target_faces(self._apply_angle_trajectories(faces))
                 detection_end = time.perf_counter()
                 tracked = TrackedFrame(faces, bool(self.tracker.scene_cut), frozenset(self.tracker.active_ids),
                                        self._frame_time(), (detection_end - began) * 1000)
@@ -565,6 +621,12 @@ class ReferencePipeline:
                                                  tracked.state, verdict.similarity))
                         continue
                 face = tracked.observation
+                target_reference = self._target_reference(tracked)
+                if face.landmarks68 is None:
+                    measured = self._bank_landmarks(target_reference, face.box)
+                    if measured is not None:
+                        face = replace(face, landmarks68=measured)
+                        tracked = replace(tracked, observation=face)
                 at = time.perf_counter()
                 extreme = abs(face.pose[0]) > 30 or abs(face.pose[1]) > 25
                 face_mode = "pose_3d" if mode == "standard" and extreme else mode
@@ -696,7 +758,7 @@ class ReferencePipeline:
                 pose_blend = 1.0
             began = time.perf_counter()
             faces = self.tracker.process(image, include203=self.portrait.available and pose_blend is None)
-            faces = self._apply_angle_trajectories(faces)
+            faces = self._persistent_target_faces(self._apply_angle_trajectories(faces))
             seconds = getattr(self.tracker, "timestamp_seconds", None)
             frame_time = float(seconds) if seconds is not None and np.isfinite(seconds) else self.frames_tracked / 30.0
             self.frames_tracked += 1

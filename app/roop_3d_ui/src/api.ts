@@ -75,11 +75,12 @@ export const extractFaceFromFrame = (body: {
 }) => post<ExtractFromFrameResult>('/faces/extract_from_frame', body);
 /** Stage 12: a person locked from a frame, with the multi-angle reference bank that keeps the lock through head turns. */
 export type TargetLock = {
+  coverage?: { captured: number; quality_locked: number; total: number };
   track_id?: string | null;
   lock_id: string; target_number: number; label: string; media_path: string; cluster_id: number;
   anchor_frame_index: number; bank_size: number; observed_frames: number[];
   reference_bank: { yaw: number; pitch: number; roll: number; frame_index: number; source: 'anchor' | 'auto' | 'user'; match_score: number }[];
-  scan: { state: 'idle' | 'running' | 'done' | 'error' | 'skipped'; sampled?: number; requested?: number; matched?: number };
+  scan: { state: 'idle' | 'running' | 'done' | 'error' | 'skipped'; sampled?: number; requested?: number; matched?: number; message?: string; exhaustive?: boolean };
   selected_face_index?: number; added?: boolean; similarity_to_bank?: number;
 };
 type FaceSelector = { face_index: number } | { point: [number, number] };

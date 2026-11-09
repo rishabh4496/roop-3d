@@ -261,7 +261,8 @@ export function VideoViewport({
   const frameFaces = !playing && scrub.current && scrub.faces ? matchedFaces : null;
   const [lockingId, setLockingId] = useState<string | null>(null);
   // Stage 12: the person locked from a frame (multi-angle reference bank, persistent cluster id); keyed to the native frame on screen.
-  const targetLock = useTargetLock({ target, frameIndex: scrub.meta?.frame_index ?? 0 });
+  const getPlaybackFrame = useCallback(() => Math.max(0, Math.min(totalFrames - 1, Math.round(getPlayhead() * fps))), [totalFrames, fps]);
+  const targetLock = useTargetLock({ target, frameIndex: scrub.meta?.frame_index ?? 0, playing, getPlaybackFrame });
   const outputPreview = usePreview(enabled && previewLive ? output : '', time, duration, fps, playing);
   // The real swapped frame (or, when a node is soloed, that stage's buffer) from POST /api/preview: debounced, 503-aware.
   const [liveSwap, setLiveSwap] = preference('live_swap');
@@ -280,7 +281,7 @@ export function VideoViewport({
       await targetLock.lockFace(match.face.face_index, match.clusterId ?? undefined);
       // "Bind .fsz identity" on a face that is already a target: map its track to the chosen FaceSet.
       const chosen = sourceOverrideId ? sources.find(item => item.faceset_id === sourceOverrideId) : undefined;
-      if (chosen && match.clusterId) { store.assignSource(match.clusterId, chosen.faceset_id); onAssignSource?.(match.clusterId, chosen.faceset_id); noticeLater(`Face #${match.face.face_index + 1} is now mapped to ${chosen.name}.`); }
+      if (chosen && match.clusterId) { store.assignSource(match.clusterId, chosen.faceset_id); onAssignSource?.(match.clusterId, chosen.faceset_id); noticeLater(`face ${match.face.persistent_face_id ?? match.face.face_index} is now mapped to ${chosen.name}.`); }
       return;
     }
     setLockingId(match.id);
@@ -296,7 +297,7 @@ export function VideoViewport({
       if (result.inspection) onInspectionUpdate?.(result.inspection);
       const source = sources.find(item => item.faceset_id === (sourceOverrideId ?? activeSourceId));
       if (source && server.track_id) { store.assignSource(server.track_id, source.faceset_id); onAssignSource?.(server.track_id, source.faceset_id); }
-      noticeLater(source ? `Face #${match.face.face_index + 1} locked and mapped to ${source.name}.` : `Face #${match.face.face_index + 1} locked as a target. Choose a source FaceSet to swap it.`);
+      noticeLater(source ? `face ${match.face.persistent_face_id ?? match.face.face_index} locked and mapped to ${source.name}.` : `face ${match.face.persistent_face_id ?? match.face.face_index} locked as a target. Choose a source FaceSet to swap it.`);
     } catch (error) { noticeLater((error as Error).message || 'Locking the face failed.'); }
     finally { setLockingId(null); }
   }, [scrub.meta, lockingId, target, sources, activeSourceId, onAssignSource, onInspectionUpdate, noticeLater, targetLock]);
@@ -763,7 +764,7 @@ export function VideoViewport({
         {detectionNotice && <span className="detection-inline-notice">{detectionNotice}</span>}
         {extraction.toast && <span className={`face-toast ${extraction.toast.kind}`} role="status">{extraction.toast.text}</span>}
         {targetLock.toast && <span className={`face-toast ${targetLock.toast.kind}`} role="status">{targetLock.toast.text}</span>}
-        {targetLock.lock && <span className="target-lock-chip" title={`${targetLock.lock.bank_size} reference angles · scan ${targetLock.lock.scan?.state ?? 'not started'}`}>TARGET LOCKED ✓ {targetLock.lock.track_id?.replace('track_', 'Face ').replace(/ 0+(\d)/, ' $1') ?? targetLock.lock.label} · {targetLock.lock.bank_size} angles{targetLock.lock.scan?.state === 'running' ? ' · capturing…' : ''}</span>}
+        {targetLock.lock && <span className="target-lock-chip" title={`${targetLock.lock.bank_size} reference angles · scan ${targetLock.lock.scan?.state ?? 'not started'}`}>TARGET LOCKED ✓ {targetLock.lock.label} · {targetLock.lock.scan?.message ?? `${targetLock.lock.coverage?.captured ?? targetLock.lock.bank_size}/15 angles`}{targetLock.lock.scan?.state === 'running' ? ' · capturing…' : ''}</span>}
         {solo && <button className="button small" onClick={() => setSolo(null)}>Exit solo · {solo}</button>}
 
         {/* Mask Editing Mode Toggle */}
@@ -1058,7 +1059,7 @@ export function VideoViewport({
       </div>; return studio ? (studio.panels ? createPortal(panels, studio.panels) : null) : panels; })()}
       {floating.portal}
       {historyOpen && <HistoryDrawer onClose={() => setHistoryOpen(false)}/>}
-      {faceMenu && <FaceContextMenu target={faceMenu} activeSourceName={activeSourceName} busy={extraction.busy || targetLock.busy} onClose={() => setFaceMenu(null)}
+      {faceMenu && <FaceContextMenu target={{ ...faceMenu, faceLabel: frameFaces?.find(item => item.face.face_index === faceMenu.faceRank)?.face.face_id }} activeSourceName={activeSourceName} busy={extraction.busy || targetLock.busy} onClose={() => setFaceMenu(null)}
         targetLabel={targetLock.lock?.label ?? null} onTargetAction={(action, menu, extra) => { setFaceMenu(null); void onTargetAction(action, menu, extra); }}
         bindSources={sources.map(item => ({ id: item.faceset_id, name: item.name }))}
         ultramaxOn={parameters.restoration_blend > 0 && parameters.restorer_model === 'ultramax'}

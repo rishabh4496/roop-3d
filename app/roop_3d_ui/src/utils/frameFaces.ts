@@ -56,9 +56,9 @@ export function matchFrameFaces(
     const found = match.get(index) ?? null;
     return {
       face, stored: found,
-      id: found?.id ?? `frame:${meta.frame_index}:${face.face_index}`,
-      clusterId: found?.clusterId ?? null,
-      locked: !!found && (found.id === activeSelection || (!!active && found.clusterId === active.clusterId)),
+      id: found?.id ?? face.track_id ?? `frame:${meta.frame_index}:${face.face_index}`,
+      clusterId: found?.clusterId ?? face.track_id ?? null,
+      locked: !!face.is_target || (!!found && (found.id === activeSelection || (!!active && found.clusterId === active.clusterId))),
       landmarks5: face.kps_5.map(([x, y]) => [x / meta.width, y / meta.height] as [number, number]),
     };
   });

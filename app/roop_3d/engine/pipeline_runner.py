@@ -681,6 +681,8 @@ class MasterPipelineRunner:
                                     retarget='off' if record.request.parameters_at(0).uses_mesh_projection() else 'auto',
                                     **record.request.parameters_at(0).session_options(),
                                     **(prepared.tracking or {}))
+            if hasattr(session, 'set_target_registry') and hasattr(self.media, 'target_locks'):
+                session.set_target_registry(self.media.target_locks.registry(record.request.target_path))
             if getattr(session, 'compositor', None) is not None:
                 session.compositor.track_labels = {number: label for label, number in labels_to_ids.items()}
             assets = session.capability().get("render_modes", {}).get("identity_assets", {})

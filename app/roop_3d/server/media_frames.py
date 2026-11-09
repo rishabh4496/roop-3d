@@ -62,7 +62,7 @@ def media_frame(request: Request, path: Annotated[str, Query(min_length=1, max_l
         analyzed = frames.analyzed_faces(path, result, threshold)
         faces = [dict(face) for face in frames.faces(path, result, threshold, detail="full" if format == "json" else "basic")]
         if analyzed:
-            annotate(request, path, result.frame_index, analyzed, faces)
+            annotate(request, path, result.frame_index, analyzed, faces, result.image)
     meta = _meta(result, frames.info(path), (out_w, out_h), faces)
     headers = {"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"}
     if format == "json":

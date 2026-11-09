@@ -45,6 +45,7 @@ class AnalyzedFace:
     kps68_status: str
     validity: dict[str, Any] = field(default_factory=dict)
     thumbnail_b64: str | None = None
+    pose6dof: dict | None = None
 
 
 def five_point_plausible(box: np.ndarray, points: np.ndarray) -> tuple[bool, str]:
@@ -152,8 +153,12 @@ class FaceAnalyzer:
                     embedding = embedding / norm if norm > 0 else None
                 except Exception as error:
                     log.warning("embedding failed: %s", error)
+            from roop_3d.core.pose import estimate_pose_6dof
+            pose6dof = estimate_pose_6dof(kps5, image.shape[1], image.shape[0])
+            pose_legacy = ((pose6dof["yaw"], -pose6dof["pitch"], pose6dof["roll"])
+                           if pose6dof else tuple(float(v) for v in geometric_pose(kps5)))
             faces.append(AnalyzedFace(
-                box=box, kps5=kps5, score=score, tier=tier, pose_legacy=tuple(float(v) for v in geometric_pose(kps5)),
+                box=box, kps5=kps5, score=score, tier=tier, pose_legacy=pose_legacy, pose6dof=pose6dof,
                 embedding=embedding, kps106=kps106, kps68_3d=kps68, kps68_status=status, validity=validity,
                 thumbnail_b64=thumbnail_b64(image, box) if thumbnails else None))
         faces.sort(key=lambda f: float(f.box[0]))                  # left to right: the rank face extraction uses
@@ -173,7 +178,7 @@ def face_to_dict(face: AnalyzedFace, rank: int, frame_index: int, width: int, he
         "kps_5": [[round(float(p[0]), 3), round(float(p[1]), 3)] for p in face.kps5],
         "pose": {"yaw": round(yaw, 2), "pitch": round(pitch, 2), "roll": round(roll, 2)},          # legacy: pitch + = down
         "pose3d": {"yaw": round(float(pose3d.yaw), 2), "pitch": round(float(pose3d.pitch), 2), "roll": round(float(pose3d.roll), 2)},
-        "pose_cell": pose_cell(pose3d).name, "pose_source": "scrfd_5pt",
+        "pose_cell": pose_cell(pose3d).name, "pose_source": "pnp_5pt" if face.pose6dof else "scrfd_5pt", "pose6dof": face.pose6dof,
         "confidence": round(face.score, 4), "detection_tier": face.tier, "landmark_validity": face.validity,
         "kps_68_3d_status": face.kps68_status, "has_embedding": face.embedding is not None,
     }

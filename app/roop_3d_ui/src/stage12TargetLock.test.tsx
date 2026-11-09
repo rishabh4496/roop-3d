@@ -71,6 +71,23 @@ describe('useTargetLock', () => {
     expect(box.current!.lock?.bank_size).toBe(5);
   });
 
+  it('harvests playback frames after a completed scan and stops on unmount', async () => {
+    const fetchMock = vi.fn(async () => ({ ok: true, json: async () => ({}) }));
+    vi.stubGlobal('fetch', fetchMock);
+    const refresh = vi.fn(async () => lockOf({ bank_size: 3 }));
+    const { box, root } = mount({ target: 'm.mp4', frameIndex: 0, playing: true,
+      getPlaybackFrame: () => 72, lock: vi.fn(async () => lockOf()), refresh });
+    await act(async () => { await box.current!.lockFace(0); });
+    expect(fetchMock).toHaveBeenCalledWith(`/api/v1/target/${'a'.repeat(32)}/match?frame_index=72`, expect.anything());
+    expect(box.current!.lock?.bank_size).toBe(3);
+    await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    await act(async () => root.unmount());
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    vi.unstubAllGlobals();
+  });
+
   it('reports a failed lock and drops the lock when the video changes', async () => {
     const lock = vi.fn().mockRejectedValueOnce(new Error('No face was detected in that frame')).mockResolvedValue(lockOf());
     const { box, root } = mount({ target: 'a.mp4', frameIndex: 0, lock });

@@ -231,12 +231,29 @@ describe('FrameFaceStrip', () => {
     await render({ faces: matches(), onLock });
     const cards = [...host.querySelectorAll<HTMLButtonElement>('.frame-face-card')];
     expect(cards).toHaveLength(2);
-    expect(cards[0].textContent).toContain('#1');
+    expect(cards[0].textContent).toContain('face 0');
     expect(cards[0].textContent).toContain('Y -12° P -5°');          // standard frame: the server's pose3d
     expect(cards[1].textContent).toContain('90%');
     await act(async () => { cards[1].click(); });
     expect(onLock).toHaveBeenCalledTimes(1);
     expect(onLock.mock.calls[0][0].face.face_index).toBe(1);
+  });
+
+  it('keeps identity labels and target badges after faces cross and stored boxes disappear', async () => {
+    const detected = [
+      { ...face(0, [100, 100, 200, 220], 60), persistent_face_id: 1, track_id: 'track_0001' },
+      { ...face(1, [600, 100, 700, 220], -60), persistent_face_id: 0, track_id: 'track_0000', is_target: true },
+    ];
+    const onLock = vi.fn();
+    const matched = matchFrameFaces(detected, { frame_index: 90, width: 1000, height: 500 }, [], null);
+    await render({ faces: matched, onLock });
+    const cards = [...host.querySelectorAll<HTMLButtonElement>('.frame-face-card')];
+    expect(cards[0].textContent).toContain('face 1');
+    expect(cards[1].textContent).toContain('face 0');
+    expect(cards[1].getAttribute('aria-pressed')).toBe('true');
+    await act(async () => cards[1].click());
+    expect(onLock.mock.calls[0][0].face.face_index).toBe(1);
+    expect(onLock.mock.calls[0][0].clusterId).toBe('track_0000');
   });
 
   it('marks the target face TARGET LOCKED and disables a card while it is being locked', async () => {

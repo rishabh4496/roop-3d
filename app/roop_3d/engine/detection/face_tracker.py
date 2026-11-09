@@ -190,6 +190,8 @@ class FaceTracker:
             raise DomainError("SESSION_RELEASED", "Tracker has been released", 409)
         if len(observations) > self.max_tracks:
             raise DomainError("TRACK_BUDGET", "Observation count exceeds track budget", 422)
+        if getattr(self, "target_registry", None) is not None:
+            return self._assign_registry(observations)
         if self.policy is not None:
             return self._assign_policy(observations)
         ids = sorted(self._tracks)
@@ -219,6 +221,33 @@ class FaceTracker:
             if identity not in updated and missed < self.max_missed and len(updated) < self.max_tracks:
                 updated[identity] = (previous, missed + 1, age)
         self._tracks = updated
+        return self._stabilize(output, updated)
+
+    def _assign_registry(self, observations):
+        """Assign persistent IDs BEFORE temporal filters, so crossings cannot mix landmarks."""
+        from roop_3d.identity.target_lock import FaceRef
+        from roop_3d.core.pose import as_pose3d
+        refs = []
+        for face in observations:
+            pose = as_pose3d(face.pose)
+            refs.append(FaceRef(face.embedding, pose.yaw, pose.pitch, pose.roll, list(face.box),
+                                landmarks3d=face.landmarks68))
+        index = getattr(self, "registry_frame_index", self.frame_index)
+        associations = self.target_registry.associate(refs, index, learn=True)
+        updated, output = {}, []
+        with self.target_registry.lock:
+            for face, assoc in zip(observations, associations):
+                if assoc.cluster_id is None:
+                    continue
+                cluster = self.target_registry.clusters[assoc.cluster_id]
+                identity = int(cluster.track_id.removeprefix("track_"))
+                age = self._tracks.get(identity, (None,0,0))[2] + 1
+                updated[identity] = (face,0,age)
+                output.append(TrackedFace(identity,face,age,self.scene_id,
+                                          confidence=assoc.score, reason="persistent_registry"))
+        self._tracks = updated
+        if not self.stabilize:
+            self.frame_index += 1
         return self._stabilize(output, updated)
 
     def _stabilize(self, output: list[TrackedFace], retained) -> tuple[TrackedFace, ...]:
@@ -463,7 +492,7 @@ class FaceTracker:
 
     @property
     def active_ids(self) -> frozenset[int]:
-        return frozenset(self._mem if self.policy is not None else self._tracks)
+        return frozenset(self._mem if self.policy is not None and getattr(self, "target_registry", None) is None else self._tracks)
 
     def reset_tracking(self) -> None:
         """Reset temporal association state while keeping detector/recognizer sessions warm."""

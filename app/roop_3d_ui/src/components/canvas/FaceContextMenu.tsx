@@ -13,6 +13,7 @@ export type FaceMenuTarget = {
   y: number;
   /** Left-to-right position of the face in the frame: the server's `face_index`. */
   faceRank: number;
+  faceLabel?: string;
   /** Standard-frame pose of that face when known. */
   pose: Pose | null;
   norm_cx?: number;
@@ -78,7 +79,7 @@ export default function FaceContextMenu({ target, activeSourceName, busy = false
   return (
     <div ref={ref} className="face-context-menu" role="menu" aria-label={`Use face ${target.faceRank + 1} from this frame`} style={{ position: 'fixed', left, top, maxHeight: `calc(100vh - ${top}px - 8px)`, overflowY: 'auto' }}
       onContextMenu={event => event.preventDefault()}>
-      <div className="face-menu-title">Face {target.faceRank + 1} in this frame{cell ? ` · ${cell.replace('_', ' / ')}` : ''}</div>
+      <div className="face-menu-title">{target.faceLabel ?? `Face ${target.faceRank + 1}`} in this frame{cell ? ` · ${cell.replace('_', ' / ')}` : ''}</div>
       <button type="button" role="menuitem" disabled={busy} onClick={() => choose('source_gallery')}>
         <span aria-hidden="true">🧑</span> Use as Active Source Face
       </button>
