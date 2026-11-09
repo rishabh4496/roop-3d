@@ -195,6 +195,7 @@ class QueueJobProgress(Contract):
     fps: float = 0.0
     stage: str = "QUEUED"
     stage_latency_ms: float = 0.0
+    advisory: str | None = None
     stage_timings_ms: dict[str, float] = Field(default_factory=dict)
 
 

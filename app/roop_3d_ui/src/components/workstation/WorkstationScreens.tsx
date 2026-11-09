@@ -229,10 +229,23 @@ export default function WorkstationScreens(props: Props) {
                   max={job.progress.total_frames ?? Math.max(1, job.progress.frame)}
                 />
                 {job.failure && <p className="inline-warning">{job.failure.message}</p>}
+                {(job.progress as any)?.advisory && (
+                  <p className="advisory-badge" data-testid="vram-advisory-badge" style={{ color: 'var(--amber, #ffd166)', fontWeight: 600, fontSize: '11px', margin: '4px 0 0 0' }}>
+                    {(job.progress as any).advisory}
+                  </p>
+                )}
               </div>
               {jobActions(caps, job.state).map(action => (
-                <button className="button" key={action} disabled={busy} onClick={() => controlJob(job, action)}>
-                  {action}
+                <button
+                  className="button"
+                  key={action}
+                  disabled={busy}
+                  onClick={() => controlJob(job, action)}
+                  data-testid={action === 'resume' ? 'resume-interrupted-btn' : undefined}
+                >
+                  {action === 'resume' && (job.progress.frame > 0 || ['paused', 'interrupted'].includes(job.state))
+                    ? `Resume Interrupted Render (from Frame ${job.progress.frame || 0})`
+                    : action}
                 </button>
               ))}
             </div>

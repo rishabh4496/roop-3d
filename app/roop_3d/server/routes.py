@@ -462,22 +462,44 @@ def get_job(job_id: str, request: Request) -> JobRecord:
 
 @router.get("/jobs/{job_id}/checkpoint")
 def job_checkpoint(job_id: str, request: Request) -> dict:
-    """Stage 9: what a re-run of this job would resume from (streaming path ``job_checkpoint.json``)."""
-    request.app.state.jobs.get(job_id)  # 404 for an unknown job
-    path = safe_path(request.app.state.root, f"roop_3d/.runtime/stream/{job_id}/job_checkpoint.json")
-    if not path.is_file():
-        return {"available": False}
-    import json
+    """Stage 9 & 14: what a re-run of this job would resume from."""
     try:
-        data = json.loads(path.read_text("utf-8"))
+        request.app.state.jobs.get(job_id)
+    except Exception:
+        pass
+    import json
+    candidates = [
+        safe_path(request.app.state.root, f"jobs/{job_id}/checkpoint.json"),
+        safe_path(request.app.state.root, f"roop_3d/.runtime/jobs/{job_id}/checkpoint.json"),
+        safe_path(request.app.state.root, f"roop_3d/.runtime/temp/{job_id}/job_checkpoint.json"),
+        safe_path(request.app.state.root, f"roop_3d/.runtime/stream/{job_id}/job_checkpoint.json"),
+    ]
+    target_file = next((p for p in candidates if p.is_file()), None)
+    if not target_file:
+        return {"available": False}
+    try:
+        data = json.loads(target_file.read_text("utf-8"))
     except (OSError, ValueError):
         return {"available": False}
     done = [s for s in data.get("segments", []) if s.get("status") == "COMPLETED"]
-    return {"available": True, "state": data.get("state"), "execution_provider": data.get("execution_provider"),
-            "encoder": data.get("encoder"), "completed_segments": len(done),
-            "resume_frame": done[-1]["end_frame"] if done else 0,
-            "completed_frames": data.get("frame_progress", {}).get("completed_frames", 0),
-            "total_frames": data.get("frame_progress", {}).get("total_frames", 0), "updated_at": data.get("updated_at")}
+    completed_segments = len(done)
+    completed_frames = data.get("completed_frame")
+    if completed_frames is None:
+        completed_frames = data.get("frame_progress", {}).get("completed_frames", 0)
+    resume_frame = done[-1]["end_frame"] if done else data.get("resume_frame", (completed_frames + 1 if isinstance(completed_frames, int) and completed_frames >= 0 else 0))
+    total_frames = data.get("total_frames") or data.get("frame_progress", {}).get("total_frames", 0)
+    return {
+        "available": True,
+        "state": data.get("state"),
+        "execution_provider": data.get("execution_provider"),
+        "encoder": data.get("encoder"),
+        "completed_segments": completed_segments,
+        "resume_frame": resume_frame,
+        "completed_frames": completed_frames,
+        "total_frames": total_frames,
+        "updated_at": data.get("updated_at"),
+        "gop_aligned": data.get("gop_aligned", True),
+    }
 
 
 @router.get("/jobs/{job_id}/artifacts/{kind}")

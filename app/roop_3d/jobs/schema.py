@@ -129,6 +129,7 @@ class JobProgress(Contract):
     fps: float = Field(default=0, ge=0)
     stage: str = Field(default="queued", min_length=1, max_length=64)
     stage_latency_ms: float = Field(default=0, ge=0)
+    advisory: str | None = Field(default=None)
     # Measured mean milliseconds per stage for the latest reporting window; unmeasured stages are absent.
     stage_timings_ms: dict[str, float] = Field(default_factory=dict)
 

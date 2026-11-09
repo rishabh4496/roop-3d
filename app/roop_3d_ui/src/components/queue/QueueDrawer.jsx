@@ -327,6 +327,11 @@ export default function QueueDrawer({
 
                     {['paused', 'interrupted', 'cancelled'].includes(job.state) && JOB_STATE_HELP[job.state] && <small className="job-hint muted">{JOB_STATE_HELP[job.state].meaning} {JOB_STATE_HELP[job.state].action}</small>}
                     {['paused', 'interrupted', 'failed'].includes(job.state) && <ResumeNote job={job} />}
+                    {job.progress?.advisory && (
+                      <div className="advisory-badge" data-testid="vram-advisory-badge" style={{ marginTop: '4px', fontSize: '11px', color: 'var(--amber, #ffd166)', fontWeight: 600 }}>
+                        {job.progress.advisory}
+                      </div>
+                    )}
                     {job.failure && <div className="failure-text"><RecoveryNotice message={job.failure.message} code={job.failure.code} /></div>}
                   </div>
 
@@ -364,7 +369,19 @@ export default function QueueDrawer({
                     )}
 
                     {['queued', 'preparing', 'running'].includes(job.state) && <button type="button" className="button small" onClick={() => handleControl(job.job_id, 'pause')}>Pause</button>}
-                    {['paused', 'interrupted'].includes(job.state) && <button type="button" className="button small" onClick={() => handleControl(job.job_id, 'resume')}>Resume</button>}
+                    {['paused', 'interrupted'].includes(job.state) && (
+                      <button
+                        type="button"
+                        className="button small accent resume-interrupted-btn"
+                        data-testid="resume-interrupted-btn"
+                        onClick={() => handleControl(job.job_id, 'resume')}
+                        title="Resume interrupted render from last checkpoint"
+                      >
+                        {job.progress?.frame > 0
+                          ? `Resume Interrupted Render (from Frame ${job.progress.frame})`
+                          : 'Resume Interrupted Render (from Frame 0)'}
+                      </button>
+                    )}
                     {hasVideo && <button type="button" className="button small" onClick={() => setInspectedOutput(job)}>Inspect output</button>}
                     {hasOutput && <a className="button small" href={`/api/v1/jobs/${job.job_id}/artifacts/manifest`} download>Render manifest</a>}
                     {hasVideo && (

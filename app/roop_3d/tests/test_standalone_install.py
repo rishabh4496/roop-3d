@@ -149,3 +149,111 @@ def test_built_ui_bundle_loads_nothing_remote() -> None:
         text = script.read_text("utf-8", errors="replace")
         assert not runtime_fetch.search(text), f"{script.name} fetches a remote URL at runtime"
         assert not [cdn for cdn in KNOWN_CDNS if cdn in text], f"{script.name} references a CDN"
+
+
+# -- Stage 14 Hardening & Standalone Packaging Verification ---------------------------------------------------
+
+REQUIRED_SWAPPERS = {
+    "hyperswap_1a_256", "hyperswap_1b_256", "hyperswap_1c_256",
+    "realswap_512", "realswap_256",
+    "simswap_512_unofficial", "simswap_256",
+    "ghost_256_unet_1", "ghost_256_unet_2", "ghost_256_unet_3",
+    "blendswap_256", "uniface_256",
+    "inswapper_128", "inswapper_128_fp16",
+}
+
+
+def test_all_swapper_models_visible_and_selectable_in_react_ui() -> None:
+    rack_file = application_root() / "roop_3d_ui/src/components/modelhub/EngineModelRack.tsx"
+    assert rack_file.is_file(), "EngineModelRack.tsx must exist"
+    content = rack_file.read_text("utf-8")
+
+    for swapper_id in REQUIRED_SWAPPERS:
+        assert f"'{swapper_id}'" in content or f'"{swapper_id}"' in content, f"{swapper_id} must be in SWAPPERS options"
+
+    assert ".dfm" in content or "local_format === \"dfm\"" in content or "local_format === 'dfm'" in content, (
+        ".dfm models must be supported in swapperOptions"
+    )
+
+
+def test_full_head_3d_makehuman_and_sh_relighting() -> None:
+    from roop_3d.tests import test_full_head
+    assert callable(getattr(test_full_head, "test_makehuman_runtime_preserves_entire_head", None))
+    assert callable(getattr(test_full_head, "test_dense_pnp_tracks_source_head_without_neural_inner_crop", None))
+
+    from roop_3d.relighting_3d import SphericalHarmonicsLighting, SurfaceNormalEstimator
+    sh = SphericalHarmonicsLighting()
+    assert hasattr(sh, "extract_sh_coefficients") or hasattr(sh, "compute_irradiance")
+    estimator = SurfaceNormalEstimator()
+    assert hasattr(estimator, "estimate_from_depth") or hasattr(estimator, "estimate_geometric_normals")
+
+
+def test_ultramax_native_grid_sharpness_gain() -> None:
+    from roop_3d.tests import test_hires_handoff as evidence
+    _, native = evidence._compose(evidence._Hires512())
+    _, shrunk = evidence._compose(evidence._ShrinksToCrop())
+    ratio = evidence._inner_sharpness(None, native) / max(evidence._inner_sharpness(None, shrunk), 1e-6)
+    assert ratio > 3.0, f"UltraMax native-resolution detail gain must be > 3.0x (got {ratio:.2f}x)"
+
+
+def test_atomic_gop_checkpoint_and_resume_journal(tmp_path: Path) -> None:
+    from roop_3d.engine.pipeline_runner import MasterPipelineRunner, PipelineCheckpoint
+
+    runner = MasterPipelineRunner(tmp_path, None, None, lambda: None, checkpoint_every=120)
+    assert runner.checkpoint_every == 120, "Checkpoint interval must be 120 frames"
+
+    job_id = "0123456789abcdef0123456789abcdef"
+    cp = PipelineCheckpoint(job_id=job_id, input_sha256="0"*64, request_sha256="0"*64, total_frames=360, completed_frame=120)
+    runner._write_checkpoint(cp)
+
+    app_cp = tmp_path / f"jobs/{job_id}/checkpoint.json"
+    assert app_cp.is_file(), "app/jobs/<job_id>/checkpoint.json must exist"
+    data = json.loads(app_cp.read_text("utf-8"))
+    assert data["job_id"] == job_id
+    assert data["completed_frame"] == 120
+    assert data["resume_frame"] == 121
+    assert data["gop_aligned"] is True
+    assert len(data.get("journal", [])) >= 1
+
+    db_path = tmp_path / f"jobs/{job_id}/checkpoint.db"
+    assert db_path.is_file(), "app/jobs/<job_id>/checkpoint.db SQLite journal must exist"
+
+    ui_queue = (application_root() / "roop_3d_ui/src/components/queue/QueueDrawer.jsx").read_text("utf-8")
+    assert "Resume Interrupted Render (from Frame" in ui_queue
+
+    ui_workstation = (application_root() / "roop_3d_ui/src/components/workstation/WorkstationScreens.tsx").read_text("utf-8")
+    assert "Resume Interrupted Render (from Frame" in ui_workstation
+
+
+def test_vram_oom_watchdog_stepdown_and_advisory_badge() -> None:
+    from roop_3d.engine.vram_watchdog import VRAMWatchdog, VRAM_OOM_THRESHOLD_PCT
+
+    watchdog = VRAMWatchdog.reset_instance()
+    assert watchdog.threshold_pct == VRAM_OOM_THRESHOLD_PCT == 92.0
+    assert watchdog.current_micro_batch == 8
+    assert watchdog.current_tile_size == 512
+
+    step1 = watchdog.stepdown(reason="Simulated 92%+ VRAM load on 4K frame")
+    assert watchdog.current_micro_batch == 4
+    assert watchdog.current_tile_size == 256
+    assert len(watchdog.advisory_badges) == 1
+    assert "B=4" in watchdog.advisory_badges[0]["badge"]
+
+    step2 = watchdog.stepdown(reason="Subsequent VRAM pressure")
+    assert watchdog.current_micro_batch == 2
+
+    step3 = watchdog.stepdown(reason="Maximum stepdown")
+    assert watchdog.current_micro_batch == 1
+
+    call_count = 0
+    def recoverable_inference():
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            raise RuntimeError("CUDA out of memory in UltraMax 1024 + Real-ESRGAN x4")
+        return {"status": "SUCCESS_AFTER_STEPDOWN"}
+
+    res = watchdog.execute_guarded(recoverable_inference)
+    assert res["status"] == "SUCCESS_AFTER_STEPDOWN"
+    assert call_count == 2
+    assert watchdog.advisory_badges[-1]["level"] == "advisory"

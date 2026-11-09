@@ -11,10 +11,10 @@ export default function ResumeNote({ job }) {
     api(`/api/v1/jobs/${job.job_id}/checkpoint`).then((value) => { if (live) setInfo(value); }, () => { if (live) setInfo(null); });
     return () => { live = false; };
   }, [job.job_id, job.state]);
-  if (!info?.available || !info.completed_segments) return null;
+  if (!info?.available || (!info.completed_segments && !info.resume_frame)) return null;
   return (
     <small className="job-hint muted" data-testid="resume-note">
-      Resumes at frame {info.resume_frame}{info.total_frames ? ` of ${info.total_frames}` : ''} after {info.completed_segments} finished segment{info.completed_segments === 1 ? '' : 's'}; they are not rendered again.
+      Resumes at frame {info.resume_frame}{info.total_frames ? ` of ${info.total_frames}` : ''}{info.completed_segments ? ` after ${info.completed_segments} finished segment${info.completed_segments === 1 ? '' : 's'}` : ''}; already completed frames/segments are not rendered again.
     </small>
   );
 }

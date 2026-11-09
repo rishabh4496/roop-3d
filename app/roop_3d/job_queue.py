@@ -19,9 +19,11 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import hashlib
+import json
 import os
 from pathlib import Path
 import shutil
+import sqlite3
 from typing import Any, Callable, Iterator
 
 import av
@@ -31,6 +33,7 @@ from pydantic import ConfigDict, Field
 from roop_3d.core.errors import DomainError
 from roop_3d.core.settings import Contract
 from roop_3d.core.storage import atomic_json, owned
+from roop_3d.engine.vram_watchdog import watchdog
 from roop_3d.media.nv_writer import NVHardwareVideoWriter, mux_source_audio
 from roop_3d.queue_manager import CanonicalJobState, QueueJob, QueueJobProgress, QueueManager, QueueSlice
 from roop_3d.segment_dispatcher import compute_gop_aligned_cuts, concat_lossless, detect_keyframe_timestamps
@@ -133,7 +136,11 @@ class SegmentedRenderRunner:
     def load_checkpoint(self, job_id: str) -> JobCheckpoint | None:
         path = owned(self.root, self.checkpoint_rel(job_id))
         if not path.is_file():
-            return None
+            alt = owned(self.root, f"jobs/{job_id}/checkpoint.json")
+            if alt.is_file():
+                path = alt
+            else:
+                return None
         try:
             return JobCheckpoint.model_validate_json(path.read_text(encoding="utf-8"))
         except Exception as err:
@@ -142,7 +149,41 @@ class SegmentedRenderRunner:
     def _save(self, ck: JobCheckpoint) -> None:
         ck.updated_at = datetime.now(timezone.utc).isoformat()
         ck.frame_progress["completed_frames"] = sum(s.frames for s in ck.segments if s.status == "COMPLETED")
-        atomic_json(self.root, self.checkpoint_rel(ck.job_id), ck.model_dump(mode="json"))
+        dump = ck.model_dump(mode="json")
+        dump["resume_frame"] = ck.frame_progress["completed_frames"]
+        dump["gop_aligned"] = True
+        dump["checkpoint_every"] = 120
+
+        # Sync to both checkpoint_rel and app/jobs/<job_id>/checkpoint.json
+        atomic_json(self.root, self.checkpoint_rel(ck.job_id), dump)
+
+        jobs_dir = owned(self.root, f"jobs/{ck.job_id}")
+        jobs_dir.mkdir(parents=True, exist_ok=True)
+        atomic_json(self.root, f"jobs/{ck.job_id}/checkpoint.json", dump)
+
+        # Append to SQLite journal
+        try:
+            db_path = jobs_dir / "checkpoint.db"
+            with sqlite3.connect(str(db_path), timeout=5.0) as conn:
+                conn.execute("PRAGMA journal_mode=WAL")
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS checkpoint_journal (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        job_id TEXT NOT NULL,
+                        frame INTEGER NOT NULL,
+                        resume_frame INTEGER NOT NULL,
+                        timestamp TEXT NOT NULL,
+                        action TEXT NOT NULL,
+                        status TEXT NOT NULL,
+                        metadata TEXT
+                    )
+                """)
+                conn.execute(
+                    "INSERT INTO checkpoint_journal (job_id, frame, resume_frame, timestamp, action, status, metadata) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (ck.job_id, ck.frame_progress["completed_frames"], ck.frame_progress["completed_frames"], ck.updated_at, "GOP_CHECKPOINT", "COMMITTED", json.dumps({"state": ck.state}))
+                )
+        except Exception:
+            pass
 
     def _target(self, request: dict[str, Any]) -> Path:
         raw = request.get("target_path")
@@ -273,8 +314,26 @@ class SegmentedRenderRunner:
             written, interrupted = 0, None
             try:
                 for index, frame in iter_source_frames(target, seg.start_frame, seg.end_frame, fps):
-                    writer.write(np.ascontiguousarray(transform(frame, index)))
+                    if written % 15 == 0:
+                        watchdog.check_and_adapt()
+                    try:
+                        transformed = transform(frame, index)
+                    except Exception as exc:
+                        if "out of memory" in str(exc).lower():
+                            watchdog.stepdown(reason="OOM during frame transform")
+                            transformed = transform(frame, index)
+                        else:
+                            raise
+                    writer.write(np.ascontiguousarray(transformed))
                     written += 1
+                    if written % 120 == 0:
+                        self._save(ck)
+                        advisory_msg = watchdog.advisory_badges[-1]["badge"] if watchdog.advisory_badges else None
+                        self.queue.update_progress(job_id, QueueJobProgress(
+                            frame=ck.frame_progress["completed_frames"] + written,
+                            total_frames=ck.frame_progress["total_frames"],
+                            fps=fps, stage="RENDERING", advisory=advisory_msg
+                        ))
                     if written % self.poll == 0:
                         interrupted = self._interrupted(job_id)
                         if interrupted:
@@ -307,9 +366,10 @@ class SegmentedRenderRunner:
             ck.state = "RENDERING"
             self._save(ck)
             self._publish_slices(job_id, ck)
+            advisory_msg = watchdog.advisory_badges[-1]["badge"] if watchdog.advisory_badges else None
             self.queue.update_progress(job_id, QueueJobProgress(
                 frame=ck.frame_progress["completed_frames"], total_frames=ck.frame_progress["total_frames"],
-                fps=fps, stage="RENDERING"))
+                fps=fps, stage="RENDERING", advisory=advisory_msg))
         return "DONE"
 
     # -- MUXING -------------------------------------------------------------------------------------------------

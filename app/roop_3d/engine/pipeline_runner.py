@@ -11,6 +11,7 @@ import io
 import json
 from pathlib import Path
 import re
+import sqlite3
 import time
 from typing import Literal
 import zipfile
@@ -29,6 +30,7 @@ from roop_3d.core.storage import atomic_bytes, atomic_json, owned
 from roop_3d.engine.runtime import RuntimeConfig
 from roop_3d.engine.volumetric.session import ReferencePipeline
 from roop_3d.engine.vram_governor import Admission, RuntimeProfile, is_cuda_oom
+from roop_3d.engine.vram_watchdog import watchdog
 from roop_3d.faceset.faceset_reader import FaceSetReader
 from roop_3d.faceset.schemas import FaceSetDocument
 from roop_3d.jobs.schema import JobOutput, JobProgress, JobRecord, JobState
@@ -145,7 +147,7 @@ class MasterPipelineRunner:
     LivePortrait, and temporal-compositor state.
     """
 
-    CHECKPOINT_EVERY = 30
+    CHECKPOINT_EVERY = 120
     MAX_FACESETS = 64
 
     def __init__(self, root: Path, catalog: ModelCatalog, media, settings_provider: Callable[[], Settings], *,
@@ -180,7 +182,11 @@ class MasterPipelineRunner:
     def retry_profile(self, job_id: str) -> RuntimeProfile | None:
         path = owned(self.root, self._checkpoint_relative(job_id))
         if not path.exists():
-            return None
+            alt = owned(self.root, f"jobs/{job_id}/checkpoint.json")
+            if alt.exists():
+                path = alt
+            else:
+                return None
         try:
             return PipelineCheckpoint.model_validate_json(path.read_text("utf-8")).retry_profile
         except (OSError, ValueError):
@@ -189,6 +195,10 @@ class MasterPipelineRunner:
     def _read_checkpoint(self, job_id: str, input_sha256: str, request_sha256: str,
                          total_frames: int | None, profile: RuntimeProfile) -> PipelineCheckpoint:
         path = owned(self.root, self._checkpoint_relative(job_id))
+        if not path.exists():
+            alt = owned(self.root, f"jobs/{job_id}/checkpoint.json")
+            if alt.exists():
+                path = alt
         if path.exists():
             try:
                 checkpoint = PipelineCheckpoint.model_validate_json(path.read_text("utf-8"))
@@ -212,8 +222,65 @@ class MasterPipelineRunner:
         return checkpoint
 
     def _write_checkpoint(self, checkpoint: PipelineCheckpoint) -> None:
-        atomic_json(self.root, self._checkpoint_relative(checkpoint.job_id),
-                    checkpoint.model_dump(mode="json"))
+        data = checkpoint.model_dump(mode="json")
+        resume_frame = checkpoint.completed_frame + 1 if checkpoint.completed_frame >= 0 else 0
+        data["resume_frame"] = resume_frame
+        data["checkpoint_every"] = self.checkpoint_every
+        data["gop_aligned"] = True
+
+        # Lightweight journal entry
+        now_iso = datetime.now(timezone.utc).isoformat()
+        journal_entry = {
+            "frame": checkpoint.completed_frame,
+            "resume_frame": resume_frame,
+            "timestamp": now_iso,
+            "action": "GOP_CHECKPOINT",
+            "status": "COMMITTED",
+        }
+
+        # Sync JSON journal across both checkpoint locations
+        jobs_dir = owned(self.root, f"jobs/{checkpoint.job_id}")
+        jobs_dir.mkdir(parents=True, exist_ok=True)
+        app_cp_file = jobs_dir / "checkpoint.json"
+        existing_journal = []
+        if app_cp_file.is_file():
+            try:
+                prev = json.loads(app_cp_file.read_text("utf-8"))
+                if isinstance(prev.get("journal"), list):
+                    existing_journal = prev["journal"]
+            except Exception:
+                pass
+        existing_journal.append(journal_entry)
+        data["journal"] = existing_journal
+
+        # Atomically write to runtime jobs path AND app/jobs/<job_id>/checkpoint.json
+        atomic_json(self.root, self._checkpoint_relative(checkpoint.job_id), data)
+        atomic_json(self.root, f"jobs/{checkpoint.job_id}/checkpoint.json", data)
+
+        # SQLite journal in app/jobs/<job_id>/checkpoint.db
+        try:
+            db_path = jobs_dir / "checkpoint.db"
+            with sqlite3.connect(str(db_path), timeout=5.0) as conn:
+                conn.execute("PRAGMA journal_mode=WAL")
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS checkpoint_journal (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        job_id TEXT NOT NULL,
+                        frame INTEGER NOT NULL,
+                        resume_frame INTEGER NOT NULL,
+                        timestamp TEXT NOT NULL,
+                        action TEXT NOT NULL,
+                        status TEXT NOT NULL,
+                        metadata TEXT
+                    )
+                """)
+                conn.execute(
+                    "INSERT INTO checkpoint_journal (job_id, frame, resume_frame, timestamp, action, status, metadata) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (checkpoint.job_id, checkpoint.completed_frame, resume_frame, now_iso, "GOP_CHECKPOINT", "COMMITTED", json.dumps({"oom_retries": checkpoint.oom_retries}))
+                )
+        except Exception:
+            pass
+
         bin_rel = f"roop_3d/.runtime/jobs/{checkpoint.job_id}/checkpoint.bin"
         json_bytes = checkpoint.model_dump_json().encode("utf-8")
         binary_payload = bytearray(b"R3DCP001")
@@ -761,13 +828,17 @@ class MasterPipelineRunner:
                             completed = decoded.index + 1
                             elapsed = max(time.monotonic() - started, 1e-6)
                             work_ms = sum(walls.get(name, 0.0) for name, _ in stages)
+                            advisory_msg = watchdog.advisory_badges[-1]["badge"] if watchdog.advisory_badges else None
                             report_progress(JobProgress(frame=completed, total_frames=total_frames,
                                 fps=completed / elapsed, stage="render", stage_latency_ms=work_ms,
+                                advisory=advisory_msg,
                                 stage_timings_ms=self._stage_timings(result, session, walls.get("decode", 0.0),
                                                                       walls.get("write", 0.0), item.meta.get("timing"))))
                             if completed % self.checkpoint_every == 0:
                                 checkpoint = self._checkpoint(checkpoint, completed_frame=last_completed,
                                                               profile=admission.profile)
+                            if completed % 15 == 0:
+                                watchdog.check_and_adapt()
                         item.release()
                         self._check_control(control, checkpoint, last_completed)
             finally:
