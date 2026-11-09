@@ -174,18 +174,29 @@ def get_canonical_3d_landmarks(landmark_count: int = 68) -> np.ndarray:
 
 def solve_pose_pnp(
     landmarks_2d: np.ndarray,
-    intrinsics: CameraIntrinsics,
+    intrinsics: CameraIntrinsics | None = None,
     canonical_3d: np.ndarray | None = None,
+    *,
+    estimate_focal: bool = False,
+    focal_bounds_mm: tuple[float, float] = (18.0, 135.0),
+    sensor_width_mm: float = 36.0,
 ) -> Pose3D:
     """Solve 3D head pose (R, t) from 2D landmarks using Perspective-n-Point.
 
+    If intrinsics is None, or contains the legacy placeholder f = 1015.0, or
+    estimate_focal=True, solves dynamic camera focal length f_est bounded between
+    18mm wide-angle selfie and 135mm telephoto equivalents via Levenberg-Marquardt.
+
     Args:
         landmarks_2d: (N, 2) array of detected 2D pixel coordinates.
-        intrinsics: CameraIntrinsics pinhole parameters.
+        intrinsics: CameraIntrinsics pinhole parameters (or None).
         canonical_3d: Optional (N, 3) canonical landmark points in meters.
+        estimate_focal: Force dynamic Levenberg-Marquardt focal length estimation.
+        focal_bounds_mm: (min_mm, max_mm) 35mm equivalent bounds (default 18mm..135mm).
+        sensor_width_mm: Sensor width for 35mm conversion (default 36.0mm).
 
     Returns:
-        Pose3D with rvec, tvec, yaw, pitch, roll, and reprojection error.
+        Pose3D with rvec, tvec, yaw, pitch, roll, reprojection error, and f_est.
     """
     pts_2d = np.asarray(landmarks_2d, dtype=np.float64)
     if pts_2d.ndim != 2 or pts_2d.shape[1] != 2:
@@ -202,6 +213,22 @@ def solve_pose_pnp(
             f"2D points {pts_2d.shape} do not match 3D canonical points {pts_3d.shape}",
             422,
         )
+
+    # Dynamic focal length solver when requested, intrinsics omitted, or legacy 1015.0 placeholder present
+    is_legacy_1015 = intrinsics is not None and abs(float(intrinsics.fx) - 1015.0) < 1e-3
+    if estimate_focal or intrinsics is None or is_legacy_1015:
+        from roop_3d.reconstruction.dynamic_camera import DynamicCameraSolver
+        solver = DynamicCameraSolver(focal_bounds_mm=focal_bounds_mm, sensor_width_mm=sensor_width_mm)
+        w = intrinsics.width if intrinsics is not None else None
+        h = intrinsics.height if intrinsics is not None else None
+        dyn_k, dyn_pose = solver.solve(
+            pts_2d,
+            pts_3d,
+            width=w,
+            height=h,
+            initial_focal_px=None if is_legacy_1015 else (intrinsics.fx if intrinsics else None),
+        )
+        return dyn_pose
 
     k_matrix = intrinsics.matrix()
     success, rvec, tvec = cv2.solvePnP(
@@ -226,6 +253,8 @@ def solve_pose_pnp(
     projected = projected.reshape(-1, 2)
     reprojection_error = float(np.mean(np.linalg.norm(projected - pts_2d, axis=1)))
 
+    fov_deg = float(math.degrees(2.0 * math.atan(intrinsics.width / (2.0 * intrinsics.fx))))
+
     return Pose3D(
         rvec=rvec_flat,
         tvec=tvec_flat,
@@ -233,6 +262,8 @@ def solve_pose_pnp(
         pitch=pitch,
         roll=roll,
         reprojection_error=reprojection_error,
+        f_est=float(intrinsics.fx),
+        fov_degrees=fov_deg,
     )
 
 

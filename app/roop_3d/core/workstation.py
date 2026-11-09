@@ -10,7 +10,7 @@ PROTECTION_FIELDS = ('neck_protection', 'hair_matting', 'preserve_ears_glasses',
 class WorkstationParameters(Contract):
     expression_restore_factor: float = Field(default=0, ge=0, le=1)
     face_expression_overrides: FaceExpressionOverrides = Field(default_factory=dict, max_length=64)
-    color_method: Literal['lab', 'reinhard_lab', 'histogram'] = 'lab'
+    color_method: Literal['lab', 'reinhard_lab', 'histogram', 'ycbcr', 'oklab', 'oklab_wasserstein'] = 'lab'
     restorer_model: Literal['auto', 'gpen', 'codeformer', 'gfpgan', 'ultramax'] = 'auto'
     identity_blend_t: float | None = Field(default=None, ge=0, le=1)
     fidelity_weight: float = Field(default=.5, ge=0, le=1)
@@ -60,6 +60,12 @@ class WorkstationParameters(Contract):
     preserve_ears_glasses: bool = True
     jaw_feather_px: float = Field(default=6.0, ge=2, le=24)
     skin_texture_retention: float = Field(default=0.25, ge=0, le=1)
+    boundary_ribbon_matting: bool = False
+    submental_contact_shadow: bool = False
+    contact_shadow_opacity: float = Field(default=0.12, ge=0, le=0.15)
+    contact_shadow_falloff_px: float = Field(default=10.0, ge=6, le=14)
+    sss_shadow_warmth: bool = False
+    sss_warmth_amount: float = Field(default=0.5, ge=0, le=1)
     sensor_shutter_angle: float = Field(default=180, ge=0, le=360)
     grain_match_strength: float = Field(default=100, ge=0, le=100)
 
@@ -128,6 +134,12 @@ class WorkstationParameters(Contract):
                                 preserve_ears_glasses=self.preserve_ears_glasses,
                                 jaw_feather_px=self.jaw_feather_px,
                                 skin_texture_retention=self.skin_texture_retention,
+                                boundary_ribbon_matting=self.boundary_ribbon_matting,
+                                submental_contact_shadow=self.submental_contact_shadow,
+                                contact_shadow_opacity=self.contact_shadow_opacity,
+                                contact_shadow_falloff_px=self.contact_shadow_falloff_px,
+                                sss_shadow_warmth=self.sss_shadow_warmth,
+                                sss_warmth_amount=self.sss_warmth_amount,
                                 ultramax_small_face_mode=self.ultramax_small_face_mode,
                                 ultramax_min_native_pixels=self.ultramax_min_native_pixels,
                                 linear_light=self.linear_light, blend_transfer=blend,

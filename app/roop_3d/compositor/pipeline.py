@@ -37,11 +37,14 @@ NECK_CLASSES = (14, 15, 16)             # neck, neck_l, cloth
 EAR_GLASSES_CLASSES = (6, 7, 8, 9)      # eye_g, l_ear, r_ear, ear_r
 
 
-def protect_matte(mask: np.ndarray, guide_bgr: np.ndarray, landmarks, options: "CompositeOptions", scale: float = 1.0) -> np.ndarray:
-    """Jaw-to-neck clamp then hairline matting, each behind its toggle. With both on this is the Stage 3 matte exactly;
+def protect_matte(mask: np.ndarray, guide_bgr: np.ndarray, landmarks, options: "CompositeOptions", scale: float = 1.0, occluder_mask: np.ndarray | None = None) -> np.ndarray:
+    """Jaw-to-neck clamp then hairline/boundary-ribbon matting, each behind its toggle. With both on this is the Stage 3 matte exactly;
     with matting off the edge is feathered by a plain Gaussian (the behaviour before the guided filter)."""
     if options.neck_protection:
         mask = apply_submental_jaw_cutoff(mask, landmarks, falloff_px=options.jaw_falloff(scale))
+    if getattr(options, "boundary_ribbon_matting", False):
+        from roop_3d.compositor.matte import refine_boundary_ribbon_matte
+        return refine_boundary_ribbon_matte(guide_bgr, mask, occluder_mask=occluder_mask, radius=max(2, int(round(6 * scale))))
     if options.hair_matting:
         return refine_hairline_matte(mask, guide_bgr, radius=8, eps=1e-4, smooth_feather_px=options.feather_px * scale)
     sigma = options.feather_px * scale
@@ -128,6 +131,12 @@ class CompositeOptions:
     preserve_ears_glasses: bool = True        # ears and eyeglasses stay the target's
     jaw_feather_px: float = 6.0               # inward falloff of the jaw-to-neck clamp, in 512-class crop pixels
     skin_texture_retention: float = 0.25      # share of the target's pore / specular residual re-injected after UltraMax
+    boundary_ribbon_matting: bool = False     # 12px morphological boundary-ribbon sub-pixel alpha matting
+    submental_contact_shadow: bool = False    # soft under-chin contact shadow projection on upper neck
+    contact_shadow_opacity: float = 0.12      # contact shadow peak opacity (0..0.15)
+    contact_shadow_falloff_px: float = 10.0   # contact shadow falloff distance (6..14 px)
+    sss_shadow_warmth: bool = False           # subsurface scattering shadow-terminator warmth
+    sss_warmth_amount: float = 0.5            # SSS warmth intensity
     occlusion_mode: str = "standard"
     robust: RobustOptions = field(default_factory=RobustOptions)
     # Stage 15: blend arithmetic in linear light, with the display transfer named explicitly (never assumed sRGB).
@@ -155,8 +164,12 @@ class CompositeOptions:
             raise ValueError('Jaw feather falloff must be within 2..24 px')
         if not np.isfinite(self.skin_texture_retention) or not 0 <= self.skin_texture_retention <= 1:
             raise ValueError('Skin texture retention must be within 0..1')
-        if self.color_method not in {"lab", "reinhard_lab", "histogram", "ycbcr"}:
-            raise ValueError("color_method must be 'lab', 'reinhard_lab', 'ycbcr', or 'histogram'")
+        if not np.isfinite(self.contact_shadow_opacity) or not 0 <= self.contact_shadow_opacity <= 0.15:
+            raise ValueError('contact_shadow_opacity must be within 0..0.15')
+        if not np.isfinite(self.contact_shadow_falloff_px) or not 6.0 <= self.contact_shadow_falloff_px <= 14.0:
+            raise ValueError('contact_shadow_falloff_px must be within 6..14 px')
+        if self.color_method not in {"lab", "reinhard_lab", "histogram", "ycbcr", "oklab", "oklab_wasserstein"}:
+            raise ValueError("color_method must be 'lab', 'reinhard_lab', 'ycbcr', 'histogram', 'oklab', or 'oklab_wasserstein'")
         if self.ultramax_small_face_mode not in {"bypass", "adaptive", "off"} or not 64 <= self.ultramax_min_native_pixels <= 1024:
             raise ValueError("Invalid UltraMax small-face policy")
         if not 0 <= self.semantic_confidence_threshold <= 1 or self.feather_px < 0 or self.pyramid_levels < 1:
@@ -319,6 +332,13 @@ class FrameCompositor:
         pixels the statistics come from, so eyes, brows, lips and hair do not skew the skin tone; ``alpha`` is where the
         correction is written (mean/std) and the fallback when no skin class is available."""
         basis = alpha if stats_mask is None else stats_mask
+        if method in {"oklab", "oklab_wasserstein"}:
+            from roop_3d.compositor.color_match import sliced_wasserstein_color_transfer_oklab
+            matched = sliced_wasserstein_color_transfer_oklab(
+                swapped, target, basis, strength=strength, preserve_specular=True
+            )
+            stats = estimate_lab_stats(swapped, target, basis)
+            return matched, stats
         if method == "ycbcr":
             from roop_3d.compositor.color_match import apply_ycbcr_stats, estimate_ycbcr_stats
             stats = estimate_ycbcr_stats(swapped, target, basis)
@@ -514,6 +534,26 @@ class FrameCompositor:
             if observer is not None:
                 observer('normal_map', normal_vis, current_inverse, current_alpha)
                 observer('sh_lighting', sh_vis, current_inverse, current_alpha)
+        if getattr(options, "sss_shadow_warmth", False):
+            from roop_3d.compositor.color_match import apply_sss_shadow_warmth
+            from roop_3d.relighting_3d import SurfaceNormalEstimator
+            estimator = SurfaceNormalEstimator()
+            crop_normals = estimator.compute_normals(harmonized)
+            l_dir = np.array([0.0, 0.85, 0.52], dtype=np.float32)
+            harmonized = apply_sss_shadow_warmth(
+                harmonized, crop_normals, l_dir, skin_mask=current_skin,
+                warmth_amount=getattr(options, "sss_warmth_amount", 0.5),
+            )
+        if getattr(options, "submental_contact_shadow", False):
+            from roop_3d.compositor.lighting import project_submental_contact_shadow
+            lms = getattr(replacement, "landmarks", None)
+            harmonized = project_submental_contact_shadow(
+                harmonized,
+                lms,
+                light_direction=np.array([0.0, 0.85, 0.52], dtype=np.float32),
+                max_opacity=getattr(options, "contact_shadow_opacity", 0.12),
+                falloff_px=getattr(options, "contact_shadow_falloff_px", 10.0),
+            )
         detail = getattr(replacement, 'face_detail', None)
         if detail is not None:
             harmonized = detail.condition(harmonized, current_target)

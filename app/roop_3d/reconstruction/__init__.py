@@ -5,6 +5,13 @@ texture atlas with OBSERVED/INTERPOLATED/UNSEEN states, and a persistent content
 """
 from __future__ import annotations
 
+from roop_3d.reconstruction.dynamic_camera import (
+    DynamicCameraSolver,
+    compute_focal_bounds_pixels,
+    focal_pixels_to_mm,
+    mm_to_focal_pixels,
+    solve_dynamic_camera_intrinsics,
+)
 from roop_3d.reconstruction.flame_fitter import (
     FLAMEFitter,
     FLAMEFittingResult,
@@ -108,6 +115,7 @@ __all__ = [
     "METRIC_SCALE_MILLIMETERS",
     "CameraIntrinsics",
     "ConfidenceState",
+    "DynamicCameraSolver",
     "FLAMEFitter",
     "FLAMEFittingResult",
     "FLAMEModel",
@@ -135,6 +143,7 @@ __all__ = [
     "rotation_matrix_to_euler",
     "rotation_matrix_to_quaternion",
     "rotation_matrix_to_rodrigues",
+    "solve_dynamic_camera_intrinsics",
     "solve_pose_pnp",
     "uv_to_pixel",
     "verify_flame_license",

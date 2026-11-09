@@ -64,17 +64,30 @@ def bfm_rotation(angles):
     return (rz @ ry @ rx).astype(np.float32)
 
 
-def bfm_camera(coefficients):
+def bfm_camera(
+    coefficients: np.ndarray,
+    dynamic_focal: bool = False,
+    landmarks_2d: np.ndarray | None = None,
+    f_est: float | None = None,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Native 257-vector -> proper OpenCV rotation, metric t and pinhole K.
 
     3DDFA has three translations, a camera distance of 10 units and a 1015px
-    focal length. The metric gauge is explicitly fixed to 0.1m/unit, s=1.
+    focal length baseline. When dynamic_focal=True or f_est is provided,
+    replaces 1015.0 with the estimated focal length.
     """
     alpha = finite(coefficients, (257,), "3DDFA-V3 coefficients")
     rotation = CV_AXES @ bfm_rotation(alpha[224:227]) @ CV_AXES
     translation = np.array([alpha[254], -alpha[255], 10.-alpha[256]], np.float32) * .1
     # Native image landmarks use y-up; upstream flips y with 224-1-y.
-    k = np.array([[1015., 0, 112.], [0, 1015., 111.], [0, 0, 1]], np.float32)
+    focal = 1015.0
+    if f_est is not None and f_est > 0:
+        focal = float(f_est)
+    elif dynamic_focal and landmarks_2d is not None:
+        from roop_3d.reconstruction.dynamic_camera import solve_dynamic_camera_intrinsics
+        k_dyn, _ = solve_dynamic_camera_intrinsics(landmarks_2d, width=224, height=224)
+        focal = float(k_dyn.fx)
+    k = np.array([[focal, 0, 112.], [0, focal, 111.], [0, 0, 1]], np.float32)
     return rotation, translation, k
 
 

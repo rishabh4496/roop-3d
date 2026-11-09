@@ -85,3 +85,10 @@ def refine_hairline_matte(
     # Forehead/hairline uses guided_m, jaw and temples use smooth_m
     result = smooth_m * (1.0 - hw) + guided_m * hw
     return np.clip(result, 0.0, 1.0).astype(np.float32)
+
+
+# Re-export boundary ribbon matting for clean access from hairline/compositor
+from roop_3d.compositor.matte import (
+    build_boundary_ribbon_trimap,
+    refine_boundary_ribbon_matte,
+)

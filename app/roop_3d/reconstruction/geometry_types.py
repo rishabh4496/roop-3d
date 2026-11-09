@@ -142,6 +142,8 @@ class Pose3D(Contract):
     pitch: float = Field(description="Pitch angle in degrees")
     roll: float = Field(description="Roll angle in degrees")
     reprojection_error: float = Field(ge=0.0, default=0.0, description="Mean reprojection error in pixels")
+    f_est: float | None = Field(default=None, description="Estimated dynamic focal length in pixels")
+    fov_degrees: float | None = Field(default=None, description="Estimated horizontal field of view in degrees")
 
     def rotation_matrix(self) -> np.ndarray:
         """Return 3x3 orthogonal rotation matrix."""

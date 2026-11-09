@@ -340,7 +340,9 @@ class NeuralRelighter3D:
                 manual_light_yaw: float = 35.0,
                 manual_light_pitch: float = 25.0,
                 ambient_fill: float = 0.3,
-                color_space: str = "hsv") -> tuple[np.ndarray, np.ndarray, np.ndarray, dict[str, Any]]:
+                color_space: str = "hsv",
+                sss_shadow_warmth: bool = True,
+                sss_warmth_amount: float = 0.5) -> tuple[np.ndarray, np.ndarray, np.ndarray, dict[str, Any]]:
         """Executes full 3D relighting transfer.
 
         Returns:
@@ -414,6 +416,15 @@ class NeuralRelighter3D:
         # 5. Specular skin sheen
         spec = self.compute_blinn_phong_specular(swap_normals, key_light_dir, k_spec=specular_sheen)
         relit_bgr = np.clip(diffuse_relit + spec, 0.0, 255.0).astype(np.uint8)
+
+        # 5b. Subsurface Scattering (SSS) shadow warmth along N dot L transition zone
+        if sss_shadow_warmth and sss_warmth_amount > 0:
+            from roop_3d.compositor.color_match import apply_sss_shadow_warmth
+            relit_bgr = apply_sss_shadow_warmth(
+                relit_bgr, swap_normals, key_light_dir,
+                skin_mask=skin_mask,
+                warmth_amount=sss_warmth_amount,
+            )
 
         # Mask blending if face_mask is provided
         if face_mask is not None:
