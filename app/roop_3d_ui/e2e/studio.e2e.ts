@@ -162,7 +162,7 @@ test('inspector: 3D render mode, relighting and engine reach the preview and the
   await expect(page.getByLabel('Swap engine')).toHaveValue('reference_onnx');
   await expect(page.getByLabel('Swap engine').locator('option[value="experimental_x"]')).toHaveAttribute('disabled', '');
 
-  await page.getByRole('radio', { name: 'Full 3D Reconstructed Swap' }).click();
+  await page.getByRole('radio', { name: '3D Expression Transfer' }).click();
   await expect.poll(() => seen.previews.at(-1)?.render_mode).toBe('reenactment_3d');
   await page.getByLabel('Occlusion handling').selectOption('robust');
   await expect.poll(() => seen.previews.at(-1)?.occlusion_mode).toBe('robust');
