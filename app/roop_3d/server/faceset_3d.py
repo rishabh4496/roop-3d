@@ -145,3 +145,10 @@ def faceset_3d_state(request: Request, faceset_id: str | None = Query(default=No
         if yaw is not None and pitch is not None:
             payload = {**payload, "live_pose": {"yaw": yaw, "pitch": pitch, "roll": roll or 0.0}}
         return payload
+
+
+@router.get("/reconstruction/backbones")
+def reconstruction_backbones():
+    """Which 3D head-model backbones are installed (read-only; nothing is loaded). Drives the Inspector's backbone dropdown."""
+    from roop_3d.reconstruction.backbone_status import backbone_status
+    return backbone_status()

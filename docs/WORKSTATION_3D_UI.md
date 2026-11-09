@@ -23,6 +23,29 @@ Everything below is built on the existing studio layout, the Three.js viewer and
 `ambient_fill` and `hairline_offset_px` are opt-in on the wire: omitted until the user touches them, so earlier requests keep their exact
 serialisation, job idempotency fingerprint and preview cache key (pinned by `tests/test_workstation3d_controls.py`).
 
+## 3D head model, influence mode and hair & neck protection
+
+Added on top of the controls above. Every control writes a real engine parameter; nothing is a placeholder.
+
+| Control | Where | Writes | Engine behaviour |
+| --- | --- | --- | --- |
+| **3D Head Model Backbone** | Step 1 → *3D head model & influence* | browser preference `roop3d-head-backbone` | Options and availability come from `GET /api/v1/reconstruction/backbones` (`reconstruction/backbone_status.py`, read-only, loads nothing). The server loads exactly **one** dense-face bundle, so the choice does not swap bundles: a family is selectable only if its bundle is installed. 3DDFA-V3 + HRN and FLAME 2023 Open + SMIRK are the two `topology` values of `roop_3d/.runtime/models/dense_face/bundle.json`; FaceVerse V4 has no loader and is always unavailable; MakeHuman is selectable only once built and is inspection / export only |
+| **3D Influence Mode** | same panel | `pose_mode` | *3D Pose-Guided Neural Swap* = `retarget`; *3D Geometry + Jaw Reshape Weight* = `mesh_blend` |
+| **Jaw Reshape Weight** | same panel | `pose_strength` | the former "Jawline / Cranial Volume Blend"; only used in geometry mode |
+| **Strict Neck & Throat Protection** | Step 2 → *Hair & neck protection* | `neck_protection` | off drops BiSeNet neck / neck_l / cloth from the forbidden set and skips the jaw clamp |
+| **Hair-Strand Guided Matting** | same | `hair_matting` | off replaces the guided-filter hairline matte with a Gaussian feather |
+| **Preserve Target Ears & Eyeglasses** | same | `preserve_ears_glasses` | off drops eye_g / ear classes from the forbidden set and from the semantic occluders |
+| **Forehead Hairline Inset** (−20…+20 px) | same | `hairline_offset_px`, **sign flipped** | + pulls the swap down off the hair; the engine value is + = grow upward. It moved here from the morph panel |
+| **Jaw-to-Neck Feather Falloff** (2…24 px) | same | `jaw_feather_px` | inward falloff of the jaw clamp (default 6) |
+| **Real Skin Micro-Texture & Pore Retention** (0…100 %) | same | `skin_texture_retention` | share of the target's high-pass skin residual re-injected after UltraMax (default 25 %) |
+
+All five new parameters are opt-in on the wire and removed again when set back to their default, so untouched requests keep their exact
+serialisation, job fingerprint and preview cache key (`tests/test_hair_neck_protection_controls.py`, `src/hairNeckProtection.test.tsx`).
+
+Scope, stated in the UI too: the jaw clamp, hairline matting and jaw feather shape the **3D-projected matte** (a 3D render mode, or Robust
+occlusion). The plain 2D swap uses the face-parser matte only, so there they are inert. Pore retention applies to the UltraMax enhancer only. In
+Robust occlusion the Smart Occluder still keeps glasses in front regardless of *Preserve Ears & Eyeglasses*.
+
 ## Limits worth knowing
 
 - **Wireframe registration is approximate.** The mesh is anchored on the detected nose tip and sized from the detector box (head ≈ 1.4 × box width). It shows head orientation and topology, not a per-vertex photometric fit.

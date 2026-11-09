@@ -22,6 +22,11 @@ const project = { project_id: 'p1', name: 'Demo', saved_at: '2026-11-02T00:00:00
 // Frontal and three-quarter views only: both profile bands are empty, and the target track turns to +78 degrees.
 const COVERAGE = { faceset_id: 'alice', views: [{ yaw: 0, pitch: 0, roll: 0, pose_bin: 'front' }, { yaw: -40, pitch: 0, roll: 0, pose_bin: 'left' }, { yaw: 42, pitch: 8, roll: 0, pose_bin: 'right' }], bins: { front: 1, left: 1, right: 1 },
   observed_views: 3, sphere_coverage_count: 3, sphere_coverage_total: 96, sphere_coverage_pct: 3 };
+const BACKBONES = { default: '3ddfa_v3_hrn', active: '3ddfa_v3_hrn', backbones: [
+  { id: '3ddfa_v3_hrn', label: '3DDFA-V3 Dense 35k + HRN Detail (Photorealistic Default)', available: true, active: true, reason: '' },
+  { id: 'flame_smirk', label: 'FLAME 2023 Open + SMIRK Micro-Expressions', available: false, active: false, reason: 'The installed bundle is the bfm35709 family; this backbone needs its own bundle.' },
+  { id: 'faceverse_v4', label: 'FaceVerse V4 (52 ARKit Blendshapes)', available: false, active: false, reason: 'Not supported: this build has no FaceVerse topology, exporter or bundle schema.' },
+  { id: 'makehuman_legacy', label: 'Legacy MakeHuman CC0 (Debug Only)', available: false, active: false, reason: 'The MakeHuman head is not built.' }] };
 const LATENCY = { detection_ms: 9.4, retarget_ms: 3.1, projection_ms: 2.2, swap_ms: 28, total_ms: 71 };
 
 test.use({ viewport: { width: 1680, height: 1050 } });
@@ -44,6 +49,7 @@ async function boot(page: Page) {
     if (/^\/facesets\/[^/]+\/views$/.test(path)) return json(COVERAGE.views.map((view, index) => ({ index, ...view })));
     if (/^\/facesets\/[^/]+\/coverage$/.test(path)) return json(COVERAGE);
     if (path === '/faceset/reconstruct-3d' || path === '/faceset/3d-state') return json(COVERAGE);
+    if (path === '/reconstruction/backbones') return json(BACKBONES);
     if (/^\/facesets\/[^/]+\/identity-asset/.test(path)) return json({ error: { message: 'not built' } }, 404);
     if (path.startsWith('/faces/bank')) return json({ version: 1, revision: 1, target_sha256: 'b'.repeat(64), next_rank: 0, clusters: [], aliases: {}, unresolved_tracks: [], inspection_id: ID });
     if (path === '/media/probe') return json({ width: 960, height: 540, duration_seconds: 4, fps_rational: '25/1', declared_frame_count: 100, audio_tracks: [] });
@@ -114,18 +120,45 @@ test('the coverage radar lists the missing profile angles and marks target poses
   expect(errors).toEqual([]);
 });
 
-test('the morph panel writes the engine blend and sends the hairline offset to the live preview only once touched', async ({ page }) => {
+test('the morph panel writes the engine blend and the masking inset sends the hairline offset to the live preview only once touched', async ({ page }) => {
   const { seen, errors } = await boot(page);
   await expect.poll(() => seen.previews.length).toBeGreaterThan(0);
   expect('hairline_offset_px' in seen.previews[0]).toBe(false);
-  await page.getByTestId('morph-section').locator('summary').click();
-  const offset = page.getByLabel('Forehead and hairline boundary offset');
-  await offset.fill('12');
-  await expect.poll(() => seen.previews.at(-1)?.hairline_offset_px).toBe(12);
-  await page.getByRole('button', { name: 'Use mesh blend' }).click();                   // an opened saved project starts in reference-retarget pose mode
+  const inset = page.getByTestId('step-mask').getByRole('slider', { name: 'Forehead hairline inset' });
+  await inset.fill('12');
+  await expect.poll(() => seen.previews.at(-1)?.hairline_offset_px).toBe(-12);          // the inset is the engine offset with the sign flipped
+  await page.getByTestId('morph-section').locator(':scope > summary').click();
+  await page.getByRole('radio', { name: /3D Geometry \+ Jaw Reshape Weight/ }).click();                   // an opened saved project starts in reference-retarget pose mode
   const blend = page.getByLabel('Jawline and cranial volume blend');
   await blend.fill('80');
   await expect.poll(() => seen.previews.at(-1)?.pose_strength).toBeCloseTo(0.8);
+  expect(errors).toEqual([]);
+});
+
+test('the Inspector exposes the backbone, influence mode and hair & neck protection, and only touched controls reach the preview', async ({ page }) => {
+  const { seen, errors } = await boot(page);
+  await expect.poll(() => seen.previews.length).toBeGreaterThan(0);
+  for (const key of ['neck_protection', 'hair_matting', 'preserve_ears_glasses', 'jaw_feather_px', 'skin_texture_retention', 'hairline_offset_px']) expect(key in seen.previews[0]).toBe(false);
+
+  const mask = page.getByTestId('step-mask');
+  await mask.scrollIntoViewIfNeeded();
+  await expect(mask.getByRole('checkbox', { name: 'Strict Neck & Throat Protection' })).toBeChecked();
+  await expect(mask.getByRole('checkbox', { name: 'Hair-Strand Guided Matting' })).toBeChecked();
+  await expect(mask.getByRole('checkbox', { name: 'Preserve Target Ears & Eyeglasses' })).toBeChecked();
+  await mask.getByRole('checkbox', { name: 'Hair-Strand Guided Matting' }).uncheck();
+  await expect.poll(() => seen.previews.at(-1)?.hair_matting).toBe(false);
+  await mask.getByRole('slider', { name: 'Jaw-to-neck feather falloff' }).fill('16');
+  await expect.poll(() => seen.previews.at(-1)?.jaw_feather_px).toBe(16);
+  await expect(mask.getByRole('slider', { name: 'Skin micro-texture and pore retention' })).toBeDisabled();        // the default enhancer is not UltraMax
+  await page.screenshot({ path: 'test-results/w3d-protection.png' });
+
+  await page.getByTestId('morph-section').locator(':scope > summary').click();
+  const select = page.getByLabel('3D head model backbone');
+  await expect(select.locator('option')).toHaveText([/3DDFA-V3 Dense 35k/, /FLAME 2023 Open.*unavailable/, /FaceVerse V4.*unavailable/, /Legacy MakeHuman.*unavailable/]);
+  await expect(select.locator('option[value="flame_smirk"]')).toHaveAttribute('disabled', '');
+  await expect(page.getByRole('radio', { name: /3D Pose-Guided Neural Swap/ })).toHaveAttribute('aria-checked', 'true');   // an opened saved project starts in reference-retarget pose mode
+  await page.getByTestId('morph-section').scrollIntoViewIfNeeded();
+  await page.screenshot({ path: 'test-results/w3d-backbone.png' });
   expect(errors).toEqual([]);
 });
 

@@ -1,5 +1,4 @@
 import type { WorkstationParameters } from '../workstation/pipeline';
-import { HAIRLINE_RANGE_PX } from './viewerRigs';
 
 export interface IdentityMorphPanelProps {
   parameters: WorkstationParameters;
@@ -9,49 +8,51 @@ export interface IdentityMorphPanelProps {
   onPreview: (value: boolean) => void;
 }
 
+export const INFLUENCE_MODES = [
+  { id: 'retarget', label: '3D Pose-Guided Neural Swap', hint: 'The neural swapper generates the skin; the 3D pose only guides it. No source geometry is projected.' },
+  { id: 'mesh_blend', label: '3D Geometry + Jaw Reshape Weight', hint: 'Projects the swap onto a 3D head volume; the weight below sets how much of it comes from the source mesh.' },
+] as const;
+
 /**
- * Live 3D identity morph + alignment controls.
+ * Live 3D identity controls.
  *
- * - **Jawline / Cranial Volume Blend** is the engine's real mesh blend (`pose_strength` in `mesh_blend` mode): the head volume the
- *   swap is projected onto goes from the target's estimated 2.5D proxy (0%) to the source's fitted 3D mesh (100%). It is applied to the
- *   whole head volume, which includes the jaw and cranium.
- * - **Forehead & Hairline Boundary Offset** (`hairline_offset_px`) moves the upper edge of the swapped region: + grows the swap upward over
- *   the forehead, - pulls it down. It only touches the forehead band of the face matte.
+ * - **3D Influence Mode** is the engine's real `pose_mode`: `retarget` (pose-guided neural swap) or `mesh_blend` (3D geometry).
+ * - **Jaw Reshape Weight** (Jawline / Cranial Volume Blend) is the engine's mesh blend, `pose_strength` in `mesh_blend` mode: the head volume
+ *   the swap is projected onto goes from the target's estimated 2.5D proxy (0%) to the source's fitted 3D mesh (100%). It is applied to the
+ *   whole head volume, which includes the jaw and cranium. The forehead hairline inset moved to the Masking step with the other matte controls.
  */
 export default function IdentityMorphPanel({ parameters, setParameters, preview, onPreview }: IdentityMorphPanelProps) {
   const meshBlend = parameters.pose_mode !== 'retarget';
   const blend = Math.round((parameters.pose_strength ?? 0.35) * 100);
-  const offset = parameters.hairline_offset_px ?? 0;
   const set = (patch: Partial<WorkstationParameters>) => setParameters({ ...parameters, ...patch });
-  const setOffset = (value: number) => {
-    const { hairline_offset_px: _old, ...rest } = parameters;
-    setParameters(value === 0 ? rest : { ...rest, hairline_offset_px: value });   // omitted at 0 so untouched requests stay byte-identical
-  };
   return (
-    <section className="identity-morph" aria-label="3D identity morph and alignment" data-testid="identity-morph">
-      <div className="identity-morph-head"><strong>Identity morph &amp; alignment</strong>
+    <section className="identity-morph" aria-label="3D identity morph and influence" data-testid="identity-morph">
+      <div className="identity-morph-head"><strong>3D influence &amp; jaw reshape</strong>
         <label className="inspector-toggle compact"><input type="checkbox" checked={preview} onChange={event => onPreview(event.target.checked)} aria-label="Show morph overlay in the 3D viewer" />Show in 3D view</label>
       </div>
 
-      <label className="morph-field">
-        <span>Jawline / Cranial Volume Blend <output aria-live="off">{meshBlend ? `${blend}%` : 'off'}</output></span>
-        <input type="range" min={0} max={100} step={1} value={blend} disabled={!meshBlend} aria-label="Jawline and cranial volume blend"
-          aria-valuetext={meshBlend ? `${blend}% source mesh geometry` : 'Mesh blending is off'}
-          onChange={event => set({ pose_strength: Number(event.target.value) / 100 })} />
-        <span className="morph-scale" aria-hidden="true"><small>0% target geometry</small><small>100% source 3D mesh</small></span>
-        {!meshBlend && <small className="identity-warn">Pose correction is set to “reference retarget”, which does not use the head volume.{' '}
-          <button type="button" className="button small" onClick={() => set({ pose_mode: 'mesh_blend' })}>Use mesh blend</button></small>}
-      </label>
+      <div className="influence-mode">
+        <span id="influence-mode-label" className="influence-mode-title">3D Influence Mode</span>
+        <div className="mode-cards" role="radiogroup" aria-labelledby="influence-mode-label">
+          {INFLUENCE_MODES.map(mode => (
+            <button key={mode.id} type="button" role="radio" aria-checked={(mode.id === 'mesh_blend') === meshBlend} className={`mode-card ${(mode.id === 'mesh_blend') === meshBlend ? 'active' : ''}`}
+              title={mode.hint} onClick={() => set({ pose_mode: mode.id })}>
+              <b>{mode.label}</b><small className="muted"> {mode.hint}</small>
+            </button>
+          ))}
+        </div>
+      </div>
 
       <label className="morph-field">
-        <span>Forehead &amp; Hairline Boundary Offset <output aria-live="off">{offset > 0 ? '+' : ''}{offset} px</output></span>
-        <input type="range" min={-HAIRLINE_RANGE_PX} max={HAIRLINE_RANGE_PX} step={1} value={offset} aria-label="Forehead and hairline boundary offset"
-          aria-valuetext={`${offset > 0 ? 'plus ' : offset < 0 ? 'minus ' : ''}${Math.abs(offset)} pixels`}
-          onChange={event => setOffset(Number(event.target.value))} />
-        <span className="morph-scale" aria-hidden="true"><small>− pull down</small><small>+ grow upward</small></span>
+        <span>Jaw Reshape Weight <output aria-live="off">{meshBlend ? `${blend}%` : 'off'}</output></span>
+        <input type="range" min={0} max={100} step={1} value={blend} disabled={!meshBlend} aria-label="Jawline and cranial volume blend"
+          aria-valuetext={meshBlend ? `${blend}% source mesh geometry` : 'Geometry mode is off'}
+          onChange={event => set({ pose_strength: Number(event.target.value) / 100 })} />
+        <span className="morph-scale" aria-hidden="true"><small>0% target geometry</small><small>100% source 3D mesh</small></span>
+        {!meshBlend && <small className="muted">Used only in “3D Geometry + Jaw Reshape Weight” mode.</small>}
       </label>
       <div className="morph-actions">
-        <button type="button" className="button small" disabled={offset === 0 && blend === 35} onClick={() => { const { hairline_offset_px: _old, ...rest } = parameters; setParameters({ ...rest, pose_strength: 0.35 }); }}>Reset morph</button>
+        <button type="button" className="button small" disabled={blend === 35} onClick={() => set({ pose_strength: 0.35 })}>Reset weight</button>
       </div>
     </section>
   );

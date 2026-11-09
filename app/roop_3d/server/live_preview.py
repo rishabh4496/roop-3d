@@ -42,7 +42,7 @@ from roop_3d.audit.isolation import safe_path
 from roop_3d.core.animation import FaceSegment, ParameterCurves
 from roop_3d.core.errors import DomainError
 from roop_3d.core.settings import Contract
-from roop_3d.core.workstation import WorkstationParameters
+from roop_3d.core.workstation import PROTECTION_FIELDS, WorkstationParameters
 from roop_3d.core.face_editor import FaceExpressionOverrides
 from roop_3d.faceset.identity_blend import IdentityBlendSpec
 from roop_3d.jobs.schema import JobRequest
@@ -141,6 +141,12 @@ class LivePreviewPayload(Contract):
     ambient_fill: float | None = Field(default=None, ge=0, le=1)
     occlusion_threshold: float | None = Field(default=None, ge=0, le=1)
     hairline_offset_px: float | None = Field(default=None, ge=-32, le=32)
+    # Hair / neck / ear protection and skin micro-texture; None = the compositor default.
+    neck_protection: bool | None = None
+    hair_matting: bool | None = None
+    preserve_ears_glasses: bool | None = None
+    jaw_feather_px: float | None = Field(default=None, ge=2, le=24)
+    skin_texture_retention: float | None = Field(default=None, ge=0, le=1)
     # job-request pass-through so the preview matches what Start would render
     face_segments: tuple[FaceSegment, ...] | None = Field(default=None, max_length=256)
     parameter_curves: ParameterCurves | None = None
@@ -198,7 +204,7 @@ class LivePreviewPayload(Contract):
     def config_digest(self) -> dict[str, Any]:
         """Everything that changes the pixels, nothing that selects the frame."""
         value = self.model_dump(mode="json", exclude={"frame_index", "timestamp"})
-        for key in ("identity_lock_id", "pose_strength", "ambient_fill", "hairline_offset_px", "occlusion_threshold"):
+        for key in ("identity_lock_id", "pose_strength", "ambient_fill", "hairline_offset_px", "occlusion_threshold", *PROTECTION_FIELDS):
             if value[key] is None:
                 value.pop(key)
         if value.get("mask_base64"):
@@ -563,6 +569,9 @@ class LivePreviewService:
             values['occlusion_threshold'] = payload.occlusion_threshold
         if payload.hairline_offset_px is not None:
             values['hairline_offset_px'] = payload.hairline_offset_px
+        for name in PROTECTION_FIELDS:
+            if getattr(payload, name) is not None:
+                values[name] = getattr(payload, name)
         if payload.render_mode is not None:
             values['render_mode'] = payload.render_mode
         if payload.occlusion_mode is not None:

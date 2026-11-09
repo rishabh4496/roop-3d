@@ -4,6 +4,8 @@ from pydantic import Field, model_serializer
 from roop_3d.core.settings import Contract
 from roop_3d.core.face_editor import FaceExpressionOverrides
 
+#: Hair / neck / ear protection fields: absent from a serialisation (and so from fingerprints) until the caller sets them.
+PROTECTION_FIELDS = ('neck_protection', 'hair_matting', 'preserve_ears_glasses', 'jaw_feather_px', 'skin_texture_retention')
 
 class WorkstationParameters(Contract):
     expression_restore_factor: float = Field(default=0, ge=0, le=1)
@@ -51,6 +53,13 @@ class WorkstationParameters(Contract):
     # so earlier requests keep their exact serialisation and idempotency fingerprint.
     ambient_fill: float = Field(default=0.3, ge=0, le=1)
     hairline_offset_px: float = Field(default=0, ge=-32, le=32)
+    # Hair / neck / ear protection and skin micro-texture (compositor/pipeline.CompositeOptions). Opt-in on the wire like the two above:
+    # the defaults are the compositor's previous hard-coded behaviour, and unset fields never reach a fingerprint or cache key.
+    neck_protection: bool = True
+    hair_matting: bool = True
+    preserve_ears_glasses: bool = True
+    jaw_feather_px: float = Field(default=6.0, ge=2, le=24)
+    skin_texture_retention: float = Field(default=0.25, ge=0, le=1)
     sensor_shutter_angle: float = Field(default=180, ge=0, le=360)
     grain_match_strength: float = Field(default=100, ge=0, le=100)
 
@@ -60,7 +69,7 @@ class WorkstationParameters(Contract):
         for field in ('expression_restore_factor', 'face_expression_overrides'):
             if field not in self.model_fields_set:
                 value.pop(field, None)
-        for field in ('color_method', 'restorer_model', 'identity_blend_t', 'fidelity_weight', 'swap_weight', 'erosion_px', 'pose_mode', 'pose_frontalization', 'tps_expression_weight', 'render_mode', 'occlusion_mode', 'linear_light', 'blend_transfer', 'ultramax_small_face_mode', 'ultramax_min_native_pixels', 'ambient_fill', 'hairline_offset_px', 'occlusion_threshold', 'sensor_shutter_angle', 'grain_match_strength'):
+        for field in ('color_method', 'restorer_model', 'identity_blend_t', 'fidelity_weight', 'swap_weight', 'erosion_px', 'pose_mode', 'pose_frontalization', 'tps_expression_weight', 'render_mode', 'occlusion_mode', 'linear_light', 'blend_transfer', 'ultramax_small_face_mode', 'ultramax_min_native_pixels', 'ambient_fill', 'hairline_offset_px', 'occlusion_threshold', 'sensor_shutter_angle', 'grain_match_strength') + PROTECTION_FIELDS:
             if field not in self.model_fields_set:
                 value.pop(field, None)
         return value
@@ -114,6 +123,11 @@ class WorkstationParameters(Contract):
                                 manual_light_pitch=self.manual_light_pitch,
                                 ambient_fill=self.ambient_fill,
                                 hairline_offset_px=self.hairline_offset_px,
+                                neck_protection=self.neck_protection,
+                                hair_matting=self.hair_matting,
+                                preserve_ears_glasses=self.preserve_ears_glasses,
+                                jaw_feather_px=self.jaw_feather_px,
+                                skin_texture_retention=self.skin_texture_retention,
                                 ultramax_small_face_mode=self.ultramax_small_face_mode,
                                 ultramax_min_native_pixels=self.ultramax_min_native_pixels,
                                 linear_light=self.linear_light, blend_transfer=blend,

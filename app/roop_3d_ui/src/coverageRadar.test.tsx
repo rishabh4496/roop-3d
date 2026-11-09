@@ -181,7 +181,7 @@ describe('IdentityMorphPanel', () => {
     input.dispatchEvent(new Event('input', { bubbles: true }));
   });
 
-  it('writes the engine\'s mesh blend and omits the hairline offset at zero so untouched requests are unchanged', async () => {
+  it('writes the engine\'s mesh blend (jaw reshape weight) and no longer carries the hairline slider', async () => {
     Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
     const seen: WorkstationParameters[] = [];
     const onChange = vi.fn((value: WorkstationParameters) => { seen.push(value); });
@@ -189,27 +189,29 @@ describe('IdentityMorphPanel', () => {
     try {
       await act(async () => root.render(<Harness onChange={onChange} />));
       const blend = host.querySelector<HTMLInputElement>('[aria-label="Jawline and cranial volume blend"]')!;
-      const offset = host.querySelector<HTMLInputElement>('[aria-label="Forehead and hairline boundary offset"]')!;
+      expect(host.querySelector('[aria-label="Forehead and hairline boundary offset"]')).toBeNull();   // moved to the Masking step as "Forehead hairline inset"
       expect(blend.value).toBe('35');
       await change(blend, '80');
       expect(seen.at(-1)?.pose_strength).toBeCloseTo(0.8);
-      await change(offset, '12');
-      expect(seen.at(-1)?.hairline_offset_px).toBe(12);
-      await change(offset, '0');
       expect('hairline_offset_px' in seen.at(-1)!).toBe(false);
       expect(host.querySelector('output')?.textContent).toBe('80%');
     } finally { await act(async () => root.unmount()); host.remove(); }
   });
 
-  it('disables the blend and offers mesh blending when pose correction is set to retarget', async () => {
+  it('switches the 3D influence mode between the neural swap and geometry, and disables the weight in neural mode', async () => {
     Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
     const seen: WorkstationParameters[] = [];
     const host = document.createElement('div'); document.body.append(host); const root = createRoot(host);
     try {
       await act(async () => root.render(<IdentityMorphPanel parameters={{ ...DEFAULT_PARAMETERS, pose_mode: 'retarget' }} setParameters={value => seen.push(value)} preview={false} onPreview={() => {}} />));
       expect(host.querySelector<HTMLInputElement>('[aria-label="Jawline and cranial volume blend"]')!.disabled).toBe(true);
-      await act(async () => host.querySelector<HTMLButtonElement>('.identity-warn button')!.click());
+      const radios = host.querySelectorAll<HTMLButtonElement>('[role="radiogroup"][aria-labelledby="influence-mode-label"] [role="radio"]');
+      expect([...radios].map(item => item.getAttribute('aria-checked'))).toEqual(['true', 'false']);
+      expect(radios[0].textContent).toContain('3D Pose-Guided Neural Swap');
+      await act(async () => radios[1].click());
       expect(seen.at(-1)?.pose_mode).toBe('mesh_blend');
+      await act(async () => radios[0].click());
+      expect(seen.at(-1)?.pose_mode).toBe('retarget');
     } finally { await act(async () => root.unmount()); host.remove(); }
   });
 });

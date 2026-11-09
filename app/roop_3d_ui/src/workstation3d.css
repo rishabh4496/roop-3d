@@ -89,3 +89,20 @@
 .fsz-inspector-viewer{min-height:320px;border:1px solid var(--line);border-radius:10px;background:var(--bg);display:grid}
 .fsz-inspector-placeholder{display:grid;place-content:center;gap:10px;padding:20px;text-align:center;font-size:12px;color:var(--muted)}
 @media (max-width:900px){.fsz-inspector-body{grid-template-columns:1fr}}
+
+/* ---- 3D influence mode, backbone selector, hair & neck protection ------------------------------------------------------ */
+.influence-mode{display:grid;gap:6px}
+.influence-mode-title{font-size:12px;font-weight:600}
+.influence-mode .mode-card{display:grid;gap:2px}
+.influence-mode .mode-card b{font-size:12px}
+.influence-mode .mode-card small{font-size:10px;line-height:1.4}
+.head-backbone{margin-bottom:8px}
+.head-backbone select{width:100%}
+.backbone-unavailable{font-size:10px;color:var(--muted)}
+.backbone-unavailable ul{margin:4px 0 0;padding-left:16px;display:grid;gap:3px}
+.hair-neck-protection{display:grid;gap:8px;margin-top:6px;padding:10px;border:1px solid var(--line);border-radius:10px;background:var(--raised)}
+.hair-neck-protection .protection-head{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:12px}
+.hair-neck-protection .inspector-field output{font:600 11px ui-monospace,Menlo,Consolas,monospace;color:var(--accent)}
+.hair-neck-protection input[type=range]{width:100%}
+.hair-neck-protection .protection-scale{display:flex;justify-content:space-between;gap:8px}
+.hair-neck-protection .inspector-toggle{align-items:flex-start}

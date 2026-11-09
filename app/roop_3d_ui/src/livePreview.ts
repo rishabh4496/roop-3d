@@ -53,6 +53,11 @@ export function buildLivePayload({ request, time, fps, parameters, maskBase64, r
     swap_weight: parameters.swap_weight ?? 1,
     // Opt-in controls: only sent once touched, so earlier previews keep their cache keys.
     hairline_offset_px: parameters.hairline_offset_px || undefined,
+    neck_protection: parameters.neck_protection,
+    hair_matting: parameters.hair_matting,
+    preserve_ears_glasses: parameters.preserve_ears_glasses,
+    jaw_feather_px: parameters.jaw_feather_px,
+    skin_texture_retention: parameters.skin_texture_retention,
     sensor_shutter_angle: parameters.sensor_shutter_angle,
     grain_match_strength: parameters.grain_match_strength,
     occlusion_threshold: parameters.occlusion_threshold,

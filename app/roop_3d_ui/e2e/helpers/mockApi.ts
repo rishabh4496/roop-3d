@@ -126,6 +126,11 @@ export async function boot(page: Page, options: BootOptions = {}) {
     if (path === `/media/inspections/${ID}` || path === '/media/inspect-faces') return json(INSPECTION);
     if (path === `/identity/inspections/${ID}`) return json(SHEET);
     if (path === '/reconstructions') return json([]);
+    if (path === '/reconstruction/backbones') return json({ default: '3ddfa_v3_hrn', active: '3ddfa_v3_hrn', backbones: [
+      { id: '3ddfa_v3_hrn', label: '3DDFA-V3 Dense 35k + HRN Detail (Photorealistic Default)', available: true, active: true, reason: '' },
+      { id: 'flame_smirk', label: 'FLAME 2023 Open + SMIRK Micro-Expressions', available: false, active: false, reason: 'The installed bundle is the bfm35709 family; this backbone needs its own bundle.' },
+      { id: 'faceverse_v4', label: 'FaceVerse V4 (52 ARKit Blendshapes)', available: false, active: false, reason: 'Not supported: this build has no FaceVerse topology, exporter or bundle schema.' },
+      { id: 'makehuman_legacy', label: 'Legacy MakeHuman CC0 (Debug Only)', available: false, active: false, reason: 'The MakeHuman head is not built.' }] });
     return json([]);
   });
   await page.route('**/api/preview', route => { seen.previews.push(route.request().postDataJSON()); return route.fulfill({ status: 200, contentType: 'image/jpeg', body: tinyJpeg,

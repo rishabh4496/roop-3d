@@ -29,8 +29,26 @@ from roop_3d.compositor.matte import border_fade
 from roop_3d.compositor.masks import (
     BisenetFaceParser, FaceParser, build_face_mask, landmark_hull_mask,
     compute_dual_bisenet_forbidden_mask, compose_active_mask, apply_submental_jaw_cutoff,
-    INCLUDED_SKIN_FACE_CLASSES, STRICT_FORBIDDEN_CLASSES
+    INCLUDED_SKIN_FACE_CLASSES, STRICT_FORBIDDEN_CLASSES, OCCLUDER_CLASS_IDS
 )
+
+#: BiSeNet 19-class ids behind the Hair & Neck Protection toggles (see masks.STRICT_FORBIDDEN_CLASSES_DICT).
+NECK_CLASSES = (14, 15, 16)             # neck, neck_l, cloth
+EAR_GLASSES_CLASSES = (6, 7, 8, 9)      # eye_g, l_ear, r_ear, ear_r
+
+
+def protect_matte(mask: np.ndarray, guide_bgr: np.ndarray, landmarks, options: "CompositeOptions", scale: float = 1.0) -> np.ndarray:
+    """Jaw-to-neck clamp then hairline matting, each behind its toggle. With both on this is the Stage 3 matte exactly;
+    with matting off the edge is feathered by a plain Gaussian (the behaviour before the guided filter)."""
+    if options.neck_protection:
+        mask = apply_submental_jaw_cutoff(mask, landmarks, falloff_px=options.jaw_falloff(scale))
+    if options.hair_matting:
+        return refine_hairline_matte(mask, guide_bgr, radius=8, eps=1e-4, smooth_feather_px=options.feather_px * scale)
+    sigma = options.feather_px * scale
+    if sigma <= 0:
+        return np.clip(np.asarray(mask, np.float32), 0.0, 1.0)
+    radius = max(1, int(np.ceil(sigma * 3)))
+    return np.clip(cv2.GaussianBlur(np.asarray(mask, np.float32), (2 * radius + 1, 2 * radius + 1), sigmaX=sigma), 0.0, 1.0).astype(np.float32)
 from roop_3d.compositor.mouth import composite_mouth_region, lower_face_soft_mask
 from roop_3d.compositor.occlusion import combine_occluders, semantic_occluder_mask, subtract_occluders
 from roop_3d.compositor.quality import inject_target_skin_micro_texture
@@ -104,6 +122,12 @@ class CompositeOptions:
     erosion_px: float = 0.0
     # Moves only the forehead / hairline band of the matte (see compositor/hairline.py), in 512-class crop pixels.
     hairline_offset_px: float = 0.0
+    # Hair / neck / ear protection (the Stage 3 anti-smudge matte). Every default is the compositor's previous hard-coded behaviour.
+    neck_protection: bool = True              # neck + cloth are forbidden classes and the matte is clamped along the 3D jawline
+    hair_matting: bool = True                 # guided-filter matte on the forehead / hairline instead of a plain Gaussian feather
+    preserve_ears_glasses: bool = True        # ears and eyeglasses stay the target's
+    jaw_feather_px: float = 6.0               # inward falloff of the jaw-to-neck clamp, in 512-class crop pixels
+    skin_texture_retention: float = 0.25      # share of the target's pore / specular residual re-injected after UltraMax
     occlusion_mode: str = "standard"
     robust: RobustOptions = field(default_factory=RobustOptions)
     # Stage 15: blend arithmetic in linear light, with the display transfer named explicitly (never assumed sRGB).
@@ -127,6 +151,10 @@ class CompositeOptions:
             raise ValueError('Ambient fill must be within 0..1')
         if not np.isfinite(self.hairline_offset_px) or not -32 <= self.hairline_offset_px <= 32:
             raise ValueError('Hairline offset is outside its bounds')
+        if not np.isfinite(self.jaw_feather_px) or not 2.0 <= self.jaw_feather_px <= 24.0:
+            raise ValueError('Jaw feather falloff must be within 2..24 px')
+        if not np.isfinite(self.skin_texture_retention) or not 0 <= self.skin_texture_retention <= 1:
+            raise ValueError('Skin texture retention must be within 0..1')
         if self.color_method not in {"lab", "reinhard_lab", "histogram", "ycbcr"}:
             raise ValueError("color_method must be 'lab', 'reinhard_lab', 'ycbcr', or 'histogram'")
         if self.ultramax_small_face_mode not in {"bypass", "adaptive", "off"} or not 64 <= self.ultramax_min_native_pixels <= 1024:
@@ -138,6 +166,20 @@ class CompositeOptions:
         from roop_3d.color.transfer import BLEND_TRANSFERS
         if self.blend_transfer not in BLEND_TRANSFERS:
             raise ValueError(f"blend_transfer must be one of {BLEND_TRANSFERS}")
+
+    def forbidden_classes(self) -> tuple[int, ...]:
+        """BiSeNet classes the swap may never cover. Hair and hats are always protected; neck/cloth and ears/glasses follow the toggles."""
+        dropped = set() if self.neck_protection else set(NECK_CLASSES)
+        if not self.preserve_ears_glasses:
+            dropped |= set(EAR_GLASSES_CLASSES)
+        return tuple(item for item in STRICT_FORBIDDEN_CLASSES if item not in dropped)
+
+    def front_classes(self) -> tuple[int, ...]:
+        """BiSeNet classes that stay in front of the swap as semantic occluders (glasses, hair, hat)."""
+        return tuple(item for item in OCCLUDER_CLASS_IDS if self.preserve_ears_glasses or item not in EAR_GLASSES_CLASSES)
+
+    def jaw_falloff(self, scale: float = 1.0) -> float:
+        return float(min(32.0, max(2.0, self.jaw_feather_px * scale)))
         if not np.isfinite(self.sensor_shutter_angle) or not 0 <= self.sensor_shutter_angle <= 360:
             raise ValueError("sensor_shutter_angle must be within 0..360 degrees")
         if not np.isfinite(self.sensor_grain_strength) or not 0 <= self.sensor_grain_strength <= 100:
@@ -422,9 +464,9 @@ class FrameCompositor:
             or hasattr(self.restorer, 'restore_hires')
             or type(self.restorer).__name__.startswith("UltraMax")
         )
-        if is_ultramax and current_skin is not None and np.any(current_skin > 0.05):
+        if is_ultramax and options.skin_texture_retention > 0 and current_skin is not None and np.any(current_skin > 0.05):
             enhanced = inject_target_skin_micro_texture(
-                enhanced, current_target, current_skin, current_alpha, injection_rate=0.25
+                enhanced, current_target, current_skin, current_alpha, injection_rate=options.skin_texture_retention
             )
 
         if observer is not None:
@@ -573,16 +615,17 @@ class FrameCompositor:
                 probabilities = None
             face_mask = build_face_mask(crop.shape, points, probabilities=probabilities,
                                         confidence_threshold=options.semantic_confidence_threshold,
-                                        feather_px=options.feather_px)
+                                        feather_px=options.feather_px,
+                                        occluder_class_ids=options.forbidden_classes())
             if getattr(replacement, "full_head", False):
                 # Mesh coverage defines source anatomy. Target parsing can veto
                 # foreground occlusions but cannot shrink it to the target hull.
                 face_mask = replace(face_mask, alpha=np.ones(crop.shape[:2], np.float32))
-            semantic_front = (semantic_occluder_mask(probabilities)
+            semantic_front = (semantic_occluder_mask(probabilities, options.front_classes())
                               if probabilities is not None and face_mask.source.startswith("bisenet") else None)
             # Run BiSeNet on both target ROI and 3D swapped face crop for dual forbidden extraction
             target_forbidden, swap_forbidden, dual_forbidden = compute_dual_bisenet_forbidden_mask(
-                self.parser, target_crop, crop
+                self.parser, target_crop, crop, forbidden_classes=options.forbidden_classes()
             )
             manual_include, manual_exclude = self._manual_mask(occluder_masks.get(replacement.track_id), crop.shape[:2])
             explicit_front = manual_exclude if manual_exclude.any() else None
@@ -617,10 +660,9 @@ class FrameCompositor:
                 # active_mask = mesh_face_only_mask * xseg_face_mask * (1.0 - forbidden_hair_neck_ear_mask)
                 xseg_mask = (1.0 - front) if front is not None else np.ones(crop.shape[:2], np.float32)
                 active_mask = compose_active_mask(coverage, xseg_mask, dual_forbidden)
-                # Submental Chin-to-Neck Gradient Cutoff (gonion-to-menton curve with 4px-8px inward SDF falloff)
-                active_mask = apply_submental_jaw_cutoff(active_mask, points, falloff_px=6.0)
-                # Edge-preserving Fast Guided Filter for hairline and bangs
-                active_mask = refine_hairline_matte(active_mask, target_crop, radius=8, eps=1e-4, smooth_feather_px=options.feather_px)
+                # Submental Chin-to-Neck Gradient Cutoff (gonion-to-menton curve with an inward SDF falloff), then the
+                # edge-preserving Fast Guided Filter for hairline and bangs; each is behind its toggle.
+                active_mask = protect_matte(active_mask, target_crop, points, options)
                 alpha = active_mask * options.swap_weight
             else:
                 alpha = alpha * options.swap_weight
@@ -855,20 +897,19 @@ class FrameCompositor:
                 output = self._remove_old_silhouette(output, context, front, options)
 
             # Dual BiSeNet forbidden extraction on robust analysis crops
-            _, _, robust_forbidden = compute_dual_bisenet_forbidden_mask(self.parser, context.work_crop, crop)
+            _, _, robust_forbidden = compute_dual_bisenet_forbidden_mask(
+                self.parser, context.work_crop, crop, forbidden_classes=options.forbidden_classes())
             work_points = self._landmarks_to_crop(landmarks_by_track.get(replacement.track_id), context.work_inverse)
             if coverage is not None:
                 xseg_mask = (1.0 - (front if front is not None else 0.0))
                 active_mask = compose_active_mask(coverage, xseg_mask, robust_forbidden)
-                active_mask = apply_submental_jaw_cutoff(active_mask, work_points, falloff_px=6.0 * scale)
-                active_mask = refine_hairline_matte(active_mask, context.work_crop, radius=8, eps=1e-4, smooth_feather_px=options.feather_px * scale)
+                active_mask = protect_matte(active_mask, context.work_crop, work_points, options, scale)
                 visible_alpha = active_mask * options.swap_weight
             else:
                 visible_alpha = face_alpha * (1.0 - (front if front is not None else 0.0)) * options.swap_weight
                 if robust_forbidden.any():
                     visible_alpha *= (1.0 - robust_forbidden)
-                visible_alpha = apply_submental_jaw_cutoff(visible_alpha, work_points, falloff_px=6.0 * scale)
-                visible_alpha = refine_hairline_matte(visible_alpha, context.work_crop, radius=8, eps=1e-4, smooth_feather_px=options.feather_px * scale)
+                visible_alpha = protect_matte(visible_alpha, context.work_crop, work_points, options, scale)
             if front is not None:
                 visible_alpha *= (1.0 - front)
             recovery_context = mask_temporal_context.get(replacement.track_id)

@@ -15,6 +15,8 @@ import CoverageRadarPanel from '../three/CoverageRadarPanel';
 import IdentityMorphPanel from '../three/IdentityMorphPanel';
 import { viewerLighting, viewerMorph } from '../three/viewerRigs';
 import FaceExpressionEditor from './FaceExpressionEditor';
+import HairNeckProtection from './HairNeckProtection';
+import HeadModelBackbone from './HeadModelBackbone';
 
 const PoseGeometryViewer = lazy(() => import('../../ThreeViewport').then(module => ({ default: module.PoseGeometryViewer })));
 const LightProbeSphere = lazy(() => import('../../ThreeViewport').then(module => ({ default: module.LightProbeSphere })));
@@ -121,7 +123,8 @@ export default function StudioInspector({ caps, config, onSaveConfig, track, she
             <CoverageRadarPanel coverage={coverage} track={track} compact />
           </details>
           <details className="inspector-subsection" data-testid="morph-section">
-            <summary>Identity morph &amp; alignment<small>jaw / cranial blend · hairline offset</small></summary>
+            <summary>3D head model &amp; influence<small>backbone · influence mode · jaw reshape</small></summary>
+            <HeadModelBackbone />
             <IdentityMorphPanel parameters={parameters} setParameters={setParameters} preview={morphPreview} onPreview={setMorphPreview} />
           </details>
         </section>
@@ -133,6 +136,7 @@ export default function StudioInspector({ caps, config, onSaveConfig, track, she
             XSeg mask + Smart Occluder <small className="muted">keeps hands, glasses, hair and microphones in front of the face</small></label>
           <label className="inspector-field">Mask feather / blur <output>{(parameters.feather_px ?? 0).toFixed(0)} px</output>
             <input type="range" aria-label="Mask feather" min={0} max={32} step={1} value={parameters.feather_px ?? 0} onChange={event => set({ feather_px: Number(event.target.value) })} /></label>
+          <HairNeckProtection parameters={parameters} setParameters={setParameters} enhancer={enhancer} />
         </section>
 
         <section className="workflow-step" aria-labelledby="step-enhance" data-testid="step-enhance">

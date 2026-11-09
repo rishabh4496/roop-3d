@@ -248,7 +248,7 @@ describe('StudioInspector', () => {
   it('a failed model hub shows the reason and retries on request (no endless skeleton)', async () => {
     // The Engine & Model Rack also reads /models and /models/active; answer them by path so only the hub call fails once.
     let hubCalls = 0;
-    api.mockImplementation(async (path: string) => { if (path === '/models') return []; if (path === '/models/active') return { selected: {}, active: {} }; hubCalls += 1; if (hubCalls === 1) throw new Error('offline'); return { engines: [] }; });
+    api.mockImplementation(async (path: string) => { if (path === '/models') return []; if (path === '/models/active') return { selected: {}, active: {} }; if (path === '/reconstruction/backbones') return { default: '3ddfa_v3_hrn', active: null, backbones: [] }; hubCalls += 1; if (hubCalls === 1) throw new Error('offline'); return { engines: [] }; });
     await render(<StudioInspector {...base} track={null} parameters={{ ...DEFAULT_PARAMETERS }} setParameters={vi.fn()} />);
     await flush();
     expect(host.textContent).toContain('Model hub unavailable: offline');

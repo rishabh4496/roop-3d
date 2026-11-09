@@ -38,6 +38,17 @@ export type WorkstationParameters = {
   ambient_fill?: number;
   /** Forehead / hairline boundary offset in px (+ grows the swapped region upward, - pulls it down), -32..32. Omitted until touched. */
   hairline_offset_px?: number;
+  // Hair / neck / ear protection and skin micro-texture: each is omitted until it differs from the engine default (see studio/protection.ts).
+  /** Clamp the matte along the 3D jawline and keep neck / cloth out of the swap (engine default: on). */
+  neck_protection?: boolean;
+  /** Guided-filter matting of the forehead / hairline instead of a plain Gaussian feather (engine default: on). */
+  hair_matting?: boolean;
+  /** Keep the target's ears and eyeglasses (engine default: on). */
+  preserve_ears_glasses?: boolean;
+  /** Inward falloff of the jaw-to-neck clamp, 2..24 px (engine default: 6). */
+  jaw_feather_px?: number;
+  /** Share of the target's pore / specular residual re-injected after UltraMax, 0..1 (engine default: 0.25). */
+  skin_texture_retention?: number;
   /** Target camera shutter angle in degrees; 180 is the conventional half-frame exposure. */
   sensor_shutter_angle?: number;
   /** Grain variance match strength, 0..100 percent. */
