@@ -50,6 +50,8 @@ export function buildLivePayload({ request, time, fps, parameters, maskBase64, r
     swap_weight: parameters.swap_weight ?? 1,
     // Opt-in controls: only sent once touched, so earlier previews keep their cache keys.
     hairline_offset_px: parameters.hairline_offset_px || undefined,
+    sensor_shutter_angle: parameters.sensor_shutter_angle,
+    grain_match_strength: parameters.grain_match_strength,
     occlusion_threshold: parameters.occlusion_threshold,
     bypass: parameters.bypass,
     // Stage 7: preview what Start would render. Omitted at their defaults so earlier preview cache keys are unchanged.

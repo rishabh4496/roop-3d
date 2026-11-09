@@ -219,6 +219,18 @@ export default function StudioInspector({ caps, config, onSaveConfig, track, she
               : <p className="muted">Relighting is off: the swapped face keeps colour-matched lighting only. Enable it to edit the light probe.</p>}
           </Section>
 
+          <Section title="Target sensor finishing">
+            <p className="muted">Match shutter blur, lens softness and sensor grain around an enhanced face.</p>
+            <label className="inspector-field">Camera shutter angle <output>{parameters.sensor_shutter_angle ?? 180}°</output>
+              <input type="range" aria-label="Camera shutter angle" min={0} max={360} step={1}
+                value={parameters.sensor_shutter_angle ?? 180}
+                onChange={event => set({ sensor_shutter_angle: Number(event.target.value) })} /></label>
+            <label className="inspector-field">Grain match strength <output>{parameters.grain_match_strength ?? 100}%</output>
+              <input type="range" aria-label="Grain match strength" min={0} max={100} step={1}
+                value={parameters.grain_match_strength ?? 100}
+                onChange={event => set({ grain_match_strength: Number(event.target.value) })} /></label>
+          </Section>
+
           <div className="inspector-panels" ref={panelsRef} aria-label="Pose, expression, masking and restoration parameters" />
 
           <Section title="Processing" open={false}>{processing}</Section>

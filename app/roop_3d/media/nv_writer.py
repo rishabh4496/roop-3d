@@ -1,4 +1,4 @@
-"""Stage 9 hardware video writer: NVENC with automatic CPU fallback, optional .cube LUT bake, trimmed audio mux.
+"""Stage 9 hardware video writer: NVENC with automatic CPU fallback, optional .cube LUT bake, and source-track mux.
 
 Frames (8-bit BGR ``ndarray``) are piped to one ``ffmpeg`` process. ``h264_nvenc`` / ``hevc_nvenc`` is tried first;
 if NVENC is missing, busy, or the process dies while the first frames are written, the writer restarts on
@@ -222,28 +222,39 @@ class NVHardwareVideoWriter:
 def mux_source_audio(video: Path | str, source: Path | str | None, output: Path | str, *,
                      start_seconds: float | None = None, end_seconds: float | None = None,
                      ffmpeg: str | None = None) -> bool:
-    """Copy ``video`` (stream copy, no re-encode) and add ``source``'s first audio track, trimmed to
-    ``[start_seconds, end_seconds)`` so it lines up with a timeline In/Out render. Returns whether audio was added.
+    """Copy ``video`` and all compatible source audio/subtitle tracks, trimmed to the timeline In/Out.
+    Returns whether an audio track was added; subtitle-only remuxes still produce an output file.
 
     An untrimmed audio track is stream-copied when the container allows it; a trimmed one is re-encoded to AAC
     because a copy can only cut on packet boundaries and would drift against the frame-exact video.
     """
     exe = ffmpeg or find_ffmpeg()
     video, output = Path(video), Path(output)
-    if source is None or not Path(source).is_file() or not _has_audio(exe, Path(source)):
+    if source is None or not Path(source).is_file() or not _has_copy_streams(exe, Path(source)):
         shutil.copyfile(video, output)
         return False
+    has_audio = _has_audio(exe, Path(source))
     trim = (start_seconds or 0.0) > 0 or end_seconds is not None
     seek = ["-ss", f"{start_seconds:.6f}"] if (start_seconds or 0.0) > 0 else []
     length = ["-t", f"{(end_seconds - (start_seconds or 0.0)):.6f}"] if end_seconds is not None else []
     base = [exe, "-y", "-v", "error", "-i", str(video), *seek, *length, "-i", str(source)]
-    maps = ["-map", "0:v:0", "-map", "1:a:0", "-c:v", "copy"]
-    for audio in (["-c:a", "aac", "-b:a", "192k"],) if trim else (["-c:a", "copy"], ["-c:a", "aac", "-b:a", "192k"]):
-        run = subprocess.run(base + maps + audio + ["-shortest", "-movflags", "+faststart", str(output)],
-                             capture_output=True, text=True)
-        if run.returncode == 0:
-            return True
-    raise DomainError("AUDIO_MUX_FAILED", f"Audio mux failed: {run.stderr.strip()[-300:]}", 500)
+    maps = ["-map", "0:v:0", "-map", "1:a?", "-map", "1:s?", "-map_metadata", "1", "-map_chapters", "1",
+            "-c:v", "copy", "-c:a", "copy", "-c:s", "copy"]
+    audio_options = ["-c:a", "aac", "-b:a", "192k"] if trim and has_audio else []
+    run = subprocess.run(base + maps + audio_options + ["-shortest", "-movflags", "+faststart", str(output)],
+                         capture_output=True, text=True)
+    if run.returncode == 0:
+        return has_audio
+    raise DomainError("AUXILIARY_MUX_FAILED", f"Audio/subtitle stream copy failed: {run.stderr.strip()[-300:]}", 500)
+
+
+def _has_copy_streams(exe: str, path: Path) -> bool:
+    import av
+    try:
+        with av.open(str(path)) as container:
+            return bool(container.streams.audio or container.streams.subtitles)
+    except Exception:
+        return False
 
 
 def _has_audio(exe: str, path: Path) -> bool:

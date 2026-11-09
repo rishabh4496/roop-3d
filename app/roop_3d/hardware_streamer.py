@@ -391,6 +391,9 @@ class NVHardwareVideoWriter:
         filters: list[str] = []
         tags: list[str] = []
         if color is not None:
+            reason = stream_color_supported(color)
+            if reason:
+                raise ValueError(reason)
             if color.matrix not in _FF_MATRIX or color.primaries not in _FF_PRIMARIES or color.transfer not in _FF_TRC:
                 raise ValueError("No validated raw-stream conversion for this colour description")
             span = "pc" if color.range == 2 else "tv"
@@ -464,16 +467,21 @@ class NVHardwareVideoWriter:
         self.destination.unlink(missing_ok=True)
 
     @staticmethod
-    def remux_audio(video: Path, source: Path, destination: Path):
+    def remux_audio(video: Path, source: Path, destination: Path, *, include_audio: bool = True):
         destination = owned_path(destination)
         if destination.exists():
             raise ValueError("Remux output already exists")
+        maps = ["-map", "0:v:0"]
+        if include_audio:
+            maps += ["-map", "1:a?"]
+        maps += ["-map", "1:s?"]
         result = subprocess.run([_binary("ffmpeg"), "-nostdin", "-v", "error", "-n", "-i", str(owned_path(video)),
-            "-i", str(owned_path(source)), "-map", "0:v:0", "-map", "1:a?", "-c", "copy", "-map_metadata", "1",
+            "-i", str(owned_path(source)), *maps,
+            "-map_metadata", "1", "-map_chapters", "1", "-c", "copy",
             "-movflags", "+faststart", str(destination)], capture_output=True, timeout=120, env=_process_environment())
         if result.returncode:
             destination.unlink(missing_ok=True)
-            raise RuntimeError("Lossless audio/video remux failed; incompatible audio is never silently transcoded")
+            raise RuntimeError("Lossless audio/subtitle remux failed; incompatible source streams are never silently dropped or transcoded")
 
 
 class SegmentWorkspace:

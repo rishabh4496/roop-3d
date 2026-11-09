@@ -104,6 +104,8 @@ class CompositeOptions:
     # Stage 15: blend arithmetic in linear light, with the display transfer named explicitly (never assumed sRGB).
     linear_light: bool = False
     blend_transfer: str = "srgb"
+    sensor_shutter_angle: float = 180.0
+    sensor_grain_strength: float = 100.0
 
     def __post_init__(self) -> None:
         if not np.isfinite(self.expression_restore_factor) or not 0 <= self.expression_restore_factor <= 1:
@@ -131,6 +133,10 @@ class CompositeOptions:
         from roop_3d.color.transfer import BLEND_TRANSFERS
         if self.blend_transfer not in BLEND_TRANSFERS:
             raise ValueError(f"blend_transfer must be one of {BLEND_TRANSFERS}")
+        if not np.isfinite(self.sensor_shutter_angle) or not 0 <= self.sensor_shutter_angle <= 360:
+            raise ValueError("sensor_shutter_angle must be within 0..360 degrees")
+        if not np.isfinite(self.sensor_grain_strength) or not 0 <= self.sensor_grain_strength <= 100:
+            raise ValueError("sensor_grain_strength must be within 0..100 percent")
 
 
 @dataclass
@@ -217,6 +223,46 @@ class FrameCompositor:
             raise DomainError("COMPOSITOR_LANDMARKS_INVALID", "Target landmarks must be finite Nx2 points", 422)
         frame_to_crop = cv2.invertAffineTransform(np.asarray(inverse, dtype=np.float32))
         return cv2.transform(points[None], frame_to_crop)[0]
+
+    def _face_motion(self, replacement, frame_index: int | None, scene_cut: bool) -> tuple[float, float]:
+        """Per-frame crop-center displacement, used when a dense motion field is unavailable."""
+        side = int(np.asarray(replacement.image).shape[0])
+        centre = cv2.transform(np.array([[[side / 2, side / 2]]], np.float32),
+                               np.asarray(replacement.inverse, np.float32))[0, 0]
+        velocity = (0.0, 0.0)
+        previous = self._face_centres.get(replacement.track_id)
+        if previous is not None and not scene_cut and (frame_index is None or previous[0] is None
+                                                       or 0 < frame_index - previous[0] <= 2):
+            velocity = (float(centre[0] - previous[1][0]), float(centre[1] - previous[1][1]))
+        self._face_centres[replacement.track_id] = (frame_index, np.asarray(centre, np.float32))
+        return velocity
+
+    @staticmethod
+    def _crop_motion(frame_motion: tuple[float, float], inverse: np.ndarray, crop_side: int,
+                     output_side: int) -> tuple[float, float]:
+        linear = np.asarray(inverse, np.float64)[:, :2]
+        try:
+            motion = np.linalg.solve(linear, np.asarray(frame_motion, np.float64))
+        except np.linalg.LinAlgError:
+            return (0.0, 0.0)
+        motion *= output_side / max(crop_side, 1)
+        return float(motion[0]), float(motion[1])
+
+    def _finish_sensor(self, replacement, enhanced, target, alpha, skin, frame_motion, options, frame_index,
+                       *, grain_strength: float | None = None, match_optics: bool = True):
+        """Run the target sensor model on the restored face before it reaches the final mask blend."""
+        if options.restoration_blend <= 0 or self.restorer is None:
+            return enhanced, {"backend": "skipped", "reason": "restoration_not_active"}
+        from roop_3d.compositor.sensor_physics import finish_target_sensor
+        motion = self._crop_motion(frame_motion, replacement.inverse, np.asarray(replacement.image).shape[0],
+                                  enhanced.shape[0])
+        output, report = finish_target_sensor(
+            enhanced, target, alpha, skin, flow=self.detail_temporal.flow_for(replacement.track_id),
+            crop_motion=motion, shutter_angle=options.sensor_shutter_angle,
+            grain_strength=options.sensor_grain_strength if grain_strength is None else grain_strength,
+            seed=((frame_index or 0) * 1_000_003 + replacement.track_id * 9_176) % (2**31 - 1),
+            match_optics=match_optics, transfer=options.blend_transfer)
+        return output, report
 
     @staticmethod
     def _color_process(swapped: np.ndarray, target: np.ndarray, alpha: np.ndarray, method: str,
@@ -569,6 +615,7 @@ class FrameCompositor:
                 continue
 
             skin = face_mask.skin if getattr(face_mask, "source", "").startswith("bisenet") else alpha
+            frame_motion = self._face_motion(replacement, frame_index, scene_cut)
             harmonized, color_stats, spent = self._enhance(
                 replacement, crop, target_crop, alpha, probabilities=probabilities, skin=skin, options=options,
                 observer=observer, lip_result=lip_sync_results.get(replacement.track_id), frame_index=frame_index,
@@ -577,8 +624,11 @@ class FrameCompositor:
             harmonized, detail_report = self._stabilize_detail(
                 replacement.track_id, harmonized, crop, target_crop, alpha,
                 frame_index=frame_index, scene_cut=scene_cut)
+            harmonized, sensor_report = self._finish_sensor(replacement, harmonized, target_crop, alpha, skin,
+                                                            frame_motion, options, frame_index)
             self.last_reports[replacement.track_id] = {
                 "temporal_detail": detail_report,
+                "target_sensor": sensor_report,
                 "mask_watchdog": mask_report,
             }
             temporal = self.temporal.update(replacement.track_id, replacement.inverse, alpha / max(options.swap_weight, 1e-8), color_stats,
@@ -674,12 +724,7 @@ class FrameCompositor:
         centre = cv2.transform(np.array([[[side / 2, side / 2]]], np.float32), np.asarray(replacement.inverse, np.float32))[0, 0]
         # Face velocity in frame pixels: the aligned crop is stabilised, so the blur the camera recorded on the face
         # has to come from how far the crop moved through the frame, not from the flow inside the crop.
-        velocity = (0.0, 0.0)
-        previous = self._face_centres.get(replacement.track_id)
-        if previous is not None and not scene_cut and (frame_index is None or previous[0] is None
-                                                       or 0 < frame_index - previous[0] <= 2):
-            velocity = (float(centre[0] - previous[1][0]), float(centre[1] - previous[1][1]))
-        self._face_centres[replacement.track_id] = (frame_index, np.asarray(centre, np.float32))
+        velocity = self._face_motion(replacement, frame_index, scene_cut)
         report = {"tier": analysis.tier, "confidence": analysis.confidence, "reasons": list(analysis.reasons),
                   "networks": list(analysis.nets_used), "parser_trusted": analysis.parser_trusted,
                   "visible_fraction": analysis.visible_fraction, "outside_frame_fraction": outside,
@@ -735,8 +780,10 @@ class FrameCompositor:
                                        options, scene_cut, frame_index) for replacement in replacements]
         # Back-to-front: nearer (larger) faces are composited last so they correctly cover farther ones.
         contexts.sort(key=functools.cmp_to_key(self._depth_order))
+        sensor_active = options.restoration_blend > 0 and self.restorer is not None
         fusion_options = RobustFusionOptions(refine_matte=robust.refine_matte, decontaminate=robust.edge_decontamination,
-                                             match_sharpness=robust.sharpness_matching, texture_strength=robust.texture_strength,
+                                             match_sharpness=robust.sharpness_matching and not sensor_active,
+                                             texture_strength=0.0 if sensor_active else robust.texture_strength,
                                              linear_light=robust.linear_light or options.linear_light,
                                              transfer=options.blend_transfer if options.linear_light else "srgb",
                                              matte_contrast=robust.matte_contrast)
@@ -824,6 +871,18 @@ class FrameCompositor:
             harmonized, detail_report = self._stabilize_detail(
                 replacement.track_id, harmonized, crop, context.target_crop, alpha_native,
                 frame_index=frame_index, scene_cut=scene_cut, protect=protect)
+            sensor_alpha = alpha_native
+            if analysis.regions is not None:
+                ears = self._resize_plane(analysis.regions.get("ears"), side)
+                sensor_alpha = np.maximum(sensor_alpha, ears)
+            if front is not None:
+                sensor_front = self._resize_plane(front, side)
+                sensor_alpha = sensor_alpha * (1.0 - sensor_front)
+            harmonized, sensor_report = self._finish_sensor(
+                replacement, harmonized, context.target_crop, sensor_alpha, skin_native, context.motion, options,
+                frame_index, grain_strength=options.sensor_grain_strength * robust.texture_strength,
+                match_optics=robust.sharpness_matching)
+            context.report["target_sensor"] = sensor_report
             context.report["temporal_detail"] = detail_report
             context.report["mask_watchdog"] = mask_report
             temporal = self.temporal.update(replacement.track_id, replacement.inverse, face_alpha, color_stats,

@@ -188,16 +188,8 @@ class StreamingProcessor:
             final_video = owned(self.root, f"roop_3d/.runtime/stream/{self.project_id}/video_{workspace.run_id}.mp4")
             workspace.concat(final_video)
             destination.parent.mkdir(parents=True, exist_ok=True)
-            if audio:
-                NVHardwareVideoWriter.remux_audio(final_video, self.source, destination)
-                published = True
-            else:
-                from roop_3d.models.owned_files import owned_path
-                owned_path(destination)
-                if destination.exists():
-                    raise ValueError("Final output exists")
-                final_video.replace(destination)
-                published = True
+            NVHardwareVideoWriter.remux_audio(final_video, self.source, destination, include_audio=audio)
+            published = True
             self.check()
             from roop_3d.media.video_reader import VideoReader
             verified = (sum(1 for _ in NvdecFrameSource(destination, strict=True).frames())

@@ -32,6 +32,10 @@ export type WorkstationParameters = {
   ambient_fill?: number;
   /** Forehead / hairline boundary offset in px (+ grows the swapped region upward, - pulls it down), -32..32. Omitted until touched. */
   hairline_offset_px?: number;
+  /** Target camera shutter angle in degrees; 180 is the conventional half-frame exposure. */
+  sensor_shutter_angle?: number;
+  /** Grain variance match strength, 0..100 percent. */
+  grain_match_strength?: number;
 };
 export type FaceEditor = Partial<Record<'head_pitch' | 'head_yaw' | 'head_roll' | 'gaze_x' | 'gaze_y' | 'blink_left' | 'blink_right' | 'eyebrow_tilt' | 'eyebrow_raise' | 'mouth_smile' | 'mouth_pout' | 'mouth_open' | 'jaw_width' | 'chin_length', number>>;
 export const DEFAULT_PARAMETERS: WorkstationParameters = {

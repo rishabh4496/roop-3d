@@ -51,6 +51,8 @@ class WorkstationParameters(Contract):
     # so earlier requests keep their exact serialisation and idempotency fingerprint.
     ambient_fill: float = Field(default=0.3, ge=0, le=1)
     hairline_offset_px: float = Field(default=0, ge=-32, le=32)
+    sensor_shutter_angle: float = Field(default=180, ge=0, le=360)
+    grain_match_strength: float = Field(default=100, ge=0, le=100)
 
     @model_serializer(mode='wrap')
     def compatible_serialization(self, handler):
@@ -58,7 +60,7 @@ class WorkstationParameters(Contract):
         for field in ('expression_restore_factor', 'face_expression_overrides'):
             if field not in self.model_fields_set:
                 value.pop(field, None)
-        for field in ('color_method', 'restorer_model', 'identity_blend_t', 'fidelity_weight', 'swap_weight', 'erosion_px', 'pose_mode', 'pose_frontalization', 'tps_expression_weight', 'render_mode', 'occlusion_mode', 'linear_light', 'blend_transfer', 'ultramax_small_face_mode', 'ultramax_min_native_pixels', 'ambient_fill', 'hairline_offset_px', 'occlusion_threshold'):
+        for field in ('color_method', 'restorer_model', 'identity_blend_t', 'fidelity_weight', 'swap_weight', 'erosion_px', 'pose_mode', 'pose_frontalization', 'tps_expression_weight', 'render_mode', 'occlusion_mode', 'linear_light', 'blend_transfer', 'ultramax_small_face_mode', 'ultramax_min_native_pixels', 'ambient_fill', 'hairline_offset_px', 'occlusion_threshold', 'sensor_shutter_angle', 'grain_match_strength'):
             if field not in self.model_fields_set:
                 value.pop(field, None)
         return value
@@ -114,4 +116,6 @@ class WorkstationParameters(Contract):
                                 hairline_offset_px=self.hairline_offset_px,
                                 ultramax_small_face_mode=self.ultramax_small_face_mode,
                                 ultramax_min_native_pixels=self.ultramax_min_native_pixels,
-                                linear_light=self.linear_light, blend_transfer=blend)
+                                linear_light=self.linear_light, blend_transfer=blend,
+                                sensor_shutter_angle=self.sensor_shutter_angle,
+                                sensor_grain_strength=self.grain_match_strength)

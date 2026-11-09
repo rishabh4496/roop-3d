@@ -49,6 +49,7 @@ class TemporalDetailStabilizer:
         self.max_tracks, self.max_cache_bytes = int(max_tracks), int(max_cache_bytes)
         self.cut_correlation, self.min_flow_confidence = float(cut_correlation), float(min_flow_confidence)
         self._tracks: OrderedDict[int, _DetailState] = OrderedDict()
+        self._last_flows: OrderedDict[int, object] = OrderedDict()
         self._flow = cv2.DISOpticalFlow_create(cv2.DISOPTICAL_FLOW_PRESET_MEDIUM)
         self._gpu_flow = None
         self._use_cuda_flow = use_cuda_flow
@@ -167,9 +168,9 @@ class TemporalDetailStabilizer:
         correlation = (float(((af * bf).sum() / denom).item()) if denom_value > 1e-6
                        else (1.0 if torch.equal(warped_guide, guide) else 0.0))
         if correlation < self.cut_correlation:
-            return None, confidence_mean, 0.0, None, "APPEARANCE_CUT"
+            return None, confidence_mean, 0.0, None, "APPEARANCE_CUT", None
         if confidence_mean < self.min_flow_confidence:
-            return None, confidence_mean, 0.0, None, "FLOW_UNRELIABLE"
+            return None, confidence_mean, 0.0, None, "FLOW_UNRELIABLE", None
 
         work_w, work_h = work_size
         resized_flow = F.interpolate(backward.permute(0, 3, 1, 2), size=(work_h, work_w),
@@ -199,7 +200,7 @@ class TemporalDetailStabilizer:
         correction = correction * torch.from_numpy(np.ascontiguousarray(valid_full[None, None])).to(device=device)
         correction_host = correction[0].permute(1, 2, 0).contiguous().float().cpu().numpy()
         return fused.detach().to(dtype=torch.float16), confidence_mean, float((weight > .01).float().mean().item()), \
-            float(weight.mean().item()), correction_host, None
+            float(weight.mean().item()), correction_host, None, -backward[0].detach()
 
     @property
     def cache_bytes(self) -> int:
@@ -211,6 +212,11 @@ class TemporalDetailStabilizer:
 
     def clear(self) -> None:
         self._tracks.clear()
+        self._last_flows.clear()
+
+    def flow_for(self, track_id: int):
+        """Most recent reliable current-frame motion field; CUDA flow stays on CUDA until finishing consumes it."""
+        return self._last_flows.get(track_id)
 
     def release(self) -> None:
         self.clear()
@@ -227,6 +233,7 @@ class TemporalDetailStabilizer:
         for track_id in tuple(self._tracks):
             if track_id not in keep:
                 self._tracks.pop(track_id, None)
+                self._last_flows.pop(track_id, None)
 
     @staticmethod
     def _gray(image: np.ndarray, side: int) -> np.ndarray:
@@ -324,12 +331,13 @@ class TemporalDetailStabilizer:
                 state, reason = None, "SHAPE_CHANGED"
 
         result = output.copy()
+        motion_flow = None
         confidence_mean, influenced_fraction, gpu_history_weight = 0.0, 0.0, 0.0
         backend, backend_fallback = "none_no_history", self._gpu_flow_error
         if state is not None:
             if cuda_state and hasattr(state.guide, "is_cuda") and state.guide.is_cuda:
                 try:
-                    fused_device, confidence_mean, influenced_fraction, gpu_history_weight, correction, reason = self._fuse_cuda(
+                    fused_device, confidence_mean, influenced_fraction, gpu_history_weight, correction, reason, motion_flow = self._fuse_cuda(
                         state, guide_state, raw, valid_work, valid, (work_w, work_h), (w, h))
                     backend = "opencv_nvidia_of_2_0_cuda_fusion"
                     backend_fallback = None
@@ -342,6 +350,7 @@ class TemporalDetailStabilizer:
                         state = None
                 except (ImportError, AttributeError, OSError, RuntimeError, ValueError, cv2.error) as error:
                     self._gpu_flow_error = f"{type(error).__name__}: {error}"
+                    motion_flow = None
                     try:
                         self._gpu_flow.close()
                     except Exception:
@@ -381,6 +390,7 @@ class TemporalDetailStabilizer:
                     self._tracks.pop(track_id, None)
                     state, reason = None, "FLOW_UNRELIABLE"
                 else:
+                    motion_flow = -backward
                     flow_x = cv2.resize(backward[..., 0], (work_w, work_h), interpolation=cv2.INTER_LINEAR) * (work_w / side)
                     flow_y = cv2.resize(backward[..., 1], (work_w, work_h), interpolation=cv2.INTER_LINEAR) * (work_h / side)
                     confidence = cv2.resize(confidence_small, (work_w, work_h), interpolation=cv2.INTER_LINEAR)
@@ -402,6 +412,13 @@ class TemporalDetailStabilizer:
 
         self._tracks[track_id] = current
         self._evict(track_id)
+        if motion_flow is None:
+            self._last_flows.pop(track_id, None)
+        else:
+            self._last_flows[track_id] = motion_flow
+            self._last_flows.move_to_end(track_id)
+            while len(self._last_flows) > self.max_tracks:
+                self._last_flows.popitem(last=False)
         report = {
             "backend": backend,
             "temporal_alpha": self.temporal_alpha,
