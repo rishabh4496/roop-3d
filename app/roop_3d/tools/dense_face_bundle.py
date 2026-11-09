@@ -226,7 +226,11 @@ def readiness(bundle, prepared=None, config=None):
             if spec is not None:
                 path = _asset(base, spec["assets"][role]["file"])
             else:
-                path = owned_path(prepared / (role + (".onnx" if role in GRAPH_CONTRACTS else ".npz")))
+                name = role + (".onnx" if role in GRAPH_CONTRACTS else ".npz")
+                candidates = [owned_path(path) for path in prepared.rglob(name)] if prepared.is_dir() else []
+                if len(candidates) > 1:
+                    raise ValueError(f"Multiple prepared candidates for {role}; use --config to identify the intended asset")
+                path = candidates[0] if candidates else owned_path(prepared / name)
             exists = path.is_file()
             result["assets"][role] = {"file": str(path), "present": exists}
             if not exists:

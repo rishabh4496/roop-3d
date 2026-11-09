@@ -174,6 +174,19 @@ def test_status_without_bundle_lists_every_missing_asset_and_evidence(local, cap
     assert "Missing coarse" in capsys.readouterr().out
 
 
+def test_nested_prepared_exports_and_ambiguity(local):
+    nested = local / "prepared" / "hrn"
+    nested.mkdir(parents=True)
+    (nested / "hrn_mid.onnx").write_bytes(b"SYNTHETIC INVENTORY ONLY")
+    report = tool.readiness(local / "bundle.json")
+    assert report["assets"]["hrn_mid"]["present"]
+    assert report["assets"]["hrn_mid"]["file"] == str(nested / "hrn_mid.onnx")
+    (nested.parent / "hrn_mid.onnx").write_bytes(b"SYNTHETIC AMBIGUITY ONLY")
+    report = tool.readiness(local / "bundle.json")
+    assert not report["ready"]
+    assert "Multiple prepared candidates" in report["assets"]["hrn_mid"]["error"]
+
+
 def test_status_config_without_bundle_is_not_ready(synthetic):
     config, output, _ = synthetic
     report = tool.readiness(output, config=config)
