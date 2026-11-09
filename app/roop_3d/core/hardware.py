@@ -7,17 +7,20 @@ import ctypes.util
 from datetime import datetime, timezone
 from functools import lru_cache
 import importlib.metadata
+import logging
 import os
 import platform
 from pathlib import Path
 import re
 import shutil
 import subprocess
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
 from roop_3d.core.settings import Settings
+
+log = logging.getLogger("roop3d.hardware")
 
 
 class GPU(BaseModel):
@@ -45,6 +48,10 @@ class Hardware(BaseModel):
     advertised_providers: list[str] | None = None
     provider_probe_state: Literal["VERIFIED_LOCAL", "UNKNOWN"] = "UNKNOWN"
     provider_execution_verified: bool = False
+    tensorrt_mixed_precision: dict[str, Any] = Field(default_factory=lambda: {
+        "available": False, "active": False, "tensorrt_available": False, "cuda_fp16_available": False,
+        "active_provider": None, "diagnostic": None,
+    })
     ort_version: str | None = None
     cuda_runtime_version: str | None = None
     cuda_runtime_state: Literal["VERIFIED_LOCAL", "UNKNOWN"] = "UNKNOWN"
@@ -149,7 +156,9 @@ def tensor_core_precisions(compute_capability: str | None) -> list[str]:
 @lru_cache(maxsize=1)
 def tensorrt_version() -> str | None:
     """Installed TensorRT Python distribution version; no native library is loaded."""
-    for name in ("tensorrt", "tensorrt-cu12", "tensorrt_cu12", "tensorrt-cu13", "tensorrt_cu13", "tensorrt-cu11", "tensorrt_cu11"):
+    for name in ("tensorrt", "tensorrt-cu12", "tensorrt_cu12", "tensorrt-cu13", "tensorrt_cu13",
+                 "tensorrt-cu11", "tensorrt_cu11", "tensorrt-cu12-libs", "tensorrt-cu13-libs",
+                 "tensorrt-cu11-libs"):
         try:
             return importlib.metadata.version(name)
         except importlib.metadata.PackageNotFoundError:
@@ -174,6 +183,75 @@ def _summarize(result: Hardware) -> None:
         result.nvenc_available = bool(result.ffmpeg_nvenc_encoders)
         result.qsv_available = bool(result.ffmpeg_qsv_decoders or result.ffmpeg_qsv_encoders)
         result.codec_hardware_state = "FFMPEG_REGISTRATION_ONLY"
+
+
+@lru_cache(maxsize=1)
+def _torch_cuda_available() -> bool:
+    """Probe PyTorch CUDA lazily; it is optional for installations using ONNX Runtime only."""
+    try:
+        import torch
+        return bool(torch.cuda.is_available())
+    except Exception:
+        return False
+
+
+def _nvinfer_filename_present(filename: str) -> bool:
+    try:
+        from core.trt_bootstrap import native_library_directories
+        directories = native_library_directories()
+    except Exception:
+        directories = ()
+    try:
+        if any((directory / filename).is_file() for directory in directories):
+            return True
+        if os.name != "nt":
+            located = ctypes.util.find_library("nvinfer")
+            if located:
+                return True
+            return any(any(directory.glob("libnvinfer.so*")) for directory in directories)
+        return bool(shutil.which(filename))
+    except OSError:
+        return False
+
+
+def _mixed_precision_status(result: Hardware, settings: Settings) -> dict[str, Any]:
+    providers = set(result.advertised_providers or ())
+    torch_cuda = "CUDAExecutionProvider" in providers and _torch_cuda_available()
+    trt_available = "TensorrtExecutionProvider" in providers
+    cuda_fp16_available = "CUDAExecutionProvider" in providers and torch_cuda
+    active_sessions: list[dict[str, Any]] = []
+    try:
+        from roop_3d.engine.active_models import snapshot
+        active_sessions = [item for item in snapshot().values() if isinstance(item, dict)]
+    except Exception:
+        pass
+    active_session = next((item for item in active_sessions
+                           if item.get("provider") == "TensorrtExecutionProvider" and item.get("precision") == "fp16"
+                           or item.get("provider") == "CUDAExecutionProvider" and item.get("precision") == "fp16"), None)
+
+    configured_provider = settings.preferred_provider
+    configured_fp16 = settings.precision_policy == "fp16" or (
+        settings.precision_policy == "auto" and configured_provider in ("auto", "TensorrtExecutionProvider")
+    )
+    configured_trt = configured_provider == "TensorrtExecutionProvider" or (
+        configured_provider == "auto" and trt_available
+    )
+    configured_cuda = configured_provider == "CUDAExecutionProvider" or (
+        configured_provider == "auto" and not trt_available and cuda_fp16_available
+    )
+    configured_active = configured_fp16 and (
+        (configured_trt and trt_available) or (configured_cuda and cuda_fp16_available)
+    )
+    active_provider = (active_session or {}).get("provider")
+    return {
+        "available": bool(trt_available or cuda_fp16_available or active_session),
+        "active": bool(active_session),
+        "configured": configured_active,
+        "tensorrt_available": bool(trt_available),
+        "cuda_fp16_available": bool(cuda_fp16_available),
+        "active_provider": active_provider,
+        "diagnostic": None if trt_available or cuda_fp16_available else "TensorRT EP or CUDA-enabled PyTorch with CUDA EP is required",
+    }
 
 
 def _run(arguments: list[str]) -> str:
@@ -274,6 +352,17 @@ def probe_hardware(settings: Settings | None = None) -> Hardware:
         result.provider_probe_state = "VERIFIED_LOCAL"
     except Exception:
         result.probe_notes.append("ONNX Runtime import/probe failed; provider fields are unknown")
+    result.tensorrt_mixed_precision = _mixed_precision_status(result, settings)
+    installed_trt = tensorrt_version()
+    if installed_trt or "TensorrtExecutionProvider" in (result.advertised_providers or []):
+        try:
+            from core.trt_bootstrap import expected_nvinfer_filename
+            filename = expected_nvinfer_filename(installed_trt)
+            if not _nvinfer_filename_present(filename):
+                result.probe_notes.append(f"TensorRT native library missing: {filename}")
+                log.warning("TensorRT native library missing: %s", filename)
+        except ImportError:
+            result.probe_notes.append("TensorRT native library diagnostics unavailable")
     _system_memory(result)
     result.ffmpeg_path = shutil.which("ffmpeg")
     if result.ffmpeg_path:

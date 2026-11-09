@@ -15,7 +15,7 @@ from roop_3d.engine.resources import guarded, inference, register
 
 # Shared low-level session construction is also available to GPU graph callers.
 # This additive adapter keeps the verified catalog as the only model path source.
-from roop_3d.core.ort_session import GpuIoBinding, SessionManager, SessionInfo
+from roop_3d.core.ort_session import GpuIoBinding, SessionManager, SessionInfo, _cuda_fp16_model_path
 
 log = logging.getLogger(__name__)
 
@@ -142,6 +142,9 @@ class OrtModel:
                 self.path = prepared[0]
             except Exception:
                 pass
+        if config.provider == "CUDAExecutionProvider" and config.precision_policy == "fp16":
+            fp16_cache = catalog.root / "roop_3d/.runtime/cache/cuda_fp16"
+            self.path, _ = _cuda_fp16_model_path(self.path, fp16_cache)
         self._identity = self._stat()
         options = ort.SessionOptions()
         options.intra_op_num_threads, options.inter_op_num_threads = config.cpu_threads, 1
@@ -180,9 +183,11 @@ class OrtModel:
             if "CUDAExecutionProvider" not in ort.get_available_providers():
                 raise DomainError("PROVIDER_UNAVAILABLE", "CUDAExecutionProvider is required for TensorRT graph partitions", 503)
             try:
+                trt_provider = ("tensorrt_mixed" if config.precision_policy == "fp16"
+                                else "TensorrtExecutionProvider")
                 info = SessionManager(fp16=config.precision_policy != 'fp32', hardware_profile=config.hardware_profile,
                     gpu_memory_limit=self._gpu_memory_limit).create(self.path, model_name=name,
-                        providers=("TensorrtExecutionProvider", "CUDAExecutionProvider"))
+                        providers=(trt_provider, "CUDAExecutionProvider"))
                 self.session = info.session
                 self.provider = self.session.get_providers()[0]
                 if self.provider != "TensorrtExecutionProvider":

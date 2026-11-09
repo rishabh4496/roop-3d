@@ -11,6 +11,30 @@ from typing import Mapping
 import numpy as np
 
 TRT, CUDA, CPU = "TensorrtExecutionProvider", "CUDAExecutionProvider", "CPUExecutionProvider"
+_TRT_MIXED_ALIASES = {
+    "tensorrt_mixed", "trt_mixed_precision", "tensorrt_mixed_precision", "tensorRT mixed precision".casefold(),
+}
+
+
+def _provider_name(value: str) -> str:
+    return TRT if value.casefold() in _TRT_MIXED_ALIASES else value
+
+
+def _string_provider_options(options: Mapping[str, object]) -> dict[str, str]:
+    """The ORT C API accepts provider options as string-to-string maps."""
+    return {key: str(value) for key, value in options.items()}
+
+
+def _trt_mixed_options(trt_cache_dir: Path, device_id: int = 0) -> dict[str, str]:
+    """Required TensorRT FP16 cache options in the string format expected by ORT's C API."""
+    return {
+        "device_id": str(device_id),
+        "trt_fp16_enable": "True",
+        "trt_engine_cache_enable": "True",
+        "trt_engine_cache_path": str(trt_cache_dir),
+        "trt_timing_cache_enable": "True",
+        "trt_builder_optimization_level": "3",
+    }
 
 
 def _image_size(name: str) -> tuple[int, int, int]:
@@ -76,6 +100,37 @@ def _cache_prefix(path: Path, name: str, profiles: list[dict], policy: Mapping[s
 
 
 _FP32_MODEL_LOCK = threading.Lock()
+_CUDA_FP16_MODEL_LOCK = threading.Lock()
+
+
+def _cuda_fp16_model_path(path: Path, cache_path: Path):
+    """Build an owned CUDA mixed-precision graph while preserving its external float32 contract."""
+    import onnx
+    from onnx import TensorProto
+    from onnxruntime.transformers.float16 import convert_float_to_float16
+
+    path = Path(path).resolve(strict=True)
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    source_digest = digest.hexdigest()
+    from roop_3d.models.owned_files import owned_path
+    cache_path = owned_path(cache_path)
+    cache_path.mkdir(parents=True, exist_ok=True)
+    target = owned_path(cache_path / f"{path.stem}.{source_digest[:20]}.cuda_fp16_mixed_v1.onnx")
+    with _CUDA_FP16_MODEL_LOCK:
+        if target.is_file():
+            return target, None
+        model = onnx.load(str(path), load_external_data=False)
+        if any(value.data_location == TensorProto.EXTERNAL for value in model.graph.initializer):
+            raise ValueError("CUDA FP16 graph conversion does not admit external ONNX data")
+        converted = convert_float_to_float16(model, keep_io_types=True)
+        onnx.checker.check_model(converted)
+        temporary = owned_path(target.with_name(target.name + f".{os.getpid()}.tmp"))
+        onnx.save(converted, str(temporary))
+        os.replace(temporary, target)
+    return target, converted
 
 
 def _fp32_safe_model_path(path: Path, cache_path: Path, name: str):
@@ -333,7 +388,7 @@ class SessionManager:
             options.add_session_config_entry("session.disable_cpu_ep_fallback", "1")
         return options
 
-    def _providers(self, ort, path: Path, name: str, provider: str):
+    def _providers(self, ort, path: Path, name: str, provider: str, *, force_fp16: bool = False):
         available = set(ort.get_available_providers())
         if provider not in available:
             return []
@@ -345,7 +400,7 @@ class SessionManager:
                        "arena_extend_strategy": "kNextPowerOfTwo" if self.hardware_profile == "12gb" else "kSameAsRequested"}
             if self.gpu_memory_limit is not None:
                 options["gpu_mem_limit"] = self.gpu_memory_limit
-            return [(CUDA, options)]
+            return [(CUDA, _string_provider_options(options))]
         import onnx
         model = onnx.load(str(path), load_external_data=False)
         initializers = {v.name for v in model.graph.initializer}
@@ -365,18 +420,19 @@ class SessionManager:
             return []
         static = _static_graph_inputs(model)
         folded_name = name.casefold()
-        fp16 = self.fp16 and not any(
-            token in folded_name for token in ("inswapper", "motion_extractor", "gpen")
-        )
+        fp16_sensitive = any(token in folded_name for token in ("inswapper", "motion_extractor", "gpen"))
+        fp16 = force_fp16 or (self.fp16 and not fp16_sensitive)
         excluded_ops = _trt_excluded_ops(model, name)
-        cache_policy = {"fp16": fp16, "optimization_level": 5, "auxiliary_streams": 2,
+        cache_policy = {"fp16": fp16, "optimization_level": 3, "auxiliary_streams": 2,
                         "cuda_graph": static, "force_sequential": False, "excluded_ops": excluded_ops}
-        options = {"device_id": self.gpu_id, "trt_fp16_enable": fp16,
-                   "trt_engine_cache_enable": True, "trt_engine_cache_path": str(self.cache_path),
-                   "trt_timing_cache_enable": True, "trt_timing_cache_path": str(self.cache_path),
+        trt_cache_dir = self.cache_path
+        mixed_options = _trt_mixed_options(trt_cache_dir, self.gpu_id)
+        if not fp16:
+            mixed_options["trt_fp16_enable"] = "False"
+        options = {**mixed_options,
+                   "trt_timing_cache_path": str(trt_cache_dir),
                    "trt_engine_cache_prefix": _cache_prefix(path, name, profiles, cache_policy),
                    "trt_max_workspace_size": (1024 if self.hardware_profile == "6gb" else 2048) * 1024**2,
-                   "trt_builder_optimization_level": 5,
                    "trt_auxiliary_streams": 2,
                    "trt_force_sequential_engine_build": False,
                    "trt_cuda_graph_enable": static,
@@ -391,7 +447,7 @@ class SessionManager:
                         "arena_extend_strategy": "kNextPowerOfTwo" if self.hardware_profile == "12gb" else "kSameAsRequested"}
         if self.gpu_memory_limit is not None:
             cuda_options["gpu_mem_limit"] = self.gpu_memory_limit
-        return [(TRT, options), (CUDA, cuda_options)]
+        return [(TRT, _string_provider_options(options)), (CUDA, _string_provider_options(cuda_options)), CPU]
 
     def create(self, model_path: str | Path, *, model_name: str | None = None,
                providers: tuple[str, ...] = (TRT, CUDA, CPU), intra_op_threads: int | None = None) -> SessionInfo:
@@ -415,7 +471,9 @@ class SessionManager:
             pass
         path = Path(model_path).resolve(strict=True)
         name = model_name or path.name
-        order = tuple(p for p in (TRT, CUDA, CPU) if p in providers)
+        mixed_requested = any(p.casefold() in _TRT_MIXED_ALIASES for p in providers)
+        normalized = {_provider_name(provider) for provider in providers}
+        order = tuple(p for p in (TRT, CUDA, CPU) if p in normalized)
         if not order:
             raise ValueError("At least one provider is required")
         errors = []
@@ -426,7 +484,10 @@ class SessionManager:
                     session_path, _ = _fp32_safe_model_path(path, self.cache_path, name)
                 if provider in (TRT, CUDA):
                     session_path, _ = _static_model_path(session_path, self.cache_path, name)
-                provider_options = self._providers(ort, session_path, name, provider)
+                if provider == CUDA and mixed_requested:
+                    session_path, _ = _cuda_fp16_model_path(session_path, self.cache_path / "cuda_fp16")
+                provider_options = self._providers(ort, session_path, name, provider,
+                                                   force_fp16=mixed_requested)
                 if not provider_options:
                     errors.append(f"{provider}: unavailable")
                     continue
@@ -436,12 +497,12 @@ class SessionManager:
                     session = ort.InferenceSession(str(session_path), sess_options=session_options,
                                                    providers=provider_options)
                 except Exception as error:
-                    if (provider != TRT or not provider_options[0][1].get("trt_cuda_graph_enable")
+                    if (provider != TRT or provider_options[0][1].get("trt_cuda_graph_enable", "False").casefold() not in ("1", "true")
                             or not _is_cuda_graph_partition_error(error)):
                         raise
                     errors.append("TensorRT CUDA graph capture disabled for a mixed-provider partition")
                     retry_options = [(ep, dict(options)) for ep, options in provider_options]
-                    retry_options[0][1]["trt_cuda_graph_enable"] = False
+                    retry_options[0][1]["trt_cuda_graph_enable"] = "False"
                     session = ort.InferenceSession(str(session_path), sess_options=session_options,
                                                    providers=retry_options)
                 active = session.get_providers()

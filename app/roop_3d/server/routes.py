@@ -63,17 +63,16 @@ def capabilities(request: Request) -> Capabilities:
     from roop_3d.server.workstation import CHUNK_BYTES, MAX_ASSET_BYTES
     state = request.app.state
     hardware = probe_hardware(state.settings)
+    precision_status = hardware.tensorrt_mixed_precision
     model_rows = state.models.public()
     available = {item['id'] for item in model_rows if item.get('installed') and item.get('state') == 'VERIFIED_LOCAL'}
     available.update(item['name'] for item in model_rows if item.get('installed') and item.get('state') == 'VERIFIED_LOCAL')
-    gpu = bool(hardware.gpus) and "CUDAExecutionProvider" in hardware.advertised_providers
+    gpu = ("CUDAExecutionProvider" in (hardware.advertised_providers or [])
+           and (bool(hardware.gpus) or bool(precision_status.get("cuda_fp16_available"))))
     lp = all(name in available for name in ("liveportrait_appearance_feature_extractor.onnx", "liveportrait_motion_extractor.onnx", "liveportrait_warping_spade.onnx"))
-    import importlib.metadata
-    try:
-        importlib.metadata.version("tensorrt-cu12-libs")
-        trt = gpu and 'TensorrtExecutionProvider' in hardware.advertised_providers
-    except importlib.metadata.PackageNotFoundError:
-        trt = False
+    trt = bool(precision_status.get("tensorrt_available"))
+    cuda_fp16 = bool(precision_status.get("cuda_fp16_available"))
+    mixed_precision = bool(precision_status.get("available") or trt or cuda_fp16)
     try:
         from roop_3d.compositor.stream_restoration import load_ultramax_spec
         ultramax = load_ultramax_spec(state.root).model_name in available
@@ -83,8 +82,8 @@ def capabilities(request: Request) -> Capabilities:
         "swapper_model_id": {item["id"]: None for item in state.models.public() if item["category"] == "swapper"},
         "execution_mode": {"swap": None, "volumetric": None if lp else "LivePortrait weights are unavailable", "hybrid": "No verified diffusion loader is configured", "diffusion_vfx": "No verified diffusion loader is configured"},
         "preferred_provider": {"auto": None, "CPUExecutionProvider": None, "CUDAExecutionProvider": None if gpu else "CUDA is unavailable", "TensorrtExecutionProvider": None if trt else "TensorRT requires an NVIDIA GPU, its execution provider and packaged TensorRT libraries"},
-        "hardware_profile": {"auto": None, "cpu": None, "6gb": None if gpu else "No CUDA GPU is available", "12gb": None if gpu and hardware.gpus[0].total_vram_mib >= MIN_12GB_PROFILE_VRAM_MIB else "A CUDA GPU with at least 10 GB of video memory is required"},
-        "precision_policy": {"auto": None, "fp32": None, "fp16": None if trt and state.settings.preferred_provider in ('auto', 'TensorrtExecutionProvider') else "FP16 mixed precision requires TensorRT; CUDA uses the model's graph precision"},
+        "hardware_profile": {"auto": None, "cpu": None, "6gb": None if gpu else "No CUDA GPU is available", "12gb": None if gpu and hardware.gpus and hardware.gpus[0].total_vram_mib >= MIN_12GB_PROFILE_VRAM_MIB else "A CUDA GPU with at least 10 GB of video memory is required"},
+        "precision_policy": {"auto": None, "fp32": None, "fp16": None if mixed_precision else "FP16 mixed precision requires TensorRT or CUDA FP16 support"},
         "detector_model_id": {key: None for key in ('scrfd', 'retinaface', 'yoloface')},
         "face_restoration_policy": {"off": None, "auto": None, "gfpgan": None if 'gfpgan_v14' in available else "GFPGAN weights are unavailable",
             "gpen": None if 'gpen_bfr_512' in available else "GPEN weights are unavailable",
@@ -106,6 +105,7 @@ def capabilities(request: Request) -> Capabilities:
                          "cancel": ["queued", "preparing", "running", "pausing", "paused", "interrupted"]},
         "upload_chunk_bytes": min(CHUNK_BYTES, state.settings.max_body_bytes), "max_asset_bytes": MAX_ASSET_BYTES}
     workstation["features"]["queue"] = {"enabled": state.worker is not None, "reason": None if state.worker is not None else "Background worker is disabled"}
+    workstation["tensorrt_mixed_precision"] = precision_status
     workstation["active_hardware_profile"] = state.settings.hardware_profile
     workstation["resolved_hardware_profile"] = getattr(hardware, "resolved_hardware_profile", "auto")
     return Capabilities(enabled_modes=("media_probe", "frame_preview", "face_inspection", "persistent_job_queue",
@@ -138,7 +138,10 @@ class ModelCompileTrtRequest(Contract):
 
 @router.get("/models", response_model=list[ModelSummary])
 def models(request: Request) -> list[dict]:
-    return request.app.state.models.public()
+    from roop_3d.core.hardware import probe_hardware
+    status = probe_hardware(request.app.state.settings).tensorrt_mixed_precision
+    return [{**item, "tensorrt_mixed_precision": status}
+            for item in request.app.state.models.public()]
 
 
 @router.get("/models/active")

@@ -107,10 +107,23 @@ export default function EngineModelRack({ params, onParams, config, caps, onSave
   const precision = configuredPrecision === 'auto' && provider === 'TensorrtExecutionProvider' ? 'fp16'
     : configuredPrecision === 'auto' && provider === 'CUDAExecutionProvider' ? 'fp32' : configuredPrecision;
   const runtimeValue = (RUNTIMES.find(item => item.provider === provider && item.precision === precision) ?? RUNTIMES.find(item => item.provider === provider && item.precision === 'auto') ?? RUNTIMES[0]).id;
+  const mixedPrecisionStatus = caps?.workstation.tensorrt_mixed_precision;
   const runtimeReason = (item: (typeof RUNTIMES)[number]): string | null => {
     const controls = caps?.workstation.controls;
     if (!controls) return null;
-    return controls.preferred_provider?.[item.provider] ?? (item.precision === 'fp16' && item.provider !== 'TensorrtExecutionProvider' ? 'CUDA uses the selected model’s graph precision; use TensorRT for mixed precision.' : null);
+    const providers = controls.preferred_provider;
+    const status = mixedPrecisionStatus;
+    if (item.id === 'trt_fp16' && status && !status.tensorrt_available) {
+      return providers?.[item.provider] ?? 'TensorRT Execution Provider is unavailable.';
+    }
+    if (item.id === 'cuda_fp16' && status && !status.cuda_fp16_available) {
+      return providers?.[item.provider] ?? 'CUDA FP16 requires CUDA Execution Provider and torch.cuda.is_available().';
+    }
+    if (item.precision === 'fp16' && status && !status.available) {
+      return controls.precision_policy?.fp16 ?? 'FP16 mixed precision is unavailable.';
+    }
+    if (item.precision === 'fp16' && !status) return controls.precision_policy?.fp16 ?? null;
+    return providers?.[item.provider] ?? null;
   };
   const pickRuntime = (id: string) => {
     const item = RUNTIMES.find(entry => entry.id === id);
@@ -188,6 +201,13 @@ export default function EngineModelRack({ params, onParams, config, caps, onSave
           {RUNTIMES.filter(item => runtimeReason(item)).map(item => <small key={item.id}>{item.label}: {runtimeReason(item)}</small>)}
           {!onSaveConfig && <small>Global engine setting: change it from the Faceswap workspace or Settings.</small>}
         </label>
+        {mixedPrecisionStatus && <small data-testid="mixed-precision-status">
+          {mixedPrecisionStatus.active
+            ? `FP16 active via ${mixedPrecisionStatus.active_provider ?? 'GPU provider'}.`
+            : mixedPrecisionStatus.available
+              ? `FP16 available via ${mixedPrecisionStatus.tensorrt_available ? 'TensorRT' : 'CUDA'}.`
+              : mixedPrecisionStatus.diagnostic ?? 'FP16 mixed precision is unavailable.'}
+        </small>}
         <div className="model-manager-row">
           <button type="button" className="button small" disabled={trtBusy} onClick={() => void rebuildTrt()}>{trtBusy ? 'Requesting…' : 'Rebuild TRT engine'}</button>
         </div>

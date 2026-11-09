@@ -216,6 +216,7 @@ def create_app(settings: Settings | None = None, *, repo_root: Path | None = Non
                 "pinokio_app_id": "roop-3d", "standalone": True,
                 "uptime_seconds": max(0.0, time.monotonic() - started), "isolation": isolation_status(root)}
 
+    @app.get("/api/v1/hardware", response_model=Hardware)
     @app.get("/api/v1/system/hardware", response_model=Hardware)
     def hardware() -> Hardware:
         return probe_hardware(app.state.settings)

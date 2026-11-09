@@ -9,6 +9,10 @@ _app_dir = Path(__file__).resolve().parent
 if str(_app_dir) not in sys.path:
     sys.path.insert(0, str(_app_dir))
 
+# Register CUDA/TensorRT paths before importing the server or ONNX Runtime.
+from core.trt_bootstrap import bootstrap_native_library_paths
+bootstrap_native_library_paths(_app_dir.parent)
+
 # Automatically inject CUDA / cuDNN / TensorRT DLLs & ensure runtime directories
 from roop_3d.core.dll_injection import setup_environment
 setup_environment(_app_dir.parent)

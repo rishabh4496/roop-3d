@@ -8,6 +8,7 @@ export type CatalogModel = {
   category: 'swapper' | 'enhancer' | 'detector' | 'occluder' | 'upscaler' | 'other' | string;
   native_resolution: number | null;
   installed: boolean; selectable: boolean; vram_loaded: boolean; trt_cached: boolean;
+  tensorrt_mixed_precision?: { available: boolean; active: boolean; configured?: boolean };
   download_url: string | null; state: string; sha256: string | null; size_bytes: number | null;
   license_id?: string; license_notice?: string; commercial_use?: string; manual_acceptance_required?: boolean;
   local_format?: string | null; supports_3d_hybrid?: boolean;

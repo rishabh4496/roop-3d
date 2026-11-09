@@ -8,6 +8,13 @@ import os
 import socket
 import sys
 
+# The standalone launcher puts app/ on sys.path before this module is imported.
+try:
+    from core.trt_bootstrap import bootstrap_native_library_paths
+except ImportError:
+    from app.core.trt_bootstrap import bootstrap_native_library_paths
+bootstrap_native_library_paths()
+
 from roop_3d.core.dll_injection import setup_environment
 setup_environment()
 

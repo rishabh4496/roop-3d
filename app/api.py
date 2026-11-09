@@ -16,6 +16,10 @@ for _p in (str(_current_dir), str(_root_dir)):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
+# Bootstrap native dependencies before any application imports can reach ONNX Runtime.
+from core.trt_bootstrap import bootstrap_native_library_paths
+bootstrap_native_library_paths(_root_dir)
+
 # Automatically inject CUDA / cuDNN / TensorRT DLLs and ensure runtime directories
 from roop_3d.core.dll_injection import setup_environment
 setup_environment(_root_dir)

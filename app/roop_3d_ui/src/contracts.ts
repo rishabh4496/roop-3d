@@ -11,6 +11,8 @@ export interface Capabilities {
     supports_3d_hybrid?: boolean; state: string; license_state: string; inference_state: string; sha256?: string | null;
     verified?: boolean; governance_approved?: boolean | null; blocked?: boolean; local_trust?: boolean }[];
   workstation: { features: Record<string, Feature>; controls: Record<string, Record<string, string | null>>;
+    tensorrt_mixed_precision?: { available: boolean; active: boolean; configured?: boolean; tensorrt_available: boolean;
+      cuda_fp16_available: boolean; active_provider?: string | null; diagnostic?: string | null };
     active_hardware_profile?: string; resolved_hardware_profile?: string;
     read_only_parameters: Record<string, string>; disabled_parameters: Record<string, string>; job_states: string[];
     job_controls: Record<string, string[]>; upload_chunk_bytes: number; max_asset_bytes: number };

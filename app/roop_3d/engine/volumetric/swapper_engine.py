@@ -48,6 +48,11 @@ def load_local_session(catalog, model_id: str, path: Path, config: RuntimeConfig
         raise DomainError("LOCAL_MODEL_GRAPH_UNSUPPORTED",
             f"Local ONNX model graph failed safety/format checks ({type(error).__name__})", 422) from None
     from roop_3d.core.ort_session import CUDA, CPU, TRT, SessionManager
+    model_name = path.name
+    if config.provider == CUDA and config.precision_policy == "fp16":
+        from roop_3d.core.ort_session import _cuda_fp16_model_path
+        fp16_cache = catalog.root / "roop_3d/.runtime/cache/cuda_fp16"
+        path, _ = _cuda_fp16_model_path(path, fp16_cache)
     providers = ((TRT, CUDA) if config.provider == TRT else
                  (CUDA,) if config.provider == CUDA else (CPU,))
     if config.provider in (TRT, CUDA):
@@ -57,7 +62,7 @@ def load_local_session(catalog, model_id: str, path: Path, config: RuntimeConfig
     else:
         manager = SessionManager(hardware_profile="6gb", fp16=False)
     try:
-        info = manager.create(path, model_name=path.name, providers=providers,
+        info = manager.create(path, model_name=model_name, providers=providers,
                               intra_op_threads=config.cpu_threads)
     except Exception as error:
         raise DomainError("MODEL_SESSION_FAILED",
