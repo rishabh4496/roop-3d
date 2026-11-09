@@ -1,6 +1,7 @@
-"""Optional, clamped spherical-harmonic luminance relighting."""
+"""Luminance-chrominance decoupled spherical-harmonic relighting."""
 from __future__ import annotations
 
+import cv2
 import numpy as np
 
 from roop_3d.core.errors import DomainError
@@ -21,8 +22,14 @@ def relight_spherical_harmonics(
     *,
     gain_range: tuple[float, float] = (0.72, 1.35),
     minimum_samples: int = 96,
+    occluder_mask: np.ndarray | None = None,
+    color_space: str = "ycbcr",
 ) -> np.ndarray:
-    """Match low-order directional luminance; fit coefficients on skin pixels only."""
+    """Decoupled luminance relighting over unoccluded Class 1 (Skin) pixels.
+
+    Replaces flat RGB multiplication with YCbCr/LAB luminance-chrominance decoupled matching.
+    Never samples dark hair or neck shadows when computing skin illumination statistics.
+    """
     source = np.asarray(swapped_bgr)
     target = np.asarray(target_bgr)
     skin = np.asarray(skin_mask, dtype=np.float32)
@@ -34,20 +41,46 @@ def relight_spherical_harmonics(
     low, high = gain_range
     if not (0 < low <= high and np.isfinite((low, high)).all()):
         raise ValueError("gain_range must be finite, positive and ordered")
-    samples = (skin > 0.5) & (face > 0.05)
-    if np.count_nonzero(samples) < minimum_samples:
-        return source.copy()
-    basis = _basis(source.shape[0], source.shape[1])
+
     source_rgb = source[..., ::-1].astype(np.float32) / 255.0
     target_rgb = target[..., ::-1].astype(np.float32) / 255.0
     source_luma = source_rgb @ np.array((0.2126, 0.7152, 0.0722), np.float32)
     target_luma = target_rgb @ np.array((0.2126, 0.7152, 0.0722), np.float32)
+
+    # Exclusively sample unoccluded Class 1 (Skin) pixels; exclude dark hair and neck shadows (< 0.08)
+    samples = (skin > 0.5) & (face > 0.05) & (target_luma > 0.08) & (source_luma > 0.08)
+    if occluder_mask is not None:
+        occ = np.asarray(occluder_mask, dtype=np.float32)
+        if occ.shape == samples.shape:
+            samples &= (occ < 0.15)
+
+    if np.count_nonzero(samples) < minimum_samples:
+        # Fallback to general skin region if insufficient shadow-free samples
+        samples = (skin > 0.5) & (face > 0.05)
+        if np.count_nonzero(samples) < minimum_samples:
+            return source.copy()
+
+    basis = _basis(source.shape[0], source.shape[1])
     source_coeff, *_ = np.linalg.lstsq(basis[samples], source_luma[samples], rcond=1e-4)
     target_coeff, *_ = np.linalg.lstsq(basis[samples], target_luma[samples], rcond=1e-4)
     source_shade = np.maximum(basis @ source_coeff, 0.05)
     target_shade = np.maximum(basis @ target_coeff, 0.05)
     gain = np.clip(target_shade / source_shade, low, high)
-    output = source.astype(np.float32, copy=True)
+
     active = (skin > 0.05) & (face > 0)
-    output[active] *= gain[active, None]
-    return np.clip(np.nan_to_num(output), 0, 255).astype(np.uint8)
+    if not active.any():
+        return source.copy()
+
+    # Luminance-chrominance decoupled matching (anti-plastic finish)
+    if color_space == "lab":
+        lab = cv2.cvtColor(source, cv2.COLOR_BGR2LAB).astype(np.float32)
+        # Modulate L (lightness) exclusively
+        lab[active, 0] = np.clip(lab[active, 0] * gain[active], 0.0, 255.0)
+        output = cv2.cvtColor(np.clip(lab, 0, 255).astype(np.uint8), cv2.COLOR_LAB2BGR)
+    else:  # default YCbCr
+        ycc = cv2.cvtColor(source, cv2.COLOR_BGR2YCrCb).astype(np.float32)
+        # Modulate Y (luminance) exclusively
+        ycc[active, 0] = np.clip(ycc[active, 0] * gain[active], 0.0, 255.0)
+        output = cv2.cvtColor(np.clip(ycc, 0, 255).astype(np.uint8), cv2.COLOR_YCrCb2BGR)
+
+    return output

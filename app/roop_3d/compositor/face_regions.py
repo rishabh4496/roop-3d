@@ -35,8 +35,9 @@ REGION_CLASSES: dict[str, tuple[int, ...]] = {
     "hat": (18,),
 }
 FACE_INTERIOR_REGIONS = ("skin", "brows", "eyes", "nose", "mouth_interior", "lips")
-# Parser classes that are physically in front of, or beside, the face and must be preserved.
-FOREGROUND_REGIONS = ("glasses", "hat", "hair", "cloth")
+# Parser classes that are physically in front of, or beside, the face and must be preserved (strict hair/neck/ear exclusion).
+FOREGROUND_REGIONS = ("glasses", "hat", "hair", "cloth", "neck", "ears")
+STRICT_FORBIDDEN_REGIONS = ("neck", "cloth", "hair", "hat", "ears", "glasses")
 
 
 @dataclass(frozen=True)

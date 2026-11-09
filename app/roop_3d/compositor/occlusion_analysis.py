@@ -167,8 +167,12 @@ class OcclusionAnalyzer:
         zeros = np.zeros(shape, np.float32)
         if parser_trusted:
             regions = build_regions(probabilities)
-            semantic_front = np.clip(regions.get("glasses") + regions.get("hat"), 0, 1)
-            semantic_front = combine_occluders(semantic_front, regions.get("hair") * support)
+            # Strict Hair, Ear & Neck Exclusion: hard-subtract forbidden classes
+            forbidden_static = np.clip(
+                regions.get("glasses") + regions.get("hat") + regions.get("cloth")
+                + regions.get("neck") + regions.get("ears"), 0, 1
+            )
+            semantic_front = combine_occluders(forbidden_static, regions.get("hair") * support)
             face_alpha = semantic.alpha
             skin = regions.get("skin") * support
             protect = restoration_protection(regions, crop)

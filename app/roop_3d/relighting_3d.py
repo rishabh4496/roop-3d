@@ -165,6 +165,12 @@ class SphericalHarmonicsLighting:
             mask = np.asarray(mask, dtype=bool)
 
         valid_idx = mask & np.all(np.isfinite(normals), axis=-1)
+        # Never sample dark hair or neck shadows when computing skin color/lighting statistics
+        img_luma = (image_bgr.astype(np.float32) @ np.array([0.114, 0.587, 0.299], np.float32)) / 255.0
+        shadow_free_idx = valid_idx & (img_luma > 0.08)
+        if np.count_nonzero(shadow_free_idx) >= 32:
+            valid_idx = shadow_free_idx
+
         if np.count_nonzero(valid_idx) < 32:
             # Default neutral illumination
             return self.create_directional_lighting(np.array([0.0, 0.0, 1.0]), ambient=0.5, intensity=0.5)
@@ -333,7 +339,8 @@ class NeuralRelighter3D:
                 lighting_mode: str = "auto",
                 manual_light_yaw: float = 35.0,
                 manual_light_pitch: float = 25.0,
-                ambient_fill: float = 0.3) -> tuple[np.ndarray, np.ndarray, np.ndarray, dict[str, Any]]:
+                ambient_fill: float = 0.3,
+                color_space: str = "hsv") -> tuple[np.ndarray, np.ndarray, np.ndarray, dict[str, Any]]:
         """Executes full 3D relighting transfer.
 
         Returns:
@@ -384,12 +391,25 @@ class NeuralRelighter3D:
         shadow_mask = self.compute_shadow_mask(target_bgr, target_normals, target_sh, skin_mask)
         eff_shadow = (1.0 - shadow_preservation) + shadow_preservation * shadow_mask
 
-        # 4. Apply diffuse shading on HSV Value (Luminance) channel to strictly preserve Hue
-        swap_hsv = cv2.cvtColor(swapped_bgr, cv2.COLOR_BGR2HSV).astype(np.float32)
-        orig_v = swap_hsv[..., 2]
-        new_v = np.clip(orig_v * eff_ratio * eff_shadow, 0.0, 255.0)
-        swap_hsv[..., 2] = new_v
-        diffuse_relit = cv2.cvtColor(swap_hsv.astype(np.uint8), cv2.COLOR_HSV2BGR).astype(np.float32)
+        # 4. Apply diffuse shading on luminance channel to strictly decouple luminance from chrominance
+        if color_space == "ycbcr":
+            swap_ycc = cv2.cvtColor(swapped_bgr, cv2.COLOR_BGR2YCrCb).astype(np.float32)
+            orig_y = swap_ycc[..., 0]
+            new_y = np.clip(orig_y * eff_ratio * eff_shadow, 0.0, 255.0)
+            swap_ycc[..., 0] = new_y
+            diffuse_relit = cv2.cvtColor(np.clip(swap_ycc, 0, 255).astype(np.uint8), cv2.COLOR_YCrCb2BGR).astype(np.float32)
+        elif color_space == "lab":
+            swap_lab = cv2.cvtColor(swapped_bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
+            orig_l = swap_lab[..., 0]
+            new_l = np.clip(orig_l * eff_ratio * eff_shadow, 0.0, 255.0)
+            swap_lab[..., 0] = new_l
+            diffuse_relit = cv2.cvtColor(np.clip(swap_lab, 0, 255).astype(np.uint8), cv2.COLOR_LAB2BGR).astype(np.float32)
+        else:
+            swap_hsv = cv2.cvtColor(swapped_bgr, cv2.COLOR_BGR2HSV).astype(np.float32)
+            orig_v = swap_hsv[..., 2]
+            new_v = np.clip(orig_v * eff_ratio * eff_shadow, 0.0, 255.0)
+            swap_hsv[..., 2] = new_v
+            diffuse_relit = cv2.cvtColor(swap_hsv.astype(np.uint8), cv2.COLOR_HSV2BGR).astype(np.float32)
 
         # 5. Specular skin sheen
         spec = self.compute_blinn_phong_specular(swap_normals, key_light_dir, k_spec=specular_sheen)

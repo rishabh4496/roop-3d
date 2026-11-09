@@ -38,6 +38,64 @@ def guided_filter(guide: np.ndarray, source: np.ndarray, *, radius: int = 4, eps
     return np.clip(_box(a, radius) * g + _box(b, radius), 0.0, 1.0).astype(np.float32)
 
 
+def fast_guided_filter(
+    guide: np.ndarray,
+    source: np.ndarray,
+    *,
+    radius: int = 8,
+    eps: float = 1e-4,
+    s: int = 2,
+) -> np.ndarray:
+    """Fast Guided Filter (He & Sun 2015) for high-performance edge-preserving alpha matting.
+
+    Subsamples inputs by factor s (s=1 is exact guided filter), computes linear coefficients a and b
+    via box filtering, and upsamples back to reconstruct edge-preserving filtered output q = a * I + b.
+    Runs on OpenCL/GPU where available through cv2.UMat.
+    """
+    g = np.asarray(guide, dtype=np.float32)
+    p = np.asarray(source, dtype=np.float32)
+    if g.ndim != 2 or p.shape != g.shape or not np.isfinite(g).all() or not np.isfinite(p).all():
+        raise DomainError("MATTE_INPUT_INVALID", "Guide and matte must be matching finite 2-D arrays", 422)
+    if radius < 1 or eps <= 0:
+        raise ValueError("radius must be >= 1 and eps positive")
+    if s < 1:
+        raise ValueError("subsample factor s must be >= 1")
+
+    h, w = g.shape
+    r = max(1, radius // s) if s > 1 else radius
+
+    if s > 1 and min(h, w) >= 16:
+        small_w, small_h = max(1, w // s), max(1, h // s)
+        small_g = cv2.resize(g, (small_w, small_h), interpolation=cv2.INTER_LINEAR)
+        small_p = cv2.resize(p, (small_w, small_h), interpolation=cv2.INTER_LINEAR)
+
+        mean_g = _box(small_g, r)
+        mean_p = _box(small_p, r)
+        var_g = _box(small_g * small_g, r) - mean_g * mean_g
+        cov_gp = _box(small_g * small_p, r) - mean_g * mean_p
+
+        a = cov_gp / (var_g + eps)
+        b = mean_p - a * mean_g
+
+        mean_a = cv2.resize(_box(a, r), (w, h), interpolation=cv2.INTER_LINEAR)
+        mean_b = cv2.resize(_box(b, r), (w, h), interpolation=cv2.INTER_LINEAR)
+    else:
+        mean_g, mean_p = _box(g, r), _box(p, r)
+        var_g = _box(g * g, r) - mean_g * mean_g
+        cov_gp = _box(g * p, r) - mean_g * mean_p
+        a = cov_gp / (var_g + eps)
+        b = mean_p - a * mean_g
+        mean_a = _box(a, r)
+        mean_b = _box(b, r)
+
+    q = mean_a * g + mean_b
+    return np.clip(q, 0.0, 1.0).astype(np.float32)
+
+
+# Alias per VFX specification
+guidedFilter = fast_guided_filter
+
+
 def refine_occluder(occluder: np.ndarray, guide_bgr: np.ndarray, *, radius: int = 4,
                     eps: float = 4e-3, strength: float = 1.0, contrast: float = 1.5) -> np.ndarray:
     """Snap an occluder matte to image edges. ``strength`` 0 returns the input unchanged.

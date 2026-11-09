@@ -23,12 +23,17 @@ import numpy as np
 
 from roop_3d.compositor.boundary_fusion import BlendMode, fuse_crop
 from roop_3d.compositor.color_match import ColorStats, apply_lab_stats, estimate_lab_stats, masked_histogram_match
-from roop_3d.compositor.hairline import offset_hairline
+from roop_3d.compositor.hairline import offset_hairline, refine_hairline_matte
 from roop_3d.compositor.lighting import relight_spherical_harmonics
 from roop_3d.compositor.matte import border_fade
-from roop_3d.compositor.masks import BisenetFaceParser, FaceParser, build_face_mask, landmark_hull_mask
+from roop_3d.compositor.masks import (
+    BisenetFaceParser, FaceParser, build_face_mask, landmark_hull_mask,
+    compute_dual_bisenet_forbidden_mask, compose_active_mask, apply_submental_jaw_cutoff,
+    INCLUDED_SKIN_FACE_CLASSES, STRICT_FORBIDDEN_CLASSES
+)
 from roop_3d.compositor.mouth import composite_mouth_region, lower_face_soft_mask
 from roop_3d.compositor.occlusion import combine_occluders, semantic_occluder_mask, subtract_occluders
+from roop_3d.compositor.quality import inject_target_skin_micro_texture
 from roop_3d.compositor.restoration import GpenRestorer, blend_restored_roi
 from roop_3d.compositor.temporal import TemporalSmoother
 from roop_3d.compositor.detail_temporal import TemporalDetailStabilizer
@@ -122,8 +127,8 @@ class CompositeOptions:
             raise ValueError('Ambient fill must be within 0..1')
         if not np.isfinite(self.hairline_offset_px) or not -32 <= self.hairline_offset_px <= 32:
             raise ValueError('Hairline offset is outside its bounds')
-        if self.color_method not in {"lab", "reinhard_lab", "histogram"}:
-            raise ValueError("color_method must be 'lab', 'reinhard_lab', or 'histogram'")
+        if self.color_method not in {"lab", "reinhard_lab", "histogram", "ycbcr"}:
+            raise ValueError("color_method must be 'lab', 'reinhard_lab', 'ycbcr', or 'histogram'")
         if self.ultramax_small_face_mode not in {"bypass", "adaptive", "off"} or not 64 <= self.ultramax_min_native_pixels <= 1024:
             raise ValueError("Invalid UltraMax small-face policy")
         if not 0 <= self.semantic_confidence_threshold <= 1 or self.feather_px < 0 or self.pyramid_levels < 1:
@@ -272,6 +277,10 @@ class FrameCompositor:
         pixels the statistics come from, so eyes, brows, lips and hair do not skew the skin tone; ``alpha`` is where the
         correction is written (mean/std) and the fallback when no skin class is available."""
         basis = alpha if stats_mask is None else stats_mask
+        if method == "ycbcr":
+            from roop_3d.compositor.color_match import apply_ycbcr_stats, estimate_ycbcr_stats
+            stats = estimate_ycbcr_stats(swapped, target, basis)
+            return apply_ycbcr_stats(swapped, stats, alpha, strength=strength), stats
         stats = estimate_lab_stats(swapped, target, basis)
         if method == "histogram":
             matched = masked_histogram_match(swapped, target, basis, smooth_histogram=smooth_histogram)
@@ -406,13 +415,28 @@ class FrameCompositor:
             restorer_seconds += time.perf_counter() - restore_began
         size = enhanced.shape[0]
 
+        # Re-inject 25% of target skin's high-frequency pore/specular residual (Target_HighPass_Skin)
+        # into UltraMax's 1024px output over unoccluded Class 1 (Skin) pixels
+        is_ultramax = (
+            getattr(replacement, 'method', '') == "dense_3d_correspondence_neural_ultramax"
+            or hasattr(self.restorer, 'restore_hires')
+            or type(self.restorer).__name__.startswith("UltraMax")
+        )
+        if is_ultramax and current_skin is not None and np.any(current_skin > 0.05):
+            enhanced = inject_target_skin_micro_texture(
+                enhanced, current_target, current_skin, current_alpha, injection_rate=0.25
+            )
+
         if observer is not None:
             observer('restorer', enhanced, current_inverse, current_alpha)
 
         stats_mask = None
         if current_skin is not None and current_skin is not current_alpha:
             candidate = np.minimum(np.asarray(current_alpha, np.float32), np.asarray(current_skin, np.float32))
-            if np.count_nonzero(candidate > 0.15) >= 64:      # a real skin class; otherwise keep the whole-face basis
+            # Never sample dark hair or neck shadows when computing skin color statistics
+            target_luma = (current_target.astype(np.float32) @ np.array([0.114, 0.587, 0.299], np.float32)) / 255.0
+            candidate[target_luma < 0.08] = 0.0
+            if np.count_nonzero(candidate > 0.15) >= 32:      # unoccluded skin class
                 stats_mask = candidate
         harmonized, color_stats = self._color_process(
             enhanced, current_target, current_alpha, options.color_method,
@@ -556,6 +580,10 @@ class FrameCompositor:
                 face_mask = replace(face_mask, alpha=np.ones(crop.shape[:2], np.float32))
             semantic_front = (semantic_occluder_mask(probabilities)
                               if probabilities is not None and face_mask.source.startswith("bisenet") else None)
+            # Run BiSeNet on both target ROI and 3D swapped face crop for dual forbidden extraction
+            target_forbidden, swap_forbidden, dual_forbidden = compute_dual_bisenet_forbidden_mask(
+                self.parser, target_crop, crop
+            )
             manual_include, manual_exclude = self._manual_mask(occluder_masks.get(replacement.track_id), crop.shape[:2])
             explicit_front = manual_exclude if manual_exclude.any() else None
             front = combine_occluders(semantic_front, explicit_front)
@@ -579,13 +607,25 @@ class FrameCompositor:
                 alpha = cv2.erode(alpha, kernel) if options.erosion_px > 0 else cv2.dilate(alpha, kernel)
             if options.hairline_offset_px:
                 alpha = offset_hairline(alpha, options.hairline_offset_px)
-            alpha = alpha * options.swap_weight
+
             coverage = getattr(replacement, 'coverage', None)
             if coverage is not None:
                 coverage = np.asarray(coverage, np.float32)
                 if coverage.shape != alpha.shape or not np.isfinite(coverage).all() or np.any((coverage < 0) | (coverage > 1)):
                     raise DomainError('PROJECTION_COVERAGE_INVALID', 'Projected coverage must be finite crop-space values in 0..1', 422)
-                alpha *= coverage
+                # Hard-subtract STRICT_FORBIDDEN_CLASSES from 3D mesh silhouette mask:
+                # active_mask = mesh_face_only_mask * xseg_face_mask * (1.0 - forbidden_hair_neck_ear_mask)
+                xseg_mask = (1.0 - front) if front is not None else np.ones(crop.shape[:2], np.float32)
+                active_mask = compose_active_mask(coverage, xseg_mask, dual_forbidden)
+                # Submental Chin-to-Neck Gradient Cutoff (gonion-to-menton curve with 4px-8px inward SDF falloff)
+                active_mask = apply_submental_jaw_cutoff(active_mask, points, falloff_px=6.0)
+                # Edge-preserving Fast Guided Filter for hairline and bangs
+                active_mask = refine_hairline_matte(active_mask, target_crop, radius=8, eps=1e-4, smooth_feather_px=options.feather_px)
+                alpha = active_mask * options.swap_weight
+            else:
+                alpha = alpha * options.swap_weight
+            if front is not None:
+                alpha *= (1.0 - front)
             recovery_context = mask_temporal_context.get(replacement.track_id)
             if recovery_context is not None:
                 recovery_context = dict(recovery_context)
@@ -813,12 +853,24 @@ class FrameCompositor:
                 coverage = cv2.resize(coverage, (work, work), interpolation=cv2.INTER_LINEAR)
             if getattr(replacement, "full_head", False):
                 output = self._remove_old_silhouette(output, context, front, options)
-            visible_alpha = face_alpha * (1.0 - (front if front is not None else 0.0)) * options.swap_weight
-            visible_alpha = self.watchdog.feather(replacement.track_id, visible_alpha, kind="composite")
+
+            # Dual BiSeNet forbidden extraction on robust analysis crops
+            _, _, robust_forbidden = compute_dual_bisenet_forbidden_mask(self.parser, context.work_crop, crop)
+            work_points = self._landmarks_to_crop(landmarks_by_track.get(replacement.track_id), context.work_inverse)
+            if coverage is not None:
+                xseg_mask = (1.0 - (front if front is not None else 0.0))
+                active_mask = compose_active_mask(coverage, xseg_mask, robust_forbidden)
+                active_mask = apply_submental_jaw_cutoff(active_mask, work_points, falloff_px=6.0 * scale)
+                active_mask = refine_hairline_matte(active_mask, context.work_crop, radius=8, eps=1e-4, smooth_feather_px=options.feather_px * scale)
+                visible_alpha = active_mask * options.swap_weight
+            else:
+                visible_alpha = face_alpha * (1.0 - (front if front is not None else 0.0)) * options.swap_weight
+                if robust_forbidden.any():
+                    visible_alpha *= (1.0 - robust_forbidden)
+                visible_alpha = apply_submental_jaw_cutoff(visible_alpha, work_points, falloff_px=6.0 * scale)
+                visible_alpha = refine_hairline_matte(visible_alpha, context.work_crop, radius=8, eps=1e-4, smooth_feather_px=options.feather_px * scale)
             if front is not None:
                 visible_alpha *= (1.0 - front)
-            if coverage is not None:
-                visible_alpha = visible_alpha * coverage
             recovery_context = mask_temporal_context.get(replacement.track_id)
             if recovery_context is not None:
                 recovery_context = dict(recovery_context)

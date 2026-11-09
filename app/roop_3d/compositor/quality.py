@@ -190,3 +190,49 @@ def mix_linear_light(target: np.ndarray, source: np.ndarray, alpha: np.ndarray, 
 def blend_linear_light(target: np.ndarray, source: np.ndarray, alpha: np.ndarray, transfer: str = "srgb") -> np.ndarray:
     """alpha-blend two uint8 BGR images in linear light; returns float32 code values 0..255 (sRGB by default)."""
     return mix_linear_light(target, source, alpha, transfer)
+
+
+def inject_target_skin_micro_texture(
+    enhanced: np.ndarray,
+    target: np.ndarray,
+    skin_mask: np.ndarray,
+    alpha_mask: np.ndarray | None = None,
+    *,
+    injection_rate: float = 0.25,
+    highpass_sigma: float = 1.5,
+) -> np.ndarray:
+    """Re-inject 25% of the target skin's high-frequency pore/specular residual (Target_HighPass_Skin).
+
+    Blended with UltraMax's 1024px output exclusively over unoccluded Class 1 (Skin) pixels
+    so the swapped skin retains authentic camera micro-texture under scene lighting.
+    """
+    enh = np.asarray(enhanced)
+    tgt = np.asarray(target)
+    if enh.ndim != 3 or enh.shape[2] != 3 or not np.isfinite(enh).all():
+        raise DomainError("QUALITY_INPUT_INVALID", "Enhanced image must be uint8 or float32 BGR", 422)
+    h, w = enh.shape[:2]
+    if tgt.shape[:2] != (h, w):
+        tgt = cv2.resize(tgt, (w, h), interpolation=cv2.INTER_CUBIC)
+
+    skin = np.clip(np.asarray(skin_mask, dtype=np.float32), 0.0, 1.0)
+    if skin.shape != (h, w):
+        skin = cv2.resize(skin, (w, h), interpolation=cv2.INTER_LINEAR)
+
+    if alpha_mask is not None:
+        alpha = np.clip(np.asarray(alpha_mask, dtype=np.float32), 0.0, 1.0)
+        if alpha.shape != (h, w):
+            alpha = cv2.resize(alpha, (w, h), interpolation=cv2.INTER_LINEAR)
+        skin = skin * alpha
+
+    if not skin.any() or injection_rate <= 0:
+        return enh.copy()
+
+    # Extract target skin high-frequency micro-texture (pore/specular residual)
+    target_low = cv2.GaussianBlur(tgt.astype(np.float32), (0, 0), sigmaX=highpass_sigma, sigmaY=highpass_sigma)
+    target_highpass = tgt.astype(np.float32) - target_low
+    target_highpass_skin = target_highpass * skin[..., None]
+
+    blended = enh.astype(np.float32) + float(injection_rate) * target_highpass_skin
+    if np.issubdtype(enh.dtype, np.integer):
+        return np.clip(blended, 0.0, 255.0).round().astype(enh.dtype)
+    return np.clip(blended, 0.0, 255.0).astype(enh.dtype)
