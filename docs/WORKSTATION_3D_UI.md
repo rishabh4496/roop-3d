@@ -69,3 +69,61 @@ cd ..   &&   roop_3d/.venv/Scripts/python.exe -m pytest roop_3d/tests/test_works
 Pitch conventions: stored / detected-face poses are *legacy* (+ = down); the radar, 3D head, wireframe and rotation maths are *standard* (+ = up).
 Conversion happens once, in `targetPoseSamples`, `CoverageRadarPanel` and `facePose`. The wireframe rotation is checked against the 3D inspector's
 `poseQuaternion` for yaw, pitch and roll (`headMesh.test.ts`).
+
+---
+
+# Stage 8: buffer switcher, gizmos and control panels (2026-11-10)
+
+Everything below runs on the single local origin (`127.0.0.1:8030`); no new network requests, fonts, scripts or models. The only new endpoint
+calls are the existing `GET /morphable-topologies` and `GET /facesets/{id}/identity-asset/mesh`.
+
+## 3D Identity & Target viewport (`components/three/PoseGeometryViewer.jsx`)
+
+**Buffer switcher** (radio group above the canvas). All six are computed in the browser from the mesh the server already sent:
+
+| Buffer | What it is | Honest label |
+|---|---|---|
+| Shaded | The previous default look. | |
+| Wireframe Mesh | Every triangle edge of the mesh being shown. | |
+| Albedo | The identity atlas, unlit (flat grey when the mesh has no texture). | The atlas is intrinsic-estimated by the local pipeline; it is **not TRUST output** (TRUST is not installed). |
+| Surface Normals | Camera-space normal as RGB. | |
+| Z-Depth | View-space distance, near = bright, normalised to the head and the current camera distance. | |
+| SH Relit | Albedo x a 9-coefficient (3-band) SH model of one key light + ambient fill (`viewportTools.shLightCoefficients`, GLSL in `SH_FRAGMENT_SHADER`). | Checked against max(n·l, 0): 1.06 toward the light, 0.06 opposite, per the 3-band expansion. |
+
+**Gizmos** (toggles in the dock under the buffer row; every gizmo has slider twins in the same dock because canvas handles cannot take focus):
+
+| Gizmo | Drag target | Real parameter written |
+|---|---|---|
+| Jaw opening (θ_jaw) | Chin handle on a hinge arc | `face_expression_overrides[track].mouth_open` = θ / 28° |
+| Eye gaze target (θ_eyes) | Point on a plane in front of the eyes, sight lines from both eyes | `…gaze_x`, `…gaze_y` (-1..1) |
+| Light direction | Handle on a shell around the head | `lighting_mode='manual'`, `manual_light_yaw/pitch` |
+
+Limits, stated in the UI where they matter:
+- The jaw hinge is a **viewer-side approximation** (chin = lowest centre-line vertex, hinge a fixed fraction up and back). The asset has no jaw skinning
+  weights; the render path uses `mouth_open`, not this geometry.
+- The gaze gizmo has two degrees of freedom because the engine has two (`gaze_x`, `gaze_y`). The depth of the target plane is fixed; "6DoF" applies to the
+  head pose overlay, not to the gaze target.
+- Jaw and gaze edit one target face, so they are disabled until a track is selected. The light handle works without one but the render only uses it while
+  *3D relighting* is on (the dock says so).
+
+## Control panels (`components/studio/WorkstationControls3D.tsx`, Step 1 of the Inspector)
+
+| Panel | Drives | Status |
+|---|---|---|
+| Topology engine: MakeHuman CC0 / FLAME 2023 Open | `topology=` on `identity-asset/mesh`; availability and licence from `GET /morphable-topologies` | real; previews the legacy identity asset, not the live swap |
+| Semantic sliders: Jaw Width, Cheekbones, Chin, Nose Bridge | `jaw_width`, `cheekbone_prominence`, `chin_projection`, `nose_bridge` (physical mm, shown) | real; MakeHuman asset only, debounced 300 ms, nothing fetched until touched |
+| Source-to-Target β blend | `skull_blend` (switches the swap scope to Adaptive Skull Blend) | real compositor option |
+| Skin-tone preservation <-> ambient adaptation | `color_strength` only | real; this is the Lab colour-transfer weight, **not the TRUST network** |
+| Expression offsets (smile, brow raise, brow tilt, mouth open) | `face_expression_overrides` of the selected face | real; same values as the existing Micro-expression editor; **NED is not installed** |
+| Speech-lip lock | browser preference `roop3d-speech-lip-lock` | **saved preference only**: no render stage consumes it yet (SPECTRE not installed); never sent to the engine |
+| 3-second scene adaptation | browser preference `roop3d-scene-adaptation` | **saved preference only**: the tracker's adaptation pass is not wired into rendering (SPARK not installed) |
+| Temporal smoothing | global `temporal_min_cutoff` through `PUT /config`, saved 500 ms after the last move | real; lower cutoff = smoother. Kalman noise terms stay at engine defaults. Changing it invalidates preview caches. |
+
+## Verify
+
+```
+cd app/roop_3d_ui
+npm run build
+npx vitest run src/viewportTools.test.ts src/workstationControls3D.test.tsx   # math + panels
+npx playwright test e2e/workstationControls3d.e2e.ts                           # real Chrome + WebGL2: pixels of each buffer, light direction, handle drag
+```

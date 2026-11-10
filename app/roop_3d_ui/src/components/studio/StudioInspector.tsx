@@ -18,6 +18,8 @@ import FaceExpressionEditor from './FaceExpressionEditor';
 import HairNeckProtection from './HairNeckProtection';
 import HeadModelBackbone from './HeadModelBackbone';
 import SwapScopeSelector from './SwapScopeSelector';
+import WorkstationControls3D from './WorkstationControls3D';
+import { faceEditOf, jawDegToMouthOpen, mouthOpenToJawDeg, shLightOf, withFaceEdit, withManualLight, type ViewportTools } from '../three/viewportTools';
 
 const PoseGeometryViewer = lazy(() => import('../../ThreeViewport').then(module => ({ default: module.PoseGeometryViewer })));
 const LightProbeSphere = lazy(() => import('../../ThreeViewport').then(module => ({ default: module.LightProbeSphere })));
@@ -54,6 +56,8 @@ export interface StudioInspectorProps {
   sources: FaceSet[]; assignedId: string; onAssign: (trackId: string, facesetId: string | null) => void;
   parameters: WorkstationParameters; setParameters: (value: WorkstationParameters) => void;
   coverage: Coverage | null; mesh: Reconstruction | null;
+  /** Replaces the mesh shown in the 3D viewport (the topology / semantic-shape preview); null returns to the FaceSet's own. */
+  onIdentityMesh?: (mesh: Reconstruction | null) => void;
   /** State of the FaceSet 3D reconstruction request (idle until a source is chosen). */
   reconstruction?: ReconstructionStatus | null;
   reconstructionPicker: ReactNode;
@@ -77,7 +81,7 @@ export const ENHANCERS: readonly { id: 'none' | RestorerModel; label: string; hi
 export const activeEnhancer = (parameters: WorkstationParameters): 'none' | RestorerModel =>
   parameters.restoration_blend > 0 ? (parameters.restorer_model ?? 'gpen') : 'none';
 
-export default function StudioInspector({ caps, config, onSaveConfig, track, sheet, sources, assignedId, onAssign, parameters, setParameters, coverage, mesh, reconstruction, reconstructionPicker, facesetCreator, panelsRef, processing, footer }: StudioInspectorProps) {
+export default function StudioInspector({ caps, config, onSaveConfig, track, sheet, sources, assignedId, onAssign, parameters, setParameters, coverage, mesh, onIdentityMesh, reconstruction, reconstructionPicker, facesetCreator, panelsRef, processing, footer }: StudioInspectorProps) {
   const engine = useSelectedEngine();
   const engines = useEngines();
   const cluster = useFaceSelectionStore(state => (track ? state.targetClusters.find(item => item.id === track.track_id) ?? null : null));
@@ -100,6 +104,21 @@ export default function StudioInspector({ caps, config, onSaveConfig, track, she
   const [morphPreview, setMorphPreview] = useState(false);
   const lighting = useMemo(() => viewerLighting(parameters), [parameters]);
   const morph = useMemo(() => viewerMorph(parameters, morphPreview), [parameters, morphPreview]);
+  // Gizmo bindings: jaw opening and gaze edit the selected face's real expression overrides, the light handle the manual key light.
+  const trackId = track?.track_id ?? null;
+  const faceEdit = faceEditOf(parameters, trackId);
+  const keyLight = shLightOf(parameters);
+  const viewportTools = useMemo<ViewportTools>(() => ({
+    trackId,
+    jawDeg: mouthOpenToJawDeg(faceEdit.mouth_open ?? 0),
+    onJaw: deg => { if (trackId) setParameters(withFaceEdit(parameters, trackId, { mouth_open: Number(jawDegToMouthOpen(deg).toFixed(2)) })); },
+    gaze: { x: faceEdit.gaze_x ?? 0, y: faceEdit.gaze_y ?? 0 },
+    onGaze: (x, y) => { if (trackId) setParameters(withFaceEdit(parameters, trackId, { gaze_x: Number(x.toFixed(2)), gaze_y: Number(y.toFixed(2)) })); },
+    light: { yaw: keyLight.yaw, pitch: keyLight.pitch, strength: keyLight.strength, ambient: keyLight.ambient, manual: parameters.lighting_mode === 'manual' },
+    onLight: (yaw, pitch) => setParameters(withManualLight(parameters, yaw, pitch)),
+    relightOn: !!parameters.relight,
+    onRelight: on => setParameters({ ...parameters, relight: on }),
+  }), [trackId, faceEdit.mouth_open, faceEdit.gaze_x, faceEdit.gaze_y, keyLight.yaw, keyLight.pitch, keyLight.strength, keyLight.ambient, parameters, setParameters]);
 
   return (
     <div className="studio-inspector workflow-inspector">
@@ -116,7 +135,7 @@ export default function StudioInspector({ caps, config, onSaveConfig, track, she
           <small className="render-mode-preview">Viewer tab for this mode: <b>{PREVIEW_TAB_LABEL[info.preview]}</b></small>
           <SwapScopeSelector parameters={parameters} setParameters={setParameters} />
           <div className="inspector-viewer">
-            <Suspense fallback={<div className="skeleton-tile wide" aria-label="Loading 3D viewer" />}><PoseGeometryViewer coverage={coverage} track={track} mesh={mesh} renderMode={renderMode} reconstruction={reconstruction} creator={facesetCreator} lighting={lighting} morph={morph} /></Suspense>
+            <Suspense fallback={<div className="skeleton-tile wide" aria-label="Loading 3D viewer" />}><PoseGeometryViewer coverage={coverage} track={track} mesh={mesh} renderMode={renderMode} reconstruction={reconstruction} creator={facesetCreator} lighting={lighting} morph={morph} tools={viewportTools} /></Suspense>
           </div>
           {reconstructionPicker}
           <FaceExpressionEditor parameters={parameters} setParameters={setParameters} trackId={track?.track_id ?? null} />
@@ -129,6 +148,8 @@ export default function StudioInspector({ caps, config, onSaveConfig, track, she
             <HeadModelBackbone />
             <IdentityMorphPanel parameters={parameters} setParameters={setParameters} preview={morphPreview} onPreview={setMorphPreview} />
           </details>
+          <WorkstationControls3D parameters={parameters} setParameters={setParameters} trackId={trackId} facesetId={assignedId || coverage?.faceset_id || ''}
+            onMesh={value => onIdentityMesh?.(value)} config={config} onSaveConfig={onSaveConfig} />
         </section>
 
         <section className="workflow-step" aria-labelledby="step-mask" data-testid="step-mask">

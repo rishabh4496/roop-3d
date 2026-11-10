@@ -619,7 +619,7 @@ export default function App() {
           <aside className="studio-panel studio-right" aria-label="Inspector">
             <div className="studio-panel-head"><span className="eyebrow">04 · INSPECTOR</span></div>
             <PanelBoundary name="Inspector"><StudioInspector caps={caps} config={config} onSaveConfig={saveSettings} track={currentTrack} sheet={sheet} sources={sources} assignedId={currentTrack ? assigned[currentTrack.track_id] ?? '' : ''} onAssign={assignTrack}
-              parameters={parameters} setParameters={setParameters} coverage={coverage} reconstruction={reconstruction} mesh={identityMesh ?? mesh} panelsRef={setPanelsSlot}
+              parameters={parameters} setParameters={setParameters} coverage={coverage} reconstruction={reconstruction} mesh={identityMesh ?? mesh} onIdentityMesh={setIdentityMesh} panelsRef={setPanelsSlot}
               reconstructionPicker={reconstructionPicker}
               facesetCreator={<FacesetBuilder sourceId={sourceId} label="+ Create .fsz from Video/Photos" className="viewer-action-btn"
                 onSaved={async id => { await refreshSources(); setSourceId(id); window.dispatchEvent(new Event('faceset-builder-saved')); }} />}

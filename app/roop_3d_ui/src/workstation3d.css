@@ -110,3 +110,25 @@
 .hair-neck-protection input[type=range]{width:100%}
 .hair-neck-protection .protection-scale{display:flex;justify-content:space-between;gap:8px}
 .hair-neck-protection .inspector-toggle{align-items:flex-start}
+
+/* ---- Viewport buffer switcher, gizmo dock and Stage 8 control panels ------------------------------------------------------ */
+.viewport-buffers{display:flex;flex-wrap:wrap;gap:4px;padding:4px 8px;background:rgba(17,23,25,0.7);border-bottom:1px solid var(--line)}
+.viewport-buffers .viewer-toggle[aria-checked="true"]{color:var(--accent);border-color:var(--accent)}
+.viewport-buffer-note{margin:0;padding:3px 8px;font-size:10px;line-height:1.4;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.depth-legend{display:inline-flex;align-items:center;gap:6px}
+.depth-legend i{display:inline-block;width:56px;height:8px;border-radius:4px;border:1px solid var(--line);background:linear-gradient(90deg,#fff,#000)}
+.viewport-gizmo-dock{display:grid;gap:4px;padding:6px 8px;background:rgba(17,23,25,0.7);border-bottom:1px solid var(--line)}
+.viewport-gizmo-dock .gizmo-toggles{display:flex;flex-wrap:wrap;gap:4px}
+.viewport-gizmo-dock .gizmo-field{display:grid;grid-template-columns:minmax(90px,1fr) auto;gap:2px 8px;align-items:center;font-size:11px}
+.viewport-gizmo-dock .gizmo-field input[type=range]{grid-column:1 / -1;width:100%}
+.viewport-gizmo-dock output,.workstation-controls-3d output{font:600 11px ui-monospace,Menlo,Consolas,monospace;color:var(--accent)}
+.workstation-controls-3d{display:grid;gap:6px}
+.workstation-controls-3d .inspector-field{display:grid;gap:4px;font-size:12px}
+.workstation-controls-3d input[type=range]{width:100%}
+.workstation-controls-3d .protection-scale{display:flex;justify-content:space-between;gap:8px}
+.workstation-controls-3d fieldset{border:0;margin:0;padding:0;display:grid;gap:6px}
+.workstation-controls-3d .inspector-toggle{align-items:flex-start;flex-wrap:wrap}
+.topology-semantic{display:grid;gap:8px}
+:root[data-theme-mode="light"] :is(.viewport-buffers,.viewport-gizmo-dock,.viewport-buffer-note){--text:#dce4e4;--muted:#a7b6b9;--accent:#91e6c9;--line:#3a4649;--bg:#111719;--raised:#1d2628;color:#dce4e4}
+.workstation-controls-3d .inspector-subsection > :not(summary){margin-inline:8px}
+.workstation-controls-3d .inspector-subsection > :last-child{margin-bottom:8px}

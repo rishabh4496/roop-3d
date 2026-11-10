@@ -5,6 +5,11 @@ import { OrbitControls, GizmoHelper, GizmoViewport } from '@react-three/drei';
 import { useFaceSelectionStore } from '../../useFaceSelectionStore';
 import { reducedMotion } from '../../utils/motionPrefs';
 import { renderModeInfo } from '../workstation/renderModes';
+import {
+  BUFFER_VIEWS, DEFAULT_SH_LIGHT, DEPTH_FRAGMENT_SHADER, DEPTH_VERTEX_SHADER, JAW_MAX_DEG, SH_FRAGMENT_SHADER, SH_VERTEX_SHADER,
+  buildJawRig, eyeAnchors, openJaw, shLightCoefficients,
+} from './viewportTools';
+import { GazeGizmo, JawGizmo, LightGizmo } from './ViewportGizmos';
 
 /**
  * @typedef {{
@@ -445,12 +450,42 @@ function ReferenceHead() {
   );
 }
 
+/** Albedo / normals / depth / SH-relit surface for the buffer switcher; all computed in the browser from the mesh being shown. */
+function BufferMaterial({ kind, texture, shLight }) {
+  const camera = useThree(state => state.camera);
+  const material = useMemo(() => {
+    if (kind === 'depth') {
+      return new THREE.ShaderMaterial({ vertexShader: DEPTH_VERTEX_SHADER, fragmentShader: DEPTH_FRAGMENT_SHADER, side: THREE.DoubleSide,
+        uniforms: { uCenter: { value: CAMERA_DISTANCE }, uRadius: { value: 1.0 } } });
+    }
+    if (kind === 'sh') {
+      return new THREE.ShaderMaterial({ vertexShader: SH_VERTEX_SHADER, fragmentShader: SH_FRAGMENT_SHADER, side: THREE.DoubleSide,
+        uniforms: { uSH: { value: new Array(9).fill(0) }, uMap: { value: null }, uHasMap: { value: 0 }, uFlatColor: { value: new THREE.Color('#c9b8a6') } } });
+    }
+    return null;
+  }, [kind]);
+  useDisposable(material);
+  useEffect(() => {
+    if (kind !== 'sh' || !material) return;
+    material.uniforms.uSH.value = shLightCoefficients(shLight);
+    material.uniforms.uMap.value = texture ?? null;
+    material.uniforms.uHasMap.value = texture ? 1 : 0;
+  }, [kind, material, shLight, texture]);
+  useFrame(() => { if (kind === 'depth' && material) material.uniforms.uCenter.value = camera.position.length(); });
+  if (kind === 'wireframe') return <meshBasicMaterial color="#0b1220" side={THREE.DoubleSide} polygonOffset polygonOffsetFactor={1} polygonOffsetUnits={1} />;
+  if (kind === 'albedo') return <meshBasicMaterial key={texture ? 'albedo-map' : 'albedo-flat'} map={texture} color={texture ? '#ffffff' : '#c9b8a6'} side={THREE.DoubleSide} />;
+  if (kind === 'normals') return <meshNormalMaterial side={THREE.DoubleSide} />;
+  return material ? <primitive object={material} attach="material" /> : null;
+}
+
 /**
  * The reconstructed head. It follows the target's pose (slerped) so the swap geometry is shown exactly as the pipeline
  * will pose it; the orbit camera moves independently around it.
  */
-function ReconstructedHead({ pose, assets, texture, volumetric, wireframe, landmarks, lighting = null, morph = null, targetAssets = null }) {
+function ReconstructedHead({ pose, assets, texture, volumetric, wireframe, landmarks, lighting = null, morph = null, targetAssets = null,
+  bufferView = 'lit', shLight = DEFAULT_SH_LIGHT, tools = null, gizmos = null }) {
   const group = useRef(null);
+  const jawDeg = tools?.jawDeg ?? 0;
   const rig = useMemo(() => (lighting ? lightingRig(lighting) : null), [lighting]);
   const shape = useMemo(() => (morph ? morphRig(morph) : null), [morph]);
   // Forehead / hairline boundary ring: an ellipse around the head at ~22% below the crown, shifted by the offset control.
@@ -477,17 +512,37 @@ function ReconstructedHead({ pose, assets, texture, volumetric, wireframe, landm
     group.current.quaternion.copy(current.current);
   });
 
+  // Jaw hinge: the geometry is edited in place from a copy of its rest pose (so opening then closing restores it exactly).
+  const rest = useMemo(() => {
+    const position = assets.geometry.getAttribute('position'), normal = assets.geometry.getAttribute('normal');
+    return { position: Float32Array.from(position.array), normal: normal ? Float32Array.from(normal.array) : null, landmarks: assets.landmarks ?? null };
+  }, [assets]);
+  const jawRig = useMemo(() => buildJawRig(rest.position), [rest]);
+  const eyes = useMemo(() => eyeAnchors(rest.position, rest.landmarks), [rest]);
+  useEffect(() => {
+    const position = assets.geometry.getAttribute('position');
+    if (!jawRig || !position) return;
+    openJaw(rest.position, position.array, jawRig, jawDeg);
+    position.needsUpdate = true;
+    const normal = assets.geometry.getAttribute('normal');
+    if (jawDeg === 0 && normal && rest.normal) { normal.array.set(rest.normal); normal.needsUpdate = true; } else assets.geometry.computeVertexNormals();
+  }, [assets, rest, jawRig, jawDeg]);
+
   const landmarkPoints = useMemo(() => {
     if (!assets?.landmarks) return [];
+    let source = assets.landmarks;
+    if (jawRig && jawDeg !== 0) { source = new Float32Array(assets.landmarks.length); openJaw(assets.landmarks, source, jawRig, jawDeg); }
     const points = [];
-    for (let i = 0; i < assets.landmarks.length; i += 3) points.push([assets.landmarks[i], assets.landmarks[i + 1], assets.landmarks[i + 2]]);
+    for (let i = 0; i < source.length; i += 3) points.push([source[i], source[i + 1], source[i + 2]]);
     return points;
-  }, [assets]);
+  }, [assets, jawRig, jawDeg]);
 
   return (
     <group ref={group}>
-      <mesh geometry={assets.geometry}>
-        {rig ? (
+      <mesh geometry={assets.geometry} name={`head-${bufferView}`}>
+        {bufferView !== 'lit' ? (
+          <BufferMaterial kind={bufferView} texture={texture} shLight={shLight} />
+        ) : rig ? (
           <meshPhysicalMaterial
             key={texture ? 'textured-lit' : 'flat-lit'}
             map={texture}
@@ -518,9 +573,9 @@ function ReconstructedHead({ pose, assets, texture, volumetric, wireframe, landm
           <lineBasicMaterial color="#fbbf24" transparent opacity={0.9} depthTest={false} />
         </lineLoop>
       )}
-      {wireframe && (
-        <mesh geometry={assets.geometry}>
-          <meshBasicMaterial color={CYAN} wireframe transparent opacity={0.22} depthWrite={false}
+      {(wireframe || bufferView === 'wireframe') && (
+        <mesh geometry={assets.geometry} name="wireframe-overlay">
+          <meshBasicMaterial color={CYAN} wireframe transparent opacity={bufferView === 'wireframe' ? 0.9 : 0.22} depthWrite={false}
             polygonOffset polygonOffsetFactor={-1} polygonOffsetUnits={-1} />
         </mesh>
       )}
@@ -529,6 +584,8 @@ function ReconstructedHead({ pose, assets, texture, volumetric, wireframe, landm
           <meshBasicMaterial color={CYAN} />
         </mesh>
       ))}
+      {tools && gizmos?.jaw && jawRig && <JawGizmo rig={jawRig} theta={jawDeg} onChange={tools.onJaw} enabled={!!tools.trackId} />}
+      {tools && gizmos?.gaze && eyes && <GazeGizmo eyes={eyes} gaze={tools.gaze} onChange={tools.onGaze} enabled={!!tools.trackId} />}
     </group>
   );
 }
@@ -711,8 +768,18 @@ export default function PoseGeometryViewer({
   creator = null,
   lighting = null,
   morph = null,
+  tools = null,
 }) {
   const hostRef = useRef(null);
+  // Buffer switcher + gizmos. `tools` (jaw / gaze / light callbacks bound to the real parameters) is supplied by the inspector.
+  const [bufferView, setBufferView] = useState('lit');
+  const [gizmos, setGizmos] = useState({ jaw: false, gaze: false, light: false });
+  const toggleGizmo = key => setGizmos(value => ({ ...value, [key]: !value[key] }));
+  const lightSource = tools?.light ?? lighting ?? null;
+  const shLight = useMemo(
+    () => (lightSource ? { yaw: lightSource.yaw, pitch: lightSource.pitch, strength: lightSource.strength, ambient: lightSource.ambient } : DEFAULT_SH_LIGHT),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- the four scalars are the whole input
+    [lightSource?.yaw, lightSource?.pitch, lightSource?.strength, lightSource?.ambient]);
   const controlsRef = useRef(null);
   const [viewMode, setViewMode] = useState('estimated_2_5d'); // 'estimated_2_5d' | 'reconstruction'
   const viewSetter = useRef(null);
@@ -849,6 +916,49 @@ export default function PoseGeometryViewer({
         </button>
       </div>
 
+      <div className="viewport-buffers" role="radiogroup" aria-label="Viewport buffer" data-testid="viewport-buffers">
+        {BUFFER_VIEWS.map(view => (
+          <button key={view.id} type="button" role="radio" aria-checked={bufferView === view.id} className={`viewer-toggle ${bufferView === view.id ? 'active' : ''}`}
+            title={view.hint} disabled={!hasGeometry} onClick={() => setBufferView(view.id)}>{view.label}</button>
+        ))}
+      </div>
+      {bufferView !== 'lit' && <p className="viewport-buffer-note muted" data-testid="viewport-buffer-note">{BUFFER_VIEWS.find(view => view.id === bufferView)?.hint}
+        {bufferView === 'depth' && <span className="depth-legend" aria-hidden="true"><i /> near → far</span>}</p>}
+      {tools && (
+        <div className="viewport-gizmo-dock" role="group" aria-label="3D gizmos" data-testid="viewport-gizmos">
+          <div className="gizmo-toggles">
+            <button type="button" className="viewer-toggle" aria-pressed={gizmos.jaw} disabled={!hasGeometry} onClick={() => toggleGizmo('jaw')}
+              title="Drag the chin handle to open the jaw (θ jaw). Edits the selected face's mouth-open value.">Jaw opening</button>
+            <button type="button" className="viewer-toggle" aria-pressed={gizmos.gaze} disabled={!hasGeometry} onClick={() => toggleGizmo('gaze')}
+              title="Drag the gaze target in front of the eyes (θ eyes). Edits the selected face's eyeball gaze.">Eye gaze target</button>
+            <button type="button" className="viewer-toggle" aria-pressed={gizmos.light} disabled={!hasGeometry} onClick={() => toggleGizmo('light')}
+              title="Drag the light handle around the head. Sets the manual key light direction.">Light direction</button>
+          </div>
+          {(gizmos.jaw || gizmos.gaze) && !tools.trackId && <small className="muted" role="status">Select a target face to edit jaw opening and eye gaze.</small>}
+          {gizmos.jaw && (
+            <label className="inspector-field gizmo-field">Jaw opening θ <output>{tools.jawDeg.toFixed(0)}°</output>
+              <input type="range" aria-label="Jaw opening angle" min={0} max={JAW_MAX_DEG} step={1} value={Math.round(tools.jawDeg)} disabled={!tools.trackId}
+                onChange={event => tools.onJaw(Number(event.target.value))} /></label>)}
+          {gizmos.gaze && (<>
+            <label className="inspector-field gizmo-field">Gaze horizontal <output>{tools.gaze.x.toFixed(2)}</output>
+              <input type="range" aria-label="Gaze horizontal" min={-1} max={1} step={0.01} value={tools.gaze.x} disabled={!tools.trackId}
+                onChange={event => tools.onGaze(Number(event.target.value), tools.gaze.y)} /></label>
+            <label className="inspector-field gizmo-field">Gaze vertical <output>{tools.gaze.y.toFixed(2)}</output>
+              <input type="range" aria-label="Gaze vertical" min={-1} max={1} step={0.01} value={tools.gaze.y} disabled={!tools.trackId}
+                onChange={event => tools.onGaze(tools.gaze.x, Number(event.target.value))} /></label>
+          </>)}
+          {gizmos.light && (<>
+            <label className="inspector-field gizmo-field">Light yaw <output>{Math.round(tools.light.yaw)}°</output>
+              <input type="range" aria-label="Light yaw" min={-180} max={180} step={1} value={Math.round(tools.light.yaw)}
+                onChange={event => tools.onLight(Number(event.target.value), tools.light.pitch)} /></label>
+            <label className="inspector-field gizmo-field">Light pitch <output>{Math.round(tools.light.pitch)}°</output>
+              <input type="range" aria-label="Light pitch" min={-90} max={90} step={1} value={Math.round(tools.light.pitch)}
+                onChange={event => tools.onLight(tools.light.yaw, Number(event.target.value))} /></label>
+            {!tools.relightOn && <small className="muted" role="status">3D relighting is off: this sets the manual light only. {tools.onRelight && <button type="button" className="button small" onClick={() => tools.onRelight(true)}>Turn on 3D relighting</button>}</small>}
+          </>)}
+        </div>
+      )}
+
       {(reconstruction?.refresh || creator) && (
         <div className="pose-viewer-actions" role="group" aria-label="3D FaceSet actions">
           {reconstruction?.refresh && (
@@ -888,8 +998,10 @@ export default function PoseGeometryViewer({
             </>
           )}
 
+          {tools && gizmos.light && <LightGizmo light={tools.light} onChange={tools.onLight} enabled />}
           {assets ? (
             <ReconstructedHead pose={targetPose} assets={assets} texture={texture} volumetric={volumetric}
+              bufferView={bufferView} shLight={shLight} tools={tools} gizmos={gizmos}
               wireframe={wireframe} landmarks={showLandmarks && viewMode === 'estimated_2_5d'}
               lighting={lighting} morph={morph} targetAssets={morph && displayedMesh !== estimatedMesh ? targetAssets : null} />
           ) : !sourceLoaded ? (
