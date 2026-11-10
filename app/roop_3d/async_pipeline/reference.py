@@ -27,11 +27,12 @@ class ReferenceStages:
     def __init__(self, session, *, request, edit_plan=None, export=None, identity_report=None,
                  lip_sync: bool = False, lip_syncer=None, working_transfer: Any = None, resume_after: int = -1,
                  write_frame: Callable[[int, Any, tuple], None] | None = None,
-                 save_passes: Callable[[Any, Any, int], None] | None = None,
+                 save_passes: Callable[[Any, Any, int], None] | None = None, watchdog=None,
                  scene_cuts: list | None = None, swapped_ranges: list | None = None):
         self.lip_syncer = lip_syncer
         self.session, self.request, self.edit_plan, self.export = session, request, edit_plan, export
         self.identity_report, self.lip_sync, self.working_transfer = identity_report, lip_sync, working_transfer
+        self.watchdog = watchdog
         self.resume_after, self.write_frame, self.save_passes = resume_after, write_frame, save_passes
         self.scene_cuts = scene_cuts if scene_cuts is not None else []
         self.swapped_ranges = swapped_ranges if swapped_ranges is not None else []
@@ -101,10 +102,15 @@ class ReferenceStages:
             collector = PassCollector(decoded.image.shape[:2], self.export.passes)
         explicit = ({"frame_index": item.meta["frame_index"], "timestamp_seconds": float(decoded.timestamp.seconds)}
                     if self.staged else {})
+        composite_options = (parameters.with_source_transfer(self._transfer()).composite_options() if parameters
+                             else CompositeOptions(restoration_blend=(0.35 if session.compositor.restorer else 0.0)))
+        if self.watchdog is not None:
+            from dataclasses import replace
+            composite_options = replace(composite_options,
+                                        roi_resolution_limit=self.watchdog.current_roi_resolution)
         output = session.composite_frame(
             decoded.image, result,
-            options=(parameters.with_source_transfer(self._transfer()).composite_options() if parameters
-                     else CompositeOptions(restoration_blend=(0.35 if session.compositor.restorer else 0.0))),
+            options=composite_options,
             occluder_masks=(edit_plan.occluders(decoded.image, result)
                             if edit_plan and edit_plan.mask is not None else None),
             lip_sync_enabled=self.lip_sync,

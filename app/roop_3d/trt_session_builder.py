@@ -114,11 +114,12 @@ class TensorRTSessionBuilder:
         self.last_build: dict = {}
         self._lock = threading.RLock()
 
-    def _emit(self, state: str, name: str, precision: str) -> None:
+    def _emit(self, state: str, name: str, precision: str, batches: tuple[int, ...] | None = None) -> None:
         payload = {"engine_state": state, "engine_label": "Compiling TensorRT Engine..." if state != "IDLE" else None,
                    "engine_model": name if state != "IDLE" else None,
                    "engine_precision": precision if state != "IDLE" else None,
-                   "engine_since": time.time() if state != "IDLE" else None}
+                   "engine_since": time.time() if state != "IDLE" else None,
+                   "engine_batch_profile": list(batches) if state != "IDLE" and batches else None}
         if self.telemetry:
             try:
                 self.telemetry(payload)
@@ -274,7 +275,7 @@ class TensorRTSessionBuilder:
             started = time.perf_counter()
             session = None
             try:
-                self._emit("COMPILING_TRT" if cold else "RUNNING_CANARY", path.name, precision)
+                self._emit("COMPILING_TRT" if cold else "RUNNING_CANARY", path.name, precision, profile.batches)
                 provider_list = [(TRT, provider_options), ("CUDAExecutionProvider", cuda_options)]
                 try:
                     session = ort.InferenceSession(str(path), sess_options=options, providers=provider_list)
@@ -311,7 +312,7 @@ class TensorRTSessionBuilder:
                     if index == 0 and cold:
                         compile_seconds = time.perf_counter() - started
                         # Includes session creation and the first synchronous compile/inference call.
-                        self._emit("RUNNING_CANARY", path.name, precision)
+                        self._emit("RUNNING_CANARY", path.name, precision, profile.batches)
                     LOG.info("TensorRT canary model=%s batch=%d seconds=%.9f", path.name, batch, time.perf_counter() - before_run)
                 engines = [owned_path(p) for p in cache.glob(f"{prefix}*.engine") if p.stat().st_size > 0]
                 if not engines:
@@ -340,7 +341,43 @@ class TensorRTSessionBuilder:
                     raise
                 raise TensorRTBuildError(f"TensorRT build/canary failed for {path.name}: {error}") from error
             finally:
-                self._emit("IDLE", path.name, precision)
+                self._emit("IDLE", path.name, precision, profile.batches)
+
+    def build_reconstruction_models(self, *, disentangled_encoder, lip_regressor, blendshape_bank,
+                                    artifact_directory: str | Path | None = None,
+                                    face_size: int = 224, mouth_size: int = 96):
+        """Export and compile the Stage 7 reconstruction heads as FP16 TRT engines.
+
+        The graph profile covers every batch from 1 through 8 and each batch is
+        exercised by the existing strict GPU canary. On a 6 GB profile this
+        larger profile is not admitted: callers should keep the existing CUDA
+        or CPU reference path there.
+        """
+        if self.hardware_profile != "12gb":
+            raise TensorRTBuildError("Dynamic reconstruction TensorRT batch 1..8 requires the 12gb profile")
+        from roop_3d.audit.project_paths import application_root
+        from roop_3d.models.owned_files import owned_path
+        from roop_3d.reconstruction.monocular_regressors import (
+            export_disentangled_face_encoder_onnx, export_lip_phoneme_regressor_onnx,
+        )
+
+        directory = owned_path(Path(artifact_directory) if artifact_directory else
+                               application_root() / "roop_3d/.runtime/reconstruction_onnx")
+        directory.mkdir(parents=True, exist_ok=True)
+        profile = BatchProfile(tuple(range(1, 9)), 4)
+        artifacts = (
+            ("disentangled_face_encoder_dynamic.onnx",
+             lambda path: export_disentangled_face_encoder_onnx(disentangled_encoder, path, face_size=face_size)),
+            ("lip_phoneme_regressor_dynamic.onnx",
+             lambda path: export_lip_phoneme_regressor_onnx(lip_regressor, path, mouth_size=mouth_size)),
+            ("reduced_blendshape_bank_dynamic.onnx", lambda path: blendshape_bank.export_onnx(path)),
+        )
+        sessions = {}
+        for filename, export in artifacts:
+            path = owned_path(directory / filename)
+            export(path)
+            sessions[filename.removesuffix("_dynamic.onnx")] = self.build(path, profile=profile)
+        return sessions
 
 
 def build_trt_session(model_path: str | Path, **kwargs):

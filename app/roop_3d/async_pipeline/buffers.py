@@ -66,6 +66,13 @@ class BoundedQueue(Generic[T]):
     def depth(self) -> int:
         return len(self._items)
 
+    def resize(self, maxsize: int) -> None:
+        if not 1 <= maxsize <= 64:
+            raise ValueError("Queue size must be within 1..64")
+        with self._lock:
+            self.maxsize = maxsize
+            self._not_full.notify_all()
+
     def wake_all(self) -> None:
         with self._lock:
             self._not_empty.notify_all()
@@ -200,3 +207,186 @@ class PinnedFramePool:
     def wake_all(self) -> None:
         with self._condition:
             self._condition.notify_all()
+
+
+class CudaFrameLease:
+    """One ring slot from asynchronous upload through its final GPU consumer."""
+
+    def __init__(self, ring: "CudaFrameRing", slot: int):
+        self.ring, self.slot = ring, slot
+        self.tensor = None
+        self.ready_event = None
+        self._owner = None
+        self._released = False
+
+    def stage_host(self, frame: np.ndarray):
+        """Copy a decoded HWC uint8 frame from the slot's pinned page into CUDA."""
+        if self._released or frame.dtype != np.uint8 or tuple(frame.shape) != self.ring.shape:
+            raise ValueError("Host frame does not match the CUDA ring's HWC uint8 contract")
+        slot = self.ring._slots[self.slot]
+        np.copyto(slot["host"].numpy(), frame)
+        torch = self.ring.torch
+        with torch.cuda.stream(self.ring.stream):
+            slot["device"].copy_(slot["host"], non_blocking=True)
+            event = torch.cuda.Event()
+            event.record(self.ring.stream)
+        self.tensor, self.ready_event = slot["device"], event
+        return self.tensor
+
+    def stage_cuda(self, frame, *, producer_stream=None, copy: bool = True):
+        """Stage a decoded CUDA surface; ``copy=False`` borrows its DLPack tensor in-place."""
+        torch = self.ring.torch
+        if (self._released or not torch.is_tensor(frame) or not frame.is_cuda
+                or frame.dtype != torch.uint8 or tuple(frame.shape) != self.ring.shape
+                or frame.device != self.ring.device or not frame.is_contiguous()):
+            raise ValueError("CUDA frame does not match the ring's contiguous HWC uint8 device contract")
+        producer_stream = producer_stream or torch.cuda.current_stream(self.ring.device)
+        if copy:
+            with torch.cuda.stream(self.ring.stream):
+                self.ring.stream.wait_stream(producer_stream)
+                slot = self.ring._slots[self.slot]
+                slot["device"].copy_(frame, non_blocking=True)
+                event = torch.cuda.Event()
+                event.record(self.ring.stream)
+            self.tensor = slot["device"]
+            self._owner = frame
+        else:
+            event = torch.cuda.Event()
+            event.record(producer_stream)
+            self.tensor = frame
+            self._owner = frame
+        self.ready_event = event
+        return self.tensor
+
+    def wait_on(self, stream) -> None:
+        if self.ready_event is not None:
+            stream.wait_event(self.ready_event)
+
+    def keepalive(self, *owners) -> None:
+        self._owner = (self._owner, *owners)
+
+    def release_after(self, event) -> None:
+        """Return the slot after a downstream CUDA event has finished using its pixels."""
+        if self._released:
+            raise ValueError("CUDA frame lease released twice")
+        self._released = True
+        self.ring._release(self.slot, event, self._owner)
+        self.tensor = self._owner = None
+
+    def release(self, stream=None) -> None:
+        if self._released:
+            raise ValueError("CUDA frame lease released twice")
+        torch = self.ring.torch
+        event = torch.cuda.Event()
+        event.record(stream or torch.cuda.current_stream(self.ring.device))
+        self.release_after(event)
+
+
+class CudaFrameRing:
+    """Bounded pinned-host/CUDA ring with stream-ordered upload and reuse.
+
+    Native CUDA decoder surfaces can be borrowed with ``copy=False``; software
+    decoders stage through pinned host slots and enqueue one asynchronous H2D
+    transfer. The existing NumPy pipeline remains the no-CUDA fallback.
+    """
+
+    def __init__(self, shape: tuple[int, ...], count: int = 4, *, device: int = 0,
+                 cancel: threading.Event | None = None):
+        if len(shape) != 3 or shape[2] != 3 or min(shape) < 1 or not 2 <= count <= 32:
+            raise ValueError("CUDA frame ring expects bounded HWC RGB frames and 2..32 slots")
+        import torch
+        if not torch.cuda.is_available():
+            raise RuntimeError("CUDA frame ring requires an available CUDA device")
+        self.torch, self.device = torch, torch.device("cuda", device)
+        self.shape, self.count = tuple(shape), count
+        self._cancel = cancel or threading.Event()
+        self._condition = threading.Condition(threading.Lock())
+        self._free: deque[int] = deque(range(count))
+        self._leased: set[int] = set()
+        self._retired: dict[int, Any] = {}
+        self.waits = 0
+        self.wait_s = 0.0
+        self.stream = torch.cuda.Stream(device=self.device, priority=0)
+        self._slots = []
+        try:
+            with torch.cuda.device(self.device):
+                for _ in range(count):
+                    host = torch.empty(self.shape, dtype=torch.uint8, pin_memory=True)
+                    device_tensor = torch.empty(self.shape, dtype=torch.uint8, device=self.device)
+                    self._slots.append({"host": host, "device": device_tensor})
+        except BaseException:
+            self._slots.clear()
+            raise
+        self.backend = "cuda_pinned_ring"
+
+    @property
+    def pinned(self) -> bool:
+        return True
+
+    @property
+    def in_flight(self) -> int:
+        with self._condition:
+            self._reclaim_ready()
+            return len(self._leased) + len(self._retired)
+
+    @property
+    def nbytes(self) -> int:
+        return self.count * int(np.prod(self.shape)) * 2
+
+    def _reclaim_ready(self) -> None:
+        for slot, (event, owner) in list(self._retired.items()):
+            if event.query():
+                del self._retired[slot]
+                self._free.append(slot)
+        if self._retired:
+            self._condition.notify_all()
+
+    def acquire(self) -> CudaFrameLease:
+        with self._condition:
+            began = None
+            while True:
+                self._reclaim_ready()
+                if self._cancel.is_set():
+                    raise PipelineCancelled()
+                if self._free:
+                    if began is not None:
+                        self.waits += 1
+                        self.wait_s += time.perf_counter() - began
+                    slot = self._free.popleft()
+                    self._leased.add(slot)
+                    return CudaFrameLease(self, slot)
+                if began is None:
+                    began = time.perf_counter()
+                self._condition.wait(0.005)
+
+    def _release(self, slot: int, event, owner=None) -> None:
+        with self._condition:
+            if slot not in self._leased:
+                raise ValueError("CUDA ring slot is not leased")
+            self._leased.remove(slot)
+            self._retired[slot] = (event, owner)
+            self._reclaim_ready()
+            self._condition.notify_all()
+
+    def wake_all(self) -> None:
+        with self._condition:
+            self._condition.notify_all()
+
+    def close(self) -> None:
+        with self._condition:
+            if self._leased:
+                raise RuntimeError("Cannot close the CUDA frame ring while slots are leased")
+            events = tuple(event for event, _owner in self._retired.values())
+        for event in events:
+            event.synchronize()
+        self.stream.synchronize()
+        with self._condition:
+            self._retired.clear()
+            self._free = deque(range(self.count))
+            self._slots.clear()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_):
+        self.close()

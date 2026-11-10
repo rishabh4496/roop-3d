@@ -177,6 +177,13 @@ class AsyncPipeline:
         """Register a ``PinnedFramePool`` so its occupancy is reported and its waiters wake on cancel."""
         self.pools.append(pool)
 
+    def set_queue_capacity(self, capacity: int) -> None:
+        """Adapt every in-flight queue to current VRAM pressure without dropping queued frames."""
+        if not self._started:
+            raise RuntimeError("Queue capacity can only change on a running pipeline")
+        for queue in self._queues:
+            queue.resize(capacity)
+
     # -- failure / cancellation -----------------------------------------------------------------------------
     def fail(self, error: BaseException) -> None:
         with self._error_lock:

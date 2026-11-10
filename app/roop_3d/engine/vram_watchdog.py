@@ -27,6 +27,7 @@ log = logging.getLogger("roop3d.vram_watchdog")
 VRAM_OOM_THRESHOLD_PCT = 92.0
 MICRO_BATCH_STEPS = (8, 4, 2, 1)
 TILE_SIZE_STEPS = (512, 256)
+ROI_RESOLUTION_STEPS = (1024, 768, 512, 384, 256)
 
 
 class VRAMWatchdog:
@@ -35,10 +36,17 @@ class VRAMWatchdog:
     _instance: Optional["VRAMWatchdog"] = None
     _lock = threading.RLock()
 
-    def __init__(self, threshold_pct: float = VRAM_OOM_THRESHOLD_PCT):
+    def __init__(self, threshold_pct: float = VRAM_OOM_THRESHOLD_PCT, *, pressure_pct: float = 80.0):
+        if not 50 <= threshold_pct <= 99 or not 50 <= pressure_pct < threshold_pct:
+            raise ValueError("VRAM thresholds must satisfy 50 <= pressure < threshold <= 99")
         self.threshold_pct = threshold_pct
+        self.pressure_pct = pressure_pct
+        self.vram_budget_mb = 0
+        self.memory_safety_reserve_mb = 768
+        self.hardware_profile = "12gb"
         self.current_micro_batch: int = 8
         self.current_tile_size: int = 512
+        self.current_roi_resolution: int = 1024
         self.advisory_badges: List[Dict[str, Any]] = []
         self.stepdown_count: int = 0
         self._trt_cache_flushed: bool = False
@@ -56,6 +64,21 @@ class VRAMWatchdog:
         with cls._lock:
             cls._instance = cls()
             return cls._instance
+
+    def configure_budget(self, budget_mb: int, *, reserve_mb: int = 768, profile: str = "12gb") -> None:
+        """Start a job with a bounded budget and the profile's safe operating point."""
+        if type(budget_mb) is not int or budget_mb < 0 or type(reserve_mb) is not int or reserve_mb < 0:
+            raise ValueError("VRAM budget and reserve must be nonnegative integers")
+        if profile not in {"cpu", "6gb", "12gb"}:
+            raise ValueError("Unknown VRAM hardware profile")
+        with self._lock:
+            self.vram_budget_mb, self.memory_safety_reserve_mb = budget_mb, reserve_mb
+            self.hardware_profile = profile
+            self.current_micro_batch = 1 if profile == "cpu" else (2 if profile == "6gb" else 8)
+            self.current_tile_size = 256 if profile in {"cpu", "6gb"} else 512
+            self.current_roi_resolution = 512 if profile in {"cpu", "6gb"} else 1024
+            self.advisory_badges.clear()
+            self.stepdown_count = 0
 
     def _query_torch_cuda(self) -> List[Dict[str, Any]]:
         """Query VRAM across single-GPU and multi-GPU setups using torch.cuda."""
@@ -150,16 +173,28 @@ class VRAMWatchdog:
                 gpus = self._query_nvml()
 
             max_used_pct = max((g["used_pct"] for g in gpus), default=0.0)
-            near_oom = max_used_pct >= self.threshold_pct
+            budget_pressure_pct = max_used_pct
+            if gpus and self.vram_budget_mb:
+                available = max(0.0, min(float(g["free_mb"]) for g in gpus) - self.memory_safety_reserve_mb)
+                usable = max(1.0, min(float(self.vram_budget_mb), float(gpus[0]["total_mb"]))
+                             - self.memory_safety_reserve_mb)
+                budget_pressure_pct = max(0.0, min(100.0,
+                    (1.0 - min(available, usable) / usable) * 100.0))
+            near_oom = budget_pressure_pct >= self.threshold_pct
+            under_pressure = budget_pressure_pct >= self.pressure_pct
 
             return {
                 "gpus": gpus,
                 "gpu_count": len(gpus),
                 "max_used_pct": max_used_pct,
                 "near_oom": near_oom,
+                "under_pressure": under_pressure,
+                "budget_pressure_pct": round(budget_pressure_pct, 2),
+                "vram_budget_mb": self.vram_budget_mb or None,
                 "threshold_pct": self.threshold_pct,
                 "micro_batch": self.current_micro_batch,
                 "tile_size": self.current_tile_size,
+                "roi_resolution": self.current_roi_resolution,
                 "advisories": list(self.advisory_badges),
             }
 
@@ -223,16 +258,26 @@ class VRAMWatchdog:
             else:
                 self.current_tile_size = 256
 
+            old_roi = self.current_roi_resolution
+            for resolution in ROI_RESOLUTION_STEPS:
+                if resolution < old_roi:
+                    self.current_roi_resolution = resolution
+                    break
+            else:
+                self.current_roi_resolution = ROI_RESOLUTION_STEPS[-1]
+
             self.stepdown_count += 1
             badge = {
                 "id": f"vram_stepdown_{self.stepdown_count}",
                 "level": "advisory",
-                "badge": f"⚡ Micro-batch stepped down to B={self.current_micro_batch}, Tile {self.current_tile_size}px (VRAM {self.threshold_pct}%+)",
+                "badge": f"VRAM pressure: batch B={self.current_micro_batch}, ROI {self.current_roi_resolution}px",
                 "reason": reason,
                 "micro_batch": self.current_micro_batch,
                 "tile_size": self.current_tile_size,
+                "roi_resolution": self.current_roi_resolution,
                 "previous_micro_batch": old_b,
                 "previous_tile_size": old_tile,
+                "previous_roi_resolution": old_roi,
             }
             self.advisory_badges.append(badge)
             log.warning("VRAMWatchdog Stepdown: %s", badge["badge"])
@@ -240,14 +285,16 @@ class VRAMWatchdog:
                 "badge": badge,
                 "micro_batch": self.current_micro_batch,
                 "tile_size": self.current_tile_size,
+                "roi_resolution": self.current_roi_resolution,
                 "flush": flush_res,
             }
 
     def check_and_adapt(self) -> Optional[Dict[str, Any]]:
         """Check live VRAM; if >= 92% capacity, automatically trigger stepdown."""
         status = self.get_vram_status()
-        if status["near_oom"]:
-            return self.stepdown(reason=f"VRAM capacity reached {status['max_used_pct']}% >= {self.threshold_pct}%")
+        if status["under_pressure"]:
+            return self.stepdown(reason=(f"VRAM budget pressure reached {status['budget_pressure_pct']}% "
+                                         f">= {self.pressure_pct}%"))
         return None
 
     def execute_guarded(self, fn, *args, **kwargs):

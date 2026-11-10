@@ -126,13 +126,14 @@ def test_torch_flow_fusion_keeps_warp_and_history_on_tensor_device():
     current = np.zeros((16, 16, 3), np.float32)
     valid_work = np.ones((16, 16), np.float32)
     valid_full = np.ones((32, 32), np.float32)
-    fused, confidence, influenced, history, correction, reason = stabilizer._fuse_cuda(
+    fused, confidence, influenced, history, correction, reason, motion_flow = stabilizer._fuse_cuda(
         state, guide, current, valid_work, valid_full, (16, 16), (32, 32))
     assert reason is None and confidence > .99 and influenced == 1.0
     assert history == pytest.approx(.75, abs=1e-5)
     assert fused.device.type == "cpu" and fused.shape == (1, 3, 16, 16)
     assert correction.shape == (32, 32, 3)
     assert np.mean(correction) == pytest.approx(.75, abs=.02)
+    assert motion_flow.shape == (16, 16, 2)
 
 
 def test_nvidia_flow_bridge_uses_gpu_pair_contract_and_releases(monkeypatch):

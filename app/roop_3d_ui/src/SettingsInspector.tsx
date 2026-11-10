@@ -21,6 +21,7 @@ const SETTING_DOMAINS: Record<string, DomainId> = {
   preferred_provider: 'compute',
   precision_policy: 'compute',
   vram_limit_mb: 'compute',
+  vram_budget_mb: 'compute',
   memory_safety_reserve_mb: 'compute',
   execution_threads: 'compute',
   stream_batch_size: 'compute',

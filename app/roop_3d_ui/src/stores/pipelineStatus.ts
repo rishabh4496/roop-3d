@@ -8,7 +8,7 @@ import type { ActiveModel } from './activeModels';
 export type SwitchFailure = { id: number; stage: 'detector' | 'swapper' | 'enhancer'; model_id: string; code: string; reason: string; at: number };
 /** `GET /api/pipeline/status`: what each stage has loaded, the precision those sessions really run, and failed switches. */
 export type PipelineStatus = {
-  pipeline: { engine_state: string; engine_label: string | null; engine_model: string | null; engine_precision: string | null };
+  pipeline: { engine_state: string; engine_label: string | null; engine_model: string | null; engine_precision: string | null; engine_batch_profile?: number[] | null };
   selected: { swapper_model: string; detector_model: string; enhancer_model: string };
   active: { detector: ActiveModel; swapper: ActiveModel; enhancer: ActiveModel };
   precision: { label: string | null; stage: string | null; stages: Record<string, string | null>; policy: string };

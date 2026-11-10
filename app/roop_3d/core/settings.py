@@ -54,6 +54,8 @@ class Settings(Contract):
     swapper_model_id: str = Field(default="inswapper_128", pattern=r"^[a-z0-9][a-z0-9_]{0,95}$")
     dfm_morph_factor: float = Field(default=0.75, ge=0, le=1)
     vram_limit_mb: int = Field(default=0, ge=0, le=131072, strict=True, description="0 uses available VRAM")
+    vram_budget_mb: int = Field(default=0, ge=0, le=131072, strict=True,
+                                description="0 uses the active hardware profile; otherwise caps per-job GPU memory")
     memory_safety_reserve_mb: int = Field(default=768, ge=0, le=131072, strict=True)
     max_concurrent_jobs: int = Field(default=1, ge=1, le=8, strict=True)
     face_restoration_policy: Literal["off", "auto", "gpen", "gfpgan", "codeformer", "ultramax"] = "off"

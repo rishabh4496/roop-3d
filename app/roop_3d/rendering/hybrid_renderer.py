@@ -402,6 +402,45 @@ class ReducedBlendshapeBank:
         result = neutral + delta
         return np.clip(result, 0, 1) if clamp else result
 
+    def to_torch_module(self, *, clamp: bool = True):
+        """Freeze the fitted bank as a batchable Torch module for CUDA/TRT export.
+
+        The identity-specific PCA banks are buffers (not trainable parameters).
+        Batch stays dynamic while atlas resolution and expression dimension are
+        fixed by this fitted FaceSet.
+        """
+        torch = _torch_module()
+        from torch import nn
+
+        bank = self
+        class BankModule(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.register_buffer("neutral", torch.as_tensor(bank.neutral_bgr, dtype=torch.float32))
+                self.register_buffer("banks", torch.as_tensor(bank.banks_bgr, dtype=torch.float32))
+                self.register_buffer("mapping", torch.as_tensor(bank.expression_map, dtype=torch.float32))
+                self.register_buffer("center", torch.as_tensor(bank.expression_center, dtype=torch.float32))
+                self.register_buffer("scale", torch.as_tensor(bank.expression_scale, dtype=torch.float32))
+
+            def forward(self, expression_codes):
+                coefficients = ((expression_codes - self.center) / self.scale) @ self.mapping
+                delta = torch.einsum("bk,khwc->bhwc", coefficients, self.banks)
+                image = self.neutral.unsqueeze(0) + delta
+                return image.clamp(0, 1) if clamp else image
+
+        return BankModule().eval()
+
+    def export_onnx(self, output_path, *, opset_version: int = 17):
+        """Export expression-to-atlas inference with a dynamic leading batch."""
+        torch = _torch_module()
+        module = self.to_torch_module()
+        parameter_or_buffer = next(module.buffers())
+        example = torch.zeros((1, self.expression_map.shape[0]), device=parameter_or_buffer.device,
+                              dtype=parameter_or_buffer.dtype)
+        from roop_3d.reconstruction.monocular_regressors import _export_dynamic_batch
+        return _export_dynamic_batch(module, output_path, (example,), input_names=("expression_codes",),
+                                     output_names=("albedo_atlas",), opset_version=opset_version)
+
 
 @dataclass(frozen=True)
 class BoundarySplats:

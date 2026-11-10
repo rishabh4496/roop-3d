@@ -62,6 +62,7 @@ class PipelineStatusEvent(EventBase):
     engine_model: str | None = None
     engine_precision: str | None = None
     engine_since: float | None = None
+    engine_batch_profile: list[int] | None = None
 
 
 TrackingStatus = Literal["tracked", "coasting", "lost"]

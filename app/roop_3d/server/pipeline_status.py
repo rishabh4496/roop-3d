@@ -33,7 +33,7 @@ class PipelineTracker:
         self._state: dict = {"job_id": None, "stage": None, "stages": _idle(), "stage_progress_pct": None,
                              "eta_seconds": None, "fps": 0.0}
         self._engine: dict = {"engine_state": "IDLE", "engine_label": None, "engine_model": None,
-                              "engine_precision": None, "engine_since": None}
+                              "engine_precision": None, "engine_since": None, "engine_batch_profile": None}
         self._tracking: dict | None = None
 
     def snapshot(self) -> PipelineStatusEvent:
@@ -127,23 +127,26 @@ class PipelineTracker:
 
     # -- engine builds --------------------------------------------------------------
     def set_engine(self, state: EngineState, *, label: str | None = None, model: str | None = None,
-                   precision: str | None = None, since: float | None = None) -> None:
+                   precision: str | None = None, since: float | None = None,
+                   batches: list[int] | tuple[int, ...] | None = None) -> None:
         with self._lock:
             previous_since = self._engine["engine_since"]
             if state == "IDLE":
                 self._engine = {"engine_state": "IDLE", "engine_label": None, "engine_model": None,
-                                "engine_precision": None, "engine_since": None}
+                                "engine_precision": None, "engine_since": None, "engine_batch_profile": None}
             else:
                 if since is None:
                     since = time.time() if state != self._engine["engine_state"] or previous_since is None else previous_since
                 self._engine = {"engine_state": state, "engine_label": label, "engine_model": model,
-                                "engine_precision": precision, "engine_since": since}
+                                "engine_precision": precision, "engine_since": since,
+                                "engine_batch_profile": list(batches) if batches else None}
         self._emit()
 
     def compilation_event(self, payload: dict) -> None:
         """Strict builder adapter shared by both WebSocket streams."""
         self.set_engine(payload["engine_state"], label=payload["engine_label"], model=payload["engine_model"],
-                        precision=payload["engine_precision"], since=payload["engine_since"])
+                        precision=payload["engine_precision"], since=payload["engine_since"],
+                        batches=payload.get("engine_batch_profile"))
 
     def engine_observer(self, state: str, record: dict, precision: str) -> None:
         """`TensorRTBuilder(engine_observer=...)` adapter."""

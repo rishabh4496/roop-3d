@@ -30,7 +30,7 @@ from roop_3d.core.storage import atomic_bytes, atomic_json, owned
 from roop_3d.engine.runtime import RuntimeConfig
 from roop_3d.engine.volumetric.session import ReferencePipeline
 from roop_3d.engine.vram_governor import Admission, RuntimeProfile, is_cuda_oom
-from roop_3d.engine.vram_watchdog import watchdog
+from roop_3d.engine.vram_watchdog import VRAMWatchdog
 from roop_3d.faceset.faceset_reader import FaceSetReader
 from roop_3d.faceset.schemas import FaceSetDocument
 from roop_3d.jobs.schema import JobOutput, JobProgress, JobRecord, JobState
@@ -639,6 +639,11 @@ class MasterPipelineRunner:
                      control: Callable[[], object], mark_running: Callable[[], None],
                      report_progress: Callable[[JobProgress], None]) -> JobOutput:
         settings = prepared.settings
+        watchdog = VRAMWatchdog()
+        default_budget = {"cpu": 0, "6gb": 4600, "12gb": 12288}[admission.profile]
+        watchdog.configure_budget(settings.vram_budget_mb or settings.vram_limit_mb or default_budget,
+                                  reserve_mb=settings.memory_safety_reserve_mb, profile=admission.profile)
+        watchdog.current_micro_batch = min(watchdog.current_micro_batch, settings.stream_batch_size)
         target, input_sha256 = prepared.target, prepared.input_sha256
         total_frames = prepared.total_frames
         sources, labels_to_ids, faceset_ids = prepared.sources_by_track, prepared.labels_to_ids, prepared.faceset_ids
@@ -786,9 +791,14 @@ class MasterPipelineRunner:
                 session, request=request, edit_plan=prepared.edit_plan, export=export, identity_report=identity_report,
                 lip_sync=settings.lip_sync_mode != "off", lip_syncer=lip_syncer, working_transfer=lambda: reader.working.transfer,
                 resume_after=resume_after, scene_cuts=scene_cuts, swapped_ranges=swapped_ranges, save_passes=save_passes,
-                write_frame=lambda index, image, shape: self._save_frame(record.job_id, index, image, shape))
+                write_frame=lambda index, image, shape: self._save_frame(record.job_id, index, image, shape),
+                watchdog=watchdog if admission.profile != "cpu" else None)
             stages = frame_stages.stages()
-            depth = async_queue_depth()
+            # The queue is a throughput buffer, not an inference micro-batch.
+            # Keep the CPU reference depth intact; only bind it to the adaptive
+            # GPU micro-batch when the admitted provider can consume GPU memory.
+            depth = (min(async_queue_depth(), watchdog.current_micro_batch)
+                     if admission.profile != "cpu" else async_queue_depth())
             pipeline = AsyncPipeline("render", None, queue_size=depth) if pipelined else None
 
             def decoded_items():
@@ -860,7 +870,9 @@ class MasterPipelineRunner:
                                 checkpoint = self._checkpoint(checkpoint, completed_frame=last_completed,
                                                               profile=admission.profile)
                             if completed % 15 == 0:
-                                watchdog.check_and_adapt()
+                                if (admission.profile != "cpu" and watchdog.check_and_adapt() is not None
+                                        and pipeline is not None):
+                                    pipeline.set_queue_capacity(watchdog.current_micro_batch)
                         item.release()
                         self._check_control(control, checkpoint, last_completed)
             finally:

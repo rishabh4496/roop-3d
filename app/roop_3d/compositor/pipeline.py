@@ -105,6 +105,8 @@ class CompositeOptions:
     face_expression_overrides: Mapping = field(default_factory=dict)
     mode: BlendMode = BlendMode.FEATHER
     restoration_blend: float = 0.0
+    # Internal pressure governor cap; zero keeps the restorer's native output resolution.
+    roi_resolution_limit: int = 0
     fidelity_weight: float = 0.5
     color_method: str = "lab"
     color_strength: float = 0.65
@@ -159,6 +161,9 @@ class CompositeOptions:
             raise ValueError("CodeFormer fidelity must be within 0..1")
         if not 0 <= self.restoration_blend <= 1 or not 0 <= self.color_strength <= 1:
             raise ValueError("Blend ratios must be within 0..1")
+        if (type(self.roi_resolution_limit) is not int
+                or (self.roi_resolution_limit != 0 and not 128 <= self.roi_resolution_limit <= 2048)):
+            raise ValueError("ROI resolution cap must be zero or within 128..2048")
         if not np.isfinite(self.swap_weight) or not 0 <= self.swap_weight <= 1 or not np.isfinite(self.erosion_px) or not -32 <= self.erosion_px <= 32:
             raise ValueError('Swap weight or erosion is outside its bounds')
         if not np.isfinite(self.ambient_fill) or not 0 <= self.ambient_fill <= 1:
@@ -400,10 +405,16 @@ class FrameCompositor:
                     if options.ultramax_small_face_mode != 'off':
                         # The destination bounding box in the TARGET frame, not the size of the swap crop.
                         kwargs['native_face_size_px'] = destination_face_side(replacement.inverse, alpha)
-                return restorer.restore_hires(crop, landmarks, **kwargs)
-            if hasattr(restorer, 'restore_aligned'):
-                return restorer.restore_aligned(crop, landmarks)
-            return restorer.restore(crop)
+                restored = restorer.restore_hires(crop, landmarks, **kwargs)
+            elif hasattr(restorer, 'restore_aligned'):
+                restored = restorer.restore_aligned(crop, landmarks)
+            else:
+                restored = restorer.restore(crop)
+            limit = options.roi_resolution_limit
+            if limit and restored.shape[0] > limit:
+                side = max(int(limit), int(crop.shape[0]))
+                restored = cv2.resize(restored, (side, side), interpolation=cv2.INTER_AREA)
+            return restored
         except DomainError:
             raise
         except Exception as error:

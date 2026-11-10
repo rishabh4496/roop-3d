@@ -114,7 +114,9 @@ def effective_vram_budget(total: int, free: int, settings: Settings) -> int:
     if resolved == "cpu" or settings.preferred_provider == "CPUExecutionProvider":
         return 0
     profile_ceiling = LOW_VRAM_CEILING_MIB if resolved == "6gb" else STANDARD_VRAM_CEILING_MIB
-    ceiling = min(total, profile_ceiling, settings.vram_limit_mb or total)
+    configured_budgets = [value for value in (settings.vram_budget_mb, settings.vram_limit_mb) if value > 0]
+    configured_ceiling = min(configured_budgets, default=total)
+    ceiling = min(total, profile_ceiling, configured_ceiling)
     return max(0, min(free, ceiling) - settings.memory_safety_reserve_mb)
 
 

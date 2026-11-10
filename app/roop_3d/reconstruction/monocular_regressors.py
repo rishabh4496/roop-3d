@@ -126,6 +126,35 @@ class _ImageEncoder(nn.Module):
         return self.projection(self.features(image))
 
 
+class DisentangledFaceEncoder(nn.Module):
+    """Encode a face crop into independent identity, expression, pose and light codes.
+
+    The heads are deliberately separate so the renderer can consume only the
+    factors needed for a frame. This is an architecture contract; meaningful
+    predictions still require supplied or trained weights.
+    """
+
+    def __init__(self, *, identity_dim: int = 512, expression_dim: int = 100,
+                 pose_dim: int = 6, illumination_dim: int = 27, hidden_dim: int = 256) -> None:
+        super().__init__()
+        dimensions = (identity_dim, expression_dim, pose_dim, illumination_dim, hidden_dim)
+        if any(type(value) is not int or value <= 0 for value in dimensions):
+            raise ValueError("Encoder dimensions must be positive integers")
+        self.identity_dim, self.expression_dim = identity_dim, expression_dim
+        self.pose_dim, self.illumination_dim = pose_dim, illumination_dim
+        self.encoder = _ImageEncoder(hidden_dim)
+        self.identity = nn.Linear(hidden_dim, identity_dim)
+        self.expression = nn.Linear(hidden_dim, expression_dim)
+        self.pose = nn.Linear(hidden_dim, pose_dim)
+        self.illumination = nn.Linear(hidden_dim, illumination_dim)
+
+    def forward(self, face_roi: Tensor) -> tuple[Tensor, Tensor, Tensor, Tensor]:
+        features = self.encoder(face_roi)
+        return (F.normalize(self.identity(features), p=2, dim=-1, eps=1e-8),
+                torch.tanh(self.expression(features)), torch.tanh(self.pose(features)),
+                torch.tanh(self.illumination(features)))
+
+
 class AsymmetricExpressionEncoder(nn.Module):
     """Regress 100 expression coefficients and unsmoothed local vertex offsets.
 
@@ -319,3 +348,42 @@ def export_articulated_head_onnx(
         dynamo=False,
     )
     return path
+
+
+def _export_dynamic_batch(model: nn.Module, output_path: str | Path, examples: tuple[Tensor, ...], *,
+                          input_names: tuple[str, ...], output_names: tuple[str, ...],
+                          opset_version: int = 17) -> Path:
+    """Export a fixed-spatial, dynamic-batch model for TensorRT profile building."""
+    if len(examples) != len(input_names) or not examples or not output_names:
+        raise ValueError("ONNX inputs and names must have matching nonempty contracts")
+    if any(example.ndim < 1 or example.shape[0] != 1 for example in examples):
+        raise ValueError("Export examples must have batch size one")
+    destination = Path(output_path)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    dynamic_axes = {name: {0: "batch"} for name in (*input_names, *output_names)}
+    torch.onnx.export(model.eval(), examples, str(destination), export_params=True,
+                      opset_version=opset_version, do_constant_folding=True,
+                      input_names=input_names, output_names=output_names,
+                      dynamic_axes=dynamic_axes, dynamo=False)
+    return destination
+
+
+def export_disentangled_face_encoder_onnx(model: DisentangledFaceEncoder, output_path: str | Path, *,
+                                          face_size: int = 224, opset_version: int = 17) -> Path:
+    if face_size < 16:
+        raise ValueError("face_size must be at least 16")
+    parameter = next(model.parameters())
+    example = torch.zeros((1, 3, face_size, face_size), device=parameter.device, dtype=parameter.dtype)
+    return _export_dynamic_batch(model, output_path, (example,), input_names=("face_roi",),
+        output_names=("identity_code", "expression_code", "pose_code", "illumination_code"),
+        opset_version=opset_version)
+
+
+def export_lip_phoneme_regressor_onnx(model: LipPhonemeRegressor, output_path: str | Path, *,
+                                      mouth_size: int = 96, opset_version: int = 17) -> Path:
+    if mouth_size < 16:
+        raise ValueError("mouth_size must be at least 16")
+    parameter = next(model.parameters())
+    example = torch.zeros((1, 3, mouth_size, mouth_size), device=parameter.device, dtype=parameter.dtype)
+    return _export_dynamic_batch(model, output_path, (example,), input_names=("mouth_roi",),
+        output_names=("jaw_pose", "inner_lip_residual", "phoneme_logits"), opset_version=opset_version)
