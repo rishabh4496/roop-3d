@@ -214,6 +214,19 @@ class IdentityRig:
         cov = np.where(asset.texel_state == int(ConfidenceState.OBSERVED), confidence,
                        np.where(asset.texel_state == int(ConfidenceState.INTERPOLATED), 0.4 * confidence, 0.0)).astype(np.float32)
         self.texture_coverage = cv2.GaussianBlur(cov, (0, 0), 1.2)
+        self._view_appearance_cache: dict[tuple[float, float], tuple[np.ndarray, np.ndarray]] = {}
+        self._view_appearance_aggregator = None
+        self._view_uv_normals = None
+        view_textures = np.asarray(getattr(asset, "view_textures", ()))
+        if view_textures.ndim == 4 and len(view_textures) and view_textures.shape[-1] == 3:
+            from roop_3d.reconstruction.geometry_types import Mesh3D
+            from roop_3d.reconstruction.uv_synthesizer import UVSynthesizer
+            uv_for_image = np.column_stack((asset.uvs[:, 0], 1.0 - asset.uvs[:, 1]))
+            uv_mesh = Mesh3D(self.V0.astype(np.float32), self.faces, uvs=uv_for_image,
+                             normals=self.normals0.astype(np.float32))
+            uv_surface = UVSynthesizer(uv_mesh, uv_size=view_textures.shape[1],
+                                       max_interpolation_fraction=0)
+            self._view_uv_normals = np.asarray(uv_surface.norm_map, np.float32)
         self.observed_share = float(np.mean(asset.texel_state == int(ConfidenceState.OBSERVED)))
         v0 = self.V0[self.landmark_indices]
         self.eye_a, self.eye_b = v0[list(EYE_A)].mean(axis=0), v0[list(EYE_B)].mean(axis=0)
@@ -230,6 +243,38 @@ class IdentityRig:
         self.pitch_range = (min(u.refined_pitch for u in used), max(u.refined_pitch for u in used)) if used else (0.0, 0.0)
         self.depth_triangulated = bool(manifest.claims.get("depth_triangulated", False))
         self._build_weights()
+
+    def texture_for_pose(self, yaw: float, pitch: float) -> tuple[np.ndarray, np.ndarray]:
+        """Return a view-attended UV atlas, preferring measured side views at profile yaw."""
+        textures = np.asarray(getattr(self.asset, "view_textures", ()))
+        supports = np.asarray(getattr(self.asset, "view_support", ()))
+        poses = np.asarray(getattr(self.asset, "view_poses", ()))
+        if (textures.ndim != 4 or not len(textures) or supports.shape != textures.shape[:3]
+                or poses.shape[0] != len(textures)):
+            return self.texture, self.texture_coverage
+        key = (round(float(yaw)), round(float(pitch)))
+        cached = self._view_appearance_cache.get(key)
+        if cached is not None:
+            return cached
+        if self._view_appearance_aggregator is None:
+            from roop_3d.rendering.hybrid_renderer import MultiViewCanonicalAggregator
+            self._view_appearance_aggregator = MultiViewCanonicalAggregator()
+        bank_h, bank_w = textures.shape[1:3]
+        base = cv2.resize(self.texture, (bank_w, bank_h), interpolation=cv2.INTER_AREA)
+        base_confidence = cv2.resize(self.texture_coverage, (bank_w, bank_h), interpolation=cv2.INTER_AREA)
+        appearance = self._view_appearance_aggregator.aggregate(
+            textures, supports, poses, (yaw, pitch, 0.0), base_albedo=base,
+            base_confidence=base_confidence, uv_normals=self._view_uv_normals)
+        bank_texture = np.rint(np.clip(appearance.albedo_bgr, 0, 1) * 255).astype(np.uint8)
+        texture = cv2.resize(bank_texture, (self.texture.shape[1], self.texture.shape[0]),
+                             interpolation=cv2.INTER_LINEAR)
+        coverage = cv2.resize(appearance.confidence, (self.texture.shape[1], self.texture.shape[0]),
+                              interpolation=cv2.INTER_LINEAR).astype(np.float32)
+        result = (texture, np.clip(coverage, 0, 1))
+        if len(self._view_appearance_cache) >= 8:
+            self._view_appearance_cache.pop(next(iter(self._view_appearance_cache)))
+        self._view_appearance_cache[key] = result
+        return result
 
     @staticmethod
     def _face_normals_of(vertices: np.ndarray, faces: np.ndarray) -> np.ndarray:
@@ -428,6 +473,12 @@ class ReenactmentEngine:
         self.rig = rig
         self.s = settings or ReenactmentSettings()
         self.sampling_device = "cpu"
+        self.renderer_profile = "6gb"
+        self._hybrid_renderer = None
+        self._hybrid_failed = False
+        self._hybrid_failure_reason: str | None = None
+        self._uv_fallback_failed = False
+        self._uv_fallback_failure_reason: str | None = None
         self.reset()
 
     # ------------------------------------------------------------------ state
@@ -577,7 +628,10 @@ class ReenactmentEngine:
         alignment_after = float(np.max(np.linalg.norm(target_anchor - post, axis=1)) / max(iod_px, 1e-6))
 
         h, w = canvas
-        image, coverage, support = self._render(shown, camera_vertices, (h, w))
+        texture, texture_coverage = rig.texture_for_pose(float(yaw), float(pitch))
+        image, coverage, support = self._render(
+            shown, camera_vertices, (h, w), texture, texture_coverage,
+            mesh_vertices=vertices, mesh_rotation=rot, mesh_camera=camera)
         coverage = self._release_holes(coverage, shown, params, iod_px)
         # below the minimum the observed texture cannot support this pose at all; above it the score rises to 1 at 75 %
         comps["pose_support"] = 0.0 if support < s.min_pose_support else float(
@@ -627,13 +681,86 @@ class ReenactmentEngine:
         rotated = vertices @ rot.T
         return np.column_stack([rotated[:, 0], rotated[:, 1], FAR_CAMERA_M - rotated[:, 2]])
 
-    def _render(self, pixels: np.ndarray, camera_vertices: np.ndarray, shape: tuple[int, int]):
+    def _render(self, pixels: np.ndarray, camera_vertices: np.ndarray, shape: tuple[int, int],
+                texture: np.ndarray | None = None, texture_coverage: np.ndarray | None = None,
+                *, mesh_vertices: np.ndarray | None = None, mesh_rotation: np.ndarray | None = None,
+                mesh_camera=None):
         """Painter's-order rasteriser (far -> near by triangle depth) + vectorised barycentric UV lookup.
 
         The identity mesh is a smooth facial height field under a weak-perspective camera, so depth-sorted triangles are
         exact for it and barycentrics are affine. (``pose_blend.rasterize`` is the independent reference this is tested
         against.)"""
         rig = self.rig
+        texture = rig.texture if texture is None else texture
+        texture_coverage = rig.texture_coverage if texture_coverage is None else texture_coverage
+        if (self.renderer_profile.lower() == "6gb" and mesh_vertices is not None
+                and mesh_rotation is not None and mesh_camera is not None):
+            try:
+                from roop_3d.rendering.hybrid_renderer import FastUVFallbackRenderer
+                base_projection = np.asarray(mesh_camera.project(mesh_vertices), np.float32)
+                snap_offset = np.asarray(pixels, np.float32) - base_projection
+
+                def project_displaced(points):
+                    return np.asarray(mesh_camera.project(points), np.float32) + snap_offset
+
+                def transform_displaced(points):
+                    rotated = np.asarray(points) @ mesh_rotation.T
+                    return np.column_stack((rotated[:, 0], rotated[:, 1], FAR_CAMERA_M - rotated[:, 2]))
+
+                image, coverage, _ = FastUVFallbackRenderer.render(
+                    mesh_vertices, rig.faces[:, [0, 2, 1]], rig.asset.uvs, texture,
+                    texture_coverage, project=project_displaced, transform=transform_displaced,
+                    shape=shape, displacement_uv_m=getattr(rig.asset, "displacement_uv_m", None),
+                    sampling_device=self.sampling_device, perspective=True)
+                footprint = coverage > 0
+                support = float(coverage[footprint].mean()) if footprint.any() else 0.0
+                coverage *= cv2.GaussianBlur(footprint.astype(np.float32), (0, 0), 1.0)
+                image[coverage <= 0] = 0
+                return image, np.clip(coverage, 0, 1).astype(np.float32), support
+            except Exception as error:
+                # Keep the bounded painter's-order warp available if an optional
+                # perspective sampling backend is unavailable on this machine.
+                self._uv_fallback_failed = True
+                self._uv_fallback_failure_reason = f"{type(error).__name__}: {error}"
+        if (self.renderer_profile.lower() == "12gb"
+                and not self._hybrid_failed and mesh_vertices is not None and mesh_rotation is not None
+                and shape[0] == shape[1]):
+            try:
+                if self._hybrid_renderer is None:
+                    from roop_3d.rendering.hybrid_renderer import HybridMeshGaussianRenderer
+                    self._hybrid_renderer = HybridMeshGaussianRenderer(profile=self.renderer_profile)
+
+                pose_adapter = type("ProjectedSurfacePose", (), {
+                    "perspective": False, "rotation": mesh_rotation})()
+
+                from roop_3d.rendering.skin_calibration import linear_to_srgb
+                sh = np.zeros((9, 3), np.float32)
+                sh[0] = 1.1283792 / 0.96  # Unit albedo output after the renderer's 4% dielectric energy reserve.
+                hybrid = self._hybrid_renderer.render(
+                    vertices=mesh_vertices, faces=rig.faces, uvs=rig.asset.uvs,
+                    albedo_uv=texture, uv_confidence=texture_coverage, pose=pose_adapter,
+                    inverse=np.array([[1, 0, 0], [0, 1, 0]], np.float32), sh_coefficients=sh,
+                    side=shape[0], specular_strength=0, projected_pixels=pixels,
+                    camera_vertices_override=camera_vertices)
+                physical = hybrid.physical
+                footprint = np.isfinite(physical.z_depth)
+                support = float(physical.coverage[footprint].mean()) if footprint.any() else 0.0
+                image = np.rint(np.clip(linear_to_srgb(hybrid.linear_bgr), 0, 1) * 255).astype(np.uint8)
+                coverage = np.asarray(physical.coverage, np.float32) * cv2.GaussianBlur(
+                    footprint.astype(np.float32), (0, 0), 1.0)
+                image[coverage <= 0] = 0
+                return image, np.clip(coverage, 0, 1).astype(np.float32), support
+            except Exception as error:
+                # Hardware rasterization can be unavailable in headless worker
+                # contexts. Keep the established lightweight UV warp usable.
+                self._hybrid_failed = True
+                self._hybrid_failure_reason = f"{type(error).__name__}: {error}"
+                if self._hybrid_renderer is not None:
+                    try:
+                        self._hybrid_renderer.release()
+                    except Exception:
+                        pass
+                    self._hybrid_renderer = None
         faces = rig.faces[:, [0, 2, 1]]                 # the z reflection reverses winding (same fix as PoseBlendProjector)
         normals = np.cross(camera_vertices[faces[:, 1]] - camera_vertices[faces[:, 0]],
                            camera_vertices[faces[:, 2]] - camera_vertices[faces[:, 0]])
@@ -663,15 +790,30 @@ class ReenactmentEngine:
             uv = (bary[:, :1] * rig.uv_pixels[tri[:, 0]] + bary[:, 1:2] * rig.uv_pixels[tri[:, 1]]
                   + bary[:, 2:3] * rig.uv_pixels[tri[:, 2]])
             from roop_3d.reconstruction.uv_synthesizer import remap_points
-            image[ys, xs] = remap_points(rig.texture, uv[:, 0], uv[:, 1], cv2.INTER_LINEAR,
+            image[ys, xs] = remap_points(texture, uv[:, 0], uv[:, 1], cv2.INTER_LINEAR,
                                          device=self.sampling_device).reshape(-1, 3)
-            coverage[ys, xs] = remap_points(rig.texture_coverage, uv[:, 0], uv[:, 1], cv2.INTER_LINEAR,
+            coverage[ys, xs] = remap_points(texture_coverage, uv[:, 0], uv[:, 1], cv2.INTER_LINEAR,
                                              device=self.sampling_device).reshape(-1) * ok
         inside = footprint
         support = float(coverage[inside].mean()) if inside.any() else 0.0
         coverage = coverage * cv2.GaussianBlur(footprint.astype(np.float32), (0, 0), 1.0)
         image[coverage <= 0] = 0
         return image, np.clip(coverage, 0.0, 1.0).astype(np.float32), support
+
+    def release(self) -> None:
+        if self._hybrid_renderer is not None:
+            self._hybrid_renderer.release()
+            self._hybrid_renderer = None
+
+    def renderer_status(self) -> dict[str, str | bool]:
+        if self.renderer_profile == "12gb":
+            state = "fallback" if self._hybrid_failed else ("active" if self._hybrid_renderer is not None else "pending")
+            failure_reason = self._hybrid_failure_reason
+        else:
+            state = "fallback" if self._uv_fallback_failed else "uv_warp"
+            failure_reason = self._uv_fallback_failure_reason
+        return {"profile": self.renderer_profile, "state": state,
+                "fallback_reason": failure_reason or ""}
 
     def _release_holes(self, coverage: np.ndarray, pixels: np.ndarray, p: ExpressionParams, iod_px: float) -> np.ndarray:
         """The atlas has no mouth interior and no eyelid skin: release those regions to the target instead of stretching texture."""

@@ -49,7 +49,7 @@ from roop_3d.reconstruction.multiview_fit import (
 from roop_3d.reconstruction.uv_synthesizer import UVSynthesizer, ViewObservation
 
 SCHEMA = "roop.identity_asset.v1"
-ALGORITHM_VERSION = "identity-mv-4"          # v4: GPU UV visibility + angularly balanced texture bank
+ALGORITHM_VERSION = "identity-mv-5"          # v5: pose UV layers + metric relief for hybrid rendering
 TEMPLATE_VERSION = "canonical68-delaunay+midpoint-subdiv"
 TEMPLATES = ("canonical", "makehuman")
 FRAME_DESCRIPTION = ("mesh frame (metres): +x image-right, +y down, +z toward the viewer; a frontal head has "
@@ -140,6 +140,7 @@ class IdentityAsset:
     view_embeddings: np.ndarray = field(default_factory=lambda: np.empty((0, 512), np.float32))
     view_textures: np.ndarray = field(default_factory=lambda: np.empty((0, 256, 256, 3), np.uint8))
     view_support: np.ndarray = field(default_factory=lambda: np.empty((0, 256, 256), np.float32))
+    displacement_uv_m: np.ndarray = field(default_factory=lambda: np.empty((0, 0), np.float32))
 
     @property
     def build_key(self) -> str:
@@ -156,7 +157,7 @@ class IdentityAsset:
 _ARRAY_FIELDS = ("vertices", "faces", "normals", "uvs", "vertex_confidence", "vertex_state", "texture", "texel_state",
                  "texel_confidence", "texel_view_count", "texel_source_view", "landmarks_3d", "landmark_confidence",
                  "landmark_sigma", "template_landmarks", "shape_params", "expression_params",
-                 "view_poses", "view_embeddings", "view_textures", "view_support")
+                 "view_poses", "view_embeddings", "view_textures", "view_support", "displacement_uv_m")
 
 
 # --------------------------------------------------------------------------- hashing / keys
@@ -327,9 +328,9 @@ def build_identity_asset(
     by_index = {v.index: v for v in document.views}
     q_by_index = {q.index: q for q in report.views}
     from roop_3d.reconstruction.view_texture_bank import select_bucket_views, pose_bucket, BUCKETS
-    chosen = (select_bucket_views(by_index, report.usable_indices, settings.max_views)
-              if settings.template == "makehuman" else
-              sorted(report.usable_indices, key=lambda i: -by_index[i].quality.score)[:settings.max_views])
+    # Preserve rare pose bins in every template so the appearance bank can keep
+    # real quarter/profile references even when many frontal samples score higher.
+    chosen = select_bucket_views(by_index, report.usable_indices, settings.max_views)
     template = template_for(settings)
     basis_fit = None
     if settings.template == "makehuman":
@@ -519,20 +520,30 @@ def build_identity_asset(
         "view_embeddings": np.empty((0, 512), np.float32),
         "view_textures": np.empty((0, 256, 256, 3), np.uint8),
         "view_support": np.empty((0, 256, 256), np.float32),
+        "displacement_uv_m": (np.zeros((settings.uv_size, settings.uv_size), np.float32)
+                              if atlas.intrinsic_displacement_uv_m is None
+                              else atlas.intrinsic_displacement_uv_m.astype(np.float32)),
     }
-    if settings.template == "makehuman":
-        # A bounded bank alongside the high-resolution canonical atlas. Embeddings
-        # are neural identity features; these RGB layers are observations, not a
-        # claimed learned spatial feature encoder. No unobserved texture is invented.
-        bank_synth = UVSynthesizer(Mesh3D(vertices, template.faces, uvs=uv_for_atlas), uv_size=256,
-                                   max_interpolation_fraction=0, visibility_backend="gpu",
-                                   intrinsic_texture_decomposer=intrinsic_decomposer)
-        layers = [bank_synth.synthesize([observation]) for observation in views_obs]
-        arrays.update(view_poses=np.array([[fit_by_view[i].yaw, fit_by_view[i].pitch, fit_by_view[i].roll]
-                                          for i in chosen], np.float32),
-                      view_embeddings=np.array([by_index[i].embedding for i in chosen], np.float32),
-                      view_textures=np.stack([layer.texture_map for layer in layers]),
-                      view_support=np.stack([layer.confidence_score for layer in layers]).astype(np.float32))
+    # Keep one bounded, confidence-masked UV layer per observed reference view.
+    # This lets rendering attend to a measured profile texture at profile yaw
+    # instead of selecting a frontal atlas and stretching its visible pixels.
+    # The layers are observations, not a learned feature encoder or completion.
+    bank_synth = UVSynthesizer(
+        Mesh3D(vertices, template.faces, uvs=uv_for_atlas), uv_size=256,
+        max_interpolation_fraction=0,
+        visibility_backend="gpu" if settings.template == "makehuman" else "cpu",
+        intrinsic_texture_decomposer=intrinsic_decomposer)
+    layers = [bank_synth.synthesize([observation]) for observation in views_obs]
+    arrays.update(view_poses=np.array([[fit_by_view[i].yaw, fit_by_view[i].pitch, fit_by_view[i].roll]
+                                      for i in chosen], np.float32),
+                  view_embeddings=np.array([by_index[i].embedding for i in chosen], np.float32),
+                  view_textures=np.stack([layer.texture_map for layer in layers]),
+                  view_support=np.stack([
+                      np.minimum(
+                          layer.confidence_score if layer.confidence_score is not None
+                          else (layer.confidence_mask > 0).astype(np.float32),
+                          0.35 if by_index[i].is_synthetic else 1.0)
+                      for i, layer in zip(chosen, layers)]).astype(np.float32))
 
     frontal = min(chosen, key=lambda i: abs(fit_by_view[i].yaw) + abs(fit_by_view[i].pitch))
     sources = []

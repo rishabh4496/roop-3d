@@ -113,6 +113,22 @@ class PhysicalBuffers:
     coverage: np.ndarray            # HxW float32 visible geometry x UV confidence
 
 
+@dataclass(frozen=True)
+class DifferentiablePhysicalBuffers:
+    """Torch appearance pass aligned to a fixed GPU-rasterized visibility surface.
+
+    Gradients flow through UV sampling, albedo, SH coefficients and shading.
+    Mesh visibility/coverage is produced by the existing hardware z-buffer and
+    is discrete; this path does not claim gradients through triangle ownership.
+    """
+
+    normals: object
+    z_depth: object
+    albedo: object
+    sh_shaded: object
+    coverage: object
+
+
 _VERTEX_SHADER = """#version 330
 out vec2 uv;
 void main() {
@@ -200,6 +216,8 @@ class PhysicalBufferRenderer:
         side: int = 512,
         specular_strength: float = 0.25,
         shininess: float = 32.0,
+        projected_pixels=None,
+        camera_vertices_override=None,
     ) -> PhysicalBuffers:
         """Render one frame; image arrays and depth are returned in top-left row order."""
         coefficients = _validate_sh(sh_coefficients)
@@ -219,7 +237,8 @@ class PhysicalBufferRenderer:
         # Existing depth-tested rasterization supplies aligned albedo, depth,
         # normals, UV coverage and silhouette from the same mesh/camera pass.
         surface = self.rasterizer.render_buffers(
-            vertices, faces, uvs, texture, confidence, pose, inverse, side)
+            vertices, faces, uvs, texture, confidence, pose, inverse, side,
+            projected_pixels=projected_pixels, camera_vertices_override=camera_vertices_override)
         coverage = np.clip(surface.silhouette * surface.coverage, 0, 1).astype(np.float32)
         normals = np.asarray(surface.normals, np.float32).copy()
         normals[coverage <= 0] = 0
@@ -275,6 +294,102 @@ class PhysicalBufferRenderer:
             for resource in reversed(resources):
                 resource.release()
             context.__exit__(None, None, None)
+
+    def render_torch(
+        self,
+        vertices,
+        faces,
+        uvs,
+        albedo_uv,
+        uv_confidence,
+        pose,
+        inverse,
+        sh_coefficients,
+        *,
+        side: int = 512,
+        specular_strength: float = 0.25,
+        shininess: float = 32.0,
+        device: str | None = None,
+        projected_pixels=None,
+        camera_vertices_override=None,
+    ) -> DifferentiablePhysicalBuffers:
+        """Differentiable UV appearance/shading on the GPU rasterizer's fixed surface.
+
+        The topology, pose, depth ownership and UV interpolation are generated
+        by the same hardware pass as :meth:`render`. PyTorch then samples the
+        live atlas and evaluates SH lighting, preserving gradients to atlas
+        values and lighting coefficients without copying learned appearance
+        through the CPU.
+        """
+        import torch
+        import torch.nn.functional as functional
+
+        reference = albedo_uv if torch.is_tensor(albedo_uv) else sh_coefficients
+        if device is None:
+            device = str(reference.device) if torch.is_tensor(reference) else (
+                "cuda" if torch.cuda.is_available() else "cpu")
+        texture = torch.as_tensor(albedo_uv, device=device)
+        if texture.ndim != 3 or texture.shape[-1] != 3:
+            raise ValueError("albedo_uv must be HxWx3 BGR")
+        if texture.dtype == torch.uint8:
+            texture = texture.to(torch.float32) / 255.0
+        else:
+            texture = texture.to(torch.float32)
+        if not bool(torch.isfinite(texture).all()) or bool(torch.any((texture < 0) | (texture > 1))):
+            raise ValueError("albedo_uv must be finite BGR values in [0,1]")
+        confidence = torch.as_tensor(uv_confidence, dtype=torch.float32, device=device)
+        if confidence.ndim != 2 or tuple(confidence.shape) != tuple(texture.shape[:2]):
+            raise ValueError("uv_confidence must be a 2D UV map matching albedo_uv")
+        if side <= 0 or not 0 <= float(specular_strength) <= 1 or not np.isfinite(shininess) or shininess < 1:
+            raise ValueError("invalid side or specular parameters")
+
+        # Geometry-only rasterization: texture values are sampled below by
+        # grid_sample so their gradient remains connected to the caller.
+        dummy = np.zeros((2, 2, 3), np.uint8)
+        geometry = self.rasterizer.render_buffers(
+            vertices, faces, uvs, dummy, np.ones((2, 2), np.float32), pose, inverse, side,
+            projected_pixels=projected_pixels, camera_vertices_override=camera_vertices_override)
+        height, width = geometry.coverage.shape
+        uv = torch.as_tensor(geometry.uv[..., :2], dtype=torch.float32, device=device)
+        grid = torch.stack((2.0 * uv[..., 0] - 1.0, 2.0 * uv[..., 1] - 1.0), dim=-1)[None]
+        albedo_srgb = functional.grid_sample(texture.permute(2, 0, 1)[None], grid,
+                                              mode="bilinear", padding_mode="zeros",
+                                              align_corners=True)[0].permute(1, 2, 0)
+        albedo = torch.where(albedo_srgb > 0.04045,
+            ((albedo_srgb + 0.055) / 1.055).clamp_min(0).pow(2.4), albedo_srgb / 12.92)
+        confidence_sample = functional.grid_sample(confidence[None, None], grid,
+            mode="bilinear", padding_mode="zeros", align_corners=True)[0, 0]
+        coverage = torch.as_tensor(np.clip(geometry.silhouette * geometry.coverage, 0, 1),
+                                   dtype=torch.float32, device=device) * confidence_sample.clamp(0, 1)
+        normals = torch.as_tensor(geometry.normals, dtype=torch.float32, device=device)
+        normals = functional.normalize(normals, dim=-1, eps=1e-8)
+        x, y, z = normals.unbind(-1)
+        basis = torch.stack((torch.full_like(x, 0.886227), 1.023328*x, 1.023328*y, 1.023328*z,
+            0.858086*x*y, 0.858086*x*z, 0.858086*y*z, 0.429043*(x*x-y*y),
+            0.743125*(3*z*z-1)), dim=-1)
+        coefficients = torch.as_tensor(sh_coefficients, dtype=torch.float32, device=device)
+        if coefficients.shape != (9, 3) or not bool(torch.isfinite(coefficients).all()):
+            raise ValueError("sh_coefficients must be finite with shape (9,3) in BGR order")
+        irradiance = torch.einsum("...k,kc->...c", basis, coefficients).clamp_min(0)
+        diffuse = albedo * irradiance * (1 - _FRESNEL_DIELECTRIC)
+        strength = float(specular_strength)
+        if strength:
+            luma = torch.tensor(_LUMA_BGR, dtype=torch.float32, device=device)
+            weighted = coefficients[1:4] @ luma
+            fallback_direction = torch.tensor((0., 0., 1.), dtype=torch.float32, device=device)
+            light = torch.where(torch.linalg.vector_norm(weighted) > 1e-8,
+                                functional.normalize(weighted, dim=0, eps=1e-8), fallback_direction)
+            half = functional.normalize(light + fallback_direction, dim=0, eps=1e-8)
+            lobe = normals @ half
+            lobe = lobe.clamp_min(0).pow(float(shininess)) * (normals @ light).clamp_min(0)
+            specular = torch.minimum(
+                irradiance * (_FRESNEL_DIELECTRIC * strength * lobe[..., None]),
+                irradiance * _FRESNEL_DIELECTRIC)
+            shaded = diffuse + specular
+        else:
+            shaded = diffuse
+        depth = torch.as_tensor(geometry.depth, dtype=torch.float32, device=device)
+        return DifferentiablePhysicalBuffers(normals, depth, albedo, shaded, coverage)
 
     def release(self) -> None:
         program = getattr(self._local, "program", None)

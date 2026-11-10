@@ -122,11 +122,20 @@ class GPUHeadRasterizer:
         return self.local.last_buffers
 
     def render_buffers(self, vertices, faces, uvs, texture, coverage, pose, inverse, side=512,
-                       *, rest_normals=None, seam=None):
+                       *, rest_normals=None, seam=None, projected_pixels=None,
+                       camera_vertices_override=None):
         ctx, program = self._context()
         import moderngl
-        camera = pose.camera_vertices(vertices)
-        pixels = pose.project(vertices)
+        if (projected_pixels is None) != (camera_vertices_override is None):
+            raise ValueError("projected_pixels and camera_vertices_override must be supplied together")
+        if projected_pixels is None:
+            camera = pose.camera_vertices(vertices)
+            pixels = pose.project(vertices)
+        else:
+            camera = np.asarray(camera_vertices_override, np.float64)
+            pixels = np.asarray(projected_pixels, np.float64)
+            if camera.shape != (len(vertices), 3) or pixels.shape != (len(vertices), 2):
+                raise ValueError("projected mesh buffers must match the supplied vertices")
         local = cv2.transform(pixels[None].astype(np.float32), cv2.invertAffineTransform(inverse))[0]
         z = camera[:, 2]
         near, far = .001, max(10., float(z.max()) * 2)
@@ -445,26 +454,27 @@ def complete_diffuse_albedo(texture, confidence):
 
 
 def view_texture(asset, angles):
-    """Blend nearby pose-bank atlases, filling their unseen texels from the stitched atlas."""
+    """Attend to supported pose-bank atlases, filling unseen texels from the stitched atlas."""
     base = asset.texture.astype(np.float32)
     confidence = np.where(asset.texel_state > 0, np.clip(asset.texel_confidence / .5, 0, 1), 0).astype(np.float32)
-    if not len(getattr(asset, "view_poses", ())):
+    view_poses = np.asarray(getattr(asset, "view_poses", ()))
+    view_textures = np.asarray(getattr(asset, "view_textures", ()))
+    view_support = np.asarray(getattr(asset, "view_support", ()))
+    if (view_poses.ndim != 2 or not len(view_poses) or view_textures.ndim != 4
+            or len(view_textures) != len(view_poses) or view_support.shape != view_textures.shape[:3]):
         return asset.texture, confidence
-    from roop_3d.reconstruction.view_texture_bank import nearest_views
-    ids, weights = nearest_views(asset.view_poses, angles)
-    colors, total = np.zeros_like(base), np.zeros(base.shape[:2], np.float32)
-    for index, weight in zip(ids, weights):
-        raw_support = np.clip(asset.view_support[index], 0, 1).astype(np.float32)
-        # Resize premultiplied color, not black unobserved texels: bilinear taps
-        # across a UV visibility boundary otherwise introduce dark streaks.
-        support = cv2.resize(raw_support, (base.shape[1], base.shape[0])) * weight
-        colors += cv2.resize(asset.view_textures[index].astype(np.float32) * raw_support[..., None],
-                             (base.shape[1], base.shape[0])) * weight
-        total += support
-    blend = np.clip(total, 0, 1)
-    result = colors / np.maximum(total[..., None], 1e-6)
-    confidence = np.maximum(confidence, np.clip(total / .5, 0, 1)).astype(np.float32)
-    return np.clip(result * blend[..., None] + base * (1 - blend[..., None]), 0, 255).round().astype(np.uint8), confidence
+    from roop_3d.rendering.hybrid_renderer import MultiViewCanonicalAggregator
+    bank_h, bank_w = view_textures.shape[1:3]
+    base_small = cv2.resize(asset.texture, (bank_w, bank_h), interpolation=cv2.INTER_AREA)
+    confidence_small = cv2.resize(confidence, (bank_w, bank_h), interpolation=cv2.INTER_AREA)
+    appearance = MultiViewCanonicalAggregator().aggregate(
+        view_textures, view_support, view_poses, angles,
+        base_albedo=base_small, base_confidence=confidence_small)
+    result = cv2.resize(np.rint(appearance.albedo_bgr * 255).astype(np.uint8),
+                        (base.shape[1], base.shape[0]), interpolation=cv2.INTER_LINEAR)
+    confidence = cv2.resize(appearance.confidence, (base.shape[1], base.shape[0]),
+                            interpolation=cv2.INTER_LINEAR).astype(np.float32)
+    return result, np.clip(confidence, 0, 1)
 
 
 def bridge_neural_detail(rendered, neural, coverage):

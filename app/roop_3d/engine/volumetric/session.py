@@ -595,7 +595,8 @@ class ReferencePipeline:
             scene_cut, active_ids = tracked.scene_cut, tracked.active_ids
             frame_time = tracked.frame_time
             self.portrait.retain_tracks(active_ids)
-            self.reenactors = {key: engine for key, engine in self.reenactors.items() if key in active_ids}
+            for track_id in set(self.reenactors) - set(active_ids):
+                self.reenactors.pop(track_id).release()
             for track_id in set(self.full_head_engines) - set(active_ids):
                 self.full_head_engines.pop(track_id).rasterizer.release()
             if scene_cut:
@@ -787,6 +788,7 @@ class ReferencePipeline:
         if engine is None:
             engine = self.reenactors[tracked.track_id] = ReenactmentEngine(rig, self.reenactment_settings)
             engine.sampling_device = "cuda" if self.config.provider == "CUDAExecutionProvider" else "cpu"
+            engine.renderer_profile = self.config.hardware_profile
         face = tracked.observation
         to_crop = cv2.invertAffineTransform(inverse)
         cut = (self._frame_context.scene_cut if self._frame_context is not None
@@ -823,6 +825,8 @@ class ReferencePipeline:
                 "selected_track_ids": sorted(self.selected_ids) if self.selected_ids is not None else None,
                 "pose_method": "three_tier_morphable_model" if self.neural_face is not None else "five_point_geometric_estimate", "dense_landmarks": (68, 106, 203),
                 "full_head": {"active": False, "renderer": "disabled_legacy_cg"},
+                "hybrid_mesh_renderer": {str(track_id): engine.renderer_status()
+                                         for track_id, engine in self.reenactors.items()},
                 "dense_face": self.neural_face.capability() if self.neural_face is not None else {
                     "available": False, "active": False,
                     "reason": self.dense_face_unavailable or "Dense face bundle has not been loaded",
@@ -834,7 +838,7 @@ class ReferencePipeline:
                 "full_frame_compositor": self.compositor.capability(),
                 "lip_sync": self.lip_sync.capability(),
                 "render_modes": {"available": list(RENDER_MODES), "default": self.render_mode,
-                                 "fallback": "3D modes require a compatible dense facial model bundle, hardware geometry rasterization, neural swapper and UltraMax; unavailable inputs raise explicit errors",
+                                 "fallback": "3D modes require a compatible dense facial model bundle, neural swapper and UltraMax; 6 GB uses perspective UV warping and 12 GB reports hardware-raster failures before falling back",
                                  "identity_assets": dict(self.rig_status),
                                  "active_reenactors": len(self.reenactors)}}
 
@@ -901,6 +905,8 @@ class ReferencePipeline:
             self.render_mode, self.default_source = "standard", None
             self.rigs.clear()
             self.rig_status.clear()
+            for engine in self.reenactors.values():
+                engine.release()
             self.reenactors.clear()
             self.pose_projectors.clear()
             for engine in self.full_head_engines.values():
