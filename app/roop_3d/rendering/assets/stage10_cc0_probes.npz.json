@@ -1,0 +1,64 @@
+{
+  "ambientcg_catalog_query": "https://ambientcg.com/api/v3/assets?type=material&q=skin&limit=100&include=title,tags",
+  "ambientcg_license_url": "https://docs.ambientcg.com/license/",
+  "ambientcg_note": "ambientCG publishes CC0 assets; its current catalog did not expose a human-skin pore map, so this tile is procedural and is not misattributed to a different ambientCG material.",
+  "bundle_sha256": "6666c53bbb4a85ff6d20a263309b4a28ee6aaeafdaf191463f7c59ec8d6bb845",
+  "environment_license": "CC0-1.0",
+  "environment_shape": [
+    32,
+    64
+  ],
+  "environment_source": "Poly Haven HDRIs, reduced from official 1K Radiance downloads",
+  "license": "CC0-1.0",
+  "pore_license": "CC0-1.0",
+  "pore_resolution": 256,
+  "pore_source": "Deterministic procedural periodic dimple synthesis by Roop 3D contributors",
+  "probes": [
+    {
+      "asset_id": "studio_small_08",
+      "download_url": "https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/1k/studio_small_08_1k.hdr",
+      "kelvin": 6000.0,
+      "license": "CC0-1.0",
+      "md5": "de3ba64222895aca876b1d1c2e0cf81a",
+      "name": "Neutral Studio",
+      "page_url": "https://polyhaven.com/a/studio_small_08"
+    },
+    {
+      "asset_id": "studio_small_09",
+      "download_url": "https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/1k/studio_small_09_1k.hdr",
+      "kelvin": 2750.0,
+      "license": "CC0-1.0",
+      "md5": "d5d7eb9d26d341d6aa4d11c1a54fd97c",
+      "name": "Warm Indoor",
+      "page_url": "https://polyhaven.com/a/studio_small_09"
+    },
+    {
+      "asset_id": "white_studio_06",
+      "download_url": "https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/1k/white_studio_06_1k.hdr",
+      "kelvin": 5500.0,
+      "license": "CC0-1.0",
+      "md5": "d9950d6316c57b1b92494d909bd1a92a",
+      "name": "Cool Overcast",
+      "page_url": "https://polyhaven.com/a/white_studio_06"
+    },
+    {
+      "asset_id": "signal_hill_sunrise",
+      "download_url": "https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/1k/signal_hill_sunrise_1k.hdr",
+      "kelvin": 5400.0,
+      "license": "CC0-1.0",
+      "md5": "6245187232b805d255988ae27ed31e1f",
+      "name": "Golden Hour",
+      "page_url": "https://polyhaven.com/a/signal_hill_sunrise"
+    },
+    {
+      "asset_id": "studio_small_04",
+      "download_url": "https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/1k/studio_small_04_1k.hdr",
+      "kelvin": 5500.0,
+      "license": "CC0-1.0",
+      "md5": "4d58f1d1b8f919f2bb4de1b748d11270",
+      "name": "Cinematic Rim",
+      "page_url": "https://polyhaven.com/a/studio_small_04"
+    }
+  ],
+  "schema": "roop3d.stage10.cc0_preview_assets.v1"
+}

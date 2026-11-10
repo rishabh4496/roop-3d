@@ -29,6 +29,12 @@ from roop_3d.rendering.skin_calibration import (
 # Seam-free swap tooling is exported lazily: it pulls in scipy and the reconstruction package, which the renderers above
 # deliberately import only on demand (reconstruction imports rendering lazily, so an eager import here would be circular).
 _LAZY = {
+    "PhysicalCameraMatcher": "physical_camera", "OpticalMeasurements": "physical_camera",
+    "OpticalMatchInfo": "physical_camera", "DominantKeyLightAligner": "physical_camera",
+    "KeyLightEstimate": "physical_camera", "RimLightLobe": "physical_camera",
+    "TemporalSpatialSwapDenoiser": "physical_camera", "EnvironmentProbe": "physical_camera",
+    "CC0PreviewAssets": "physical_camera", "load_cc0_preview_assets": "physical_camera",
+    "synthesize_micro_pore_normal": "physical_camera", "sample_micro_pore_normal": "physical_camera",
     "StrandAwareOcclusionCompositor": "strand_occlusion", "StrandOcclusionOptions": "strand_occlusion",
     "OcclusionInputs": "strand_occlusion", "OcclusionResult": "strand_occlusion", "OcclusionReport": "strand_occlusion",
     "SwapRegionConfig": "swap_region_3d", "SwapMask3D": "swap_region_3d", "JawTarget": "swap_region_3d",

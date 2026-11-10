@@ -74,6 +74,36 @@ weights, and point splats. Splats must be supplied with those region labels;
 the renderer does not infer eyebrows, eyelashes or facial hair from an atlas.
 Triangle visibility and UV interpolation come from the fixed hardware
 z-buffer, so gradients do not pass through triangle ownership or mesh pose.
+
+## Physical camera and CC0 relighting
+
+`PhysicalCameraMatcher.estimate_focal_length` fits the per-shot focal length in
+millimetres from metric camera-space head points and tracked image points. Its
+projection helper also supports OpenCV radial and tangential lens distortion.
+`measure_target_optics` estimates masked Laplacian sharpness, dense inter-frame
+flow, radial color-edge displacement, and sensor grain. Apply
+`match_rendered_head` to the isolated BGR/BGRA render and its alpha before
+compositing it over the target frame; metric depth plus focus distance enables
+spatial circle-of-confusion blur.
+
+`DominantKeyLightAligner.estimate` fits second-order SH coefficients to target
+face normals and returns a directional key, approximate color temperature, and
+bright grazing-angle rim lobes. `TemporalSpatialSwapDenoiser.process` blends
+the current UV texture with a previous one using current-to-previous normalized
+UV flow, confidence, and a color-edge bilateral weight. Pass scene cuts so the
+history is cleared by the next call.
+
+`rendering/assets/stage10_cc0_probes.npz` bundles five 32x64 linear Radiance
+maps plus 9x3 SH reductions and a 256x256 tileable tangent-space pore normal.
+The five environment reductions derive from Poly Haven's CC0
+`studio_small_08`, `studio_small_09`, `white_studio_06`, `signal_hill_sunrise`,
+and `studio_small_04` 1K HDRIs. File hashes, asset pages, and CC0 declarations
+are in the adjacent `.npz.json` provenance sidecar. The pore tile is deterministic
+procedural CC0 data. ambientCG does not currently expose a human-skin pore map
+in its public asset catalog, so the pore field is not attributed to a different
+ambientCG surface asset. Rebuild the bundle with
+`python -m roop_3d.rendering.physical_camera --build-cc0-bundle <source-dir>`
+after placing the five verified 1K Radiance files in `<source-dir>`.
 The implementation has not been benchmarked at 120 FPS.
 
 For low-VRAM operation, `FastUVFallbackRenderer` applies optional metric UV

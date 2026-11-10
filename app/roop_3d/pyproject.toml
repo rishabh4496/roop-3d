@@ -38,7 +38,7 @@ packages = ["roop_3d", "roop_3d.audit", "roop_3d.core", "roop_3d.server", "roop_
 package-dir = {"roop_3d" = "."}
 
 [tool.setuptools.package-data]
-roop_3d = ["py.typed", "reconstruction/ARTICULATED_MODELS_LICENSE", "reconstruction/ARTICULATED_MODELS.md", "rendering/RENDERING_MODELS_LICENSE", "rendering/RENDERING_MODELS.md"]
+roop_3d = ["py.typed", "reconstruction/ARTICULATED_MODELS_LICENSE", "reconstruction/ARTICULATED_MODELS.md", "rendering/RENDERING_MODELS_LICENSE", "rendering/RENDERING_MODELS.md", "rendering/assets/*.npz", "rendering/assets/*.npz.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
