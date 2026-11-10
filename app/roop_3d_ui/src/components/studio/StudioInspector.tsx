@@ -17,6 +17,7 @@ import { viewerLighting, viewerMorph } from '../three/viewerRigs';
 import FaceExpressionEditor from './FaceExpressionEditor';
 import HairNeckProtection from './HairNeckProtection';
 import HeadModelBackbone from './HeadModelBackbone';
+import SwapScopeSelector from './SwapScopeSelector';
 
 const PoseGeometryViewer = lazy(() => import('../../ThreeViewport').then(module => ({ default: module.PoseGeometryViewer })));
 const LightProbeSphere = lazy(() => import('../../ThreeViewport').then(module => ({ default: module.LightProbeSphere })));
@@ -113,6 +114,7 @@ export default function StudioInspector({ caps, config, onSaveConfig, track, she
           </div>
           <small className="muted" data-testid="render-mode-hint">{info.hint}</small>
           <small className="render-mode-preview">Viewer tab for this mode: <b>{PREVIEW_TAB_LABEL[info.preview]}</b></small>
+          <SwapScopeSelector parameters={parameters} setParameters={setParameters} />
           <div className="inspector-viewer">
             <Suspense fallback={<div className="skeleton-tile wide" aria-label="Loading 3D viewer" />}><PoseGeometryViewer coverage={coverage} track={track} mesh={mesh} renderMode={renderMode} reconstruction={reconstruction} creator={facesetCreator} lighting={lighting} morph={morph} /></Suspense>
           </div>

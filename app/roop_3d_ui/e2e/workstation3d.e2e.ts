@@ -162,6 +162,34 @@ test('the Inspector exposes the backbone, influence mode and hair & neck protect
   expect(errors).toEqual([]);
 });
 
+test('the swap scope selector defaults to the full craniofacial lock, and only a changed scope reaches the live preview', async ({ page }) => {
+  const { seen, errors } = await boot(page);
+  await expect.poll(() => seen.previews.length).toBeGreaterThan(0);
+  expect('swap_scope' in seen.previews[0] || 'skull_blend' in seen.previews[0]).toBe(false);
+
+  const scope = page.getByTestId('swap-scope');
+  await scope.scrollIntoViewIfNeeded();
+  const options = scope.getByRole('radio');
+  await expect(options).toHaveCount(3);
+  await expect(scope.getByRole('radio', { name: /Full Craniofacial Lock/ })).toHaveAttribute('aria-checked', 'true');
+  await expect(scope.getByRole('slider')).toHaveCount(0);
+
+  await scope.getByRole('radio', { name: /Adaptive Skull Blend/ }).click();
+  await expect(scope.getByRole('slider', { name: 'Source skull share' })).toHaveValue('50');
+  await expect.poll(() => seen.previews.at(-1)?.swap_scope).toBe('adaptive_skull');
+  await scope.getByRole('slider', { name: 'Source skull share' }).fill('80');
+  await expect.poll(() => seen.previews.at(-1)?.skull_blend).toBeCloseTo(0.8);
+  await expect(scope).toContainText('β source 80% · β target 20%');
+  await page.screenshot({ path: 'test-results/w3d-swap-scope.png' });
+
+  await scope.getByRole('radio', { name: /Legacy Inner-Face Only/ }).click();
+  await expect.poll(() => seen.previews.at(-1)?.swap_scope).toBe('inner_face');
+  expect('skull_blend' in (seen.previews.at(-1) ?? {})).toBe(false);
+  await scope.getByRole('radio', { name: /Full Craniofacial Lock/ }).click();
+  await expect.poll(() => 'swap_scope' in (seen.previews.at(-1) ?? {})).toBe(false);
+  expect(errors).toEqual([]);
+});
+
 test('the Mesh and Gaze toggles draw a 6DoF overlay and the right-click menu offers the per-face toggles', async ({ page }) => {
   const { errors } = await boot(page);
   const canvas = page.getByLabel('Detected face bounding boxes').first();

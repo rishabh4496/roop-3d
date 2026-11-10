@@ -16,7 +16,7 @@ import functools
 import logging
 import time
 from typing import Mapping
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 
 import cv2
 import numpy as np
@@ -151,8 +151,22 @@ class CompositeOptions:
     blend_transfer: str = "srgb"
     sensor_shutter_angle: float = 180.0
     sensor_grain_strength: float = 100.0
+    # Stage 6B swap scope (rendering/silhouette_replacement.py). Only read for full-head (3D silhouette) replacements.
+    # full_craniofacial: the old silhouette is removed (hair / ears / neck warped onto the new perimeter, overhang filled with
+    # background); adaptive_skull: the same for the blended skull the engine rendered; inner_face: legacy, the swap stays inside
+    # the target's own face outline and nothing is filled or warped.
+    swap_scope: str = "full_craniofacial"
+    skull_blend: float = 1.0                  # adaptive_skull: share of beta_source in the skull (-> source_identity_lock)
+    silhouette_history: int = 2               # past unswapped frames kept per track as temporal background donors (0 = spatial only)
 
     def __post_init__(self) -> None:
+        from roop_3d.rendering.silhouette_replacement import resolve_scope
+        try:
+            resolve_scope(self.swap_scope, self.skull_blend)
+        except DomainError as error:
+            raise ValueError(error.message) from error
+        if type(self.silhouette_history) is not int or not 0 <= self.silhouette_history <= 8:
+            raise ValueError("silhouette_history must be an integer within 0..8")
         if not np.isfinite(self.expression_restore_factor) or not 0 <= self.expression_restore_factor <= 1:
             raise ValueError('expression_restore_factor must be within 0..1')
         if self.photometric_identity_floor != 0 and not .78 < self.photometric_identity_floor < 1:
@@ -261,6 +275,10 @@ class FrameCompositor:
         self.last_reports: dict[int, dict] = {}
         self.last_relighting: dict[int, dict] = {}
         self._relight_recognizer = None
+        # Stage 6B: silhouette replacement (built on first full-head frame) and the unswapped-frame history that feeds it.
+        self._silhouette_replacer = None
+        self._silhouette_history = None
+        self._background_donors: Mapping[int, Sequence] = {}
 
     # -- lazy Stage 5 components ----------------------------------------------------------------------
     @property
@@ -621,8 +639,13 @@ class FrameCompositor:
                 mask_temporal_context: Mapping[int, Mapping[str, np.ndarray]] | None = None,
                 lip_sync_results: Mapping[int, object] | None = None,
                 options: CompositeOptions = CompositeOptions(),
-                observer: Callable | None = None) -> np.ndarray:
+                observer: Callable | None = None,
+                background_donors: Mapping[int, Sequence] | None = None) -> np.ndarray:
         """Composite one frame with optional per-track one-frame mask lookahead.
+
+        ``background_donors`` (track id -> ``DonorFrame`` list, frame space) adds frames the caller can see but this causal
+        compositor cannot, typically the NEXT frames of an offline job, to the past frames it keeps itself: silhouette
+        completion then draws on t-k .. t+k.
 
         Each context entry needs ``previous_mask``, ``next_mask``, ``previous_guide``
         and ``next_guide`` in the same face-crop coordinate system as this frame.
@@ -652,7 +675,8 @@ class FrameCompositor:
         self.last_reports = {}
         if options.occlusion_mode == "robust":
             return self._compose_robust(frame, replacements, landmarks_by_track, active_tracks, scene_cut, frame_index,
-                                        occluder_masks, mask_temporal_context, lip_sync_results, options, observer)
+                                        occluder_masks, mask_temporal_context, lip_sync_results, options, observer,
+                                        background_donors or {})
         output = frame.copy()
         compose_began, restorer_seconds = time.perf_counter(), 0.0
         for replacement in sorted(replacements, key=lambda item: item.track_id):
@@ -836,7 +860,8 @@ class FrameCompositor:
                                          track_id=replacement.track_id,
                                          **({"mesh_support": cv2.resize(replacement.coverage, (work, work))}
                                             if getattr(replacement, "full_head", False) else {}))
-        if getattr(replacement, "full_head", False):
+        if getattr(replacement, "full_head", False) and options.swap_scope != "inner_face":
+            # Legacy inner-face scope keeps the analysis matte (target landmark hull AND semantic face): the swap stays inside it.
             analysis = replace(analysis, face_alpha=np.ones((work, work), np.float32))
         # Pixels outside the frame are reflected copies for the models; they must never count as foreground.
         validity = cv2.warpAffine(np.ones(frame.shape[:2], np.float32), cv2.invertAffineTransform(work_inverse),
@@ -904,9 +929,15 @@ class FrameCompositor:
         return total
 
     def _compose_robust(self, frame, replacements, landmarks_by_track, active_tracks, scene_cut, frame_index,
-                        occluder_masks, mask_temporal_context, lip_sync_results, options, observer) -> np.ndarray:
+                        occluder_masks, mask_temporal_context, lip_sync_results, options, observer,
+                        background_donors=None) -> np.ndarray:
         from roop_3d.compositor.robust_fusion import RobustFusionOptions, fuse_robust
         robust = options.robust
+        self._background_donors = background_donors or {}
+        if self._silhouette_history is not None:
+            self._silhouette_history.retain(active_tracks)
+            if scene_cut:
+                self._silhouette_history.clear()
         self.occlusion_tracker.retain(active_tracks)
         self.analyzer.retain(active_tracks)
         self._face_centres = {key: value for key, value in self._face_centres.items() if key in active_tracks}
@@ -950,7 +981,7 @@ class FrameCompositor:
                     raise DomainError('PROJECTION_COVERAGE_INVALID', 'Projected coverage must be finite crop-space values in 0..1', 422)
                 coverage = cv2.resize(coverage, (work, work), interpolation=cv2.INTER_LINEAR)
             if getattr(replacement, "full_head", False):
-                output = self._remove_old_silhouette(output, context, front, options)
+                output = self._remove_old_silhouette(output, context, front, options, original=frame, frame_index=frame_index)
 
             # Dual BiSeNet forbidden extraction on robust analysis crops
             _, _, robust_forbidden = compute_dual_bisenet_forbidden_mask(
@@ -1087,9 +1118,20 @@ class FrameCompositor:
         self.last_timing = {"masking": max(0.0, total_ms - restorer_ms), "restorer": restorer_ms}
         return output
 
-    def _remove_old_silhouette(self, frame, context, front, options):
-        """Complete only target-minus-source pixels; never use facial skin as a donor."""
+    def _remove_old_silhouette(self, frame, context, front, options, *, original, frame_index=None):
+        """Stage 6B: replace the target's silhouette with the source head's, BEFORE the source face is fused.
+
+        The overhang ``dilate(M_tgt) & ~M_src`` and whatever the hair / ears / neck vacate when they are warped onto the new
+        perimeter are filled with background (temporal donors, then a multi-scale spatial fill); facial skin never donates.
+        ``original`` is the UNSWAPPED input frame: it is what the donor history keeps."""
+        from roop_3d.rendering.silhouette_replacement import DonorHistory, SilhouetteReplacer, resolve_scope
+        from roop_3d.rendering.silhouette_inpaint import DonorFrame
+        plan = resolve_scope(options.swap_scope, options.skull_blend)
         item = context.replacement
+        if not plan.replace_silhouette:
+            context.report["silhouette_completion"] = {"scope": plan.scope, "applied": False,
+                                                       "reason": "SCOPE_KEEPS_TARGET_SILHOUETTE"}
+            return frame
         target = getattr(item, "target_silhouette", None)
         source = getattr(item, "source_silhouette", None)
         if source is None:
@@ -1104,29 +1146,49 @@ class FrameCompositor:
                 raise DomainError("HEAD_SILHOUETTE_INVALID", "Head silhouettes must be finite native crop masks in 0..1", 422)
             planes.append(cv2.resize(plane, (side, side)))
         target, source = planes
+        analysis = context.analysis
+        structure = None
         # Semantic skin may extend the measured jaw into the forehead/temples.
-        if context.analysis.parser_trusted:
-            target = np.maximum(target, context.analysis.skin)
-        ribbon = np.clip(target - source, 0, 1)
-        if front is not None:
-            ribbon *= 1 - front
-        if not ribbon.any():
-            return frame
-        excluded = np.maximum(target, source) > .01
-        if front is not None:
-            excluded |= front > .01
-        excluded = cv2.dilate(excluded.astype(np.uint8), np.ones((5, 5), np.uint8)) > 0
+        if analysis.parser_trusted:
+            target = np.maximum(target, analysis.skin)
+            if analysis.regions is not None:
+                structure = np.clip(np.maximum.reduce([analysis.regions.get(name) for name in ("hair", "ears", "neck")]), 0, 1)
         # Reflected out-of-frame model padding is never valid background.
         valid = cv2.warpAffine(np.ones(frame.shape[:2], np.uint8),
-                              cv2.invertAffineTransform(context.work_inverse), (side, side)) > 0
-        excluded |= ~valid
-        if not hasattr(self, "_background_propagator"):
-            from roop_3d.reconstruction.gpu_background import GPUBackgroundPropagator
-            self._background_propagator = GPUBackgroundPropagator()
-        filled = self._background_propagator.fill(context.work_crop, excluded)
-        context.report["silhouette_completion"] = {"method": "gpu_jump_flood", "pixels": int((ribbon > .01).sum())}
-        return fuse_crop(frame, filled, context.work_inverse, ribbon * options.swap_weight,
-                         mode=BlendMode.FEATHER)
+                               cv2.invertAffineTransform(context.work_inverse), (side, side)) > 0
+        if self._silhouette_replacer is None:
+            self._silhouette_replacer = SilhouetteReplacer()
+        history = self._silhouette_history
+        if history is None or history.depth != options.silhouette_history:
+            history = self._silhouette_history = DonorHistory(options.silhouette_history)
+        track = item.track_id
+        past = history.donors(track, original.shape[:2], frame_index, max_gap=max(2, 2 * history.depth))
+        donors = []
+        for donor in (*past, *self._background_donors.get(track, ())):
+            image = np.asarray(donor.image)
+            if image.shape != original.shape or image.dtype != np.uint8:
+                continue
+            head = np.zeros((side, side), np.float32)
+            if donor.head_mask is not None and np.asarray(donor.head_mask).shape == original.shape[:2]:
+                head = self._crop_to_frame(np.asarray(donor.head_mask, np.float32), context.work_inverse, (side, side))
+            donors.append(DonorFrame(self._crop_to_frame(image, context.work_inverse, (side, side)),
+                                     np.maximum(head, (~valid).astype(np.float32))))
+        perimeter = None
+        source_xy, target_xy = getattr(item, "source_perimeter", None), getattr(item, "target_perimeter", None)
+        if source_xy is not None and target_xy is not None:
+            k = side / item.image.shape[0]
+            perimeter = (np.asarray(source_xy, np.float64) * k, np.asarray(target_xy, np.float64) * k)
+        edited, changed, outcome = self._silhouette_replacer.apply(
+            context.work_crop, target_mask=target, source_mask=source, plan=plan, structure_mask=structure, occluder=front,
+            donors=donors, perimeter=perimeter, invalid=~valid)
+        head = np.maximum(target, structure) if structure is not None else target
+        history.push(track, original, cv2.warpAffine(head.astype(np.float32), np.asarray(context.work_inverse, np.float32),
+                                                     (original.shape[1], original.shape[0])), frame_index)
+        context.report["silhouette_completion"] = {"method": "silhouette_delta", "pixels": int(changed.sum()), **outcome.as_dict()}
+        if not changed.any():
+            return frame
+        alpha = np.maximum(changed, cv2.GaussianBlur(changed, (0, 0), 1.0)) * options.swap_weight
+        return fuse_crop(frame, edited, context.work_inverse, alpha, mode=BlendMode.FEATHER)
 
     def capability(self) -> dict:
         parser = self.parser.capability() if hasattr(self.parser, "capability") else {
@@ -1159,8 +1221,8 @@ class FrameCompositor:
             self._relight_recognizer.release_for_build()
             self._relight_recognizer = None
         self.last_relighting.clear()
-        if hasattr(self, "_background_propagator"):
-            self._background_propagator.release()
+        if self._silhouette_history is not None:
+            self._silhouette_history.clear()
         if self.parser is not None and hasattr(self.parser, "release"):
             self.parser.release()
         if self._analyzer is not None:

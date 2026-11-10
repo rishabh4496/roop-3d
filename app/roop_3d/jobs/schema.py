@@ -12,7 +12,7 @@ from pydantic import Field, field_validator, model_validator
 from roop_3d.core.errors import DomainError
 from roop_3d.core.stage_timing import validate_timings
 from roop_3d.core.settings import Contract, Settings
-from roop_3d.core.workstation import PROTECTION_FIELDS, WorkstationParameters
+from roop_3d.core.workstation import PROTECTION_FIELDS, SCOPE_FIELDS, WorkstationParameters
 from roop_3d.core.animation import ParameterCurves, FaceSegment
 from roop_3d.media.schema import TrackToFaceSetMap
 from roop_3d.faceset.identity_blend import IdentityBlendSpec
@@ -82,7 +82,7 @@ class JobRequest(Contract):
             value.pop("engine_id", None)
         if self.workstation_parameters:
             # Preserve fingerprints of requests saved before these opt-in controls existed.
-            for field in ('swap_weight', 'erosion_px', 'pose_frontalization', 'tps_expression_weight', 'linear_light', 'blend_transfer', 'ambient_fill', 'hairline_offset_px', 'occlusion_threshold', *PROTECTION_FIELDS):
+            for field in ('swap_weight', 'erosion_px', 'pose_frontalization', 'tps_expression_weight', 'linear_light', 'blend_transfer', 'ambient_fill', 'hairline_offset_px', 'occlusion_threshold', *PROTECTION_FIELDS, *SCOPE_FIELDS):
                 if field not in self.workstation_parameters.model_fields_set:
                     value['workstation_parameters'].pop(field, None)
         if isinstance(value.get('export'), dict):

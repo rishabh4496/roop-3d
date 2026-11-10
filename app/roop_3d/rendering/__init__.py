@@ -36,6 +36,12 @@ _LAZY = {
     "adapt_jaw": "swap_region_3d", "jaw_target_from_ratios": "swap_region_3d", "jaw_target_from_landmarks": "swap_region_3d",
     "rasterize_swap_mask": "swap_region_3d", "rasterize_uv_swap_mask": "swap_region_3d",
     "rasterize_vertex_attributes": "vertex_raster", "RasterBuffers": "vertex_raster",
+    "SilhouetteDeltaInpainter": "silhouette_inpaint", "InpaintOptions": "silhouette_inpaint", "DonorFrame": "silhouette_inpaint",
+    "InpaintReport": "silhouette_inpaint", "overhang_ring": "silhouette_inpaint",
+    "PerimeterCageWarper": "perimeter_cage", "CageOptions": "perimeter_cage", "CageField": "perimeter_cage",
+    "perimeter_from_masks": "perimeter_cage", "perimeter_vertex_ids": "perimeter_cage", "mesh_perimeter_pairs": "perimeter_cage",
+    "SilhouetteReplacer": "silhouette_replacement", "DonorHistory": "silhouette_replacement", "ScopePlan": "silhouette_replacement",
+    "resolve_scope": "silhouette_replacement", "SWAP_SCOPES": "silhouette_replacement",
 }
 
 

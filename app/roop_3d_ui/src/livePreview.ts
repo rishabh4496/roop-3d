@@ -58,6 +58,9 @@ export function buildLivePayload({ request, time, fps, parameters, maskBase64, r
     preserve_ears_glasses: parameters.preserve_ears_glasses,
     jaw_feather_px: parameters.jaw_feather_px,
     skin_texture_retention: parameters.skin_texture_retention,
+    // Stage 6B swap scope: only present once the user leaves the default full craniofacial lock.
+    swap_scope: parameters.swap_scope,
+    skull_blend: parameters.swap_scope === 'adaptive_skull' ? parameters.skull_blend : undefined,
     sensor_shutter_angle: parameters.sensor_shutter_angle,
     grain_match_strength: parameters.grain_match_strength,
     occlusion_threshold: parameters.occlusion_threshold,

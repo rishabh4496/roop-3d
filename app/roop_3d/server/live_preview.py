@@ -42,7 +42,7 @@ from roop_3d.audit.isolation import safe_path
 from roop_3d.core.animation import FaceSegment, ParameterCurves
 from roop_3d.core.errors import DomainError
 from roop_3d.core.settings import Contract
-from roop_3d.core.workstation import PROTECTION_FIELDS, WorkstationParameters
+from roop_3d.core.workstation import PROTECTION_FIELDS, SCOPE_FIELDS, WorkstationParameters
 from roop_3d.core.face_editor import FaceExpressionOverrides
 from roop_3d.faceset.identity_blend import IdentityBlendSpec
 from roop_3d.jobs.schema import JobRequest
@@ -147,6 +147,9 @@ class LivePreviewPayload(Contract):
     preserve_ears_glasses: bool | None = None
     jaw_feather_px: float | None = Field(default=None, ge=2, le=24)
     skin_texture_retention: float | None = Field(default=None, ge=0, le=1)
+    # Stage 6B swap scope; None = the compositor default (full_craniofacial, skull_blend 1).
+    swap_scope: Literal['full_craniofacial', 'adaptive_skull', 'inner_face'] | None = None
+    skull_blend: float | None = Field(default=None, ge=0, le=1)
     # job-request pass-through so the preview matches what Start would render
     face_segments: tuple[FaceSegment, ...] | None = Field(default=None, max_length=256)
     parameter_curves: ParameterCurves | None = None
@@ -204,7 +207,7 @@ class LivePreviewPayload(Contract):
     def config_digest(self) -> dict[str, Any]:
         """Everything that changes the pixels, nothing that selects the frame."""
         value = self.model_dump(mode="json", exclude={"frame_index", "timestamp"})
-        for key in ("identity_lock_id", "pose_strength", "ambient_fill", "hairline_offset_px", "occlusion_threshold", *PROTECTION_FIELDS):
+        for key in ("identity_lock_id", "pose_strength", "ambient_fill", "hairline_offset_px", "occlusion_threshold", *PROTECTION_FIELDS, *SCOPE_FIELDS):
             if value[key] is None:
                 value.pop(key)
         if value.get("mask_base64"):
@@ -569,7 +572,7 @@ class LivePreviewService:
             values['occlusion_threshold'] = payload.occlusion_threshold
         if payload.hairline_offset_px is not None:
             values['hairline_offset_px'] = payload.hairline_offset_px
-        for name in PROTECTION_FIELDS:
+        for name in (*PROTECTION_FIELDS, *SCOPE_FIELDS):
             if getattr(payload, name) is not None:
                 values[name] = getattr(payload, name)
         if payload.render_mode is not None:

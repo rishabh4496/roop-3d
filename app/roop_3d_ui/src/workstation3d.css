@@ -100,6 +100,10 @@
 .head-backbone select{width:100%}
 .backbone-unavailable{font-size:10px;color:var(--muted)}
 .backbone-unavailable ul{margin:4px 0 0;padding-left:16px;display:grid;gap:3px}
+.swap-scope .inspector-field{display:grid;gap:4px;font-size:12px}
+.swap-scope .inspector-field output{font:600 11px ui-monospace,Menlo,Consolas,monospace;color:var(--accent)}
+.swap-scope input[type=range]{width:100%}
+.swap-scope .protection-scale{display:flex;justify-content:space-between;gap:8px}
 .hair-neck-protection{display:grid;gap:8px;margin-top:6px;padding:10px;border:1px solid var(--line);border-radius:10px;background:var(--raised)}
 .hair-neck-protection .protection-head{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:12px}
 .hair-neck-protection .inspector-field output{font:600 11px ui-monospace,Menlo,Consolas,monospace;color:var(--accent)}

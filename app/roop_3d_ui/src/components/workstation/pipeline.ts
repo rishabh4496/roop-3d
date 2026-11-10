@@ -22,6 +22,10 @@ export type WorkstationParameters = {
   occlusion_mode?: 'standard' | 'robust';
   /** Stage 4 render mode. Omitted (= 'standard') until the user picks a 3D mode, so older requests keep their identity. */
   render_mode?: 'standard' | 'pose_3d' | 'reenactment_3d';
+  /** Stage 6B swap scope: which part of the target's head the source geometry replaces. Omitted (= 'full_craniofacial') until the user picks another. */
+  swap_scope?: 'full_craniofacial' | 'adaptive_skull' | 'inner_face';
+  /** Adaptive scope only: share of the source skull (β source) in the blended skull, 0..1. Omitted otherwise. */
+  skull_blend?: number;
   /** Stage 17 3D Relighting: off unless enabled; the strength / light controls below only apply while it is on. */
   relight?: boolean;
   relight_strength?: number;

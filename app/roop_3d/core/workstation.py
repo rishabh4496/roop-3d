@@ -6,6 +6,8 @@ from roop_3d.core.face_editor import FaceExpressionOverrides
 
 #: Hair / neck / ear protection fields: absent from a serialisation (and so from fingerprints) until the caller sets them.
 PROTECTION_FIELDS = ('neck_protection', 'hair_matting', 'preserve_ears_glasses', 'jaw_feather_px', 'skin_texture_retention')
+#: Stage 6B swap-scope fields: same opt-in rule, absent from a serialisation (and so from fingerprints) until the caller sets them.
+SCOPE_FIELDS = ('swap_scope', 'skull_blend')
 
 class WorkstationParameters(Contract):
     expression_restore_factor: float = Field(default=0, ge=0, le=1)
@@ -66,6 +68,11 @@ class WorkstationParameters(Contract):
     preserve_ears_glasses: bool = True
     jaw_feather_px: float = Field(default=6.0, ge=2, le=24)
     skin_texture_retention: float = Field(default=0.25, ge=0, le=1)
+    # Stage 6B swap scope. full_craniofacial = 100% source skull/jaw/forehead with the old silhouette removed (hair, ears and neck
+    # warped onto the new perimeter, overhang filled with background); adaptive_skull = skull_blend is the share of beta_source in the
+    # skull (the rest is beta_target); inner_face = legacy, only the inside of the target's own face outline is replaced.
+    swap_scope: Literal['full_craniofacial', 'adaptive_skull', 'inner_face'] = 'full_craniofacial'
+    skull_blend: float = Field(default=1.0, ge=0, le=1)
     boundary_ribbon_matting: bool = False
     submental_contact_shadow: bool = False
     contact_shadow_opacity: float = Field(default=0.12, ge=0, le=0.15)
@@ -81,7 +88,7 @@ class WorkstationParameters(Contract):
         for field in ('expression_restore_factor', 'face_expression_overrides'):
             if field not in self.model_fields_set:
                 value.pop(field, None)
-        for field in ('color_method', 'restorer_model', 'identity_blend_t', 'fidelity_weight', 'swap_weight', 'erosion_px', 'pose_mode', 'pose_frontalization', 'tps_expression_weight', 'render_mode', 'occlusion_mode', 'strand_matte', 'jaw_adaptation', 'linear_light', 'blend_transfer', 'ultramax_small_face_mode', 'ultramax_min_native_pixels', 'ambient_fill', 'hairline_offset_px', 'occlusion_threshold', 'sensor_shutter_angle', 'grain_match_strength') + PROTECTION_FIELDS:
+        for field in ('color_method', 'restorer_model', 'identity_blend_t', 'fidelity_weight', 'swap_weight', 'erosion_px', 'pose_mode', 'pose_frontalization', 'tps_expression_weight', 'render_mode', 'occlusion_mode', 'strand_matte', 'jaw_adaptation', 'linear_light', 'blend_transfer', 'ultramax_small_face_mode', 'ultramax_min_native_pixels', 'ambient_fill', 'hairline_offset_px', 'occlusion_threshold', 'sensor_shutter_angle', 'grain_match_strength') + PROTECTION_FIELDS + SCOPE_FIELDS:
             if field not in self.model_fields_set:
                 value.pop(field, None)
         return value
@@ -143,6 +150,7 @@ class WorkstationParameters(Contract):
                                 preserve_ears_glasses=self.preserve_ears_glasses,
                                 jaw_feather_px=self.jaw_feather_px,
                                 skin_texture_retention=self.skin_texture_retention,
+                                swap_scope=self.swap_scope, skull_blend=self.skull_blend,
                                 boundary_ribbon_matting=self.boundary_ribbon_matting,
                                 submental_contact_shadow=self.submental_contact_shadow,
                                 contact_shadow_opacity=self.contact_shadow_opacity,
