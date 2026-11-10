@@ -8,7 +8,8 @@ from typing import Callable
 from roop_3d.core.hardware import Hardware
 from roop_3d.jobs.schema import JobState
 from roop_3d.server.ws import (EngineState, EventBase, JobProgressEvent, JobStateEvent, PipelineStatusEvent,
-                               StageId, StageStatus)
+                               StageId, StageStatus, TrackingTelemetryEvent)
+from roop_3d.tracking.telemetry import TrackingTelemetryPublisher
 
 STAGE_ORDER: tuple[StageId, ...] = ("STAGE_1_SPARSE_PRESCAN", "STAGE_2_ACTIVE_PREPASS", "STAGE_3_MAIN_SWAP")
 MAIN = "STAGE_3_MAIN_SWAP"
@@ -33,10 +34,28 @@ class PipelineTracker:
                              "eta_seconds": None, "fps": 0.0}
         self._engine: dict = {"engine_state": "IDLE", "engine_label": None, "engine_model": None,
                               "engine_precision": None, "engine_since": None}
+        self._tracking: dict | None = None
 
     def snapshot(self) -> PipelineStatusEvent:
         with self._lock:
             return PipelineStatusEvent(sequence=self._sequence(), **self._state, **self._engine)
+
+    # -- head / gaze tracking telemetry ------------------------------------------------
+    def tracking_frame(self, payload: dict) -> None:
+        """Sink for ``TrackingTelemetryPublisher``: fan the frame out, then remember it for clients that connect later.
+
+        Raises (and remembers nothing) if the payload is not a valid `tracking.telemetry` frame."""
+        self._publish(payload)
+        with self._lock:
+            self._tracking = payload
+
+    def tracking_snapshot(self) -> TrackingTelemetryEvent | None:
+        with self._lock:
+            return None if self._tracking is None else TrackingTelemetryEvent.model_validate(self._tracking)
+
+    def tracking_publisher(self, **kwargs) -> TrackingTelemetryPublisher:
+        """A publisher bound to this tracker: ``VideoHeadTracker3D(on_frame=tracker.tracking_publisher(job_id=...))``."""
+        return TrackingTelemetryPublisher(self.tracking_frame, **kwargs)
 
     def _emit(self) -> None:
         self._publish(self.snapshot().model_dump(mode="json", exclude={"sequence", "timestamp"}))
