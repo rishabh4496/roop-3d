@@ -264,3 +264,22 @@ def test_api_template_parameter_builds_a_separate_asset(api, doc):
         assert mesh.status_code == 200 and len(mesh.json()["vertices"]) == body["asset"]["vertex_count"]
         assert client.get(base + "/mesh").status_code == 404
         assert client.get(base, params={"template": "bogus"}).status_code == 422
+
+
+def test_api_topology_and_semantic_sliders_on_a_real_build(api, doc):
+    """End to end on a really fitted asset: default topology, semantic sliders, and (when installed) FLAME 2023 Open."""
+    from roop_3d.reconstruction.topology import default_registry
+    base = f"/api/v1/facesets/{doc.faceset_id}/identity-asset"
+    with api as client:
+        assert client.post(base, params={"template": "makehuman"}).status_code == 200
+        plain = client.get(base + "/mesh", params={"template": "makehuman"}).json()
+        assert plain["topology"]["id"] == "makehuman_cc0" and plain["semantic"] is None
+        slid = client.get(base + "/mesh", params={"template": "makehuman", "jaw_width": 1.0, "chin_projection": -1.0}).json()
+        assert slid["semantic"]["achieved_mm"]["jaw_width"] == pytest.approx(4.0, abs=0.02) and not slid["semantic"]["clamped"]
+        assert slid["vertices"] != plain["vertices"] and slid["texture"] == plain["texture"]
+        if default_registry().availability("flame2023_open")["available"]:
+            flame = client.get(base + "/mesh", params={"template": "makehuman", "topology": "flame2023_open", "brow_arch": 1.0})
+            assert flame.status_code == 200, flame.text
+            body = flame.json()
+            assert body["topology"]["license_id"] == "CC-BY-4.0" and len(body["uvs"]) == len(body["vertices"])
+            assert body["semantic"]["achieved_mm"]["brow_arch"] == pytest.approx(1.5, abs=0.05) or body["semantic"]["clamped"]

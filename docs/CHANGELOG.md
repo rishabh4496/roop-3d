@@ -6,6 +6,15 @@ All notable changes to the Roop 3D project are documented in this file.
 
 ## [Unreleased]
 
+### Data-free albedo prior (opt-in, measured: no benefit)
+- **New:** `reconstruction/albedo_prior.py` (robust skin-tone estimate, smooth CIELAB surface fit, refuses without skin), `far_field` hook in `complete_texture` (default unchanged), `albedo_prior=true` on `/identity-asset/mesh`. No third-party colour data (AlbedoMM is academic-only; MakeHuman litspheres are AGPL-stamped). Held-out real-photo study: no gain over the existing completion (-0.26 dE, 21/45), so it stays off by default. See `docs/ALBEDO_PRIOR_STAGE1.md`.
+
+### Stage 1: morphable topologies, barycentric surface bridge, semantic shape sliders
+- **New:** `MorphableTopologyRegistry` (`reconstruction/topology.py`): `makehuman_cc0` (CC0, default) and a pluggable `flame2023_open` (CC-BY-4.0, SHA-256 pinned in `audit/local_models.py`, allow-listed unpickler, attribution returned with every use). Non-commercial licences cannot be registered.
+- **New:** `BarycentricMeshBridge` (`reconstruction/mesh_bridge.py`) converts positions, normals and UV albedo in both directions between topologies; a derived, labelled UV layout is generated for FLAME (it ships none).
+- **New:** `SemanticShapeController` (`reconstruction/semantic_shape.py`): jaw width, cheekbone prominence, chin projection, nose bridge, brow arch and face fullness as decoupled shape-coefficient offsets that hold head size fixed.
+- **API:** `GET /facesets/{id}/identity-asset/mesh` takes `topology` and the six sliders (`template=makehuman`); new `GET /morphable-topologies`. `local_models.py --verify` also verifies pinned open artifacts. See `docs/MORPHABLE_TOPOLOGY_STAGE1.md` for measured results and limits.
+
 ### Final workstation stage: curves, sweep, linter, stream lanes, relit pass, certification
 - **New:** curves for SH relighting intensity and an occlusion (semantic-parser) confidence threshold, both evaluated per frame into real engine fields; `occlusion_threshold` is opt-in on the wire. See `docs/STAGE27_FINAL_WORKSTATION.md`.
 - **UI:** 3x3 sweep gains an Enhancer axis (None / GPEN Realistic / UltraMax), an SH relighting axis (25 / 60 / 100%) and a native-pixel tile zoom; flamegraph gains a Stream Overlap & PCIe tab (measured stage lanes, ORT-boundary copy ledger, frame ring buffers).

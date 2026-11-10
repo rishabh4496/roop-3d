@@ -14,6 +14,17 @@ Stage 4 render session uses (``engine/volumetric/session.py``), so an asset buil
 All three accept ``?template=canonical|makehuman`` (default ``canonical``, the template ``pose_3d`` / ``reenactment_3d`` render
 sessions reuse). ``makehuman`` is the open CC0 head+neck template (5-point landmarks; it must be built first, see
 ``roop_3d.reconstruction.makehuman_build``); such assets are for inspection / export and are refused by the expression rig.
+
+``GET .../identity-asset/mesh`` additionally takes, for ``template=makehuman`` assets only:
+
+* ``topology=makehuman_cc0|flame2023_open``  re-express the mesh on another registered topology through the barycentric bridge
+  (vertices, normals and the UV albedo atlas). ``flame2023_open`` is CC-BY-4.0; its attribution is returned with the mesh.
+* ``jaw_width``, ``cheekbone_prominence``, ``chin_projection``, ``nose_bridge``, ``brow_arch``, ``face_fullness``  semantic shape
+  sliders (physical units, see ``/morphable-topologies``) applied through the output topology's own shape basis.
+* ``albedo_prior=true``  fill texels no photo observed with the data-free surface albedo prior (``reconstruction.albedo_prior``),
+  through the existing symmetry + harmonic completion. Opt-in; default is the grey "unseen" display.
+
+``GET /morphable-topologies`` lists the registered topologies (licence, attribution, availability) and the slider definitions.
 """
 from __future__ import annotations
 
@@ -35,6 +46,8 @@ from roop_3d.faceset.faceset_reader import FaceSetReader
 router = APIRouter(prefix="/api/v1")
 _FACESET_ID = re.compile(r"[A-Za-z0-9_-]{1,64}")
 TemplateName = Literal["canonical", "makehuman"]
+_CONTROLLERS: dict[tuple, Any] = {}
+_CONTROLLERS_GUARD = threading.Lock()
 _BUILD_LOCKS: dict[str, threading.Lock] = {}
 _BUILD_LOCKS_GUARD = threading.Lock()
 MESH_VERTEX_LIMIT = 100_000
@@ -177,35 +190,145 @@ async def build_identity_asset(faceset_id: str, request: Request, template: Temp
     return await run_in_threadpool(_build, document, template)
 
 
-def _mesh(document, template: str = "canonical") -> dict[str, Any]:
+def _semantic_controller(registry, topology_id: str):
+    """Cached per topology: building one costs a bridge registration the first time (seconds for FLAME), milliseconds after."""
+    from roop_3d.reconstruction.semantic_shape import SemanticShapeController
+    key = (topology_id, registry.fingerprint(registry.default_id), registry.fingerprint(topology_id))
+    with _CONTROLLERS_GUARD:
+        if key not in _CONTROLLERS:
+            _CONTROLLERS.clear()
+            _CONTROLLERS[key] = SemanticShapeController.for_topology(registry, topology_id)
+        return _CONTROLLERS[key]
+
+
+def _topology_view(asset, template: str, topology: str | None, sliders: dict[str, float]):
+    """Mesh / atlas the viewer gets, plus the ``topology`` and ``semantic`` evidence blocks (``None`` when untouched)."""
+    from roop_3d.reconstruction.geometry_types import Mesh3D
+    from roop_3d.reconstruction.topology import default_registry
+    asked = {k: v for k, v in sliders.items() if v != 0.0}
+    if template != "makehuman":
+        if topology is not None or asked:
+            raise DomainError("TOPOLOGY_REQUIRES_MAKEHUMAN_TEMPLATE",
+                              "topology and semantic sliders apply to template=makehuman assets only", 422)
+        return asset.mesh(), asset.texture, asset.texel_state, None, None
+    registry = default_registry()
+    topology_id = topology or registry.default_id
+    spec = registry.spec(topology_id)
+    base = registry.prepared(registry.default_id)
+    if len(asset.vertices) != base.vertex_count:
+        raise DomainError("TOPOLOGY_ASSET_MISMATCH", "The cached asset was built on a different MakeHuman template version; rebuild it", 409)
+    vertices, faces, uvs = np.asarray(asset.vertices, np.float64), base.faces, base.uvs
+    texture, texel_state, bridge_report = asset.texture, asset.texel_state, None
+    is_default = topology_id == registry.default_id
+    if not is_default:
+        bridge = registry.bridge(registry.default_id, topology_id)
+        vertices = bridge.convert_positions(vertices, "target")
+        faces, uvs = bridge.target.faces, bridge.target.uvs
+        moved = bridge.convert_texture(asset.texture, "target", out_size=asset.texture.shape[0], texel_state=asset.texel_state)
+        texture, texel_state, bridge_report = moved["texture"], moved["texel_state"], bridge.report()
+    semantic = None
+    if asked:
+        vertices, result = _semantic_controller(registry, topology_id).apply(vertices, sliders)
+        semantic = result.public()
+    mesh = asset.mesh() if is_default and not asked else Mesh3D(vertices, faces, uvs=uvs)
+    block = {**spec.public(), "default": is_default, "vertex_count": int(len(vertices)),
+             "uv_provenance": base.uv_provenance if is_default else registry.prepared(topology_id).uv_provenance,
+             "bridge": bridge_report}
+    return mesh, texture, texel_state, block, semantic
+
+
+def _complete_with_prior(mesh, texture: np.ndarray, state: np.ndarray) -> tuple[np.ndarray, dict[str, Any]]:
+    """Hole-free atlas for display: symmetry + harmonic completion whose far field is the data-free surface albedo prior."""
+    from roop_3d.reconstruction.albedo_prior import prior_field
+    from roop_3d.reconstruction.mesh_bridge import rasterize_uv
+    from roop_3d.reconstruction.uv_completion import complete_texture
+    from roop_3d.reconstruction.uv_synthesizer import ConfidenceState
+    if mesh.uvs is None:
+        raise DomainError("ALBEDO_PRIOR_NEEDS_UVS", "The mesh has no UV layout to place the prior on", 422)
+    size = texture.shape[0]
+    tri, bary = rasterize_uv(np.asarray(mesh.uvs, np.float64), mesh.faces, size)
+    footprint = tri >= 0
+    positions = np.zeros((size, size, 3))
+    positions[footprint] = np.einsum("nc,ncd->nd", bary[footprint], np.asarray(mesh.vertices, np.float64)[mesh.faces[tri[footprint]]])
+    field, prior = prior_field(texture[..., :3], state, footprint, positions)
+    known = footprint & (state >= int(ConfidenceState.INTERPOLATED))
+    done = complete_texture(texture[..., :3], known, footprint, positions, mirror_x=float(np.asarray(mesh.vertices)[:, 0].mean()), far_field=field)
+    total = max(int(footprint.sum()), 1)
+    out = np.array(texture, copy=True)
+    out[..., :3] = np.where(footprint[..., None], done.texture[..., :3], out[..., :3])
+    report = {"method": "data_free_surface_prior + symmetry/harmonic completion", "third_party_data": False, "colour_space": "CIELAB",
+              "observed_ratio": round(done.stats["observed_ratio"], 4), "symmetry_ratio": round(done.stats["symmetry_ratio"], 4),
+              "harmonic_ratio": round(done.stats["harmonic_ratio"], 4), "skin_tone": prior.tone.public(), "fit": prior.report,
+              "limits": "Completed texels are priors, not observations: a smooth skin tone with no lip, brow, eyelid or identity detail. "
+                        "Texels within a few pixels of completed areas are softened to hide the seam."}
+    return out, report
+
+
+def _mesh(document, template: str = "canonical", topology: str | None = None, sliders: dict[str, float] | None = None,
+          albedo_prior: bool = False) -> dict[str, Any]:
     from roop_3d.reconstruction.identity_asset import compute_build_key, to_gltf_frame
     from roop_3d.reconstruction.uv_synthesizer import ConfidenceState
     key = compute_build_key(document, _settings(template))
     asset = _store().load(document.faceset_id, key)
     if asset is None:
         raise DomainError("IDENTITY_ASSET_NOT_BUILT", "Build the identity asset first; it is never built implicitly", 404)
-    if len(asset.vertices) > MESH_VERTEX_LIMIT or len(asset.faces) > MESH_FACE_LIMIT:
+    source_mesh, source_texture, source_state, topology_block, semantic = _topology_view(asset, template, topology, sliders or {})
+    if len(source_mesh.vertices) > MESH_VERTEX_LIMIT or len(source_mesh.faces) > MESH_FACE_LIMIT:
         raise DomainError("IDENTITY_ASSET_TOO_LARGE", "The identity mesh exceeds the viewer bounds", 413)
-    mesh = to_gltf_frame(asset.mesh())
-    texture = asset.texture.copy()
-    # Unseen texels are shown as neutral grey, never as invented skin.
-    texture[asset.texel_state == int(ConfidenceState.UNSEEN)] = (96, 96, 96)
+    mesh = to_gltf_frame(source_mesh)
+    texture = np.array(source_texture, copy=True)
+    prior_block = None
+    if albedo_prior:
+        texture, prior_block = _complete_with_prior(source_mesh, texture, np.asarray(source_state))
+    else:
+        # Unseen texels are shown as neutral grey, never as invented skin.
+        texture[source_state == int(ConfidenceState.UNSEEN)] = (96, 96, 96)
     ok, png = cv2.imencode(".png", texture)
     if not ok:
         raise DomainError("TEXTURE_ENCODE_FAILED", "Failed to encode the identity atlas", 500)
-    return {
+    provenance = (f"Stage 3 identity asset {asset.manifest.build_key[:12]} · {asset.manifest.reconstruction_level}"
+                  f" · {asset.manifest.landmark_layout} landmarks · "
+                  + ("unseen texels filled by the data-free albedo prior" if albedo_prior else "unseen texels grey"))
+    out = {
         "method": "identity_asset",
         "coordinate_system": "opengl",
         "vertices": np.round(mesh.vertices.astype(np.float64), 6).tolist(),
         "faces": mesh.faces.astype(np.int64).tolist(),
         "uvs": np.round(mesh.uvs.astype(np.float64), 6).tolist() if mesh.uvs is not None else None,
         "texture": "data:image/png;base64," + base64.b64encode(png.tobytes()).decode("ascii"),
-        "provenance": f"Stage 3 identity asset {asset.manifest.build_key[:12]} · {asset.manifest.reconstruction_level}"
-                      f" · {asset.manifest.landmark_layout} landmarks · unseen texels grey",
+        "provenance": provenance,
     }
+    if topology_block is not None:
+        if not topology_block["default"]:
+            provenance += f" · topology {topology_block['id']} ({topology_block['license_id']}; UV {topology_block['uv_provenance']})"
+        out["provenance"] = provenance + (" · semantic sliders applied" if semantic else "")
+        out["topology"] = topology_block
+        out["semantic"] = semantic
+    if prior_block is not None:
+        out["albedo_prior"] = prior_block
+    return out
 
 
 @router.get("/facesets/{faceset_id}/identity-asset/mesh")
-async def identity_asset_mesh(faceset_id: str, request: Request, template: TemplateName = Query(default="canonical")):
+async def identity_asset_mesh(
+    faceset_id: str, request: Request, template: TemplateName = Query(default="canonical"),
+    topology: str | None = Query(default=None, max_length=64),
+    jaw_width: float = Query(default=0.0), cheekbone_prominence: float = Query(default=0.0),
+    chin_projection: float = Query(default=0.0), nose_bridge: float = Query(default=0.0),
+    brow_arch: float = Query(default=0.0), face_fullness: float = Query(default=0.0),
+    albedo_prior: bool = Query(default=False),
+):
+    sliders = {"jaw_width": jaw_width, "cheekbone_prominence": cheekbone_prominence, "chin_projection": chin_projection,
+               "nose_bridge": nose_bridge, "brow_arch": brow_arch, "face_fullness": face_fullness}
     document = await run_in_threadpool(load_document, request, faceset_id)
-    return await run_in_threadpool(_mesh, document, template)
+    return await run_in_threadpool(_mesh, document, template, topology, sliders, albedo_prior)
+
+
+@router.get("/morphable-topologies")
+async def morphable_topologies():
+    """Registered head topologies (licence, attribution, availability) and the semantic slider definitions."""
+    from roop_3d.reconstruction.semantic_shape import slider_definitions
+    from roop_3d.reconstruction.topology import default_registry
+    registry = default_registry()
+    return {"default": registry.default_id, "topologies": await run_in_threadpool(registry.describe),
+            "semantic_sliders": slider_definitions()}

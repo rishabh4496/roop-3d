@@ -20,7 +20,10 @@ try:
     from isolation import AuditError, is_link, safe_path, sha256_file, write_json, write_text
 except ImportError:
     from roop_3d.audit.isolation import AuditError, is_link, safe_path, sha256_file, write_json, write_text
-from project_paths import legacy_root
+try:
+    from project_paths import legacy_root
+except ImportError:  # imported as roop_3d.audit.local_models (the audit directory is not on sys.path)
+    from roop_3d.audit.project_paths import legacy_root
 
 
 class EvidenceState(str, Enum):
@@ -161,6 +164,76 @@ def default_scopes(repo: Path) -> dict[str, Path]:
             "torch_cache": home / ".torch"}
 
 
+# --------------------------------------------------------------------------------------------------------------------
+# Pinned open-licence artifacts: model files that are NOT discovered by scanning but are loaded by exact name, only when
+# their SHA-256 matches. Each entry carries the licence and the attribution the licence requires. Only artifacts whose
+# licence permits commercial use belong here: FLAME 2020 and every other academic-only MPG model (DECA, EMOCA, MICA, VOCA)
+# are deliberately absent and are never loaded.
+# --------------------------------------------------------------------------------------------------------------------
+OPEN_ARTIFACTS: dict[str, dict[str, Any]] = {
+    "flame2023_open": {
+        "name": "FLAME 2023 Open",
+        "filename": "flame2023_Open.pkl",
+        "sha256": "e75a0990728ba038c7da2a420ae4396f7ddd7781366c13026066c5b24f127623",
+        "size_bytes": 53023668,
+        "license_id": "CC-BY-4.0",
+        "license_url": "https://flame.is.tue.mpg.de/modellicense.html",
+        "commercial_use": "allow",
+        "attribution": ("FLAME 2023 Open, Max Planck Institute for Intelligent Systems, CC BY 4.0. "
+                        "T. Li, T. Bolkart, M. J. Black, H. Li and J. Romero, Learning a model of facial shape and expression "
+                        "from 4D scans, ACM Transactions on Graphics (Proc. SIGGRAPH Asia), 2017."),
+        "source": "https://flame.is.tue.mpg.de/",
+        "format": "pickle holding numpy arrays and a scipy.sparse matrix only; read with an allow-listed unpickler",
+        "provenance": "Official FLAME2023_Open download; the file is user-supplied, git-ignored and never bundled",
+        # Checkout-relative locations searched in order (the file is never fetched automatically).
+        "search_paths": ("app/roop_3d/.runtime/models/flame2023_open/flame2023_Open.pkl", "flame/flame2023/flame2023_Open.pkl"),
+    },
+}
+
+
+def open_artifact_record(artifact_id: str) -> dict[str, Any]:
+    try:
+        return OPEN_ARTIFACTS[artifact_id]
+    except KeyError:
+        raise AuditError("OPEN_ARTIFACT_UNKNOWN", artifact_id) from None
+
+
+def verify_open_artifact(artifact_id: str, path: Path) -> dict[str, Any]:
+    """Hash ``path`` and require it to be exactly the pinned artifact. Raises ``MODEL_DRIFT`` on any difference."""
+    record = open_artifact_record(artifact_id)
+    size, digest = sha256_file(path)
+    if digest != record["sha256"] or size != record["size_bytes"]:
+        raise AuditError("MODEL_DRIFT", f"{artifact_id}: {path} is not the pinned file (sha256 {digest[:16]}..., {size} bytes)")
+    return {"artifact_id": artifact_id, "state": EvidenceState.VERIFIED_LOCAL.value, "sha256": digest, "size_bytes": size,
+            "license_id": record["license_id"], "commercial_use": record["commercial_use"], "attribution": record["attribution"],
+            "evidence": "Local file bytes read and SHA-256 compared with the pinned value"}
+
+
+def locate_open_artifact(artifact_id: str, repo: Path) -> Path | None:
+    """First existing pinned location inside the checkout (``repo`` is the checkout root, i.e. the app's parent)."""
+    for relative in open_artifact_record(artifact_id)["search_paths"]:
+        candidate = safe_path(repo, relative)
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def verify_open_artifacts(repo: Path) -> dict[str, Any]:
+    """Verify every pinned open artifact that is present. An absent optional artifact is reported, not a failure; a present
+    file that does not match its pinned hash is a violation."""
+    rows, violations = [], []
+    for artifact_id in OPEN_ARTIFACTS:
+        located = locate_open_artifact(artifact_id, repo)
+        if located is None:
+            rows.append({"artifact_id": artifact_id, "state": "NOT_PRESENT", "evidence": "Optional artifact is not installed"})
+            continue
+        try:
+            rows.append(verify_open_artifact(artifact_id, located))
+        except AuditError as error:
+            violations.append({"artifact_id": artifact_id, "detail": str(error)})
+    return {"ok": not violations, "artifacts": rows, "violations": violations}
+
+
 def license_register(registry: dict[str, Any]) -> str:
     """Keep artifact integrity separate from permissions we have not verified."""
     output = io.StringIO(newline="")
@@ -196,6 +269,11 @@ def main() -> int:
         if arguments.verify:
             registry = json.loads(safe_path(repo, registry_path).read_text("utf-8"))
             result = verify_registry(registry, scopes)
+            open_result = verify_open_artifacts(repo.parent)   # checkout root; optional pinned open-licence files
+            result["open_artifacts"] = open_result["artifacts"]
+            if not open_result["ok"]:
+                result["ok"] = False
+                result["violations"] = [*result["violations"], *open_result["violations"]]
         else:
             old = json.loads(safe_path(repo, "roop_3d/audit/local_models_discovered.json").read_text("utf-8"))
             expected = {os.path.normcase(str(Path(m["path"]).absolute())): m["sha256"] for m in old["models"]}

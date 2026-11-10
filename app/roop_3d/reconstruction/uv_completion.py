@@ -154,8 +154,11 @@ class CompletionResult:
 
 def complete_texture(texture: np.ndarray, observed: np.ndarray, footprint: np.ndarray, positions: np.ndarray,
                      *, mirror_x: float, symmetry_max_mm: float = 5.0, tone_decay_px: float = 60.0,
-                     feather_px: float = 6.0) -> CompletionResult:
-    """Fill every footprint texel. ``positions`` is the (H, W, 3) surface position of each texel (metres)."""
+                     feather_px: float = 6.0, far_field: np.ndarray | None = None) -> CompletionResult:
+    """Fill every footprint texel. ``positions`` is the (H, W, 3) surface position of each texel (metres).
+
+    ``far_field`` (optional (H, W, 3) BGR) replaces the flat skin tone as the colour the harmonic extension relaxes to far from
+    any texture (see ``albedo_prior``); ``None`` keeps the flat tone."""
     h, w = footprint.shape
     tex = texture.astype(np.float32).copy()
     known = observed & footprint
@@ -190,9 +193,10 @@ def complete_texture(texture: np.ndarray, observed: np.ndarray, footprint: np.nd
             ext = _harmonic_extend(tex, placed)
             dist = cv2.distanceTransform((~placed).astype(np.uint8), cv2.DIST_L2, 3)
             alpha = np.exp(-dist / max(tone_decay_px, 1.0))[..., None]
-            filled = tone[None, None, :] + (ext - tone[None, None, :]) * alpha
+            target = tone[None, None, :] if far_field is None else np.asarray(far_field, np.float32)
+            filled = target + (ext - target) * alpha
         else:
-            filled = np.broadcast_to(tone, tex.shape)
+            filled = np.broadcast_to(tone, tex.shape) if far_field is None else np.asarray(far_field, np.float32)
         tex[rest] = filled[rest]
 
     # soften the seam between completed and observed texels (normalised blur: never pulls in the empty atlas)
