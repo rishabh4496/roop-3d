@@ -447,7 +447,10 @@ class SessionManager:
                         "arena_extend_strategy": "kNextPowerOfTwo" if self.hardware_profile == "12gb" else "kSameAsRequested"}
         if self.gpu_memory_limit is not None:
             cuda_options["gpu_mem_limit"] = self.gpu_memory_limit
-        return [(TRT, _string_provider_options(options)), (CUDA, _string_provider_options(cuda_options)), CPU]
+        # No explicit CPU entry: GPU sessions set session.disable_cpu_ep_fallback, and ORT >= 1.23 rejects a session
+        # that both lists the CPU EP and disables CPU fallback ("Conflicting session configuration"), which made
+        # every TensorRT build fail after compiling and silently drop to CUDA.
+        return [(TRT, _string_provider_options(options)), (CUDA, _string_provider_options(cuda_options))]
 
     def create(self, model_path: str | Path, *, model_name: str | None = None,
                providers: tuple[str, ...] = (TRT, CUDA, CPU), intra_op_threads: int | None = None) -> SessionInfo:

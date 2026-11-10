@@ -279,6 +279,35 @@ def test_session_manager_retries_mixed_static_graph_without_cuda_graph(tmp_path,
     assert attempts == ["True", "False"]
 
 
+def test_gpu_sessions_never_list_cpu_ep_while_cpu_fallback_is_disabled(tmp_path, monkeypatch):
+    """ORT >= 1.23 raises "Conflicting session configuration" when the CPU EP is listed together with
+    session.disable_cpu_ep_fallback, which made every TensorRT build fail and silently drop to CUDA."""
+    import roop_3d.core.ort_session as module
+    source = tmp_path / "model.onnx"
+    onnx.save(graph(dynamic=False, fixed_reshape=False), source)
+    seen = []
+
+    class Session:
+        def __init__(self, path, sess_options, providers):
+            names = [p[0] if isinstance(p, tuple) else p for p in providers]
+            if (sess_options.get_session_config_entry("session.disable_cpu_ep_fallback") == "1"
+                    and module.CPU in names):
+                raise RuntimeError("Conflicting session configuration: explicitly added the CPU EP")
+            seen.append(names)
+
+        def get_providers(self):
+            return [module.TRT, module.CUDA, module.CPU]
+
+        def disable_fallback(self):
+            pass
+
+    monkeypatch.setattr(ort, "InferenceSession", Session)
+    result = SessionManager(cache_path=tmp_path / "cache").create(
+        source, model_name=source.name, providers=(module.TRT, module.CUDA, module.CPU))
+    assert result.provider == module.TRT and not result.fallback_errors
+    assert seen == [[module.TRT, module.CUDA]]
+
+
 def test_enhancer_exclusions_do_not_fragment_residual_operator_types():
     model = graph(codeformer=True)
     excluded = set(_trt_excluded_ops(model, "CodeFormer.fp16.onnx").split(","))
