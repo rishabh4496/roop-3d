@@ -14,6 +14,7 @@ import json
 import io
 import os
 from pathlib import Path
+import sys
 from typing import Any, Mapping
 
 try:
@@ -190,6 +191,54 @@ OPEN_ARTIFACTS: dict[str, dict[str, Any]] = {
     },
 }
 
+# Local, procedurally synthesized CC0 assets are registered separately from
+# downloadable model weights. Their bytes are validated by their own embedded
+# digest; no external model source or network request is involved.
+LOCAL_CC0_ASSETS: dict[str, dict[str, Any]] = {
+    "makehuman_cc0_anatomical_pack": {
+        "name": "MakeHuman CC0 Anatomical Full Head Pack",
+        "filename": "makehuman_cc0_anatomical_pack.npz",
+        "relative_path": "roop_3d/.runtime/models/anatomical/makehuman_cc0_anatomical_pack.npz",
+        "license_id": "CC0-1.0",
+        "commercial_use": "allow",
+        "source": "Pinned MakeHuman CC0 head data plus repository-local NumPy synthesis",
+        "fallback": "Analytic CC0 head synthesis when pinned MakeHuman data is not installed",
+    },
+}
+
+
+def verify_local_cc0_assets(repo: Path) -> dict[str, Any]:
+    """Build missing registered CC0 assets locally and validate their content digests."""
+    rows: list[dict[str, Any]] = []
+    violations: list[dict[str, str]] = []
+    for artifact_id, record in LOCAL_CC0_ASSETS.items():
+        try:
+            # The audit CLI can be run as a file with only audit/ on sys.path;
+            # expose the application package for its local asset builder.
+            repo_text = str(repo.absolute())
+            if repo_text not in sys.path:
+                sys.path.insert(0, repo_text)
+            from roop_3d.reconstruction.anatomical_pack import AnatomicalFullHeadAsset
+
+            path = safe_path(repo, record["relative_path"])
+            asset = AnatomicalFullHeadAsset.load(path if path.exists() else None, auto_build=True, verify=True)
+            size, digest = sha256_file(path)
+            rows.append({
+                "artifact_id": artifact_id,
+                "name": record["name"],
+                "state": "VERIFIED_LOCAL",
+                "path": record["relative_path"],
+                "size_bytes": size,
+                "sha256": digest,
+                "license_id": asset.license_id,
+                "commercial_use": record["commercial_use"],
+                "template_source": asset.template_source,
+                "evidence": "Local CC0 synthesis loaded with allow_pickle=False and matched its recorded content digest",
+            })
+        except Exception as error:
+            violations.append({"artifact_id": artifact_id, "detail": str(error)})
+    return {"ok": not violations, "assets": rows, "violations": violations}
+
 
 def open_artifact_record(artifact_id: str) -> dict[str, Any]:
     try:
@@ -250,6 +299,14 @@ def license_register(registry: dict[str, Any]) -> str:
                          "inference_state": model["inference_state"], "license_state": model["license_state"],
                          "commercial_permission": model["commercial_permission"], "download_url_state": "UNKNOWN",
                          "evidence": model["evidence"]})
+    for record in LOCAL_CC0_ASSETS.values():
+        writer.writerow({"artifact_name": record["name"], "family_hint": "anatomical_asset",
+                         "verification_state": "REGISTERED_LOCAL_SYNTHESIS",
+                         "locator": f"application_runtime:{record['relative_path']}",
+                         "graph_metadata_state": "NOT_APPLICABLE", "inference_state": "NOT_APPLICABLE",
+                         "license_state": record["license_id"],
+                         "commercial_permission": record["commercial_use"], "download_url_state": "NOT_APPLICABLE",
+                         "evidence": f"{record['source']}; {record['fallback']}."})
     for name in ("FLAME", "Wav2Lip", "InstantID", "PuLID", "SDXL-Turbo", "FLUX.1-Schnell", "remote_provider"):
         writer.writerow({"artifact_name": name, "verification_state": "CANDIDATE", "graph_metadata_state": "UNKNOWN",
                          "inference_state": "UNKNOWN", "license_state": "UNKNOWN", "commercial_permission": "UNKNOWN",
@@ -271,6 +328,11 @@ def main() -> int:
             result = verify_registry(registry, scopes)
             open_result = verify_open_artifacts(repo.parent)   # checkout root; optional pinned open-licence files
             result["open_artifacts"] = open_result["artifacts"]
+            local_result = verify_local_cc0_assets(repo)
+            result["local_assets"] = local_result["assets"]
+            if not local_result["ok"]:
+                result["ok"] = False
+                result["violations"] = [*result["violations"], *local_result["violations"]]
             if not open_result["ok"]:
                 result["ok"] = False
                 result["violations"] = [*result["violations"], *open_result["violations"]]

@@ -46,12 +46,16 @@ class LocalModelTests(unittest.TestCase):
     def test_license_register_does_not_invent_permissions_or_downloads(self) -> None:
         rows = list(csv.DictReader(io.StringIO(license_register(discover(self.scopes)))))
         self.assertEqual(rows[0]["verification_state"], "VERIFIED_LOCAL")
-        for row in rows:
+        weight_rows = [row for row in rows if row["family_hint"] != "anatomical_asset"]
+        for row in weight_rows:
             self.assertEqual(row["commercial_permission"], "UNKNOWN")
             self.assertEqual(row["license_state"], "UNKNOWN")
             self.assertEqual(row["download_url_state"], "UNKNOWN")
             self.assertEqual(row["inference_state"], "UNKNOWN")
         self.assertEqual(next(r for r in rows if r["artifact_name"] == "FLAME")["verification_state"], "CANDIDATE")
+        anatomical = next(r for r in rows if r["family_hint"] == "anatomical_asset")
+        self.assertEqual(anatomical["license_state"], "CC0-1.0")
+        self.assertEqual(anatomical["commercial_permission"], "allow")
 
     def test_discovery_halts_on_old_hash_drift(self) -> None:
         expected = {os.path.normcase(str(self.weight.absolute())): "0" * 64}
