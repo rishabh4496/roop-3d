@@ -66,6 +66,10 @@ class IdentityAssetSettings(Contract):
     # expression rig / pose blend understand); 'makehuman' is the open CC0 head+neck (5-point landmarks only; `subdivisions`
     # does not apply). It must be built first: python -m roop_3d.reconstruction.makehuman_build
     template: Literal["canonical", "makehuman"] = "canonical"
+    intrinsic_texture_decomposition: bool = Field(
+        default=False,
+        description="Remove broad baked illumination and extract four UV detail bands during atlas synthesis",
+    )
     max_interpolation_fraction: float = Field(default=0.02, ge=0.0, le=0.1)
     # Hashes of external models whose output the inputs depend on (e.g. the detector that produced the stored
     # landmarks). Part of the cache key: change one and the asset is rebuilt.
@@ -395,10 +399,13 @@ def build_identity_asset(
 
     # ---- texture atlas (the synthesizer addresses rows as v*(H-1); the asset keeps OBJ v-up, so flip for it)
     uv_for_atlas = np.column_stack([template.uvs[:, 0], 1.0 - template.uvs[:, 1]])
+    from roop_3d.rendering.intrinsic_texture import IntrinsicTextureDecomposer
+    intrinsic_decomposer = IntrinsicTextureDecomposer() if settings.intrinsic_texture_decomposition else None
     synth = UVSynthesizer(Mesh3D(vertices, template.faces, uvs=uv_for_atlas), uv_size=settings.uv_size,
                           max_interpolation_fraction=settings.max_interpolation_fraction,
                           blend_mode="multiband" if settings.template == "makehuman" else "weighted",
-                          visibility_backend="gpu" if settings.template == "makehuman" else "cpu")
+                          visibility_backend="gpu" if settings.template == "makehuman" else "cpu",
+                          intrinsic_texture_decomposer=intrinsic_decomposer)
     views_obs = []
     for i in chosen:
         vf, q = fit_by_view[i], q_by_index[i]
@@ -478,8 +485,11 @@ def build_identity_asset(
         "Metric head size is a prior: a scale cannot be recovered from images without a known reference length.",
         "Pose comes from a 5-point scaled-orthographic estimate refined during the fit; typical error a few degrees.",
         "Expression is stored as image-space measurements, not FLAME coefficients.",
-        "Texture lighting is only gain-compensated per view; shading/specular are baked into OBSERVED texels.",
     ]
+    if settings.intrinsic_texture_decomposition:
+        limitations.append("UV albedo is intrinsic-image estimated: broad illumination and specular outliers are attenuated, but exact reflectance remains underconstrained without a known scene illuminant; four observed detail bands are retained in the synthesis result.")
+    else:
+        limitations.append("Texture lighting is gain-compensated per view; residual shading and specular highlights may remain baked into observed texels.")
     if generated_ids:
         limitations.append('Synthetic pose references contribute generated appearance priors; they do not prove observed depth or hidden source detail.')
     if not flame["used"]:
@@ -515,7 +525,8 @@ def build_identity_asset(
         # are neural identity features; these RGB layers are observations, not a
         # claimed learned spatial feature encoder. No unobserved texture is invented.
         bank_synth = UVSynthesizer(Mesh3D(vertices, template.faces, uvs=uv_for_atlas), uv_size=256,
-                                   max_interpolation_fraction=0, visibility_backend="gpu")
+                                   max_interpolation_fraction=0, visibility_backend="gpu",
+                                   intrinsic_texture_decomposer=intrinsic_decomposer)
         layers = [bank_synth.synthesize([observation]) for observation in views_obs]
         arrays.update(view_poses=np.array([[fit_by_view[i].yaw, fit_by_view[i].pitch, fit_by_view[i].roll]
                                           for i in chosen], np.float32),

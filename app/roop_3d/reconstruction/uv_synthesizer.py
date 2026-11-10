@@ -114,6 +114,10 @@ class UVSynthesisResult(Contract):
     dominant_view: np.ndarray | None = Field(default=None, description="Per-texel int32 view_index of the top contributor (-1 none)")
     view_gains: dict[int, tuple[float, float, float]] | None = Field(default=None, description="Per-view BGR exposure gain applied")
     rejected_samples: int = Field(default=0, ge=0, description="Photometric outlier samples excluded from blending")
+    intrinsic_displacement_uv_m: np.ndarray | None = Field(
+        default=None, description="Four-band high-frequency skin relief in metres, when intrinsic cleanup is enabled")
+    intrinsic_laplacian_bands: tuple[np.ndarray, ...] | None = Field(
+        default=None, description="Four signed linear-luminance Laplacian bands")
 
 
 class UVSynthesizer:
@@ -127,6 +131,7 @@ class UVSynthesizer:
         max_interpolation_fraction: float | None = None,
         blend_mode: str = "weighted",
         visibility_backend: str = "cpu",
+        intrinsic_texture_decomposer=None,
     ):
         if blend_mode not in ("weighted", "multiband"):
             raise DomainError("INVALID_BLEND_MODE", f"blend_mode must be 'weighted' or 'multiband', got {blend_mode!r}", 422)
@@ -142,12 +147,20 @@ class UVSynthesizer:
         if visibility_backend not in ("cpu", "gpu"):
             raise ValueError("Visibility backend must be cpu or gpu")
         self.visibility_backend = visibility_backend
+        self.intrinsic_texture_decomposer = intrinsic_texture_decomposer
         self.vis_thresh = float(visibility_threshold)
         # Identity path only: interpolation is bounded to this distance (in texels) from an observed texel.
         self.max_interp_px = None if max_interpolation_fraction is None else max(1.0, max_interpolation_fraction * uv_size)
 
         # Precompute rasterized 3D surface positions and normals in UV space
         self._rasterize_uv_geometry()
+
+    def _intrinsic_texture(self, texture: np.ndarray):
+        if self.intrinsic_texture_decomposer is None:
+            return texture, None, None
+        decomposition = self.intrinsic_texture_decomposer.canonicalize(texture, self.face_texel_mask)
+        return (decomposition.albedo_bgr, decomposition.displacement_uv_m,
+                decomposition.laplacian_bands)
 
     def _rasterize_uv_geometry(self) -> None:
         """Rasterize mesh 3D positions and normals onto UV pixel grid."""
@@ -344,6 +357,7 @@ class UVSynthesizer:
         n_obs = int(np.sum(confidence_mask == int(ConfidenceState.OBSERVED)))
         n_interp = int(np.sum(confidence_mask == int(ConfidenceState.INTERPOLATED)))
         n_unseen = total_face - n_obs - n_interp
+        texture_map, displacement, laplacian_bands = self._intrinsic_texture(texture_map)
 
         return UVSynthesisResult(
             texture_map=texture_map,
@@ -351,6 +365,8 @@ class UVSynthesizer:
             observed_ratio=float(n_obs / total_face),
             interpolated_ratio=float(n_interp / total_face),
             unseen_ratio=float(max(0, n_unseen) / total_face),
+            intrinsic_displacement_uv_m=displacement,
+            intrinsic_laplacian_bands=laplacian_bands,
         )
 
     # ------------------------------------------------------------------ identity (camera) path
@@ -578,6 +594,7 @@ class UVSynthesizer:
         total_face = max(int(self.face_texel_mask.sum()), 1)
         n_obs = int((state == int(ConfidenceState.OBSERVED)).sum())
         n_interp = int((state == int(ConfidenceState.INTERPOLATED)).sum())
+        texture, displacement, laplacian_bands = self._intrinsic_texture(texture)
         return UVSynthesisResult(
             texture_map=texture, confidence_mask=state,
             observed_ratio=n_obs / total_face, interpolated_ratio=n_interp / total_face,
@@ -585,4 +602,6 @@ class UVSynthesizer:
             confidence_score=score, view_count=view_count, dominant_view=dominant,
             view_gains={int(view_ids[i]): tuple(float(g) for g in gains[i]) for i in range(n_views)},
             rejected_samples=rejected,
+            intrinsic_displacement_uv_m=displacement,
+            intrinsic_laplacian_bands=laplacian_bands,
         )

@@ -34,11 +34,11 @@ articulated-reconstruction = ["torch==2.7.1"]
 provenance = ["c2pa-python==0.38.0"]
 
 [tool.setuptools]
-packages = ["roop_3d", "roop_3d.audit", "roop_3d.core", "roop_3d.server", "roop_3d.models", "roop_3d.faceset", "roop_3d.media", "roop_3d.engine", "roop_3d.engine.detection", "roop_3d.engine.volumetric", "roop_3d.engine.diffusion", "roop_3d.engine.audio_sync", "roop_3d.reconstruction", "roop_3d.compositor", "roop_3d.bridges", "roop_3d.jobs", "roop_3d.reliability", "roop_3d.tools", "roop_3d.async_pipeline"]
+packages = ["roop_3d", "roop_3d.audit", "roop_3d.core", "roop_3d.server", "roop_3d.models", "roop_3d.faceset", "roop_3d.media", "roop_3d.engine", "roop_3d.engine.detection", "roop_3d.engine.volumetric", "roop_3d.engine.diffusion", "roop_3d.engine.audio_sync", "roop_3d.reconstruction", "roop_3d.rendering", "roop_3d.compositor", "roop_3d.bridges", "roop_3d.jobs", "roop_3d.reliability", "roop_3d.tools", "roop_3d.async_pipeline"]
 package-dir = {"roop_3d" = "."}
 
 [tool.setuptools.package-data]
-roop_3d = ["py.typed", "reconstruction/ARTICULATED_MODELS_LICENSE", "reconstruction/ARTICULATED_MODELS.md"]
+roop_3d = ["py.typed", "reconstruction/ARTICULATED_MODELS_LICENSE", "reconstruction/ARTICULATED_MODELS.md", "rendering/RENDERING_MODELS_LICENSE", "rendering/RENDERING_MODELS.md"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
