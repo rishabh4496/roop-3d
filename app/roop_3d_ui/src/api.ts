@@ -11,7 +11,8 @@ export class ApiError extends Error {
 }
 const apiError = (body: any, status: number) => new ApiError(body?.error?.message ?? `Local service returned ${status}`, body?.error?.code ?? null, status, body?.error?.request_id ?? null);
 export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const response = await fetch(`/api/v1${path}`, { ...init, headers: { ...(typeof init.body === 'string' ? { 'Content-Type': 'application/json' } : {}), ...init.headers } });
+  const normalizedPath = path.startsWith('/api/v1') ? path : `/api/v1${path}`;
+  const response = await fetch(normalizedPath, { ...init, headers: { ...(typeof init.body === 'string' ? { 'Content-Type': 'application/json' } : {}), ...init.headers } });
   if (!response.ok) {
     const error = await response.json().catch(() => null);
     throw apiError(error, response.status);

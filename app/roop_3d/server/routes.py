@@ -420,7 +420,7 @@ def download_missing_models_endpoint(
     req_models = value.models if (value and value.models) else list(REQUIRED_MODELS.keys())
     results = []
     root = request.app.state.root
-    dest_dir = root / "app/models"
+    dest_dir = (root / "models") if (root / "models").is_dir() or root.name == "app" else (root / "app/models")
     dest_dir.mkdir(parents=True, exist_ok=True)
 
     for mname in req_models:
@@ -436,6 +436,12 @@ def download_missing_models_endpoint(
             results.append({"name": mspec.name, "status": "DOWNLOADED", "path": str(path)})
         except Exception as error:
             results.append({"name": mspec.name, "status": "FAILED", "error": str(error)})
+
+    if hasattr(request.app.state, "models") and hasattr(request.app.state.models, "rescan_local"):
+        try:
+            request.app.state.models.rescan_local()
+        except Exception:
+            pass
 
     return {"status": "ok", "results": results}
 

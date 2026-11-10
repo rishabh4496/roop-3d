@@ -57,11 +57,12 @@ REQUIRED_MODELS: Dict[str, ModelSpec] = {
         name="inswapper_128_fp16.onnx",
         aliases=("inswapper_128.onnx", "inswapper_128_fp16.onnx", "inswapper_128.model.onnx"),
         primary_url="https://huggingface.co/ezioruan/inswapper_128.onnx/resolve/6ffdf0e83c5996cc425e77b59913fc48d79441be/inswapper_128.onnx",
-        fallback_url="https://huggingface.co/countfloyd/deepfake/resolve/main/inswapper_128.onnx",
+        fallback_url="https://huggingface.co/facefusion/models-3.0.0/resolve/main/inswapper_128_fp16.onnx",
         expected_sha256="e4a3f08c753cb72d04e10aa0f7dbe3deebbf39567d4ead6dce08e98aa49e16af",
         acceptable_sha256s=(
             "e4a3f08c753cb72d04e10aa0f7dbe3deebbf39567d4ead6dce08e98aa49e16af",
             "eae68e48eb33ac8870a6f39f886f32e2d93e18a804e3b7b62c1214fa619d8560",
+            "c4eccca86ad177586c85c28bf1a64a9d9ed237e283a15818d831f7facfd3f420",
         ),
         expected_size_bytes=554253681,
         category="swapper",
@@ -71,15 +72,17 @@ REQUIRED_MODELS: Dict[str, ModelSpec] = {
         model_id="scrfd_2.5g",
         name="scrfd_2.5g.onnx",
         aliases=("scrfd_2.5g_kps.onnx", "scrfd_2.5g.onnx", "det_2.5g.onnx", "scrfd_2_5g_kps.onnx"),
-        primary_url="https://huggingface.co/facefusion/models-3.0.0/resolve/main/scrfd_2.5g_kps.onnx",
-        fallback_url="https://github.com/visomaster/visomaster-assets/releases/download/v0.1.0/scrfd_2.5g_kps.onnx",
-        expected_sha256="b0959828d11ca7ff989a50ae40da1f5ee7e54c87da2364c3c3a9d2ec05cb51dc",
+        primary_url="https://huggingface.co/facefusion/models-3.0.0/resolve/main/scrfd_2.5g.onnx",
+        fallback_url="https://huggingface.co/AgentRecon/scrfd-2.5g/resolve/main/scrfd_2.5g.onnx",
+        expected_sha256="2c07342347cef21a619c49dd5664fb8c09570ae9eda5bff3e385c11eafc45ada",
         acceptable_sha256s=(
+            "2c07342347cef21a619c49dd5664fb8c09570ae9eda5bff3e385c11eafc45ada",
             "b0959828d11ca7ff989a50ae40da1f5ee7e54c87da2364c3c3a9d2ec05cb51dc",
             "168ec889f5a04eb003bb24e6eb4862f9eb6e28fb68e4bf49129532e3ea721c5b",
             "5838f7fe0536ef55fa3ba422709a3fc3a4b008d66ff97b4c3ae6a090e9cc0c7b",
+            "bc24bb349491481c3ca793cf89306723162c280cb284c5a5e49df3760bf5c2ce",
         ),
-        expected_size_bytes=3272996,
+        expected_size_bytes=3295067,
         category="detector",
         description="SCRFD 2.5G lightweight high-speed face & landmark detector.",
     ),
@@ -88,13 +91,13 @@ REQUIRED_MODELS: Dict[str, ModelSpec] = {
         name="1k3d68.onnx",
         aliases=("1k3d68.onnx", "1k3d68.model.onnx"),
         primary_url="https://huggingface.co/Aitrepreneur/insightface/resolve/fd887cdef0c73f32251198b8160d6771ac413fc0/models/buffalo_l/1k3d68.onnx",
-        fallback_url="https://huggingface.co/facefusion/models-3.0.0/resolve/main/1k3d68.onnx",
+        fallback_url="https://huggingface.co/DavidHoa/buffalo_l/resolve/main/1k3d68.onnx",
         expected_sha256="df5c06b8a0c12e422b2ed8947b8869faa4105387f199c477af038aa01f9a45cc",
         acceptable_sha256s=(
             "df5c06b8a0c12e422b2ed8947b8869faa4105387f199c477af038aa01f9a45cc",
             "df5c06b8a0c109b82e21ee648a734685ff4cfc79469e38e68cfb9efbe7b274c6",
         ),
-        expected_size_bytes=9040332,
+        expected_size_bytes=143607619,
         category="3d_geometry",
         description="68-point 3D facial landmark and shape regressor.",
     ),
@@ -103,13 +106,13 @@ REQUIRED_MODELS: Dict[str, ModelSpec] = {
         name="2d106det.onnx",
         aliases=("2d106det.onnx", "2d106det.model.onnx"),
         primary_url="https://huggingface.co/Aitrepreneur/insightface/resolve/fd887cdef0c73f32251198b8160d6771ac413fc0/models/buffalo_l/2d106det.onnx",
-        fallback_url="https://huggingface.co/facefusion/models-3.0.0/resolve/main/2d106det.onnx",
+        fallback_url="https://huggingface.co/karanjakhar/insightface_weights/resolve/main/2d106det.onnx",
         expected_sha256="f001b856447c413801ef5c42091ed0cd516fcd21f2d6b79635b1e733a7109dbf",
         acceptable_sha256s=(
             "f001b856447c413801ef5c42091ed0cd516fcd21f2d6b79635b1e733a7109dbf",
             "f001b856447ce7c8340d046c3ef6be59cb7a3fa0b7b1ca2cb5c50c37f4cf9983",
         ),
-        expected_size_bytes=4944948,
+        expected_size_bytes=5030888,
         category="3d_geometry",
         description="106-point dense 2D contour and facial feature detector.",
     ),
@@ -118,7 +121,7 @@ REQUIRED_MODELS: Dict[str, ModelSpec] = {
         name="xseg.onnx",
         aliases=("xseg.onnx", "xseg_3.onnx", "xseg_1.onnx", "xseg_2.onnx", "xseg_1.model.onnx", "xseg_2.model.onnx"),
         primary_url="https://huggingface.co/hacksider/deep-live-cam/resolve/581e70b61240b7928404c17900437f47cfe94133/xseg.onnx",
-        fallback_url="https://huggingface.co/facefusion/models-3.0.0/resolve/main/xseg_3.onnx",
+        fallback_url="https://huggingface.co/facefusion/models-3.2.0/resolve/f9cbb5a090256d304f662b81b85880853a9d62cc/xseg_3.onnx",
         expected_sha256="0b57328efcb839d85973164b617ceee9dfe6cfcb2c82e8a033bba9f4f09b27e5",
         acceptable_sha256s=(
             "0b57328efcb839d85973164b617ceee9dfe6cfcb2c82e8a033bba9f4f09b27e5",
@@ -128,7 +131,7 @@ REQUIRED_MODELS: Dict[str, ModelSpec] = {
             "3cbfe3fa6269b61dbdb89117621c1729b12488a032be5566f1fc953b98c56fa7",
             "a8e0ea5f3bf19a3fa2718fb4bce365ab74ecf4f08acdbdc4c6fce7c0f1e00e23",
         ),
-        expected_size_bytes=160492582,
+        expected_size_bytes=70327737,
         category="occlusion",
         description="XSeg neural face and boundary segmentation occluder.",
     ),
@@ -138,13 +141,14 @@ REQUIRED_MODELS: Dict[str, ModelSpec] = {
         aliases=("bisenet_resnet_34.onnx", "bisenet_resnet_18.onnx", "bisenet_resnet_18.model.onnx", "bisenet.onnx"),
         primary_url="https://huggingface.co/facefusion/models-3.0.0/resolve/728b9659bd9691bf32cbf7f61af478d94b7ba81e/bisenet_resnet_34.onnx",
         fallback_url="https://huggingface.co/facefusion/models-3.1.0/resolve/c9e3a503d8e84e91c5cd89ee2d510fe5e793e570/bisenet_resnet_18.onnx",
-        expected_sha256="4a0b8c958a3cbf34800b6564e525beeb56c80249c5be4e3cae6d1912a2333796",
+        expected_sha256="4a0b8c958a3c938913bd06a8365dbb3c8761afba6ecbf0d14b3b1f77eb230c96",
         acceptable_sha256s=(
+            "4a0b8c958a3c938913bd06a8365dbb3c8761afba6ecbf0d14b3b1f77eb230c96",
             "4a0b8c958a3cbf34800b6564e525beeb56c80249c5be4e3cae6d1912a2333796",
             "2218b6183c26ca5c83303232d682a536c670c13ea9695f716c777d1f244eefe9",
             "2218b6183c5098ff4fe39bba0be72648fb162232a514d5ce177721865a7f2921",
         ),
-        expected_size_bytes=53342080,
+        expected_size_bytes=93632546,
         category="occlusion",
         description="BiSeNet 19-class semantic facial parsing network.",
     ),
@@ -153,12 +157,12 @@ REQUIRED_MODELS: Dict[str, ModelSpec] = {
         name="occluder.onnx",
         aliases=("face_occluder.onnx", "occluder.onnx", "face_occluder.model.onnx"),
         primary_url="https://huggingface.co/datvtn/face_occluder/resolve/1eb61ffa05b1548675dea08facbf3c7edcfcb28f/face_occluder.onnx",
-        fallback_url="https://github.com/visomaster/visomaster-assets/releases/download/v0.1.0/face_occluder.onnx",
+        fallback_url="https://huggingface.co/datvtn/face_occluder/resolve/main/face_occluder.onnx",
         expected_sha256="ad9bfb90510790711a429935f846eaba2dcf2935d9afc2bda7349f5bfb92a104",
         acceptable_sha256s=(
             "ad9bfb90510790711a429935f846eaba2dcf2935d9afc2bda7349f5bfb92a104",
         ),
-        expected_size_bytes=3625062,
+        expected_size_bytes=70324403,
         category="occlusion",
         description="High-precision foreground hand, hair, and object occluder.",
     ),
@@ -167,27 +171,31 @@ REQUIRED_MODELS: Dict[str, ModelSpec] = {
         name="GPEN-BFR-512.onnx",
         aliases=("GPEN-BFR-512.onnx", "gpen_bfr_512.onnx", "gpen_bfr_512.model.onnx"),
         primary_url="https://huggingface.co/CountFloyd/deepfake/resolve/ee7d0fe0c284700192ff11e14ecdab5b40185204/GPEN-BFR-512.onnx",
-        fallback_url="https://huggingface.co/facefusion/models-3.0.0/resolve/main/GPEN-BFR-512.onnx",
+        fallback_url="https://huggingface.co/facefusion/models-3.0.0/resolve/728b9659bd9691bf32cbf7f61af478d94b7ba81e/gpen_bfr_512.onnx",
         expected_sha256="0960f836488737faee862412e87fc4c2f74122d2ee7fefd4e0e29b10ec871b69",
         acceptable_sha256s=(
             "0960f836488737faee862412e87fc4c2f74122d2ee7fefd4e0e29b10ec871b69",
+            "d5f066b9068a8b74217f9712e28e875a6144629b108a6f7355acbdb3a2832c54",
             "d5f066b9062df67e2ea3c9ef526ebcd9e3fba46fa0bfd30d5bfaab03f9011707",
         ),
-        expected_size_bytes=284241604,
+        expected_size_bytes=284250449,
         category="enhancer",
         description="GPEN Realistic 512px blind face restoration neural engine.",
     ),
     "ultramax.onnx": ModelSpec(
         model_id="ultramax",
         name="ultramax.onnx",
-        aliases=("ultramax_bfr.onnx", "ultramax.onnx", "codeformer.fp16.onnx", "ultramax_bfr.model.onnx"),
-        primary_url="https://huggingface.co/facefusion/models-3.0.0/resolve/main/codeformer.fp16.onnx",
-        fallback_url="https://github.com/visomaster/visomaster-assets/releases/download/v0.1.0/ultramax_bfr.onnx",
-        expected_sha256="5414b2c989eb2fb12d5930b91e779a1f10bc47cc15da9942a4a753697ebaa400",
+        aliases=("ultramax_bfr.onnx", "ultramax.onnx", "codeformer.fp16.onnx", "codeformer.onnx", "ultramax_bfr.model.onnx"),
+        primary_url="https://huggingface.co/netrunner-exe/Face-Upscalers-onnx/resolve/c0d6e7796b70241abe2fc29b398b3c6a5c766783/codeformer.fp16.onnx",
+        fallback_url="https://huggingface.co/CountFloyd/deepfake/resolve/ee7d0fe0c284700192ff11e14ecdab5b40185204/CodeFormerv0.1.onnx",
+        expected_sha256="5414b2c989eb93feb7b5bccd22a1a9f3842a127411932663d03884af140a48b6",
         acceptable_sha256s=(
+            "5414b2c989eb93feb7b5bccd22a1a9f3842a127411932663d03884af140a48b6",
             "5414b2c989eb2fb12d5930b91e779a1f10bc47cc15da9942a4a753697ebaa400",
+            "9aa48fc4b212351239bc7bf08a90ec4ef0b991efcdcf3a7e584f7bbdcf83626e",
+            "21710e7ab61c82683576c428e9c1b6fe1ed419586b7b39e394c3449c294b550f",
         ),
-        expected_size_bytes=188981248,
+        expected_size_bytes=188576500,
         category="enhancer",
         description="UltraMax decoupled zero-copy Laplacian pyramid face restoration.",
     ),
@@ -211,14 +219,34 @@ def get_model_spec(identifier: str) -> Optional[ModelSpec]:
 def get_model_search_paths(root: Path | None = None) -> List[Path]:
     """Return all valid on-disk directories where models may reside."""
     r = root or _resolve_project_root()
-    return [
-        r / "app/models",
-        r / "app/roop_3d/models/cache",
-        r / "roop_3d/models/cache",
-        r / ".cache/models",
-        r / "cache/models",
+    base = r.parent if r.name == "app" else r
+    app_dir = r if r.name == "app" else (r / "app")
+    raw_paths = [
+        app_dir / "models",
+        app_dir / "roop_3d/models/cache",
         r / "models",
+        r / "app/models",
+        r / "roop_3d/models/cache",
+        r / "app/roop_3d/models/cache",
+        base / "app/models",
+        base / "app/roop_3d/models/cache",
+        base / ".cache/models",
+        base / "cache/models",
+        base / "models",
     ]
+    seen = set()
+    result = []
+    for p in raw_paths:
+        try:
+            resolved = p.resolve()
+            if resolved not in seen:
+                seen.add(resolved)
+                result.append(p)
+        except Exception:
+            if p not in seen:
+                seen.add(p)
+                result.append(p)
+    return result
 
 
 def verify_file_hash(path: Path, expected_sha256: str, acceptable: Tuple[str, ...] = ()) -> bool:
@@ -251,6 +279,17 @@ def find_model_path(spec: ModelSpec, root: Path | None = None) -> Optional[Path]
             if candidate_path.is_file():
                 if verify_file_hash(candidate_path, spec.expected_sha256, spec.acceptable_sha256s):
                     return candidate_path
+        # Also check immediate subdirectories (e.g. CodeFormer/, buffalo_l/)
+        try:
+            for sub in base.iterdir():
+                if sub.is_dir():
+                    for name in candidates:
+                        candidate_path = sub / name
+                        if candidate_path.is_file():
+                            if verify_file_hash(candidate_path, spec.expected_sha256, spec.acceptable_sha256s):
+                                return candidate_path
+        except (OSError, PermissionError):
+            pass
     return None
 
 
@@ -303,6 +342,13 @@ def download_model(
 
     url = spec.fallback_url if use_fallback else spec.primary_url
     existing_bytes = part_path.stat().st_size if part_path.is_file() else 0
+    if existing_bytes >= spec.expected_size_bytes:
+        # Existing partial is invalid or oversized, clear it
+        try:
+            part_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        existing_bytes = 0
 
     req = urllib.request.Request(url, headers={"User-Agent": "roop-3d/1.0"})
     if existing_bytes > 0:
@@ -315,6 +361,13 @@ def download_model(
 
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp, open(part_path, mode) as out_f:
+            # If server returned 200 OK instead of 206 Partial Content, reset file pointer
+            if resp.status == 200 and mode == "ab":
+                out_f.seek(0)
+                out_f.truncate()
+                downloaded = 0
+                existing_bytes = 0
+
             content_len = resp.headers.get("Content-Length")
             if content_len:
                 total_size = existing_bytes + int(content_len)
@@ -342,8 +395,13 @@ def download_model(
                 })
 
     except (URLError, OSError) as err:
-        if not use_fallback:
+        if not use_fallback and spec.fallback_url:
             logger.info("Retrying %s with fallback URL...", spec.name)
+            if part_path.is_file():
+                try:
+                    part_path.unlink(missing_ok=True)
+                except OSError:
+                    pass
             return download_model(identifier, target_dir, progress_callback, app_state, timeout, use_fallback=True)
         raise RuntimeError(f"Download failed for {spec.name}: {err}") from err
 

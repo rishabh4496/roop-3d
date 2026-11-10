@@ -27,7 +27,10 @@ class ApiAliasMiddleware:
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] in {"http", "websocket"}:
             path = scope["path"]
-            if path.startswith("/api/") and path.split("/", 3)[2] != "v1":
+            if path.startswith("/api/v1/api/v1/"):
+                rewritten = path[len("/api/v1"):]
+                scope = {**scope, "path": rewritten, "raw_path": rewritten.encode("latin1"), "original_api_path": path}
+            elif path.startswith("/api/") and path.split("/", 3)[2] != "v1":
                 rewritten = "/api/v1/" + path[len("/api/"):]
                 scope = {**scope, "path": rewritten, "raw_path": rewritten.encode("latin1"), "original_api_path": path}
         await self.app(scope, receive, send)

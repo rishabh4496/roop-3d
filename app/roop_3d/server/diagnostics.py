@@ -846,7 +846,7 @@ def run_preflight_lint(root: Path, state, payload: PreFlightLintRequest) -> dict
         models_check["action"] = {
             "id": "download_models",
             "label": f"Download Missing Models ({len(missing_models)})",
-            "endpoint": "/api/v1/models/download_missing",
+            "endpoint": "/models/download-missing",
             "models": missing_models,
         }
     checks.append(models_check)
