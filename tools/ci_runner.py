@@ -50,6 +50,9 @@ def run_cmd(args: list[str], cwd: Path | None = None, env: dict[str, str] | None
 
 
 def run_pytest(test_files: list[str]) -> tuple[int, str]:
+    # pyproject's addopts pins --basetemp=roop_3d/.runtime/pytest and pytest does not create the parent, so a
+    # fresh checkout (CI) fails every test that uses tmp_path unless .runtime exists first.
+    (APP_DIR / "roop_3d" / ".runtime").mkdir(parents=True, exist_ok=True)
     args = [
         str(PYTHON_VENV),
         "-B",

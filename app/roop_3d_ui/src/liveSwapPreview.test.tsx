@@ -21,7 +21,8 @@ const REQUEST: JobRequest = {
   face_mappings: [{ track_id: 'track_0000', faceset_id: 'alice' }], trim_start_seconds: null, trim_end_seconds: null,
 };
 const png = () => new Blob([new Uint8Array([137, 80, 78, 71])], { type: 'image/png' });
-const swapped = (cache = 'MISS') => new Response(png(), { status: 200, headers: {
+// Bytes, not jsdom's Blob: Node's native Response (undici) needs Blob.stream(), which jsdom's Blob lacks (Node 22 in CI).
+const swapped = (cache = 'MISS') => new Response(new Uint8Array([137, 80, 78, 71]), { status: 200, headers: {
   'Content-Type': 'image/png', 'X-Preview-Cache': cache,
   'X-Preview-Meta': JSON.stringify({ media_id: 'a'.repeat(32), frame_index: 5, faces: [], applied: [], unsupported: ['tps_expression_weight'], notes: [], latency: { total_ms: 41.2 } }) } });
 const busy = (stage = 'STAGE_1_SPARSE_PRESCAN') => new Response(JSON.stringify({ busy: true, stage, retry_after_ms: 1000 }), {

@@ -135,7 +135,7 @@ describe('FrameScrubber: latest frame wins, one request in flight', () => {
 describe('fetchFrame', () => {
   afterEach(() => { vi.unstubAllGlobals(); });
   it('reads the frame metadata from the X-Frame-Meta header and sends the selectors', async () => {
-    const fetchMock = vi.fn(async (_url: string) => new Response(new Blob(['jpeg']), { status: 200, headers: { 'X-Frame-Meta': JSON.stringify(meta(7, [face(0, [1, 2, 3, 4])])) } }));
+    const fetchMock = vi.fn(async (_url: string) => new Response('jpeg', { status: 200, headers: { 'X-Frame-Meta': JSON.stringify(meta(7, [face(0, [1, 2, 3, 4])])) } }));
     vi.stubGlobal('fetch', fetchMock);
     const result = await fetchFrame('roop_3d/.runtime/media/a.mp4', 7, { detect: true });
     expect(result.meta.faces).toHaveLength(1);
