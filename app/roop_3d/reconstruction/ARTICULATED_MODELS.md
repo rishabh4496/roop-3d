@@ -14,10 +14,13 @@ optional for the rest of the Roop 3D application.
 `ArticulatedHeadLayer` takes metric template geometry, five skinning-weight
 columns (root, neck, jaw, left eye, right eye), and optional shape, expression,
 and pose-corrective bases. The articulated groups are root, neck, jaw, and a
-shared six-DoF eye pose. Inputs are `beta (B, 300)`, `psi (B, 100)`, three
-axis-angle vectors for root/neck/jaw, and `theta_eyes (B, 6)` containing eye
-axis-angle followed by eye translation in metres. It returns metric vertices
-and yaw-selected cheek-contour points.
+shared six-DoF eye pose. Inputs are source `beta (B, 300)`, target `psi (B, 100)`,
+three axis-angle vectors for root/neck/jaw, and `theta_eyes (B, 6)` containing
+eye axis-angle followed by eye translation in metres. Source identity is locked
+at 1.0 by default. An optional `beta_target` is used to convert target expression
+displacements into source metric scale; it does not alter source geometry while
+the lock remains 1.0. The layer returns metric vertices and yaw-selected
+cheek-contour points.
 
 `ArcFaceToMetricShapeAdapter.forward_faceset` accepts a parsed `.fsz`
 `FaceSetDocument` or a sequence of its views. It reads each stored 512-D
@@ -28,7 +31,8 @@ is the export interface and returns 300 shape coefficients.
 per-vertex residuals. `LipPhonemeRegressor` predicts a frame-local jaw pose,
 inner-lip residuals, and silence/P/B/M/A/E/I/O/U logits. Neither branch has a
 temporal filter. `MonocularArticulatedHead` composes these regressors, the
-identity adapter, and LBS into one ONNX graph.
+identity adapter, and LBS into one ONNX graph. Its forward and exported graph
+accept target beta explicitly so expression scale is always normalized.
 
 ## Training and export
 

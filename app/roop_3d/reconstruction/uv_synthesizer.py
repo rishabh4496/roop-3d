@@ -556,13 +556,15 @@ class UVSynthesizer:
             mean_color[:, c] = (weights * colors[:, :, c]).sum(axis=0) / denom
 
         if self.blend_mode == "multiband" and int((weights.max(axis=1) > 0).sum()) > 1:
-            from roop_3d.reconstruction.uv_completion import multiband_blend
+            from roop_3d.reconstruction.uv_completion import FullHeadUVCompleter
             used = np.nonzero(weights.max(axis=1) > 0)[0]
             layer_c = np.zeros((len(used), h, w, 3), np.float32)
             layer_w = np.zeros((len(used), h, w), np.float32)
             layer_c[:, ys, xs] = colors[used]
             layer_w[:, ys, xs] = weights[used]
-            mean_color = multiband_blend(layer_c, layer_w)[ys, xs].astype(np.float64)
+            stitched, _ = FullHeadUVCompleter(poisson_seams=True).stitch(
+                layer_c, layer_w, self.face_texel_mask)
+            mean_color = stitched[ys, xs].astype(np.float64)
 
         texture = np.zeros((h, w, 3), np.uint8)
         state = np.zeros((h, w), np.uint8)

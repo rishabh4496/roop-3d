@@ -228,10 +228,12 @@ class NativeMorphableBackbone:
         displacement_m = high_raw[0, 0] * (.1 * self.spec["hrn_beta"] * .1) * valid
         if self.topology.family == "bfm35709":
             identity_native = neutral * .1
+            expression_native = expressed * .1
             vertices_native = (expressed+mid_native) * .1
             mid_m = mid_native * .1
         else:
             identity_native = self._to_bfm_frame(flame_identity)
+            expression_native = self._to_bfm_frame(flame_expressed)
             mid_m = self.to_flame(mid_native * .1)
             vertices_native = self._to_bfm_frame(flame_expressed) + mid_m
         # The shared refinement plan samples the registered HRN UV chart for
@@ -246,7 +248,9 @@ class NativeMorphableBackbone:
         return FittedFace(vertices, camera_vertices, k, alignment,
                           self.surface.interpolate(self.topology.select(identity_native) @ CV_AXES), expression,
                           self.surface.interpolate(self.topology.select(mid_m) @ CV_AXES), displacement_m,
-                          rotation, translation, 1., jaw=jaw, eyelids=eyelids)
+                          rotation, translation, 1., jaw=jaw, eyelids=eyelids,
+                          expression_vertices=self.surface.interpolate(
+                              self.topology.select(expression_native) @ CV_AXES))
 
     def capability(self):
         return {"available": True, "topology": self.topology.family,

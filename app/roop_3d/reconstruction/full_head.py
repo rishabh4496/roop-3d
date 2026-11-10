@@ -350,9 +350,7 @@ class FullHeadEngine:
             cv2.fillPoly(self.target_silhouette, [np.round(jaw).astype(np.int32)], 1.)
         texture, confidence = view_texture(self.rig.asset, (yaw, pitch, roll))
         texture = complete_diffuse_albedo(texture, confidence)
-        from roop_3d.reconstruction.photometry import (
-            HeadPhotometry, decompose_albedo, extend_neck, fit_target_surface,
-        )
+        from roop_3d.reconstruction.photometry import HeadPhotometry, decompose_albedo, extend_neck
         from roop_3d.reconstruction.photometric_gpu import renderer
         from roop_3d.reconstruction.face_detail import extract_detail
         from roop_3d.reconstruction.rbf_deform import welded_vertex_normals
@@ -370,8 +368,10 @@ class FullHeadEngine:
         from roop_3d.reconstruction.photometry import fit_sh, linearize
         sh_source = fit_sh(self._uv_normals, linearize(texture), confidence * self._uv_support,
                           albedo=self._albedo.albedo)
-        target_vertices = fit_target_surface(vertices, indices, points, pose)
-        target_buffers = self.rasterizer.render_buffers(target_vertices, self.rig.faces, self.rig.asset.uvs,
+        # The source mesh owns both the rendered silhouette and the geometry
+        # used for lighting. Fitting target 2D landmarks onto this surface would
+        # pull its jaw and cheek widths back toward the target actor.
+        target_buffers = self.rasterizer.render_buffers(vertices, self.rig.faces, self.rig.asset.uvs,
             texture, confidence, pose, inverse, self.side)
         # A short submental mesh ribbon replaces a normal-guided alpha edge.
         expanded, triangles, uvs, seam = extend_neck(vertices, self.rig.faces, self.rig.asset.uvs,

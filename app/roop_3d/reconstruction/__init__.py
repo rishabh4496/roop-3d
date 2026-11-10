@@ -80,6 +80,7 @@ from roop_3d.reconstruction.tps_fallback import (
     solve_pose_pnp,
     warp_delaunay_piecewise_affine,
 )
+from roop_3d.reconstruction.uv_completion import FullHeadUVCompleter
 from roop_3d.reconstruction.uv_synthesizer import (
     UVSynthesizer,
     UVSynthesisResult,
@@ -94,6 +95,7 @@ __all__ = [
     "ReenactmentSettings",
     "TargetObservation",
     "FaceSetCoverageReport",
+    "FullHeadUVCompleter",
     "IdentityAsset",
     "IdentityAssetManifest",
     "IdentityAssetSettings",

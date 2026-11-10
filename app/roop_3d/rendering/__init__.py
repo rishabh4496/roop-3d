@@ -34,7 +34,8 @@ _LAZY = {
     "SwapRegionConfig": "swap_region_3d", "SwapMask3D": "swap_region_3d", "JawTarget": "swap_region_3d",
     "JawAdaptation": "swap_region_3d", "WeldedGraph": "swap_region_3d", "build_swap_mask_3d": "swap_region_3d",
     "adapt_jaw": "swap_region_3d", "jaw_target_from_ratios": "swap_region_3d", "jaw_target_from_landmarks": "swap_region_3d",
-    "rasterize_swap_mask": "swap_region_3d", "rasterize_vertex_attributes": "vertex_raster", "RasterBuffers": "vertex_raster",
+    "rasterize_swap_mask": "swap_region_3d", "rasterize_uv_swap_mask": "swap_region_3d",
+    "rasterize_vertex_attributes": "vertex_raster", "RasterBuffers": "vertex_raster",
 }
 
 

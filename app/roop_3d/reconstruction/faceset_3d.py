@@ -127,7 +127,7 @@ def _display_texture(asset, mesh: Mesh3D) -> tuple[np.ndarray, dict[str, Any]]:
 
     The asset's own atlas stays observation-only (the reenactment/blending code relies on that); this is display only."""
     from roop_3d.reconstruction.geometry_types import ConfidenceState
-    from roop_3d.reconstruction.uv_completion import complete_texture
+    from roop_3d.reconstruction.uv_completion import FullHeadUVCompleter
     from roop_3d.reconstruction.uv_synthesizer import UVSynthesizer
     size = int(asset.texture.shape[0])
     uv_for_atlas = np.column_stack([asset.uvs[:, 0], 1.0 - asset.uvs[:, 1]])
@@ -135,8 +135,20 @@ def _display_texture(asset, mesh: Mesh3D) -> tuple[np.ndarray, dict[str, Any]]:
     state = np.asarray(asset.texel_state)
     known = (state == int(ConfidenceState.OBSERVED)) | (state == int(ConfidenceState.INTERPOLATED))
     mirror_x = float(np.median(asset.vertices[:, 0]))
-    result = complete_texture(asset.texture, known, synth.face_texel_mask, synth.pos_map.astype(np.float64), mirror_x=mirror_x)
-    return result.texture, {"method": "symmetry_projection+harmonic_skin_tone", **result.stats,
+    view_textures = np.asarray(getattr(asset, "view_textures", ()))
+    view_support = np.asarray(getattr(asset, "view_support", ()))
+    if (view_textures.ndim == 4 and len(view_textures) and view_textures.shape[-1] == 3
+            and view_support.shape == view_textures.shape[:3]):
+        colors = np.stack([cv2.resize(layer, (size, size), interpolation=cv2.INTER_LINEAR)
+                           for layer in view_textures]).astype(np.float32)
+        weights = np.stack([cv2.resize(layer.astype(np.float32), (size, size), interpolation=cv2.INTER_LINEAR)
+                            for layer in view_support]).astype(np.float32)
+    else:
+        colors = asset.texture[None].astype(np.float32)
+        weights = known[None].astype(np.float32)
+    result = FullHeadUVCompleter().complete(
+        colors, weights, synth.face_texel_mask, synth.pos_map.astype(np.float64), mirror_x=mirror_x)
+    return result.texture, {"method": "multiview_poisson+skin_symmetry+harmonic", **result.stats,
                             "note": "Completed texels are generated for display only; they are not observations."}
 
 

@@ -1,16 +1,18 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 Roop 3D contributors
-"""3D swap mask beyond the inner face oval, and the Laplacian field that carries a jaw onto a different jaw width.
+"""Full craniofacial 3D swap mask and the Laplacian field that carries a jaw onto a different jaw width.
 
-ROME-inspired (mesh-based head with a face region that is *extended* past the facial oval to the jaw, chin and ears rather
-than cropped at it). The inner oval is the default and stays the default: every extension is opt-in.
+The default mask covers the forehead toward the hairline, temples, orbital/brow ridge, nose, cheeks, mandible edge, chin
+underside, and upper-neck transition. The smaller inner region remains available for diagnostics and explicit opt-out.
 
 SwapMask3D
     A soft per-vertex weight on the welded head mesh. ``inner`` is the frontal region enclosed by the jaw contour
-    (landmarks 0-16) and the brow line lifted over the forehead. Optional components extend it:
-    ``jawline``      a geodesic band around the jaw contour, both sides of it (the old oval cut the jaw in half);
-    ``chin_underside`` down-facing surface under the chin (visible when the head tilts up);
-    ``ears``         a geodesic disc around each ear anchor.
+    (landmarks 0-16) and a brow line lifted toward the hairline. The default ``full_craniofacial`` union adds:
+    ``temples``        geodesic expansion around the lateral brow and jaw corners;
+    ``jawline``        a geodesic band around the jaw contour, both sides of it;
+    ``chin_underside`` down-facing surface under the chin;
+    ``neck_transition`` the front submental surface leading into the upper neck;
+    ``ears``           an optional geodesic disc around each ear anchor.
 
 Jaw adaptation (``adapt_jaw``)
     When the source and target jaws differ in width, a swapped face either spills past the target's jaw or leaves a rim of
@@ -47,27 +49,30 @@ CHIN_HANDLES = (6, 7, 8, 9, 10)
 BROW_LANDMARKS = tuple(range(17, 27))
 EYE_LANDMARKS = tuple(range(36, 48))
 MOUTH_LANDMARKS = tuple(range(48, 68))
-COMPONENTS = ("inner", "jawline", "chin_underside", "ears")
+COMPONENTS = ("inner", "temples", "jawline", "chin_underside", "neck_transition", "ears", "full_craniofacial")
 
 
 class SwapRegionConfig(Contract):
+    full_craniofacial_mask: bool = True
     include_jawline: bool = False
     include_chin_underside: bool = False
     include_ears: bool = False
     inner_margin_m: float = Field(default=0.004, ge=0.0, le=0.03, description="Inner oval is shrunk this far inside the jaw contour")
-    forehead_lift: float = Field(default=2.0, ge=0.0, le=4.0, description="Brow line is lifted this many brow-to-eye distances")
+    forehead_lift: float = Field(default=2.5, ge=0.0, le=4.0, description="Brow line is lifted toward the hairline")
     feather_m: float = Field(default=0.008, gt=0.0, le=0.03)
-    jaw_band_m: float = Field(default=0.014, gt=0.0, le=0.05, description="Geodesic reach of the jawline component past the contour")
+    jaw_band_m: float = Field(default=0.025, gt=0.0, le=0.05, description="Geodesic reach of the jawline component past the contour")
     inner_blend_m: float = Field(default=0.02, ge=0.0, le=0.05, description="Deformation fall-off on the inner side of the contour")
-    underside_depth_m: float = Field(default=0.03, gt=0.0, le=0.08)
+    underside_depth_m: float = Field(default=0.04, gt=0.0, le=0.08)
     underside_min_normal_y: float = Field(default=0.3, ge=0.0, le=0.9)
+    temple_band_m: float = Field(default=0.032, gt=0.0, le=0.06)
+    neck_transition_m: float = Field(default=0.045, gt=0.0, le=0.08)
     ear_radius_m: float = Field(default=0.03, gt=0.0, le=0.08)
     ear_follow: float = Field(default=0.5, ge=0.0, le=1.0, description="Share of the jaw width change the ears follow")
     max_displacement_m: float = Field(default=0.025, gt=0.0, le=0.06)
 
     @property
     def extended(self) -> bool:
-        return self.include_jawline or self.include_chin_underside or self.include_ears
+        return self.full_craniofacial_mask or self.include_jawline or self.include_chin_underside or self.include_ears
 
 
 def _smoothstep(x: np.ndarray, lo: float, hi: float) -> np.ndarray:
@@ -208,11 +213,21 @@ def build_swap_mask_3d(vertices: np.ndarray, faces: np.ndarray, landmarks68, con
 
     contour_nodes = np.unique(np.concatenate([graph.path(int(ids[k]), int(ids[k + 1])) for k in range(16)]))
     contour_vertices = graph.representative(contour_nodes)
-    if cfg.include_jawline:
+    if cfg.full_craniofacial_mask:
+        # The inner polygon already covers forehead, orbital ridge, nose and
+        # cheeks. Extend around the temporal corners along the actual surface,
+        # stopping before the ear and posterior scalp.
+        temple_anchors = np.asarray([ids[0], ids[16], ids[17], ids[26]], np.int64)
+        temple_distance = graph.geodesic(temple_anchors, limit=cfg.temple_band_m + cfg.feather_m)
+        temporal = (1.0 - _smoothstep(temple_distance, cfg.temple_band_m - cfg.feather_m,
+                                      cfg.temple_band_m)) * facing
+        components["temples"] = np.where(np.isfinite(temple_distance), temporal, 0.0).astype(np.float32)
+
+    if cfg.include_jawline or cfg.full_craniofacial_mask:
         g = graph.geodesic(contour_vertices, limit=cfg.jaw_band_m + cfg.feather_m)
         band = 1.0 - _smoothstep(g, cfg.jaw_band_m - cfg.feather_m, cfg.jaw_band_m)
         components["jawline"] = (np.where(np.isfinite(g), band, 0.0)).astype(np.float32)
-    if cfg.include_chin_underside:
+    if cfg.include_chin_underside or cfg.full_craniofacial_mask:
         chin_nodes = np.unique(np.concatenate([graph.path(int(ids[k]), int(ids[k + 1])) for k in range(5, 11)]))
         g = graph.geodesic(graph.representative(chin_nodes), limit=cfg.underside_depth_m + cfg.feather_m)
         chin_y = float(lm[list(CHIN_HANDLES), 1].mean()) - 0.01
@@ -221,6 +236,20 @@ def build_swap_mask_3d(vertices: np.ndarray, faces: np.ndarray, landmarks68, con
                      * (1.0 - _smoothstep(g, cfg.underside_depth_m - cfg.feather_m, cfg.underside_depth_m))
                      * (v[:, 1] >= chin_y) * (np.abs(v[:, 0]) <= half_width))
         components["chin_underside"] = np.where(np.isfinite(g), underside, 0.0).astype(np.float32)
+    if cfg.full_craniofacial_mask:
+        chin_nodes = np.unique(np.concatenate([graph.path(int(ids[k]), int(ids[k + 1])) for k in range(5, 11)]))
+        g = graph.geodesic(graph.representative(chin_nodes),
+                           limit=cfg.neck_transition_m + cfg.feather_m)
+        chin_y = float(lm[list(CHIN_HANDLES), 1].mean())
+        half_width = 0.5 * jaw_width(lm[list(JAW_LANDMARKS)]) * 0.9
+        vertical = (_smoothstep(v[:, 1], chin_y - cfg.feather_m, chin_y + cfg.feather_m)
+                    * (1.0 - _smoothstep(v[:, 1], chin_y + cfg.neck_transition_m - cfg.feather_m,
+                                         chin_y + cfg.neck_transition_m)))
+        front_neck = _smoothstep(normals[:, 2], 0.0, 0.3)
+        neck = ((1.0 - _smoothstep(g, cfg.neck_transition_m - cfg.feather_m,
+                                   cfg.neck_transition_m)) * vertical * front_neck
+                * (np.abs(v[:, 0]) <= half_width))
+        components["neck_transition"] = np.where(np.isfinite(g), neck, 0.0).astype(np.float32)
     ears = None
     if cfg.include_ears:
         ears = derive_ear_anchors(v, ids)
@@ -228,7 +257,16 @@ def build_swap_mask_3d(vertices: np.ndarray, faces: np.ndarray, landmarks68, con
         disc = 1.0 - _smoothstep(g, cfg.ear_radius_m - cfg.feather_m, cfg.ear_radius_m)
         components["ears"] = np.where(np.isfinite(g), disc, 0.0).astype(np.float32)
         notes.append("ear anchors are the lateral extremum of the eye-to-mouth band (geometric prior)")
-    weights = np.max(np.stack(list(components.values())), axis=0).astype(np.float32)
+
+    if cfg.full_craniofacial_mask:
+        full_names = ["inner", "temples", "jawline", "chin_underside", "neck_transition"]
+        if cfg.include_ears:
+            full_names.append("ears")
+        full = np.max(np.stack([components[name] for name in full_names]), axis=0)
+        components["full_craniofacial"] = full.astype(np.float32)
+        weights = full.astype(np.float32)
+    else:
+        weights = np.max(np.stack(list(components.values())), axis=0).astype(np.float32)
     return SwapMask3D(weights, components, cfg, contour_vertices, ears, tuple(notes))
 
 
@@ -237,6 +275,34 @@ def rasterize_swap_mask(mask: SwapMask3D, pixels: np.ndarray, depth: np.ndarray,
     """Depth-tested 2D swap mask (H, W) from the per-vertex weights; also returns the raster buffers (depth, face ids)."""
     weights = mask.weights if component is None else mask.components[component]
     raster = rasterize_vertex_attributes(pixels, depth, faces, weights, shape)
+    return np.clip(raster.attributes[..., 0], 0.0, 1.0).astype(np.float32), raster
+
+
+def rasterize_uv_swap_mask(mask: SwapMask3D, uvs: np.ndarray, faces: np.ndarray,
+                           shape: tuple[int, int], *, component: str | None = None,
+                           v_origin: str = "bottom_left") -> tuple[np.ndarray, RasterBuffers]:
+    """Rasterize the same craniofacial weights into canonical UV image space.
+
+    UV-seam vertex duplicates retain their own per-vertex mask values. Triangle
+    depth is ordered only to make overlapping atlas islands deterministic.
+    """
+    uv = np.asarray(uvs, np.float64)
+    tri = np.asarray(faces, np.int64)
+    height, width = int(shape[0]), int(shape[1])
+    if (uv.shape != (len(mask.weights), 2) or tri.ndim != 2 or tri.shape[1] != 3
+            or not np.isfinite(uv).all() or np.any((uv < 0) | (uv > 1))
+            or v_origin not in ("bottom_left", "top_left")):
+        raise DomainError("SWAP_UV_INVALID", "UVs, faces and origin must describe one finite unit-square atlas", 422)
+    weights = mask.weights if component is None else mask.components[component]
+    if len(tri) == 0:
+        raise DomainError("SWAP_UV_INVALID", "UV rasterization requires at least one triangle", 422)
+    image_v = 1.0 - uv[:, 1] if v_origin == "bottom_left" else uv[:, 1]
+    pixels = np.column_stack((uv[:, 0] * max(width - 1, 1), image_v * max(height - 1, 1)))
+    expanded_faces = np.arange(len(tri) * 3, dtype=np.int64).reshape(-1, 3)
+    expanded_pixels = pixels[tri].reshape(-1, 2)
+    expanded_weights = weights[tri].reshape(-1)
+    depth = -np.repeat(np.arange(len(tri), dtype=np.float64), 3)
+    raster = rasterize_vertex_attributes(expanded_pixels, depth, expanded_faces, expanded_weights, (height, width))
     return np.clip(raster.attributes[..., 0], 0.0, 1.0).astype(np.float32), raster
 
 
@@ -353,10 +419,12 @@ def adapt_jaw(vertices: np.ndarray, faces: np.ndarray, landmarks68, target: JawT
               pinned=()) -> JawAdaptation:
     """Carry the jaw (and opt-in chin underside / ears) of ``vertices`` onto ``target`` with a biharmonic Laplacian field.
 
-    The inner face is untouched except for the ``inner_blend_m`` collar inside the contour. With no extension enabled the
-    field is zero and the mesh is returned unchanged (the inner-oval behaviour). ``pinned`` vertices are held at zero
-    displacement (the field decays to zero at them): on a coarse mesh, where one edge spans several centimetres, the collar
-    alone cannot keep the eyes or the mouth still.
+    The mask is full craniofacial by default, but geometry changes remain
+    controlled by the explicit jaw/chin/ear adaptation options. With no
+    adaptation option enabled, the field is zero and the input mesh is returned
+    unchanged. ``pinned`` vertices are held at zero displacement (the field
+    decays to zero at them): on a coarse mesh, where one edge spans several
+    centimetres, the collar alone cannot keep the eyes or the mouth still.
     """
     cfg = config or SwapRegionConfig()
     v = np.asarray(vertices, np.float64)

@@ -154,7 +154,8 @@ class CompletionResult:
 
 def complete_texture(texture: np.ndarray, observed: np.ndarray, footprint: np.ndarray, positions: np.ndarray,
                      *, mirror_x: float, symmetry_max_mm: float = 5.0, tone_decay_px: float = 60.0,
-                     feather_px: float = 6.0, far_field: np.ndarray | None = None) -> CompletionResult:
+                     feather_px: float = 6.0, far_field: np.ndarray | None = None,
+                     symmetry_source: np.ndarray | None = None) -> CompletionResult:
     """Fill every footprint texel. ``positions`` is the (H, W, 3) surface position of each texel (metres).
 
     ``far_field`` (optional (H, W, 3) BGR) replaces the flat skin tone as the colour the harmonic extension relaxes to far from
@@ -167,14 +168,18 @@ def complete_texture(texture: np.ndarray, observed: np.ndarray, footprint: np.nd
     source[known] = 1
     tone = skin_tone(texture, known)
 
-    # (1) bilateral symmetry: a missing texel takes the colour at its mirrored surface position when that was observed
+    # (1) bilateral symmetry: callers may restrict donors to skin-only samples,
+    # preserving asymmetrical features while completing unseen skin patches.
     missing = footprint & ~known
+    symmetry_known = known if symmetry_source is None else known & np.asarray(symmetry_source, bool)
+    if symmetry_known.shape != footprint.shape:
+        raise ValueError("symmetry_source must match the UV footprint shape")
     n_sym = 0
-    if known.any() and missing.any():
+    if symmetry_known.any() and missing.any():
         ys, xs = np.nonzero(missing)
         q = positions[ys, xs].astype(np.float64).copy()
         q[:, 0] = 2.0 * mirror_x - q[:, 0]
-        ky, kx = np.nonzero(known)
+        ky, kx = np.nonzero(symmetry_known)
         idx, dist = nearest_texels(q, positions[ky, kx].astype(np.float64))
         ok = (idx >= 0) & (dist <= symmetry_max_mm / 1000.0)
         if ok.any():
@@ -227,3 +232,107 @@ def complete_texture(texture: np.ndarray, observed: np.ndarray, footprint: np.nd
     stats = {"observed_ratio": float(known.sum() / total), "symmetry_ratio": float(n_sym / total),
              "harmonic_ratio": float(n_harm / total), "skin_tone_bgr": [float(x) for x in tone]}
     return CompletionResult(texture=bgra, source=source, stats=stats)
+
+
+def _poisson_blend_view_seams(composite: np.ndarray, colors: np.ndarray, weights: np.ndarray,
+                              footprint: np.ndarray, *, threshold: float = 1e-4) -> tuple[np.ndarray, int]:
+    """Use local Poisson cloning on overlap seams after the broad multiband stitch."""
+    result = np.clip(composite, 0, 255).round().astype(np.uint8)
+    present = weights > threshold
+    winner = weights.argmax(axis=0)
+    seam_count = 0
+    for index in range(len(weights)):
+        other = np.max(np.where(np.arange(len(weights))[:, None, None] == index, 0.0, weights), axis=0)
+        seam = (present[index] & (other > threshold) & (winner != index) & footprint)
+        if not seam.any():
+            continue
+        seam = cv2.dilate(seam.astype(np.uint8), np.ones((5, 5), np.uint8)).astype(bool)
+        seam &= present[index] & footprint
+        ys, xs = np.nonzero(seam)
+        pad = 8
+        y0, y1 = max(int(ys.min()) - pad, 0), min(int(ys.max()) + pad + 1, result.shape[0])
+        x0, x1 = max(int(xs.min()) - pad, 0), min(int(xs.max()) + pad + 1, result.shape[1])
+        if y1 - y0 < 3 or x1 - x0 < 3:
+            continue
+        source = np.clip(colors[index, y0:y1, x0:x1], 0, 255).round().astype(np.uint8)
+        destination = result[y0:y1, x0:x1]
+        mask = seam[y0:y1, x0:x1] * 255
+        try:
+            result[y0:y1, x0:x1] = cv2.seamlessClone(
+                source, destination, mask, ((x1 - x0) // 2, (y1 - y0) // 2), cv2.NORMAL_CLONE)
+            seam_count += 1
+        except cv2.error:
+            # Tiny or degenerate overlap regions keep their multiband result.
+            continue
+    return result.astype(np.float32), seam_count
+
+
+class FullHeadUVCompleter:
+    """Stitch observed FaceSet views and complete a full-head UV atlas.
+
+    View layers are already projected into the same canonical UV topology and
+    z-buffered by the caller. This class blends their overlap seams, then uses
+    symmetric *skin* donors and a harmonic prior for texels unseen at every
+    angle. Generated texels remain tagged separately from observations.
+    """
+
+    def __init__(self, *, poisson_seams: bool = True, symmetry_max_mm: float = 5.0,
+                 tone_decay_px: float = 60.0, feather_px: float = 6.0) -> None:
+        if (not np.isfinite((symmetry_max_mm, tone_decay_px, feather_px)).all()
+                or symmetry_max_mm <= 0 or tone_decay_px <= 0 or feather_px < 0):
+            raise ValueError("UV completion distances must be positive")
+        self.poisson_seams = bool(poisson_seams)
+        self.symmetry_max_mm = float(symmetry_max_mm)
+        self.tone_decay_px = float(tone_decay_px)
+        self.feather_px = float(feather_px)
+
+    @staticmethod
+    def _skin_donors(texture: np.ndarray, observed: np.ndarray) -> np.ndarray:
+        ycc = cv2.cvtColor(np.clip(texture, 0, 255).astype(np.uint8), cv2.COLOR_BGR2YCrCb)
+        return (observed & (ycc[..., 1] >= 128) & (ycc[..., 1] <= 178)
+                & (ycc[..., 2] >= 72) & (ycc[..., 2] <= 132) & (ycc[..., 0] > 35))
+
+    def stitch(self, view_textures: np.ndarray, view_weights: np.ndarray,
+               footprint: np.ndarray) -> tuple[np.ndarray, dict[str, int]]:
+        """Return an observation-only atlas with multiband and Poisson seam blending."""
+        colors = np.asarray(view_textures, np.float32)
+        weights = np.asarray(view_weights, np.float32)
+        support = np.asarray(footprint, bool)
+        if (colors.ndim != 4 or colors.shape[-1] != 3 or weights.shape != colors.shape[:3]
+                or support.shape != colors.shape[1:3] or not np.isfinite(colors).all()
+                or not np.isfinite(weights).all() or np.any(weights < 0)):
+            raise ValueError("Expected finite view layers (N,H,W,3), weights (N,H,W), and a matching footprint")
+        weights = np.where(support[None], weights, 0.0)
+        if not (weights > 0).any():
+            raise ValueError("At least one observed UV texel is required")
+        stitched = multiband_blend(colors, weights)
+        poisson_regions = 0
+        if self.poisson_seams and len(colors) > 1:
+            stitched, poisson_regions = _poisson_blend_view_seams(stitched, colors, weights, support)
+        return stitched, {"view_count": int(len(colors)), "poisson_seam_regions": poisson_regions}
+
+    def complete(self, view_textures: np.ndarray, view_weights: np.ndarray, footprint: np.ndarray,
+                 positions: np.ndarray, *, mirror_x: float,
+                 far_field: np.ndarray | None = None) -> CompletionResult:
+        colors = np.asarray(view_textures, np.float32)
+        weights = np.asarray(view_weights, np.float32)
+        support = np.asarray(footprint, bool)
+        surface = np.asarray(positions, np.float32)
+        if (colors.ndim != 4 or colors.shape[-1] != 3 or weights.shape != colors.shape[:3]
+                or support.shape != colors.shape[1:3] or surface.shape != (*support.shape, 3)
+                or not np.isfinite(colors).all() or not np.isfinite(weights).all()
+                or np.any(weights < 0) or not np.isfinite(surface).all()):
+            raise ValueError("Expected finite view layers (N,H,W,3), weights (N,H,W), and matching UV geometry")
+        weights = np.where(support[None], weights, 0.0)
+        observed = weights.max(axis=0) > 0
+        if not observed.any():
+            raise ValueError("At least one observed UV texel is required")
+        stitched, stitch_stats = self.stitch(colors, weights, support)
+        observed &= support
+        symmetry_source = self._skin_donors(stitched, observed)
+        result = complete_texture(stitched, observed, support, surface, mirror_x=mirror_x,
+            symmetry_max_mm=self.symmetry_max_mm, tone_decay_px=self.tone_decay_px,
+            feather_px=self.feather_px, far_field=far_field, symmetry_source=symmetry_source)
+        result.stats.update({**stitch_stats, "skin_symmetry_donors": int(symmetry_source.sum()),
+                             "completion_pipeline": "multiband+poisson+skin_symmetry+harmonic"})
+        return result

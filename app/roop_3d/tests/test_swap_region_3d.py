@@ -15,7 +15,7 @@ from roop_3d.reconstruction.rbf_deform import welded_vertex_normals
 from roop_3d.rendering.swap_region_3d import (
     CHIN_HANDLES, JAW_LANDMARKS, JawTarget, SwapRegionConfig, WeldedGraph, adapt_jaw, build_swap_mask_3d,
     derive_ear_anchors, jaw_target_from_landmarks, jaw_target_from_ratios, jaw_width, polygon_signed_distance,
-    rasterize_swap_mask)
+    rasterize_swap_mask, rasterize_uv_swap_mask)
 from roop_3d.rendering.vertex_raster import orthographic_pixels, rasterize_vertex_attributes
 
 needs_asset = pytest.mark.skipif(not (DEFAULT_ASSET_DIR / ASSET_NAME).exists(), reason="MakeHuman head asset not built")
@@ -103,30 +103,32 @@ def test_rasterizer_validates_inputs():
 
 # =========================================================================== swap mask on the real head
 @needs_asset
-def test_default_mask_is_the_inner_oval_only(head):
+def test_default_mask_covers_the_full_craniofacial_surface(head):
     v, f, lm, graph = head
     mask = build_swap_mask_3d(v, f, lm, graph=graph)
-    assert set(mask.components) == {"inner"} and mask.ear_anchors is None
+    assert mask.config.full_craniofacial_mask and mask.ear_anchors is None
+    assert {"inner", "temples", "jawline", "chin_underside", "neck_transition", "full_craniofacial"} <= set(mask.components)
     assert mask.weights.min() >= 0 and mask.weights.max() <= 1
-    assert 0.2 < mask.area_fraction() < 0.5                                 # the frontal face, not the whole head
+    assert 0.2 < mask.area_fraction() < 0.75
     nose_tip = int(lm[30])
     assert mask.weights[nose_tip] > 0.95
     assert mask.weights[int(np.argmin(v[:, 2]))] == 0                     # back of the head
-    # the oval stops AT the jaw: the jaw-contour vertices themselves are on its edge, not inside it
-    assert mask.weights[lm[list(JAW_LANDMARKS)]].mean() < 0.3
+    assert mask.components["full_craniofacial"] == pytest.approx(mask.weights)
+    assert mask.weights[lm[list(JAW_LANDMARKS)]].mean() > 0.9
 
 
 @needs_asset
 def test_jawline_extension_only_adds_and_covers_the_contour(head):
     v, f, lm, graph = head
-    base = build_swap_mask_3d(v, f, lm, graph=graph)
-    ext = build_swap_mask_3d(v, f, lm, SwapRegionConfig(include_jawline=True), graph=graph)
+    base = build_swap_mask_3d(v, f, lm, SwapRegionConfig(full_craniofacial_mask=False), graph=graph)
+    ext = build_swap_mask_3d(v, f, lm, SwapRegionConfig(full_craniofacial_mask=False, include_jawline=True), graph=graph)
     assert np.all(ext.weights >= base.weights - 1e-6)                      # monotonic: an extension never removes coverage
     assert ext.area_fraction() > base.area_fraction() + 0.03
     assert ext.components["jawline"][lm[list(JAW_LANDMARKS)]].min() > 0.99
     assert ext.weights[lm[list(JAW_LANDMARKS)]].min() > 0.99
     assert ext.components["jawline"][int(lm[30])] == 0                   # the band is local to the contour
-    wider = build_swap_mask_3d(v, f, lm, SwapRegionConfig(include_jawline=True, jaw_band_m=0.03), graph=graph)
+    wider = build_swap_mask_3d(v, f, lm, SwapRegionConfig(full_craniofacial_mask=False,
+                                                          include_jawline=True, jaw_band_m=0.03), graph=graph)
     assert wider.area_fraction("jawline") > ext.area_fraction("jawline")
 
 
@@ -168,6 +170,20 @@ def test_swap_mask_rasterises_depth_tested(head):
     assert (image[raster.face_id < 0] == 0).all()                            # nothing outside the mesh
     # depth test: the near face hides the back of the head, so frontal swap weights win at the nose pixel
     assert raster.depth[nose[1], nose[0]] < depth[lm[30]] + 5e-3
+
+
+@needs_asset
+def test_full_craniofacial_mask_rasterises_into_canonical_uv_space(head):
+    v, f, lm, graph = head
+    from roop_3d.reconstruction.makehuman_template import makehuman_template
+    template = makehuman_template()
+    mask = build_swap_mask_3d(v, f, lm, graph=graph)
+    atlas, raster = rasterize_uv_swap_mask(mask, template.uvs, f, (256, 256))
+    nose_uv = template.uvs[int(lm[30])]
+    x = int(round(nose_uv[0] * 255))
+    y = int(round((1.0 - nose_uv[1]) * 255))
+    assert atlas.shape == (256, 256) and raster.coverage.sum() > 0
+    assert atlas[y, x] > 0.9
 
 
 @needs_asset

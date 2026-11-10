@@ -9,6 +9,21 @@ ModernGL rasterizer.
 
 ## Interfaces
 
+`SwapRegionConfig.full_craniofacial_mask` is enabled by default. Its per-vertex
+and UV masks include the forehead cap lifted toward the hairline, temporal
+corners, the orbital/brow and cheek region, the full jaw contour, submental
+surface, and upper-neck transition. `rasterize_uv_swap_mask` maps those same
+weights into canonical UV image coordinates while preserving UV-seam duplicates.
+
+`FullHeadUVCompleter` stitches already registered, visibility-tested per-view
+UV layers with multiband blending and local Poisson seam cloning. It completes
+unseen areas from observed skin patches reflected across the canonical midline,
+then from a harmonic color prior. The returned per-texel source labels keep
+observed, symmetric, and harmonic texels distinct. `UVSynthesizer` uses its
+Poisson stitch path when the multiband mode is selected; display atlas
+completion also uses the full completion pipeline without changing the saved
+observation states.
+
 `UnbiasedSkinToneCalibrator.decompose` returns linear BGR albedo, median CIE
 Lab values, melanin/hemoglobin optical-density coordinates, and an explicit
 scene illuminant estimate. Pass an illumination from `SceneIllumination` or a

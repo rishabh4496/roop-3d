@@ -280,6 +280,7 @@ class MonocularArticulatedHead(nn.Module):
         reference_embeddings: Tensor,
         reference_sharpness: Tensor,
         reference_yaw_degrees: Tensor,
+        beta_target: Tensor,
     ) -> tuple[Tensor, Tensor, Tensor, Tensor, Tensor, Tensor]:
         beta = self.identity(reference_embeddings, reference_sharpness, reference_yaw_degrees)
         psi, asymmetric_residual = self.expression(face_roi)
@@ -289,6 +290,7 @@ class MonocularArticulatedHead(nn.Module):
         vertices, contour = self.skinning_layer(
             beta, psi, global_pose, neck_pose, jaw, theta_eyes,
             vertex_residual=asymmetric_residual + lip_residual,
+            beta_target=beta_target,
         )
         return vertices, contour, beta, psi, jaw, phoneme_logits
 
@@ -308,6 +310,8 @@ def export_articulated_head_onnx(
     to the example resolution; this gives TensorRT a stable optimization
     profile while allowing variable FaceSet sizes. TensorRT can consume the
     resulting ONNX directly; TensorRT itself remains an optional runtime extra.
+    The export accepts ``beta_target`` explicitly so target expression scale
+    can be normalized while the output mesh stays locked to the FaceSet beta.
     """
     if face_size <= 0 or mouth_size <= 0 or reference_views <= 0:
         raise ValueError("export example dimensions must be positive")
@@ -322,6 +326,7 @@ def export_articulated_head_onnx(
         torch.zeros((1, reference_views, 512), device=device, dtype=dtype),
         torch.ones((1, reference_views), device=device, dtype=dtype),
         torch.zeros((1, reference_views), device=device, dtype=dtype),
+        torch.zeros((1, model.skinning_layer.SHAPE_DIM), device=device, dtype=dtype),
     )
     torch.onnx.export(
         model,
@@ -330,7 +335,8 @@ def export_articulated_head_onnx(
         export_params=True,
         opset_version=opset_version,
         do_constant_folding=True,
-        input_names=("face_roi", "mouth_roi", "reference_embeddings", "reference_sharpness", "reference_yaw_degrees"),
+        input_names=("face_roi", "mouth_roi", "reference_embeddings", "reference_sharpness",
+                     "reference_yaw_degrees", "beta_target"),
         output_names=("vertices", "cheek_contour", "beta", "psi", "theta_jaw", "phoneme_logits"),
         dynamic_axes={
             "face_roi": {0: "batch"},
@@ -338,6 +344,7 @@ def export_articulated_head_onnx(
             "reference_embeddings": {0: "batch", 1: "reference_views"},
             "reference_sharpness": {0: "batch", 1: "reference_views"},
             "reference_yaw_degrees": {0: "batch", 1: "reference_views"},
+            "beta_target": {0: "batch"},
             "vertices": {0: "batch"},
             "cheek_contour": {0: "batch"},
             "beta": {0: "batch"},

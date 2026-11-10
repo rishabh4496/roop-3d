@@ -8,7 +8,8 @@ own pivot. Geometry is supplied by the caller; this module contains no model
 assets or code from third-party face projects.
 
 Tensor contract (all coordinates in the template's metric frame):
-* beta: (B, 300), psi: (B, 100)
+* beta: source shape (B, 300), psi: target expression (B, 100)
+* beta_target: optional target shape for metric expression normalization
 * global_pose, neck_pose, theta_jaw: axis-angle rotations (B, 3), radians
 * theta_eyes: conjugate eye rotation then translation (B, 6), radians/metres
 * vertices: output (B, V, 3); dynamic contour landmarks: (B, K, 3)
@@ -69,6 +70,7 @@ class ArticulatedHeadLayer(nn.Module):
         pose_directions: Tensor | None = None,
         joint_regressor: Tensor | None = None,
         contour_candidates: Tensor | None = None,
+        source_identity_lock: float = 1.0,
     ) -> None:
         super().__init__()
         vertices = torch.as_tensor(template_vertices, dtype=torch.float32)
@@ -88,6 +90,11 @@ class ArticulatedHeadLayer(nn.Module):
         self.register_buffer("template_vertices", vertices.contiguous())
         self.register_buffer("skinning_weights", weights.contiguous())
         self.register_buffer("rest_joints", joints.contiguous())
+        self.register_buffer("bone_pair_indices", torch.triu_indices(
+            self.JOINT_COUNT, self.JOINT_COUNT, offset=1))
+        if not math.isfinite(source_identity_lock) or not 0.0 <= source_identity_lock <= 1.0:
+            raise ValueError("source_identity_lock must be finite and in [0, 1]")
+        self.source_identity_lock = float(source_identity_lock)
 
         self._register_basis("shape_directions", shape_directions, self.SHAPE_DIM, vertices.shape[0])
         self._register_basis("expression_directions", expression_directions, self.EXPRESSION_DIM, vertices.shape[0])
@@ -122,6 +129,37 @@ class ArticulatedHeadLayer(nn.Module):
             raise ValueError(f"{name} must have shape ({count}, V, 3)")
         self.register_buffer(name, basis.contiguous())
 
+    def _bone_scale(self, beta: Tensor) -> Tensor:
+        """Return a metric scale for the articulated skeleton represented by ``beta``.
+
+        A joint regressor gives the mean pairwise joint distance directly. If an
+        asset has no regressor, the geometric mean of its three craniofacial
+        extents is a stable scale proxy. This is used only to convert target
+        expression displacements into the source identity's metric units.
+        """
+        shaped = self.template_vertices.unsqueeze(0).expand(beta.shape[0], -1, -1)
+        if self.shape_directions is not None:
+            shaped = shaped + torch.einsum("bp,pvc->bvc", beta, self.shape_directions)
+        if self.joint_regressor is not None:
+            joints = torch.einsum("jv,bvc->bjc", self.joint_regressor, shaped)
+            pairs = self.bone_pair_indices
+            distances = torch.linalg.vector_norm(joints[:, pairs[0]] - joints[:, pairs[1]], dim=-1)
+            return distances.mean(dim=-1).clamp_min(1e-6)
+        extents = shaped.amax(dim=1) - shaped.amin(dim=1)
+        return extents.clamp_min(1e-6).prod(dim=-1).pow(1.0 / 3.0).clamp_min(1e-6)
+
+    def normalize_expression_for_source(self, psi_target: Tensor, beta_source: Tensor,
+                                        beta_target: Tensor) -> Tensor:
+        """Scale target expression into source metric units without blending target shape.
+
+        Expression bases are metric displacements. Converting a target expression
+        to the source head therefore multiplies it by source/target bone scale.
+        """
+        if beta_source.shape != beta_target.shape or beta_source.shape != (psi_target.shape[0], self.SHAPE_DIM):
+            raise ValueError("source and target beta must both have shape (B, 300)")
+        ratio = self._bone_scale(beta_source) / self._bone_scale(beta_target).clamp_min(1e-6)
+        return psi_target * ratio[:, None]
+
     def forward(
         self,
         beta: Tensor,
@@ -132,8 +170,17 @@ class ArticulatedHeadLayer(nn.Module):
         theta_eyes: Tensor,
         global_translation: Tensor | None = None,
         vertex_residual: Tensor | None = None,
+        *,
+        beta_target: Tensor | None = None,
+        source_identity_lock: float | None = None,
     ) -> tuple[Tensor, Tensor]:
-        """Return skinned vertices and yaw-marched cheek landmarks."""
+        """Return posed source-identity vertices and yaw-marched cheek landmarks.
+
+        Source shape is locked at ``source_identity_lock`` (1.0 by default).
+        If a target shape is supplied, only target expression coefficients are
+        converted between target and source bone scales; target beta never
+        blends into the source geometry at the default lock.
+        """
         batch = beta.shape[0]
         if beta.shape != (batch, self.SHAPE_DIM) or psi.shape != (batch, self.EXPRESSION_DIM):
             raise ValueError("beta and psi must have shapes (B, 300) and (B, 100)")
@@ -142,11 +189,28 @@ class ArticulatedHeadLayer(nn.Module):
         if theta_eyes.shape != (batch, 6):
             raise ValueError("theta_eyes must have shape (B, 6): shared eye axis-angle and translation")
 
+        lock = self.source_identity_lock if source_identity_lock is None else float(source_identity_lock)
+        if not math.isfinite(lock) or not 0.0 <= lock <= 1.0:
+            raise ValueError("source_identity_lock must be finite and in [0, 1]")
+        beta_used = beta
+        psi_used = psi
+        if beta_target is None and lock == 1.0:
+            # A caller without a target shape is declaring that its expression
+            # coefficients are already in source metric units.
+            beta_target = beta
+        if beta_target is not None:
+            if beta_target.shape != beta.shape:
+                raise ValueError("beta_target must have shape (B, 300), matching source beta")
+            beta_used = lock * beta + (1.0 - lock) * beta_target
+            psi_used = self.normalize_expression_for_source(psi, beta_used, beta_target)
+        else:
+            raise ValueError("beta_target is required when source_identity_lock is below 1")
+
         shaped = self.template_vertices.unsqueeze(0).expand(batch, -1, -1)
         if self.shape_directions is not None:
-            shaped = shaped + torch.einsum("bp,pvc->bvc", beta, self.shape_directions)
+            shaped = shaped + torch.einsum("bp,pvc->bvc", beta_used, self.shape_directions)
         if self.expression_directions is not None:
-            shaped = shaped + torch.einsum("bp,pvc->bvc", psi, self.expression_directions)
+            shaped = shaped + torch.einsum("bp,pvc->bvc", psi_used, self.expression_directions)
 
         if self.joint_regressor is None:
             rest = self.rest_joints.unsqueeze(0).expand(batch, -1, -1)

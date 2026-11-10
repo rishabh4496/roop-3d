@@ -119,6 +119,7 @@ class FittedFace:
     scale: float
     jaw: np.ndarray | None = None
     eyelids: np.ndarray | None = None
+    expression_vertices: np.ndarray | None = None  # expression-only geometry before HRN/detail offsets
 
 
 class NamedGraph:
@@ -244,7 +245,8 @@ class MorphableBackbone:
         project(camera_vertices, k)
         return FittedFace(vertices, camera_vertices, k, alignment,
                           self.surface.interpolate(self.topology.select(neutral)), expression,
-                          self.surface.interpolate(self.topology.select(mid)), disp[0, 0], rotation, translation, scale)
+                          self.surface.interpolate(self.topology.select(mid)), disp[0, 0], rotation, translation, scale,
+                          expression_vertices=self.surface.interpolate(self.topology.select(expressed)))
 
     def capability(self):
         return {"available": True, "topology": self.topology.family,

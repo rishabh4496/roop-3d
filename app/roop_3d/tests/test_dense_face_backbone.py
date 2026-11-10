@@ -243,7 +243,9 @@ def test_full_neural_output_and_ultramax_own_all_replacement_pixels(native_size,
         topology = SimpleNamespace(faces=faces)
         def fit(self, image, landmarks):
             return SimpleNamespace(camera_vertices=vertices, intrinsics=np.diag([224, 224, 1]),
-                rotation=np.eye(3), alignment=aligned_crop(image, np.asarray(landmarks), 128))
+                rotation=np.eye(3), translation=np.zeros(3, np.float32), scale=1.0,
+                identity=vertices.copy(), vertices=vertices.copy(), expression_vertices=vertices.copy(),
+                alignment=aligned_crop(image, np.asarray(landmarks), 128))
     class Enhancer:
         def restore_hires(self, crop, landmarks):
             assert crop.shape == (native_size, native_size, 3)
@@ -255,6 +257,7 @@ def test_full_neural_output_and_ultramax_own_all_replacement_pixels(native_size,
         def infer(self, crop, embedding, *, source_view):
             assert embedding.shape == (512,)
             assert np.any(crop == 45)
+            assert not np.any(crop == 15), "target pixels leaked into source geometry conditioning"
             return np.full_like(crop, 190)
     ok, encoded = cv2.imencode(".png", image)
     assert ok
@@ -268,7 +271,8 @@ def test_full_neural_output_and_ultramax_own_all_replacement_pixels(native_size,
     engine.prepare(document)
     observed = engine.sources[document.faceset_id][0].observed
     observed[:, :observed.shape[1]//2] = 0  # source appearance is missing on half the facial surface
-    result = engine.process(image, SimpleNamespace(landmarks5=points, pose=(0, 0, 0)), document, swapper, track_id=0)
+    target_image = np.full_like(image, 15)
+    result = engine.process(target_image, SimpleNamespace(landmarks5=points, pose=(0, 0, 0)), document, swapper, track_id=0)
     assert np.all(result.image == 210)
     assert result.coverage.sum() > 100
     assert result.coverage[0, 0] == 0
@@ -279,11 +283,11 @@ def test_full_neural_output_and_ultramax_own_all_replacement_pixels(native_size,
     np.testing.assert_allclose(recovered_points, points, atol=1e-5)
     observed[:] = 0
     with pytest.raises(DomainError) as unsupported:
-        engine.process(image, SimpleNamespace(landmarks5=points, pose=(0, 0, 0)), document, swapper, track_id=0)
+        engine.process(target_image, SimpleNamespace(landmarks5=points, pose=(0, 0, 0)), document, swapper, track_id=0)
     assert unsupported.value.code == "DENSE_FACE_NO_CORRESPONDENCE"
     swapper.model = None
     with pytest.raises(DomainError) as error:
-        engine.process(image, SimpleNamespace(landmarks5=points, pose=(0, 0, 0)), document, swapper, track_id=0)
+        engine.process(target_image, SimpleNamespace(landmarks5=points, pose=(0, 0, 0)), document, swapper, track_id=0)
     assert error.value.code == "DENSE_FACE_NEURAL_REQUIRED"
 
 
