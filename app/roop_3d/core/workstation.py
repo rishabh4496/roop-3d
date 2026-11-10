@@ -36,6 +36,12 @@ class WorkstationParameters(Contract):
     # flow-aware temporal matte, depth-ordered multi-face compositing and frame-space matte/texture refinement.
     # Missing models are reported through the compositor capability, never simulated.
     occlusion_mode: Literal['standard', 'robust'] = 'standard'
+    # Directional strand matte for hair strands / bangs over the face (robust mode only; computed at frame resolution from the
+    # parser's hair class, so it needs a trusted parser). Opt-in on the wire: omitted from a request until set.
+    strand_matte: bool = False
+    # Fit the canonical proxy head's jaw width to the target's face contour in the mesh pose-blend path (pose_mode='mesh_blend').
+    # Opt-in on the wire; near-frontal faces only, otherwise it reports why it did nothing.
+    jaw_adaptation: bool = False
     # Confidence the semantic face parser (BiSeNet) must reach before its mask is trusted over the landmark hull. 0.55 is the
     # compositor's long-standing constant, so leaving this unset changes nothing; it is opt-in on the wire.
     occlusion_threshold: float = Field(default=0.55, ge=0, le=1)
@@ -75,7 +81,7 @@ class WorkstationParameters(Contract):
         for field in ('expression_restore_factor', 'face_expression_overrides'):
             if field not in self.model_fields_set:
                 value.pop(field, None)
-        for field in ('color_method', 'restorer_model', 'identity_blend_t', 'fidelity_weight', 'swap_weight', 'erosion_px', 'pose_mode', 'pose_frontalization', 'tps_expression_weight', 'render_mode', 'occlusion_mode', 'linear_light', 'blend_transfer', 'ultramax_small_face_mode', 'ultramax_min_native_pixels', 'ambient_fill', 'hairline_offset_px', 'occlusion_threshold', 'sensor_shutter_angle', 'grain_match_strength') + PROTECTION_FIELDS:
+        for field in ('color_method', 'restorer_model', 'identity_blend_t', 'fidelity_weight', 'swap_weight', 'erosion_px', 'pose_mode', 'pose_frontalization', 'tps_expression_weight', 'render_mode', 'occlusion_mode', 'strand_matte', 'jaw_adaptation', 'linear_light', 'blend_transfer', 'ultramax_small_face_mode', 'ultramax_min_native_pixels', 'ambient_fill', 'hairline_offset_px', 'occlusion_threshold', 'sensor_shutter_angle', 'grain_match_strength') + PROTECTION_FIELDS:
             if field not in self.model_fields_set:
                 value.pop(field, None)
         return value
@@ -92,6 +98,8 @@ class WorkstationParameters(Contract):
             options['identity_blend_t'] = self.identity_blend_t
         if self.render_mode != 'standard':
             options['render_mode'] = self.render_mode
+        if self.jaw_adaptation:
+            options['jaw_adaptation'] = True
         return options
 
     def session_options(self) -> dict[str, str]:
@@ -109,7 +117,7 @@ class WorkstationParameters(Contract):
         return self.model_copy(update={'blend_transfer': blend_transfer_for(transfer_code)})
 
     def composite_options(self):
-        from roop_3d.compositor.pipeline import CompositeOptions
+        from roop_3d.compositor.pipeline import CompositeOptions, RobustOptions
         # Unresolved 'auto' falls back to sRGB, the pre-Stage-15 curve; callers with media context resolve it first.
         blend = 'srgb' if self.blend_transfer == 'auto' else self.blend_transfer
         return CompositeOptions(color_method=self.color_method, fidelity_weight=self.fidelity_weight, restoration_blend=0 if 'restorer' in self.bypass else self.restoration_blend,
@@ -118,6 +126,7 @@ class WorkstationParameters(Contract):
                                 feather_px=self.feather_px,
                                 swap_weight=self.swap_weight, erosion_px=self.erosion_px,
                                 occlusion_mode=self.occlusion_mode,
+                                robust=RobustOptions(strand_matte=self.strand_matte),
                                 semantic_confidence_threshold=self.occlusion_threshold,
                                 color_strength=0 if 'color' in self.bypass else self.color_strength,
                                 relight=self.relight,

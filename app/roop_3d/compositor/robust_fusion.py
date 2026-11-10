@@ -16,6 +16,7 @@ import numpy as np
 from roop_3d.compositor.boundary_fusion import BlendMode, fuse_warped
 from roop_3d.compositor.matte import decontaminate_edges, refine_occluder
 from roop_3d.compositor.quality import match_sharpness, transfer_fine_texture
+from roop_3d.compositor.strand_matte import StrandMatteOptions, scaled_for_face, strand_evidence
 from roop_3d.core.errors import DomainError
 
 
@@ -38,6 +39,7 @@ class FusionReport:
     sharpness: dict[str, float] = field(default_factory=dict)
     texture_gain: float = 0.0
     occluded_fraction: float = 0.0
+    strand_fraction: float = 0.0         # share of the swap area removed by the strand matte (0 when it is off or found none)
 
 
 def _roi(matrix: np.ndarray, crop_shape: tuple[int, int], frame_shape: tuple[int, int], margin: int):
@@ -54,7 +56,10 @@ def _roi(matrix: np.ndarray, crop_shape: tuple[int, int], frame_shape: tuple[int
 def fuse_robust(frame: np.ndarray, crop: np.ndarray, inverse: np.ndarray, face_alpha: np.ndarray,
                 occluder: np.ndarray | None, skin: np.ndarray | None, *, frame_motion: tuple[float, float] = (0.0, 0.0),
                 mode: BlendMode | str = BlendMode.FEATHER, levels: int = 4,
-                options: RobustFusionOptions = RobustFusionOptions()) -> tuple[np.ndarray, FusionReport]:
+                options: RobustFusionOptions = RobustFusionOptions(), hair: np.ndarray | None = None,
+                strand: StrandMatteOptions | None = None) -> tuple[np.ndarray, FusionReport]:
+    """``hair`` (crop-space hair probability) + ``strand`` options switch on the directional strand matte, computed here on
+    the frame's own pixels because a 1-2 px strand does not exist at the analysis resolution the occluder was estimated at."""
     target = np.asarray(frame)
     image = np.asarray(crop)
     matrix = np.asarray(inverse, np.float32)
@@ -65,7 +70,7 @@ def fuse_robust(frame: np.ndarray, crop: np.ndarray, inverse: np.ndarray, face_a
     alpha_crop = np.asarray(face_alpha, np.float32)
     if alpha_crop.shape != image.shape[:2] or not np.isfinite(alpha_crop).all():
         raise DomainError("COMPOSITOR_MASK_INVALID", "Face alpha must match the replacement crop", 422)
-    for name, value in (("occluder", occluder), ("skin", skin)):
+    for name, value in (("occluder", occluder), ("skin", skin), ("hair", hair)):
         if value is not None and np.asarray(value).shape != image.shape[:2]:
             raise DomainError("COMPOSITOR_MASK_INVALID", f"{name} must match the replacement crop", 422)
     box = _roi(matrix, image.shape[:2], target.shape[:2], margin=6)
@@ -86,12 +91,24 @@ def fuse_robust(frame: np.ndarray, crop: np.ndarray, inverse: np.ndarray, face_a
     # Decontamination is defined on the GEOMETRIC face edge only. Using the post-occlusion alpha would treat every
     # partially-occluded interior pixel as "edge", flatten its texture and drag its tone toward the few opaque pixels.
     face_edge_alpha = alpha.copy()
-    occluded_fraction = 0.0
+    occluded_fraction = strand_fraction = 0.0
+    front = None
     if occluder is not None:
         front = np.clip(warp(np.clip(np.asarray(occluder, np.float32), 0, 1)), 0, 1)
         if options.refine_matte:
             radius = max(2, int(round(max(size) * options.refine_radius_fraction)))
             front = refine_occluder(front, target_roi, radius=radius, contrast=options.matte_contrast)
+    if strand is not None and hair is not None:
+        hair_roi = np.clip(warp(np.clip(np.asarray(hair, np.float32), 0, 1)), 0, 1)
+        if hair_roi.max() > 0.5:
+            # Added AFTER the guided refinement: that step would otherwise smear or contrast-clip a 1-2 px structure.
+            face_px = float(np.sqrt(max(float((footprint > 0.5).sum()), 1.0)))
+            found, _ = strand_evidence(target_roi, hair_roi, np.clip(face_edge_alpha * (1.0 - hair_roi), 0.0, 1.0),
+                                       scaled_for_face(strand, face_px))
+            strand_base = float(alpha.sum())
+            strand_fraction = float((alpha * found).sum() / strand_base) if strand_base > 1e-6 else 0.0
+            front = found if front is None else 1.0 - (1.0 - front) * (1.0 - found)
+    if front is not None:
         base_sum = float(alpha.sum())
         alpha = alpha * (1.0 - front)
         occluded_fraction = float(1.0 - alpha.sum() / base_sum) if base_sum > 1e-6 else 0.0
@@ -111,4 +128,4 @@ def fuse_robust(frame: np.ndarray, crop: np.ndarray, inverse: np.ndarray, face_a
                         transfer=options.transfer)
     output = target.copy()
     output[y0:y1, x0:x1] = fused
-    return output, FusionReport(box, report_sharp, gain, occluded_fraction)
+    return output, FusionReport(box, report_sharp, gain, occluded_fraction, strand_fraction)

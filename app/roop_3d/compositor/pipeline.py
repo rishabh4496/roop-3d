@@ -26,6 +26,7 @@ from roop_3d.compositor.color_match import ColorStats, apply_lab_stats, estimate
 from roop_3d.compositor.hairline import offset_hairline, refine_hairline_matte
 from roop_3d.compositor.lighting import relight_spherical_harmonics
 from roop_3d.compositor.matte import border_fade
+from roop_3d.compositor.strand_matte import StrandMatteOptions
 from roop_3d.compositor.masks import (
     BisenetFaceParser, FaceParser, build_face_mask, landmark_hull_mask,
     compute_dual_bisenet_forbidden_mask, compose_active_mask, apply_submental_jaw_cutoff,
@@ -83,6 +84,10 @@ class RobustOptions:
     network_border_trust: float = 0.6     # weight of the networks' "not face" vote at the landmark-hull border
     matte_contrast: float = 1.5           # plateau tightening applied after guided matte refinement (1 = off)
     occlusion_release: float = 0.75       # lingering of a dropped occluder pixel (0 = none); never delays onset. 0.75 measured best on real clips
+    # Opt-in directional strand matte (hair strands / bangs over the face), computed at FRAME resolution inside fuse_robust from
+    # the parser's hair probability. Off by default: it adds a 12-orientation Gabor bank over the face region per face per frame.
+    strand_matte: bool = False
+    strand: StrandMatteOptions = field(default_factory=StrandMatteOptions)
 
     def __post_init__(self) -> None:
         if not 64 <= self.analysis_size <= 1024:
@@ -1051,12 +1056,20 @@ class FrameCompositor:
             else:
                 source = cv2.resize(harmonized, (work, work), interpolation=cv2.INTER_CUBIC) if work != side else harmonized
                 work_inverse = self._scaled_inverse(temporal.inverse, scale)
+            strand_kwargs = {}
+            if robust.strand_matte:
+                if analysis.regions is not None and analysis.parser_trusted:
+                    strand_kwargs = {"hair": self._resize_plane(analysis.regions.get("hair"), source.shape[0]),
+                                     "strand": robust.strand}
+                else:
+                    context.report["reasons"].append("STRAND_MATTE_NEEDS_TRUSTED_PARSER")
             output, fusion = fuse_robust(output, source, work_inverse, smoothed_face, front,
                                          skin_for_fusion,
                                          frame_motion=context.motion, mode=options.mode, levels=options.pyramid_levels,
-                                         options=fusion_options)
+                                         options=fusion_options, **strand_kwargs)
             context.report["fusion"] = {"sharpness": fusion.sharpness, "texture_gain": fusion.texture_gain,
-                                        "occluded_fraction": fusion.occluded_fraction}
+                                        "occluded_fraction": fusion.occluded_fraction,
+                                        "strand_fraction": fusion.strand_fraction}
         self.frames_composited += 1
         total_ms = (time.perf_counter() - compose_began) * 1000
         restorer_ms = restorer_seconds * 1000

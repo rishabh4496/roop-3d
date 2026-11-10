@@ -47,6 +47,7 @@ class PoseBlendResult:
     reprojection_error: float
     geometry: PoseBlendGeometry
     blend_pixels: np.ndarray
+    jaw: object = None                    # reconstruction.jaw_fit.JawFitReport when a jaw contour was supplied, else None
 
 
 def reblend(projection: PoseBlendResult, weight: float) -> PoseBlendResult:
@@ -145,13 +146,17 @@ class PoseBlendProjector:
             self.vertices = mesh.vertices.copy()
             self.faces = mesh.faces[:, [0, 2, 1]].copy()  # Front normals toward camera.
             self.anchors = get_canonical_3d_landmarks(5).copy()
+            self._proxy_faces = np.asarray(mesh.faces, np.int64).copy()
         else:
             self.vertices = np.asarray(vertices, np.float32).copy()
             self.faces = np.asarray(faces, np.int32)[:, [0, 2, 1]].copy()
             self.anchors = np.asarray(anchors, np.float32).copy()
+            self._proxy_faces = np.asarray(faces, np.int64).copy()
             if (self.vertices.ndim != 2 or self.vertices.shape[1] != 3 or self.anchors.shape != (5, 3)
                     or not np.isfinite(self.vertices).all() or not np.isfinite(self.anchors).all()):
                 raise DomainError('POSE_GEOMETRY_INVALID', 'Identity geometry must be finite (N,3) vertices and (5,3) anchors', 422)
+        self._jaw_adapter = None                       # built on first use (opt-in jaw fit, see reconstruction.jaw_fit)
+        self._proxy_vertices = self.vertices.astype(np.float64)    # the proxy in its own frame, before the OpenCV z flip
         self.vertices[:, 2] *= -1  # Nose toward camera in OpenCV (+Z into scene).
         self.anchors[:, 2] *= -1
         reference = ARCFACE_REFERENCE_5PTS.astype(np.float64).copy()
@@ -160,8 +165,8 @@ class PoseBlendProjector:
         # Explicit correspondence only for the known five-point model. Do not
         # reinterpret a detector's 106/203 ordering as an anatomical topology.
         model_xy = self.anchors[:, :2].astype(np.float64) * 5
-        atlas = ThinPlateSplineWarper(model_xy, self.reference, regularization=1e-6)
-        self.uv = atlas.transform_points(self.vertices[:, :2] * 5)
+        self._atlas = ThinPlateSplineWarper(model_xy, self.reference, regularization=1e-6)
+        self.uv = self._atlas.transform_points(self.vertices[:, :2] * 5)
 
     @classmethod
     def from_identity_asset(cls, asset, *, sampling_device: str = "cpu") -> "PoseBlendProjector":
@@ -179,7 +184,37 @@ class PoseBlendProjector:
                    geometry="IDENTITY_ASSET_" + asset.manifest.build_key[:12],
                    sampling_device=sampling_device)
 
-    def render(self, crop: np.ndarray, observed: np.ndarray, weight: float) -> PoseBlendResult:
+    def _fit_jaw(self, contour: np.ndarray, camera_vertices: np.ndarray, projected: np.ndarray,
+                 rotation: np.ndarray, tvec: np.ndarray, camera: np.ndarray):
+        """Opt-in jaw fit. Returns (vertices, uv, camera_vertices, projected, report); the geometry comes back UNCHANGED
+        unless a measured, pose-eligible, outside-the-dead-band ratio was applied without folding the proxy."""
+        from roop_3d.reconstruction.jaw_fit import JawFitReport, ProxyJawAdapter, decide, measure_jaw_ratio
+        pixels = projected.reshape(-1, 2)
+        measured, levels, reason = measure_jaw_ratio(pixels[:17], contour)
+        # cos(yaw), from the PnP rotation: the mesh x-axis's component along the camera axis is sin(yaw), whatever the roll.
+        foreshortening = float(np.sqrt(max(0.0, 1.0 - float(rotation[2, 0]) ** 2)))
+        ratio, report = decide(measured, levels, reason, foreshortening)
+        unchanged = (self.vertices, self.uv, camera_vertices, projected)
+        if ratio is None:
+            return (*unchanged, report)
+        if self._jaw_adapter is None:
+            self._jaw_adapter = ProxyJawAdapter(self._proxy_vertices, self._proxy_faces)
+        adapted, folded = self._jaw_adapter.adapted(ratio)
+        vertices = adapted.astype(np.float32)
+        vertices[:, 2] *= -1                                       # same OpenCV z flip as the unadapted proxy
+        new_camera = vertices @ rotation.T + tvec.reshape(3)
+        if folded or not np.isfinite(new_camera).all() or np.any(new_camera[:, 2] <= 1e-4):
+            return (*unchanged, JawFitReport(False, "adaptation_failed", measured, ratio, levels, int(folded)))
+        homogeneous = new_camera @ camera.T
+        new_projected = (homogeneous[:, :2] / homogeneous[:, 2:3]).reshape(-1, 1, 2)
+        # Texture coordinates follow the moved outline, so the crop's pixels stay where the crop has them: only the footprint changes.
+        uv = self._atlas.transform_points(vertices[:, :2] * 5)
+        return vertices, uv, new_camera, new_projected, JawFitReport(True, "adapted", measured, ratio, levels, 0)
+
+    def render(self, crop: np.ndarray, observed: np.ndarray, weight: float, *,
+               jaw_contour: np.ndarray | None = None) -> PoseBlendResult:
+        """``jaw_contour`` (33, 2) = the target's 106-point face contour in ``crop`` pixels switches on the opt-in jaw fit;
+        without it nothing below differs from the generic proxy."""
         image_bgr(crop)
         h, w = crop.shape[:2]
         points = np.asarray(observed, np.float64)
@@ -206,7 +241,6 @@ class PoseBlendProjector:
         texture = cv2.remap(crop, map_x, map_y, cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT)
         valid = cv2.remap(np.ones((h, w), np.float32), map_x, map_y, cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT)
         forward = ThinPlateSplineWarper(self.reference, normalized, regularization=1e-6)
-        flat_pixels = forward.transform_points(self.uv) * scale
         # Camera is an explicit estimate for this crop, not supplied calibration.
         focal = max(w, h) * 1.5
         camera = np.array(((focal, 0, w / 2), (0, focal, h / 2), (0, 0, 1)), np.float64)
@@ -224,9 +258,14 @@ class PoseBlendProjector:
                 raise ValueError()
         except (cv2.error, ValueError):
             raise DomainError('POSE_FIT_FAILED', 'Observed landmarks do not support a bounded front-facing proxy fit', 422) from None
+        uv_normalized, jaw = self.uv, None
+        if jaw_contour is not None:
+            _, uv_normalized, camera_vertices, projected, jaw = self._fit_jaw(
+                np.asarray(jaw_contour, np.float64), camera_vertices, projected, rotation, tvec, camera)
+        flat_pixels = forward.transform_points(uv_normalized) * scale
         mesh_pixels = projected.reshape(-1, 2)
         flat_camera = np.column_stack((flat_pixels, np.ones(len(flat_pixels))))
-        uv = self.uv * scale
+        uv = uv_normalized * scale
         tps_image, tps_alpha, flat_visible = rasterize(texture, valid, flat_pixels, flat_camera, uv, self.faces,
             (h, w), perspective=False, sampling_device=self.sampling_device)
         mesh_image, mesh_alpha, visible = rasterize(texture, valid, mesh_pixels, camera_vertices, uv, self.faces,
@@ -240,4 +279,4 @@ class PoseBlendProjector:
         geometry = PoseBlendGeometry(texture, valid, flat_camera_vertices, camera_vertices,
             camera, uv, self.faces, flat_pixels, flat_visible, visible, self.sampling_device)
         return reblend(PoseBlendResult(tps_image, tps_alpha, tps_image, tps_alpha,
-            mesh_image, mesh_alpha, mesh_pixels, visible, error, geometry, mesh_pixels), weight)
+            mesh_image, mesh_alpha, mesh_pixels, visible, error, geometry, mesh_pixels, jaw), weight)

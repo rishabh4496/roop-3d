@@ -577,3 +577,134 @@ def test_capability_reports_robust_components_only_after_they_exist():
     assert compositor.capability()["occlusion_modes"] == {"default": "standard", "available": ["standard", "robust"]}
     compositor._analyzer = _analyser(_StubParser(), _StubNet("xseg_3.onnx", _visible()))
     assert "visible_face_networks" in compositor.capability()["robust_occlusion"]
+
+
+# --------------------------------------------------------------------------- strand matte wired into the robust path
+_SKIN, _HAIR = np.array((150, 170, 205), np.float32), np.array((30, 40, 60), np.float32)
+
+
+def _strand_frame(seed=0):
+    """256 px frame: noisy skin, hair on rows 49-78 (where the stub parser's hair band lands), thin hair strands hanging below."""
+    rng = np.random.default_rng(seed)
+    img = np.tile(_SKIN, (256, 256, 1))
+    img += (cv2.GaussianBlur(rng.normal(0, 1, (256, 256)).astype(np.float32), (0, 0), 1.2) * 12)[..., None]
+    hair = np.zeros((256, 256), np.float32)
+    hair[49:79] = 1.0
+    hair = cv2.GaussianBlur(hair, (0, 0), 1.0)
+    img = img * (1 - hair[..., None]) + _HAIR * hair[..., None]
+    big = np.zeros((1024, 1024), np.uint8)
+    for x0 in (80, 110, 140, 170):
+        pts = np.array([[x0 + 5 * np.sin(t / 15.0), t] for t in range(72, 130)], np.float32)
+        cv2.polylines(big, [np.round(pts * 4).astype(np.int32)], False, 255, 5, cv2.LINE_AA)
+    line = cv2.resize(big, (256, 256), interpolation=cv2.INTER_AREA).astype(np.float32) / 255.0
+    img = img * (1 - line[..., None]) + _HAIR * line[..., None] + rng.normal(0, 3, img.shape)
+    return np.clip(img, 0, 255).astype(np.uint8), hair, line
+
+
+def _fusion_inputs():
+    from roop_3d.compositor.robust_fusion import RobustFusionOptions
+    frame, hair, line = _strand_frame()
+    crop = np.full((256, 256, 3), (30, 200, 30), np.uint8)
+    identity = np.array(((1, 0, 0), (0, 1, 0)), np.float32)
+    face = np.zeros((256, 256), np.float32)
+    face[85:200, 50:206] = 1.0
+    options = RobustFusionOptions(refine_matte=False, decontaminate=False, match_sharpness=False, texture_strength=0.0,
+                                  linear_light=False)
+    return frame, hair, line, crop, identity, face, options
+
+
+def test_fuse_robust_strand_matte_keeps_strands_and_is_inert_when_off_or_without_hair():
+    from roop_3d.compositor.robust_fusion import fuse_robust
+    from roop_3d.compositor.strand_matte import StrandMatteOptions
+    frame, hair, line, crop, identity, face, options = _fusion_inputs()
+    base, base_report = fuse_robust(frame, crop, identity, face, None, None, options=options)
+    off, off_report = fuse_robust(frame, crop, identity, face, None, None, options=options, hair=hair, strand=None)
+    no_hair, _ = fuse_robust(frame, crop, identity, face, None, None, options=options, hair=np.zeros_like(hair),
+                             strand=StrandMatteOptions())
+    on, on_report = fuse_robust(frame, crop, identity, face, None, None, options=options, hair=hair, strand=StrandMatteOptions())
+    np.testing.assert_array_equal(off, base)                       # no strand options: byte-identical to before
+    np.testing.assert_array_equal(no_hair, base)                   # options but no hair evidence: still identical
+    assert base_report.strand_fraction == 0.0 == off_report.strand_fraction and on_report.strand_fraction > 0.003
+    rows = np.arange(256)[:, None] * np.ones((1, 256))
+    strand = (line > 0.5) & (face > 0.9) & (rows > 90) & (rows < 125)
+    skin = (cv2.dilate((line > 0.05).astype(np.uint8), np.ones((9, 9), np.uint8)) == 0) & (face > 0.9) & (rows > 90) & (rows < 125)
+    green = lambda out, m: ((out[m][:, 1].astype(float) - frame[m][:, 1]) / (200.0 - frame[m][:, 1])).mean()   # 1 = fully replaced
+    assert strand.sum() > 100 and green(base, strand) > 0.9        # without the matte the green face is pasted over the strands
+    assert green(on, strand) < 0.6 and green(on, skin) > 0.9       # with it the strands stay, the skin between them is swapped
+    outside = cv2.dilate((face > 0).astype(np.uint8), np.ones((9, 9), np.uint8)) == 0
+    np.testing.assert_array_equal(on[outside], frame[outside])     # and nothing outside the face changes
+
+
+def test_fuse_robust_strand_matte_combines_with_an_existing_occluder():
+    from roop_3d.compositor.robust_fusion import fuse_robust
+    from roop_3d.compositor.strand_matte import StrandMatteOptions
+    frame, hair, line, crop, identity, face, options = _fusion_inputs()
+    hand = np.zeros((256, 256), np.float32)
+    hand[150:190, 90:160] = 1.0
+    out, report = fuse_robust(frame, crop, identity, face, hand, None, options=options, hair=hair, strand=StrandMatteOptions())
+    _, hand_only = fuse_robust(frame, crop, identity, face, hand, None, options=options)
+    np.testing.assert_array_equal(out[155:185, 95:155], frame[155:185, 95:155])             # the hand is still kept whole
+    assert report.occluded_fraction > hand_only.occluded_fraction and report.strand_fraction > 0.003   # strands add to it
+
+
+def test_compositor_strand_matte_is_opt_in_trust_gated_and_reported():
+    from roop_3d.core.workstation import WorkstationParameters
+
+    class HairParser(_StubParser):
+        def predict(self, image):
+            p = super().predict(image)
+            h, w = image.shape[:2]
+            p[36:72, w // 6: -w // 6, 1] = 0.0            # work-crop rows 36-71 (frame rows 49-78) are hair instead of skin
+            p[36:72, w // 6: -w // 6, 17] = 1.0
+            return p
+
+    frame, _, line = _strand_frame()
+    replacement = _replacement(1, (30, 200, 30), ((1.6, 0, 20), (0, 1.6, 20)))
+    points = np.array(((40, 40), (216, 40), (216, 216), (40, 216)), np.float32)
+    strand_options = CompositeOptions(occlusion_mode="robust", feather_px=2, color_strength=0,
+                                      robust=RobustOptions(local_illumination=0, texture_strength=0, strand_matte=True))
+
+    def run(options):
+        compositor = _compositor(_StubNet("xseg_3.onnx", _visible()), _StubNet("face_occluder.onnx", _visible()), parser=HairParser())
+        outputs = [compositor.compose(frame, (replacement,), {1: points}, frame_index=i, options=options) for i in range(4)]
+        return outputs, compositor
+
+    plain_out, plain_c = run(ROBUST)
+    strand_out, strand_c = run(strand_options)
+    assert plain_c.last_reports[1]["fusion"]["strand_fraction"] == 0.0               # default: untouched
+    assert strand_c.last_reports[1]["fusion"]["strand_fraction"] > 0.002
+    assert "STRAND_MATTE_NEEDS_TRUSTED_PARSER" not in strand_c.last_reports[1]["reasons"]
+    rows = np.arange(256)[:, None] * np.ones((1, 256))
+    on = (line > 0.5) & (rows > 90) & (rows < 125)
+    weight = lambda out: ((out[3][on][:, 1].astype(float) - frame[on][:, 1]) / (200.0 - frame[on][:, 1])).mean()
+    assert weight(plain_out) > weight(strand_out) + 0.2                              # strands survive only with the matte
+    # trust is earned over 3 frames: before that the matte is not computed, and the report says why instead of guessing
+    early = _compositor(_StubNet("xseg_3.onnx", _visible()), parser=HairParser())
+    early.compose(frame, (replacement,), {1: points}, frame_index=0, options=strand_options)
+    assert "STRAND_MATTE_NEEDS_TRUSTED_PARSER" in early.last_reports[1]["reasons"]
+    assert early.last_reports[1]["fusion"]["strand_fraction"] == 0.0
+    # wire format: opt-in, omitted until set, and it reaches the compositor options
+    assert "strand_matte" not in WorkstationParameters().model_dump()
+    assert WorkstationParameters().composite_options().robust.strand_matte is False
+    assert WorkstationParameters(occlusion_mode="robust", strand_matte=True).composite_options().robust.strand_matte is True
+
+
+def test_fuse_robust_strand_matte_scales_its_filters_to_the_faces_size_in_the_frame():
+    """The same scene at 4x (a 4K face, strands ~5 px wide) must still be matted: the filter lengths follow the face's size."""
+    from roop_3d.compositor.robust_fusion import fuse_robust
+    from roop_3d.compositor.strand_matte import StrandMatteOptions, scaled_for_face
+    frame, hair, line, _, _, face, options = _fusion_inputs()
+    k = 4
+    big = lambda a, flag: cv2.resize(a, None, fx=k, fy=k, interpolation=flag)
+    frame4, hair4, line4, face4 = big(frame, cv2.INTER_CUBIC), big(hair, cv2.INTER_LINEAR), big(line, cv2.INTER_LINEAR), big(face, cv2.INTER_NEAREST)
+    crop4 = np.full(frame4.shape, (30, 200, 30), np.uint8)
+    identity = np.array(((1, 0, 0), (0, 1, 0)), np.float32)
+    rows = np.arange(frame4.shape[0])[:, None] * np.ones((1, frame4.shape[1]))
+    strand = (line4 > 0.5) & (face4 > 0.9) & (rows > 90 * k) & (rows < 125 * k)
+    out, report = fuse_robust(frame4, crop4, identity, face4, None, None, options=options, hair=hair4, strand=StrandMatteOptions())
+    replaced = ((out[strand][:, 1].astype(float) - frame4[strand][:, 1]) / (200.0 - frame4[strand][:, 1])).mean()
+    assert strand.sum() > 3000 and replaced < 0.5 and report.strand_fraction > 0.003
+    # the options the call derived: lengths grew with the face, and stay inside their legal ranges at any size
+    small, large = scaled_for_face(StrandMatteOptions(), 100.0), scaled_for_face(StrandMatteOptions(), 900.0)
+    assert small.gabor_wavelength_px < StrandMatteOptions().gabor_wavelength_px < large.gabor_wavelength_px
+    assert large.strand_max_length_px > small.strand_max_length_px and scaled_for_face(StrandMatteOptions(), 1e6).gabor_wavelength_px <= 24.0

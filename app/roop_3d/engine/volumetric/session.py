@@ -25,7 +25,7 @@ from roop_3d.models.catalog import ModelCatalog
 from roop_3d.engine.resources import guarded, inference, register
 from roop_3d.compositor.pipeline import CompositeOptions, FrameCompositor
 from roop_3d.engine.audio_sync.lip_sync_adapter import LipSyncAdapter, LipSyncFrameInput
-from roop_3d.reconstruction.expression_tps import apply_expression_to_crop
+from roop_3d.reconstruction.expression_tps import apply_expression_to_crop, group, layout_is_plausible
 from roop_3d.reconstruction.pose_blend import PoseBlendProjector, PoseBlendResult
 from roop_3d.reconstruction.reenactment import (RENDER_MODES, IdentityRig, ReenactmentEngine, ReenactmentFrame,
                                                 ReenactmentSettings, TargetObservation)
@@ -561,8 +561,12 @@ class ReferencePipeline:
     @inference
     def infer_frame(self, image: np.ndarray, *, strength: float = 0.35, pose_blend: float | None = None,
                     frontalization: float = 0.0, tps_expression: float = 0.0, identity_blend_t: float | None = None,
-                    render_mode: str | None = None, tracked: TrackedFrame | None = None) -> FrameResult:
-        """``tracked`` (from :meth:`track_frame`) lets Stage 1 run ahead; without it tracking happens inline as before."""
+                    render_mode: str | None = None, tracked: TrackedFrame | None = None,
+                    jaw_adaptation: bool = False) -> FrameResult:
+        """``tracked`` (from :meth:`track_frame`) lets Stage 1 run ahead; without it tracking happens inline as before.
+
+        ``jaw_adaptation`` (opt-in) fits the canonical proxy's jaw width to the target's 106-point face contour in the mesh
+        pose-blend path (``pose_blend`` given); the outcome, applied or not and why, is on ``replacement.projection.jaw``."""
         with self.lock:
             if not self.prepared or self.tracker is None:
                 raise DomainError("SESSION_NOT_PREPARED", "Prepare a source before frame inference", 409)
@@ -682,7 +686,8 @@ class ReferencePipeline:
                                     sampling_device="cuda" if self.config.provider == "CUDAExecutionProvider" else "cpu")
                             projector = self.pose_projector
                         observed = transform_points(face.landmarks5, cv2.invertAffineTransform(inverse))
-                        projection = projector.render(generated, observed, pose_blend)
+                        projection = projector.render(generated, observed, pose_blend,
+                                                      **({"jaw_contour": self._jaw_contour(face, inverse)} if jaw_adaptation else {}))
                         generated, method = projection.image, ('identity_swap_pose_3d' if mode == "pose_3d" else 'identity_swap_tps_mesh_blend')
                         coverage = projection.coverage
                     except DomainError as error:
@@ -811,6 +816,15 @@ class ReferencePipeline:
         return (np.clip(mixed, 0, 255).astype(np.uint8), np.clip(total, 0.0, 1.0).astype(np.float32),
                 "identity_reenactment_3d" + ("" if weight >= 1.0 else "_blend"), None, frame)
 
+    @staticmethod
+    def _jaw_contour(face, inverse: np.ndarray) -> np.ndarray:
+        """The detector's 33-point face contour in replacement-crop pixels. An implausible 106 layout is never trusted: NaNs make
+        the projector report ``contour_invalid`` instead of silently skipping the requested fit."""
+        points = None if face.landmarks106 is None else np.asarray(face.landmarks106, np.float64)
+        if points is None or points.shape != (106, 2) or not layout_is_plausible(points):
+            return np.full((33, 2), np.nan)
+        return transform_points(group(points, "contour"), cv2.invertAffineTransform(inverse))
+
     def _detect_landmarks106(self, crop: np.ndarray) -> np.ndarray | None:
         """106 dense landmarks of a generated crop (the crop is a tight face, so the box is the whole image)."""
         if self.tracker is None:
@@ -834,7 +848,8 @@ class ReferencePipeline:
                 "pose_projection": {"state": "AVAILABLE" if self.neural_face is not None or self.pose_projector is not None else "NOT_LOADED",
                                     "geometry": "SEMANTIC_ANATOMICAL_FACE" if self.neural_face is not None else "ESTIMATED_CANONICAL_PROXY_68",
                                     "camera": "FITTED_EXPORT_PINHOLE" if self.neural_face is not None else "ESTIMATED_CROP_PINHOLE",
-                                    "active": self.neural_face is not None or self.pose_projector is not None},
+                                    "active": self.neural_face is not None or self.pose_projector is not None,
+                                    "jaw_adaptation": "OPT_IN_CANONICAL_PROXY_JAWLINE_FROM_106_CONTOUR"},
                 "full_frame_compositor": self.compositor.capability(),
                 "lip_sync": self.lip_sync.capability(),
                 "render_modes": {"available": list(RENDER_MODES), "default": self.render_mode,
