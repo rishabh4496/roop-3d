@@ -31,5 +31,14 @@ module.exports = {
       message: ["python -B tools/project_admin.py mark-ready"],
       on: [{ event: "/(ROOP3D_GUARD_ERROR|ModuleNotFoundError|error:)/", break: true }]
     }
+  }, {
+    // Advisory only (always exits 0, no `break` event): tells the user which optional 3D-topology assets (MakeHuman head
+    // model, FLAME 2023 Open) are missing and exactly how to get them. Nothing is downloaded and no licence is accepted here.
+    method: "shell.run",
+    params: {
+      path: "app", venv: "roop_3d/.venv",
+      env: { PYTHONDONTWRITEBYTECODE: "1" },
+      message: ["python -B -m roop_3d.tools.check_topology_assets"]
+    }
   }]
 }

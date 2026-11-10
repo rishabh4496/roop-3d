@@ -59,6 +59,25 @@ Core dependencies include FastAPI, Uvicorn, Pydantic v2, PyAV/FFmpeg, NumPy, Ope
 ONNX Runtime, PyYAML and Httpx. Pytest/ONNX inspection tools are included in the
 development lock. Heavy diffusion/TRT/FLAME extras are separate, not base imports.
 
+### Optional 3D topology assets (MakeHuman head, FLAME 2023 Open)
+
+The identity-asset mesh route can re-express a head on another topology and apply semantic shape sliders
+(`GET /api/v1/facesets/{id}/identity-asset/mesh?template=makehuman&topology=...`; see `docs/MORPHABLE_TOPOLOGY_STAGE1.md`).
+These need model files that are **not in the repository**. Install prints a status check at the end; run it any time from `app/`:
+
+```
+python -B -m roop_3d.tools.check_topology_assets          # add --strict to fail if the default is missing, --json for scripts
+```
+
+* **MakeHuman head (default, CC0).** Build once: `python -B -m roop_3d.reconstruction.makehuman_build` (from `app/`). It downloads about
+  130 small files from a pinned commit and verifies each by SHA-256. Without it, `template=makehuman` requests return `MAKEHUMAN_ASSET_MISSING` (404).
+* **FLAME 2023 Open (optional, CC-BY-4.0, attribution required).** Needed only for `topology=flame2023_open`. You must download it yourself
+  after accepting the licence at https://flame.is.tue.mpg.de/. Use only `flame2023_Open.pkl` and put it at
+  `flame/flame2023/flame2023_Open.pkl` (git-ignored) or `app/roop_3d/.runtime/models/flame2023_open/`, or set `ROOP3D_FLAME2023_OPEN` to a path
+  inside the checkout. It is accepted only if its SHA-256 matches the pinned value. The other FLAME files (FLAME 2020, `flame2023.pkl`,
+  `flame2023_no_jaw.pkl`) are non-commercial and are never loaded. Without the file the app works normally and `topology=flame2023_open`
+  returns `TOPOLOGY_ASSET_MISSING` (404) with these instructions.
+
 ## API
 
 - `GET /api/v1/health`: version, uptime, standalone app ID and the last audit status.
