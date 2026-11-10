@@ -248,6 +248,8 @@ def test_full_neural_output_and_ultramax_own_all_replacement_pixels(native_size,
                 alignment=aligned_crop(image, np.asarray(landmarks), 128))
     class Enhancer:
         def restore_hires(self, crop, landmarks):
+            # CodeFormer/UltraMax fail closed (RESTORER_LANDMARKS_REQUIRED) without five crop-space landmarks.
+            assert landmarks is not None and np.asarray(landmarks).shape == (5, 2) and np.isfinite(landmarks).all()
             assert crop.shape == (native_size, native_size, 3)
             assert np.all(crop == 190), "photographic warp bypassed the neural swapper"
             return np.full((256, 256, 3), 210, np.uint8)

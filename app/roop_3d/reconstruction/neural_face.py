@@ -259,10 +259,12 @@ class NeuralFaceEngine:
         # Full neural output owns ALL replacement pixels. No residual extraction
         # or fall-through to the photographic conditioning image is permitted.
         neural = swapper.synthesize_correspondence(conditioning, pose=face.pose, track_id=track_id)
-        # Enhancement sees the geometry-conditioned source crop. Its landmark
-        # detector input is omitted so it cannot recenter or reshape the source
-        # face from target 2D landmarks.
-        enhanced = self.enhancer.restore_hires(neural, None)
+        # Enhancement sees the geometry-conditioned source crop. CodeFormer/UltraMax are trained on five-point FFHQ
+        # alignment and fail closed without it, so the restorer is given the target's five landmarks expressed in this
+        # crop's own frame. They only choose the restorer's internal alignment: the result is warped straight back
+        # into the same crop frame, so they cannot recenter or reshape the source face.
+        crop_points = transform_points(face.landmarks5, aligned.matrix)
+        enhanced = self.enhancer.restore_hires(neural, crop_points)
         if enhanced is None or enhanced.dtype != np.uint8 or enhanced.ndim != 3 or enhanced.shape[2] != 3:
             raise DomainError("DENSE_FACE_ENHANCER_FAILED", "UltraMax did not return a neural face image", 503)
         height, width = enhanced.shape[:2]
@@ -275,7 +277,7 @@ class NeuralFaceEngine:
         inverse = aligned.inverse.copy()
         inverse[:, 0] *= size/width
         inverse[:, 1] *= size/height
-        points = transform_points(face.landmarks5, aligned.matrix) * (width/size, height/size)
+        points = crop_points * (width/size, height/size)
         return NeuralFaceResult(enhanced, inverse, coverage, points)
 
     def capability(self):
