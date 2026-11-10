@@ -172,6 +172,10 @@ class ReferencePipeline:
         self.full_head_engines = {}
         self.head_landmarks = None
         self.neural_face = None
+        # Interactive previews may opt in to degrading to the standard 2D swap when the dense facial bundle is not
+        # installed. Renders keep the strict default (explicit DENSE_FACE_ASSETS_MISSING error, never a silent change).
+        self.dense_face_optional = False
+        self.dense_face_unavailable: str | None = None
         self.angle_trajectories: dict[int, tuple[Any, ...]] = {}
         self.angle_frame_index: int | None = None
         self.reenactment_settings = ReenactmentSettings()
@@ -211,9 +215,12 @@ class ReferencePipeline:
                 self.sources_by_track = mapped_sources
                 self.default_source, self.render_mode = source, render_mode
                 self.reenactment_settings = reenactment_settings or ReenactmentSettings()
+                self.dense_face_unavailable = None
                 if render_mode != "standard":
                     self._prepare_identity_rigs(source, mapped_sources, identity_store)
-                if render_mode != "standard":
+                if render_mode != "standard" and self.dense_face_unavailable:
+                    self.portrait.fallback_reason = self.dense_face_unavailable
+                elif render_mode != "standard":
                     self.portrait.fallback_reason = "Three-tier reconstruction supplies target expressions; dense warp uses neural swapper and UltraMax"
                 elif retarget != "off":
                     self.portrait.prepare_session(required=retarget == "required")
@@ -229,7 +236,13 @@ class ReferencePipeline:
         """Prepare face-only 3D correspondence; no MakeHuman render path."""
         from roop_3d.reconstruction.neural_face import NeuralFaceEngine
         if self.neural_face is None:
-            self.neural_face = NeuralFaceEngine.load(self.catalog, self.config)
+            try:
+                self.neural_face = NeuralFaceEngine.load(self.catalog, self.config)
+            except DomainError as error:
+                if not self.dense_face_optional or error.code != "DENSE_FACE_ASSETS_MISSING":
+                    raise
+                self.dense_face_unavailable = f"{error.code}: standard 2D identity swap used instead. {error.message}"
+                return
         for document in {d.faceset_id: d for d in (source, *mapped.values())}.values():
             self.neural_face.prepare(document)
             self.rig_status[document.faceset_id] = self.neural_face.capability()
@@ -564,6 +577,8 @@ class ReferencePipeline:
             mode = self.render_mode if render_mode is None else render_mode
             if mode not in RENDER_MODES:
                 raise ValueError(f"render_mode must be one of {RENDER_MODES}")
+            if mode != "standard" and self.dense_face_unavailable:
+                mode = "standard"
             if mode == "pose_3d" and pose_blend is None:
                 pose_blend = 1.0
             began = time.perf_counter()
@@ -611,12 +626,17 @@ class ReferencePipeline:
                 at = time.perf_counter()
                 extreme = abs(face.pose[0]) > 30 or abs(face.pose[1]) > 25
                 face_mode = "pose_3d" if mode == "standard" and extreme else mode
-                if face_mode != "standard":
+                dense_fallback = self.dense_face_unavailable if face_mode != "standard" else None
+                if face_mode != "standard" and not dense_fallback:
                     document = self._document_for(tracked.track_id)
                     if document is None:
                         raise DomainError("DENSE_FACE_SOURCE_REQUIRED", "3D correspondence requires a source identity", 409)
                     if self.neural_face is None or document.faceset_id not in self.neural_face.sources:
                         self._prepare_identity_rigs(document, {})
+                    dense_fallback = self.dense_face_unavailable
+                if dense_fallback:
+                    face_mode = "standard"
+                if face_mode != "standard":
                     generated = self.neural_face.process(image, face, document, self.swapper,
                                                          track_id=tracked.track_id)
                     projection_seconds += time.perf_counter() - at
@@ -649,7 +669,7 @@ class ReferencePipeline:
                         generated, method = warp.image, method + '_tps_expression'
                     projection_seconds += time.perf_counter() - at
                 projection = None
-                fallback_reason, reenactment, coverage = None, None, None
+                fallback_reason, reenactment, coverage = dense_fallback, None, None
                 if pose_blend is not None:
                     at = time.perf_counter()
                     try:
@@ -703,6 +723,8 @@ class ReferencePipeline:
             mode = self.render_mode if render_mode is None else render_mode
             if mode not in RENDER_MODES:
                 raise ValueError(f"render_mode must be one of {RENDER_MODES}")
+            if mode != "standard" and self.dense_face_unavailable:
+                mode = "standard"
             if mode == "pose_3d" and pose_blend is None:
                 pose_blend = 1.0
             began = time.perf_counter()
@@ -802,7 +824,8 @@ class ReferencePipeline:
                 "pose_method": "three_tier_morphable_model" if self.neural_face is not None else "five_point_geometric_estimate", "dense_landmarks": (68, 106, 203),
                 "full_head": {"active": False, "renderer": "disabled_legacy_cg"},
                 "dense_face": self.neural_face.capability() if self.neural_face is not None else {
-                    "available": False, "active": False, "reason": "Dense face bundle has not been loaded",
+                    "available": False, "active": False,
+                    "reason": self.dense_face_unavailable or "Dense face bundle has not been loaded",
                     "raw_mesh_compositing": False},
                 "pose_projection": {"state": "AVAILABLE" if self.neural_face is not None or self.pose_projector is not None else "NOT_LOADED",
                                     "geometry": "SEMANTIC_ANATOMICAL_FACE" if self.neural_face is not None else "ESTIMATED_CANONICAL_PROXY_68",

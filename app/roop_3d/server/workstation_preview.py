@@ -204,6 +204,9 @@ class PreviewService:
             edit_plan = FrameEditPlan(runner, value.request, sources)
             runtime = runner._runtime_config(admission, runner.settings_for(value.request, settings))
             session = ReferencePipeline(self.state.models, runtime)
+            # A preview degrades to the standard 2D swap (with a visible note) when the dense facial bundle is not
+            # installed; render jobs keep the strict explicit error.
+            session.dense_face_optional = True
             select_swapper = getattr(session, "select_swapper", None)
             if callable(select_swapper):
                 select_swapper(value.request.swapper_model_id or settings.swapper_model_id)
@@ -342,6 +345,9 @@ class PreviewService:
                         'notes': ['Single-frame preview, tracking and compositor replayed from frame zero.' if replay else 'Single-frame preview, seeked to playhead keyframe; temporal smoothing resets per variant.',
                                   'Mesh blend: TPS at 0, perspective 3D proxy projection at 1; canonical geometry and camera are estimates.' if parameters.pose_mode == 'mesh_blend' else 'Reference retarget mode: observed dense landmarks; mesh projection is not selected.',
                                   'Matte uses the reference BiSeNet parser with landmark-hull fallback; no XSeg adapter.']}
+            fallbacks = sorted({item.fallback_reason for item in result.replacements
+                                if item.fallback_reason and item.fallback_reason.startswith('DENSE_FACE_')})
+            response['notes'].extend(f'3D mode not applied in this preview: {reason}' for reason in fallbacks)
             response['faces'] = face_readouts(result)
             if value.x and value.y:
                 cells = []

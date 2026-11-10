@@ -65,3 +65,7 @@ outputs/
 app/roop_3d/audit/protected_all_paths.json
 app/roop_3d/audit/stage00_verification.json
 app/roop_3d/audit/stage01_verification.json
+
+# License-gated FLAME model downloads (never commit)
+flame/
+FLAME*.zip
