@@ -55,7 +55,7 @@ jobs:
         run: |
           python -m pip install uv
           uv venv app/roop_3d/.venv
-          app/roop_3d/.venv/Scripts/python.exe -m uv pip install -r docs/releases/requirements.lock
+          uv pip install --python app/roop_3d/.venv/Scripts/python.exe -r app/roop_3d/requirements.lock
 
       - name: Python Unit & Integration Tests
         run: |
