@@ -30,6 +30,7 @@ cvcuda = ["cvcuda-cu12==0.19.0; platform_system == 'Linux'"]
 trt = ["tensorrt-cu12==10.9.0.34; platform_system != 'Darwin'"]
 flame = ["smplx==0.1.28"]
 dense-face-export = ["torch==2.7.1", "torchvision==0.22.1", "timm==0.9.16"]
+articulated-reconstruction = ["torch==2.7.1"]
 provenance = ["c2pa-python==0.38.0"]
 
 [tool.setuptools]
@@ -37,7 +38,7 @@ packages = ["roop_3d", "roop_3d.audit", "roop_3d.core", "roop_3d.server", "roop_
 package-dir = {"roop_3d" = "."}
 
 [tool.setuptools.package-data]
-roop_3d = ["py.typed"]
+roop_3d = ["py.typed", "reconstruction/ARTICULATED_MODELS_LICENSE", "reconstruction/ARTICULATED_MODELS.md"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
