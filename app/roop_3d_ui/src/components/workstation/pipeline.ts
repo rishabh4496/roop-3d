@@ -58,7 +58,10 @@ export type WorkstationParameters = {
   /** Grain variance match strength, 0..100 percent. */
   grain_match_strength?: number;
 };
-export type FaceEditor = Partial<Record<'head_pitch' | 'head_yaw' | 'head_roll' | 'gaze_x' | 'gaze_y' | 'blink_left' | 'blink_right' | 'eyebrow_tilt' | 'eyebrow_raise' | 'mouth_smile' | 'mouth_pout' | 'mouth_open' | 'jaw_width' | 'chin_length', number>>;
+export type FaceEditor = Partial<Record<'head_pitch' | 'head_yaw' | 'head_roll' | 'gaze_x' | 'gaze_y' | 'blink_left' | 'blink_right' | 'eyebrow_tilt' | 'eyebrow_raise' | 'mouth_smile' | 'mouth_pout' | 'mouth_open' | 'jaw_width' | 'chin_length', number>> & {
+  /** Sparse standard ARKit 52 blendshape values, each in [0,1]. */
+  arkit_blendshapes?: Record<string, number>;
+};
 export const DEFAULT_PARAMETERS: WorkstationParameters = {
   restoration_blend: 0,
   feather_px: 5,

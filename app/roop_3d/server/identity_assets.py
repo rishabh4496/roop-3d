@@ -29,6 +29,7 @@ sessions reuse). ``makehuman`` is the open CC0 head+neck template (5-point landm
 from __future__ import annotations
 
 import base64
+import json
 import re
 import threading
 from dataclasses import dataclass
@@ -38,10 +39,12 @@ import cv2
 import numpy as np
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import Response
+from pydantic import Field
 from starlette.concurrency import run_in_threadpool
 
 from roop_3d.core.errors import DomainError
-from roop_3d.core.storage import owned
+from roop_3d.core.settings import Contract
+from roop_3d.core.storage import atomic_bytes, owned
 from roop_3d.faceset.faceset_reader import FaceSetReader
 
 router = APIRouter(prefix="/api/v1")
@@ -53,6 +56,10 @@ _BUILD_LOCKS: dict[str, threading.Lock] = {}
 _BUILD_LOCKS_GUARD = threading.Lock()
 MESH_VERTEX_LIMIT = 100_000
 MESH_FACE_LIMIT = 200_000
+
+
+class BakeAtlasRequest(Contract):
+    resolution: Literal[2048, 4096] = Field(default=2048, description="Persistent PBR atlas size, 2K or 4K")
 
 
 def _archive(request: Request, faceset_id: str):
@@ -189,6 +196,74 @@ def _build(document, template: str = "canonical") -> dict[str, Any]:
 async def build_identity_asset(faceset_id: str, request: Request, template: TemplateName = Query(default="canonical")):
     document = await run_in_threadpool(load_document, request, faceset_id)
     return await run_in_threadpool(_build, document, template)
+
+
+def _bake_atlas(document, resolution: int, template: str = "canonical") -> dict[str, Any]:
+    """Build/reuse the local multi-view asset, then persist its PBR PNG maps beside that asset."""
+    from roop_3d.rendering.uv_baker import MAP_SUFFIXES, atlas_manifest, bake_pbr_atlas
+    from roop_3d.reconstruction.identity_asset import compute_build_key
+    with _BUILD_LOCKS_GUARD:
+        lock = _BUILD_LOCKS.setdefault(document.faceset_id, threading.Lock())
+    if not lock.acquire(blocking=False):
+        raise DomainError("IDENTITY_ASSET_BUILD_IN_PROGRESS", "This FaceSet's identity asset is already being built", 409)
+    try:
+        store = _store()
+        settings = _settings(template)
+        asset, reused = store.get_or_build(document, settings)
+        key = compute_build_key(document, settings)
+        baked = bake_pbr_atlas(asset, resolution)
+        encoded = baked.encoded()
+        name = f"atlas_{resolution // 1024}k"
+        directory = store._dir(document.faceset_id, key)
+        try:
+            relative_directory = directory.relative_to(store.app_root).as_posix()
+        except ValueError:
+            raise DomainError("ATLAS_PATH_DENIED", "The FaceSet asset directory is outside the local runtime", 500) from None
+        owned(store.app_root, relative_directory).mkdir(parents=True, exist_ok=True)
+        files: dict[str, str] = {}
+        for suffix in MAP_SUFFIXES:
+            filename = f"{name}_{suffix}.png"
+            relative = f"{relative_directory}/{filename}"
+            atomic_bytes(store.app_root, relative, encoded[suffix])
+            files[suffix] = f"/api/v1/facesets/{document.faceset_id}/bake-atlas/{filename}?template={template}"
+        manifest = atlas_manifest(baked, encoded, faceset_id=document.faceset_id, build_key=key,
+                                  source_sha256=document.source_sha256)
+        manifest["asset_reused"] = reused
+        atomic_bytes(store.app_root, f"{relative_directory}/{name}_manifest.json",
+                     (json.dumps(manifest, allow_nan=False, indent=2) + "\n").encode("utf-8"))
+        return {"faceset_id": document.faceset_id, "build_key": key, "resolution": resolution,
+                "source_resolution": list(baked.source_resolution), "asset_reused": reused,
+                "albedo_source": "intrinsic diffuse decomposition of observed multi-view identity texture",
+                "trust_mask": "PNG alpha: observed=1, interpolated=0.45, unseen=0",
+                "relief_available": baked.relief_available, "maps": files,
+                "manifest": f"{name}_manifest.json", "claims": manifest["claims"]}
+    finally:
+        lock.release()
+
+
+@router.post("/facesets/{faceset_id}/bake-atlas")
+async def bake_faceset_atlas(faceset_id: str, value: BakeAtlasRequest, request: Request,
+                             template: TemplateName = Query(default="canonical")):
+    document = await run_in_threadpool(load_document, request, faceset_id)
+    return await run_in_threadpool(_bake_atlas, document, value.resolution, template)
+
+
+@router.get("/facesets/{faceset_id}/bake-atlas/{filename}")
+async def get_baked_atlas(faceset_id: str, filename: str, request: Request,
+                          template: TemplateName = Query(default="canonical")):
+    if not _FACESET_ID.fullmatch(faceset_id) or not re.fullmatch(r"atlas_(?:2k|4k)_(?:basecolor|normal|orm|cavity)\.png", filename):
+        raise DomainError("ATLAS_FILE_INVALID", "The baked atlas file name is invalid", 422)
+    document = await run_in_threadpool(load_document, request, faceset_id)
+    from roop_3d.reconstruction.identity_asset import compute_build_key
+    store = _store()
+    key = compute_build_key(document, _settings(template))
+    directory = store._dir(faceset_id, key)
+    relative = (directory / filename).relative_to(store.app_root).as_posix()
+    path = owned(store.app_root, relative)
+    if not path.is_file():
+        raise DomainError("ATLAS_NOT_BAKED", "Bake this FaceSet atlas first", 404)
+    return Response(content=path.read_bytes(), media_type="image/png",
+                    headers={"Cache-Control": "private, no-cache", "X-FaceSet-Build-Key": key})
 
 
 def _semantic_controller(registry, topology_id: str):

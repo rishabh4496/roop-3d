@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api, post } from '../../api';
-import type { FaceSet, FaceSetView, IdentityAssetStatus, Reconstruction } from '../../contracts';
+import type { BakedPBRAtlas, FaceSet, FaceSetView, IdentityAssetStatus, Reconstruction } from '../../contracts';
 import VirtualList from '../common/VirtualList';
 import { loadIdentityMesh } from '../../utils/glbMesh';
 import { startFacesetDrag } from '../../utils/facesetDrag';
@@ -91,11 +91,13 @@ export default function FaceSetDetail({ faceset, selectedTrackLabel, assignedHer
   const query = template === 'makehuman' ? '?template=makehuman' : '';
   const [status, retryStatus] = useResource<IdentityAssetStatus>(`/facesets/${id}/identity-asset${query}`, isAssetStatus, assetRevision);
   const [build, setBuild] = useState<{ busy: boolean; started: number; error: string }>({ busy: false, started: 0, error: '' });
+  const [bake, setBake] = useState<{ busy: boolean; started: number; error: string; result: BakedPBRAtlas | null }>({ busy: false, started: 0, error: '', result: null });
+  const [atlasResolution, setAtlasResolution] = useState<2048 | 4096>(2048);
   const [elapsed, setElapsed] = useState(0);
   const [meshBusy, setMeshBusy] = useState(false);
   const live = useRef(id);
   live.current = id;
-  useEffect(() => { setBuild({ busy: false, started: 0, error: '' }); setMeshBusy(false); }, [id]);
+  useEffect(() => { setBuild({ busy: false, started: 0, error: '' }); setBake({ busy: false, started: 0, error: '', result: null }); setMeshBusy(false); }, [id]);
   useEffect(() => {
     if (!build.busy) return undefined;
     const timer = setInterval(() => setElapsed(Math.round((Date.now() - build.started) / 1000)), 500);
@@ -111,6 +113,18 @@ export default function FaceSetDetail({ faceset, selectedTrackLabel, assignedHer
       setBuild({ busy: false, started: 0, error: '' }); setAssetRevision(value => value + 1);
     } catch (error) {
       if (live.current === forId) setBuild({ busy: false, started: 0, error: (error as Error).message });
+    }
+  };
+  const runBake = async () => {
+    const forId = id;
+    setBake({ busy: true, started: Date.now(), error: '', result: null });
+    try {
+      const result = await post<BakedPBRAtlas>(`/facesets/${forId}/bake-atlas${query}`, { resolution: atlasResolution });
+      if (live.current !== forId) return;
+      setBake({ busy: false, started: 0, error: '', result });
+      setAssetRevision(value => value + 1);
+    } catch (error) {
+      if (live.current === forId) setBake({ busy: false, started: 0, error: (error as Error).message, result: null });
     }
   };
   const showMesh = async () => {
@@ -204,11 +218,25 @@ export default function FaceSetDetail({ faceset, selectedTrackLabel, assignedHer
           {status.value.coverage.requests.length > 0 && <details className="asset-requests" open={readiness !== 'full_coverage'}><summary>{status.value.coverage.requests.length} suggested additional angle{status.value.coverage.requests.length === 1 ? '' : 's'}</summary><ul>{status.value.coverage.requests.map(item => { const request = parseRequest(item); return <li key={item}>{request.level !== 'info' && <span className={`status-chip request-${request.level}`}>{request.level}</span>} {request.text}</li>; })}</ul></details>}
           {asset && asset.missing_information.length > 0 && <details className="asset-requests"><summary>What this asset does not contain</summary><ul>{asset.missing_information.map(item => <li key={item}>{item}</li>)}{asset.limitations.map(item => <li key={item}>{item}</li>)}</ul></details>}
           <div className="asset-actions">
-            {!asset && <button type="button" className="button small accent" disabled={build.busy} onClick={() => void runBuild()}>{build.busy ? `Building… ${elapsed}s` : 'Build 3D identity asset'}</button>}
+            {!asset && <button type="button" className="button small accent" disabled={build.busy || bake.busy} onClick={() => void runBuild()}>{build.busy ? `Building… ${elapsed}s` : 'Build 3D identity asset'}</button>}
             {asset && <button type="button" className="button small" aria-pressed={meshShown} disabled={meshBusy} onClick={() => void showMesh()}>{meshBusy ? 'Loading mesh…' : meshShown ? 'Hide 3D asset' : 'View 3D asset'}</button>}
+            <label className="inspector-field">PBR atlas resolution
+              <select aria-label="PBR atlas resolution" value={atlasResolution} disabled={bake.busy} onChange={event => setAtlasResolution(Number(event.target.value) as 2048 | 4096)}>
+                <option value={2048}>2K</option><option value={4096}>4K</option>
+              </select>
+            </label>
+            <button type="button" className="button small accent" disabled={bake.busy || build.busy} onClick={() => void runBake()}>
+              {bake.busy ? 'Baking local UV atlas…' : 'Bake PBR atlas'}
+            </button>
             {build.busy && <span className="build-progress" role="status">Reconstructing locally (fit, texture, validation). This usually takes seconds.</span>}
+            {bake.busy && <span className="build-progress" role="status">Generating observed albedo, relief normals, cavity and roughness maps locally.</span>}
           </div>
           {build.error && <ErrorRetry message={build.error} onRetry={() => { setBuild(value => ({ ...value, error: '' })); retryStatus(); }} />}
+          {bake.error && <ErrorRetry message={bake.error} onRetry={() => { setBake(value => ({ ...value, error: '' })); }} />}
+          {bake.result && <div className="atlas-downloads" role="status" aria-label="Baked PBR atlas maps">
+            <p>{bake.result.resolution / 1024}K atlas ready · {bake.result.relief_available ? 'measured UV relief included' : 'no measured pore relief was available'}</p>
+            {Object.entries(bake.result.maps).map(([map, url]) => <a key={map} href={url} download>{map === 'basecolor' ? 'Diffuse albedo' : map.toUpperCase()}</a>)}
+          </div>}
         </div>
       )}
 

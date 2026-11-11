@@ -121,6 +121,12 @@ export interface IdentityAssetStatus {
     missing_information: string[]; limitations: string[]; statistics: Record<string, unknown>; sources_used: number; sources_total: number; vertex_count: number; face_count: number; texture_size: [number, number] };
   flame: Record<string, unknown>;
 }
+export interface BakedPBRAtlas {
+  faceset_id: string; build_key: string; resolution: 2048 | 4096; source_resolution: [number, number]; asset_reused: boolean;
+  albedo_source: string; trust_mask: string; relief_available: boolean;
+  maps: { basecolor: string; normal: string; orm: string; cavity: string };
+  manifest: string; claims: Record<string, boolean>;
+}
 export interface Probe { width: number; height: number; duration_seconds: number | null; fps_rational: string | null; declared_frame_count: number | null; audio_tracks: unknown[] }
 export interface ReconstructedMesh { vertices: number[][]; uvs: number[][]; indices: number[][]; normals: number[][]; texture_base64: string; reconstruction_level: string; limitations: string[]; template?: string; backbone?: { available: boolean; reason?: string; topology?: string; active_face_vertices?: number }; deformation?: MeshDeformation; texture_completion?: TextureCompletion }
 export interface MeshDeformation { template: string; landmark_layout: string; reconstruction_level: string; method: string; vertex_count: number; deviation_from_neutral_mm: { mean: number; p95: number; max: number }; landmark_fit_rms_mm: number; yaw_span_deg: number; deformation_strength: number }

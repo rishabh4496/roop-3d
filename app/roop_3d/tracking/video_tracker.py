@@ -36,6 +36,7 @@ from roop_3d.core.pose import euler_from_rotation, rotation_from_euler
 from roop_3d.core.settings import Contract
 from roop_3d.flame_3d_engine import EyeGaze, FlameParameters
 from roop_3d.reconstruction.expression_tps import group, layout_is_plausible
+from roop_3d.reconstruction.arkit_bridge import ARKitBridgeOutput, ARKit52To3DMMBridge
 from roop_3d.reconstruction.geometry_types import WeakPerspectiveCamera
 from roop_3d.reconstruction.multiview_fit import (
     estimate_pose_from_landmarks,
@@ -130,6 +131,7 @@ class FrameEvidence:
     image_bgr: np.ndarray | None = None
     scene_cut: bool = False
     frame_index: int | None = None
+    arkit52: np.ndarray | None = None        # optional ARKit blendshape vector, standard order, [0,1]
 
 
 @dataclass(frozen=True)
@@ -179,6 +181,8 @@ class TrackedHeadFrame:
     lighting: LightingEstimate | None = None
     lighting_source: str | None = None
     lighting_coefficients: np.ndarray | None = None        # filtered (9, 3), what L_t is
+    theta_jaw: np.ndarray | None = None                    # mapped jaw joint axis-angle (3, radians)
+    theta_eyes: np.ndarray | None = None                   # mapped eye joint axis-angle + translation (6)
 
 
 # =========================================================================== shot boundaries
@@ -247,11 +251,16 @@ class VideoHeadTracker3D:
 
     def __init__(self, settings: TrackerSettings | None = None, *, anchors: HeadAnchors | None = None,
                  adaptation=None, lighting: MeshSHLightingEstimator | None = None,
+                 arkit_bridge: ARKit52To3DMMBridge | None = None, arkit_regularization: float = 0.35,
                  on_frame: Callable[[TrackedHeadFrame], None] | None = None):
         self.s = settings or TrackerSettings()
         self.adaptation = adaptation
         self.anchors = anchors or (adaptation.anchors if adaptation is not None and adaptation.anchors is not None else HeadAnchors.canonical())
         self.lighting = lighting
+        if not np.isfinite(arkit_regularization) or not 0 <= arkit_regularization <= 1:
+            raise ValueError("arkit_regularization must be in [0,1]")
+        self.arkit_bridge = arkit_bridge or ARKit52To3DMMBridge()
+        self.arkit_regularization = float(arkit_regularization)
         self.on_frame = on_frame
         self.filters = TrackFilterBank()
         self.lock = ShotIdentityLock(min_frames=self.s.lock_min_frames, lock_frames=self.s.lock_frames,
@@ -291,6 +300,7 @@ class VideoHeadTracker3D:
         self._last_camera: CameraPose | None = None
         self._last_jaw: tuple[float, str] | None = None
         self._gaze_source: str | None = None
+        self._psi_dim: int | None = None
         self._model_centre: np.ndarray = self.anchors.points.mean(axis=0)
 
     def _start_shot(self, reason: str) -> None:
@@ -346,10 +356,11 @@ class VideoHeadTracker3D:
         self._last_camera = camera
 
         expression, held, calibrated = self._expression(ev, fit, t)
-        jaw, jaw_source = self._jaw(ev, expression, t)
-        psi = self._psi(ev, t)
+        bridge_output = self.arkit_bridge.to_3dmm(ev.arkit52) if ev.arkit52 is not None else None
+        jaw, jaw_source = self._jaw(ev, expression, t, bridge_output)
+        psi = self._psi(ev, t, bridge_output)
         energy = self._energy(expression, psi)
-        gaze = self._gaze(ev, camera, t) if self.s.gaze_enabled else None
+        gaze = self._gaze(ev, camera, t, bridge_output) if self.s.gaze_enabled else None
         identity = self._identity(ev, fit, camera, energy, comps)
         if identity is not None and identity.break_detected:
             self._pending_cut = "identity_break"
@@ -361,7 +372,8 @@ class VideoHeadTracker3D:
             index, t, "tracked", "OK", comps, confidence=confidence, camera=camera, residual=fit.rms_iod, identity=identity,
             expression=expression, held=held, energy=energy, calibrated=calibrated, psi=psi, jaw=jaw, jaw_source=jaw_source,
             gaze=gaze, lighting=lighting, lighting_source=lighting_source, lighting_coefficients=lighting_coefficients,
-            cut=cut))
+            theta_jaw=None if bridge_output is None else bridge_output.theta_jaw,
+            theta_eyes=None if bridge_output is None else bridge_output.theta_eyes, cut=cut))
 
     # ------------------------------------------------------------------ pose
     def _valid5(self, ev: FrameEvidence) -> bool:
@@ -439,9 +451,15 @@ class VideoHeadTracker3D:
             return dict(zip(EXPRESSION_CHANNELS, map(float, held))), True, calibrated
         return None, False, calibrated
 
-    def _jaw(self, ev: FrameEvidence, expression: dict | None, t: float):
+    def _jaw(self, ev: FrameEvidence, expression: dict | None, t: float, bridge_output: ARKitBridgeOutput | None = None):
         if ev.flame is not None:
             value, source = float(np.clip(ev.flame.jaw_rotation[0], 0.0, JAW_MAX_RAD)), "flame_encoder"
+            if bridge_output is not None:
+                value = float(np.clip((1.0 - self.arkit_regularization) * value
+                                      + self.arkit_regularization * float(bridge_output.theta_jaw[0]), 0.0, JAW_MAX_RAD))
+                source = "flame_arkit_regularized"
+        elif bridge_output is not None:
+            value, source = float(np.clip(bridge_output.theta_jaw[0], 0.0, JAW_MAX_RAD)), "arkit52_bridge"
         elif expression is not None:
             value = float(np.clip(expression["mouth_open"] * self.s.ipd_m / JAW_LEVER_M, 0.0, JAW_MAX_RAD))
             source = "landmark_proxy"
@@ -452,10 +470,28 @@ class VideoHeadTracker3D:
         self._last_jaw = (smoothed, source)
         return smoothed, source
 
-    def _psi(self, ev: FrameEvidence, t: float) -> np.ndarray | None:
-        if ev.flame is None:
+    def _psi(self, ev: FrameEvidence, t: float, bridge_output: ARKitBridgeOutput | None = None) -> np.ndarray | None:
+        if ev.flame is None and bridge_output is None:
             return None
-        return self.filters.update("psi", np.asarray(ev.flame.psi, np.float64), t).astype(np.float32)
+        if bridge_output is not None:
+            mapped = np.asarray(bridge_output.psi, np.float32)
+            if ev.flame is not None:
+                base = np.zeros_like(mapped)
+                source = np.asarray(ev.flame.psi, np.float32)
+                base[:min(len(source), len(base))] = source[:len(base)]
+                mapped = self.arkit_bridge.regularize(base, mapped, strength=self.arkit_regularization)
+            if self._psi_dim is None:
+                self._psi_dim = 100 if ev.flame is None else len(ev.flame.psi)
+            value = mapped[:self._psi_dim] if self._psi_dim <= len(mapped) else np.pad(mapped, (0, self._psi_dim - len(mapped)))
+        else:
+            value = np.asarray(ev.flame.psi, np.float32)
+            if self._psi_dim is None:
+                self._psi_dim = len(value)
+            if self._psi_dim < len(value):
+                value = value[:self._psi_dim]
+            elif self._psi_dim > len(value):
+                value = np.pad(value, (0, self._psi_dim - len(value)))
+        return self.filters.update("psi", np.asarray(value, np.float64), t).astype(np.float32)
 
     @staticmethod
     def _energy(expression: dict | None, psi: np.ndarray | None) -> float | None:
@@ -466,12 +502,20 @@ class VideoHeadTracker3D:
         return None
 
     # ------------------------------------------------------------------ gaze
-    def _gaze(self, ev: FrameEvidence, camera: CameraPose, t: float) -> GazeState | None:
+    def _gaze(self, ev: FrameEvidence, camera: CameraPose, t: float,
+              bridge_output: ARKitBridgeOutput | None = None) -> GazeState | None:
         measurement, source = None, None
         if ev.gaze is not None:
             measurement, source = ev.gaze, SOURCE_ESTIMATOR
         elif ev.flame is not None and ev.flame.gaze is not None:
             measurement, source = ev.flame.gaze, SOURCE_ESTIMATOR
+            if bridge_output is not None:
+                angles = ((1.0 - self.arkit_regularization) * measurement.angles()
+                          + self.arkit_regularization * np.asarray(bridge_output.gaze_angles, np.float32))
+                measurement = EyeGaze(*map(float, angles))
+                source = "flame_arkit_regularized"
+        elif bridge_output is not None:
+            measurement, source = EyeGaze(*map(float, bridge_output.gaze_angles)), "arkit52_bridge"
         elif self.s.iris_gaze_fallback and ev.mesh478 is not None:
             measurement, source = iris_gaze_from_mesh478(ev.mesh478, aspect=ev.mesh_aspect), SOURCE_IRIS
         if measurement is not None:
@@ -568,7 +612,7 @@ class VideoHeadTracker3D:
                camera: CameraPose | None = None, residual: float | None = None, identity=None, expression=None,
                held: bool = False, energy: float | None = None, calibrated: bool = False, psi=None, jaw=None,
                jaw_source=None, gaze=None, lighting=None, lighting_source=None, lighting_coefficients=None,
-               cut: str | None = None) -> TrackedHeadFrame:
+               cut: str | None = None, theta_jaw=None, theta_eyes=None) -> TrackedHeadFrame:
         self.status_counts[status] += 1
         if status == "coasting":
             confidence = 0.0
@@ -577,7 +621,9 @@ class VideoHeadTracker3D:
             status=status, reason=reason, confidence=confidence, components=comps, camera=camera, pose_residual_iod=residual,
             identity=identity, expression=expression, expression_held=held, expression_energy=energy,
             expression_calibrated=calibrated, psi=psi, jaw_open_rad=jaw, jaw_source=jaw_source, gaze=gaze, lighting=lighting,
-            lighting_source=lighting_source, lighting_coefficients=lighting_coefficients)
+            lighting_source=lighting_source, lighting_coefficients=lighting_coefficients,
+            theta_jaw=None if theta_jaw is None else np.asarray(theta_jaw, np.float32),
+            theta_eyes=None if theta_eyes is None else np.asarray(theta_eyes, np.float32))
 
     def _emit(self, frame: TrackedHeadFrame) -> TrackedHeadFrame:
         if self.on_frame is not None:

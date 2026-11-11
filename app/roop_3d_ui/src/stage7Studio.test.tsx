@@ -114,6 +114,20 @@ describe('FaceSetDetail', () => {
     expect(onShowMesh).toHaveBeenCalledWith({ method: 'identity_asset' });
   });
 
+  it('bakes and links the four local PBR maps at the selected resolution', async () => {
+    api.mockImplementation((path: string) => Promise.resolve(path.endsWith('/views') ? [] : STATUS(false)));
+    post.mockResolvedValue({ faceset_id: 'alice', build_key: 'k', resolution: 2048, source_resolution: [512, 512], asset_reused: true,
+      albedo_source: 'observed multi-view identity asset', trust_mask: 'PNG alpha', relief_available: true,
+      maps: { basecolor: '/atlas/albedo.png', normal: '/atlas/normal.png', orm: '/atlas/orm.png', cavity: '/atlas/cavity.png' }, manifest: 'atlas_2k_manifest.json', claims: {} });
+    await render(detail(SOURCES[0]));
+    await flush();
+    await act(async () => byText('Bake PBR atlas')!.click());
+    await flush();
+    expect(post).toHaveBeenCalledWith('/facesets/alice/bake-atlas', { resolution: 2048 });
+    expect(host.querySelectorAll('.atlas-downloads a')).toHaveLength(4);
+    expect(host.querySelector('.atlas-downloads')?.textContent).toContain('measured UV relief included');
+  });
+
   it('assignment needs a selected target track', async () => {
     api.mockImplementation((path: string) => Promise.resolve(path.endsWith('/views') ? [] : STATUS(false)));
     await render(detail(SOURCES[0], { selectedTrackLabel: null }));

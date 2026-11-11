@@ -245,8 +245,20 @@ export function eyeAnchors(positions: ArrayLike<number>, landmarks: ArrayLike<nu
 export function withFaceEdit(parameters: WorkstationParameters, trackId: string, patch: FaceEditor): WorkstationParameters {
   const all = { ...(parameters.face_expression_overrides ?? {}) };
   const next: FaceEditor = { ...(all[trackId] ?? {}) };
-  for (const [key, value] of Object.entries(patch) as [keyof FaceEditor, number][]) {
-    if (!Number.isFinite(value) || value === 0) delete next[key]; else next[key] = value;
+  for (const [key, value] of Object.entries(patch) as [string, unknown][]) {
+    if (key === 'arkit_blendshapes' && value && typeof value === 'object') {
+      const blendshapes = { ...(next.arkit_blendshapes ?? {}) };
+      for (const [name, amount] of Object.entries(value as Record<string, unknown>)) {
+        if (typeof amount !== 'number' || !Number.isFinite(amount) || amount === 0) delete blendshapes[name];
+        else blendshapes[name] = amount;
+      }
+      if (Object.keys(blendshapes).length) next.arkit_blendshapes = blendshapes;
+      else delete next.arkit_blendshapes;
+      continue;
+    }
+    const scalar = key as Exclude<keyof FaceEditor, 'arkit_blendshapes'>;
+    if (typeof value !== 'number' || !Number.isFinite(value) || value === 0) delete next[scalar];
+    else next[scalar] = value;
   }
   if (Object.keys(next).length) all[trackId] = next; else delete all[trackId];
   return { ...parameters, face_expression_overrides: all };
