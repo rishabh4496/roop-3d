@@ -129,6 +129,7 @@ class JobProgress(Contract):
     frame: int = Field(default=0, ge=0, strict=True)
     total_frames: int | None = Field(default=None, ge=1, strict=True)
     fps: float = Field(default=0, ge=0)
+    eta_seconds: float | None = Field(default=None, ge=0)
     stage: str = Field(default="queued", min_length=1, max_length=64)
     stage_latency_ms: float = Field(default=0, ge=0)
     advisory: str | None = Field(default=None)

@@ -26,6 +26,11 @@ class ValidateBody(Contract):
     deep: bool = False
 
 
+class EDLImportBody(Contract):
+    edl_text: str = Field(min_length=1, max_length=16 * 1024 * 1024)
+    frame_rate: str | None = Field(default=None, min_length=1, max_length=32)
+
+
 @router.get("/capabilities")
 def capabilities() -> dict:
     return media_capabilities()
@@ -48,3 +53,15 @@ async def export_profiles(request: Request, verify: bool = False) -> dict:
 async def validate(body: ValidateBody, request: Request) -> dict:
     path = request.app.state.media.path(body.path)
     return await run_in_threadpool(validate_media, path, deep=body.deep)
+
+
+@router.post("/edl/import")
+async def import_edl(body: EDLImportBody) -> dict:
+    """Parse a local CMX 3600 EDL for timeline/cut import into Roop 3D."""
+    from dataclasses import asdict
+    from roop_3d.io.proxy_and_edl import VideoProxyAndEDLManager
+    document = VideoProxyAndEDLManager.import_edl(body.edl_text, frame_rate=body.frame_rate)
+    return {"title": document.title, "frame_rate": document.frame_rate, "drop_frame": document.drop_frame,
+            "events": [asdict(event) for event in document.events],
+            "swapped_ranges": [list(item) for item in document.swapped_ranges],
+            "scene_cuts": list(document.scene_cuts)}

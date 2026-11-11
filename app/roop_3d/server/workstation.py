@@ -122,12 +122,27 @@ def finish_upload(request: Request, upload_id: str):
         else:
             validate_video_container(header_sample, info.filename)
             from roop_3d.media.probe import probe
-            probe(path)
+            probed = probe(path)
             relative = f"roop_3d/.runtime/media/{upload_id}{suffix}"
             destination = owned(root, relative)
             destination.parent.mkdir(parents=True, exist_ok=True)
             os.replace(path, destination)
-            result = {"kind": "video", "path": relative, "sha256": digest}
+            duration = float(probed.duration) if probed.duration is not None else None
+            if duration is None and probed.videos and probed.videos[0].duration is not None:
+                duration = float(probed.videos[0].duration * probed.videos[0].time_base)
+            import_assets: dict[str, object] = {"state": "unavailable", "errors": {}}
+            try:
+                from roop_3d.io.proxy_and_edl import VideoProxyAndEDLManager
+                import_assets = VideoProxyAndEDLManager().prepare_import(
+                    destination, owned(root, "roop_3d/.runtime/media_artifacts"),
+                    duration_seconds=duration, asset_key=upload_id)
+                root_path = Path(root).absolute()
+                for name in ("proxy", "filmstrip"):
+                    if import_assets.get(name):
+                        import_assets[name] = Path(str(import_assets[name])).relative_to(root_path).as_posix()
+            except (OSError, RuntimeError, ValueError) as error:
+                import_assets = {"state": "unavailable", "errors": {"import": str(error)}}
+            result = {"kind": "video", "path": relative, "sha256": digest, "import_assets": import_assets}
         receipt.unlink()
         return result
 

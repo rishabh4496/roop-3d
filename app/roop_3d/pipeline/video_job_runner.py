@@ -38,6 +38,7 @@ from roop_3d.engine.pipeline_runner import (MasterPipelineRunner, PipelineCancel
                                             RecoverablePipelineOOM, PreparedPipeline)
 from roop_3d.engine.vram_governor import is_cuda_oom
 from roop_3d.jobs.schema import JobOutput, JobProgress, JobRecord
+from roop_3d.io.proxy_and_edl import CalibratedRenderTimeEstimator
 from roop_3d.media.nv_writer import NVHardwareVideoWriter, probe_nvenc
 from roop_3d.reliability.processes import REGISTRY, spawn_kwargs, terminate
 from roop_3d.segment_dispatcher import find_ffmpeg, find_ffprobe
@@ -380,6 +381,8 @@ class EndToEndVideoJobRunner(MasterPipelineRunner):
         checkpoint = self._checkpoint(prepared.checkpoint, completed_frame=-1, profile=admission.profile, provider=admission.provider)
         info = probe_video(prepared.target)
         total = prepared.total_frames or info.frames
+        if total is None and info.duration is not None and info.duration > 0:
+            total = max(1, int(np.ceil(info.duration * float(info.rate))))
         runtime_config = self._runtime_config(admission, self.settings_for(request, settings))
         session = self.pipeline_factory(self.catalog, runtime_config)
         if callable(getattr(session, "select_swapper", None)):
@@ -418,7 +421,19 @@ class EndToEndVideoJobRunner(MasterPipelineRunner):
                 last["report"] = report
                 return swapped
 
+            eta_estimator = CalibratedRenderTimeEstimator(total_frames=total)
+            eta_last_at = time.monotonic()
+            eta_last_done = 0
+
             def on_progress(done: int, fps: float, decode_ms: float, encode_ms: float) -> None:
+                nonlocal eta_last_at, eta_last_done
+                now = time.monotonic()
+                delta_done = max(0, done - eta_last_done)
+                if delta_done:
+                    per_frame = max((now - eta_last_at) / delta_done, 1e-6)
+                    for _ in range(delta_done):
+                        eta_estimator.observe_frame(per_frame)
+                    eta_last_at, eta_last_done = now, done
                 report = last.get("report")
                 timings = {name: value for name, value in (report.stage_ms if report else {}).items()
                            if name in ("detection", "inswapper", "pose_tps", "masking", "restorer")}
@@ -427,7 +442,9 @@ class EndToEndVideoJobRunner(MasterPipelineRunner):
                 if processor.faces_skipped or processor.faces_withheld:
                     advisory = f"{processor.faces_skipped} face(s) not swapped, {processor.faces_withheld} withheld by the identity gate"
                 shown_total = None if total is None else max(total, done)
+                eta = eta_estimator.snapshot(total_frames=shown_total)
                 report_progress(JobProgress(frame=done, total_frames=shown_total, fps=fps, stage="render",
+                                            eta_seconds=eta["eta_seconds"],
                                             stage_latency_ms=report.stage_ms.get("total", 0.0) if report else 0.0,
                                             stage_timings_ms=timings, advisory=advisory))
 

@@ -260,6 +260,8 @@ def frame_to_timecode(frame: int, rate_str: str, drop_frame: bool = False) -> st
     """Converts frame integer to standard SMPTE timecode (HH:MM:SS:FF)."""
     num, den, fps = parse_rational_rate(rate_str)
     nominal = round(fps)
+    if drop_frame and nominal not in (30, 60):
+        raise ValueError("Drop-frame timecode is supported only at 29.97 or 59.94 fps")
     if drop_frame and nominal in (30, 60):
         drop = 2 if nominal == 30 else 4
         per_10m = nominal * 600 - drop * 9
@@ -275,7 +277,8 @@ def frame_to_timecode(frame: int, rate_str: str, drop_frame: bool = False) -> st
     m = (frame // (nominal * 60)) % 60
     s = (frame // nominal) % 60
     f = frame % nominal
-    return f"{h:02d}:{m:02d}:{s:02d}:{f:02d}"
+    delimiter = ";" if drop_frame else ":"
+    return f"{h:02d}:{m:02d}:{s:02d}{delimiter}{f:02d}"
 
 
 def build_timeline_from_prescan(

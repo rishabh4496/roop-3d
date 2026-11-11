@@ -58,7 +58,9 @@ class MediaService:
             path = runtime_path(value, self.root)
         except ValueError:
             raise DomainError("MEDIA_PATH_DENIED", "Media must be a local file inside the owned runtime", 422) from None
-        permitted = (self.root / "roop_3d/.runtime/media", runtime_path(self.settings().output_root, self.root))
+        permitted = (self.root / "roop_3d/.runtime/media",
+                     self.root / "roop_3d/.runtime/media_artifacts/proxies",
+                     runtime_path(self.settings().output_root, self.root))
         if not any(path.is_relative_to(parent) for parent in permitted) or path.suffix.lower() not in VIDEO_SUFFIXES:
             raise DomainError("MEDIA_PATH_DENIED", "Only video files in runtime/media or runtime/outputs are accepted", 422)
         if not path.is_file():
