@@ -176,6 +176,7 @@ def test_live_failure_releases_capture_models_and_admission(monkeypatch):
 
 
 def test_wav2lip_frontend_is_finite_and_normalized():
+    pytest.importorskip("librosa", reason="Wav2Lip audio features require librosa")
     from roop_3d.engine.audio_sync.audio_features import extract_wav2lip_mel
     samples = np.sin(np.arange(16000) * 2 * np.pi * 440 / 16000).astype(np.float32)
     features = extract_wav2lip_mel(AudioSignal(samples))

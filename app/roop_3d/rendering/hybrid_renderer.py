@@ -192,25 +192,31 @@ class MultiViewCanonicalAggregator:
             norm = normal / np.maximum(np.linalg.norm(normal, axis=-1, keepdims=True), 1e-8)
             query_dir = (1 - self.normal_query_weight) * query_dir + self.normal_query_weight * norm
             query_dir /= np.maximum(np.linalg.norm(query_dir, axis=-1, keepdims=True), 1e-8)
-        target_score = np.einsum("hwc,nc->nhw", query_dir, source_dirs, optimize=True)
+        score_raw = np.einsum("hwc,nc->nhw", query_dir, source_dirs, optimize=True)
         visible = (np.maximum(np.einsum("hwc,nc->nhw", normal / np.maximum(
             np.linalg.norm(normal, axis=-1, keepdims=True), 1e-8), source_dirs, optimize=True), 0)
                    if normal is not None else np.ones_like(sup))
         reliability = sup * quality[:, None, None] * visible
         valid = reliability > 1e-8
+        exact_match = (score_raw >= 1.0 - 1e-4) & valid
+        has_exact = exact_match.any(axis=0)
+        target_score = score_raw
         logits = target_score / self.temperature + np.log(np.maximum(reliability, 1e-12))
         logits = np.where(valid, logits, -1e9)
         logits -= logits.max(axis=0, keepdims=True)
         weights = np.exp(logits) * valid
         weights /= np.maximum(weights.sum(axis=0, keepdims=True), 1e-12)
+        if has_exact.any():
+            exact_weights = exact_match.astype(np.float32)
+            exact_weights /= np.maximum(exact_weights.sum(axis=0, keepdims=True), 1e-12)
+            weights = np.where(has_exact[None, ...], exact_weights, weights)
         fused = np.einsum("nhw,nhwc->hwc", weights, rgb, optimize=True)
         confidence = np.clip(reliability, 0, 1).max(axis=0)
         if base is not None:
             base_float = base.astype(np.float32) / (255.0 if base.dtype == np.uint8 else 1.0)
             base_float = np.clip(base_float, 0, 1)
             old_confidence = np.zeros_like(confidence) if base_conf is None else base_conf
-            use_views = (np.clip(confidence / 0.1, 0, 1) if base_conf is None else
-                         confidence / np.maximum(confidence + old_confidence, 1e-8))
+            use_views = np.clip(confidence, 0, 1)
             fused = fused * use_views[..., None] + base_float * (1 - use_views[..., None])
             confidence = np.maximum(confidence, old_confidence)
         return CanonicalAppearance(np.clip(fused, 0, 1).astype(np.float32),
@@ -253,15 +259,22 @@ class MultiViewCanonicalAggregator:
             normal = torch.nn.functional.normalize(normal, dim=-1)
             query_dir = torch.nn.functional.normalize((1 - self.normal_query_weight) * query_dir
                 + self.normal_query_weight * normal, dim=-1)
-        score = torch.einsum("hwc,nc->nhw", query_dir, source_dirs) / self.temperature
+        score_raw = torch.einsum("hwc,nc->nhw", query_dir, source_dirs)
         visible = (torch.einsum("hwc,nc->nhw", normal, source_dirs).clamp_min(0)
                    if normal is not None else torch.ones_like(sup))
         reliability = sup * q[:, None, None] * visible
         valid = reliability > 1e-8
+        exact_match = (score_raw >= 1.0 - 1e-4) & valid
+        has_exact = exact_match.any(dim=0)
+        score = score_raw / self.temperature
         logits = score + reliability.clamp_min(1e-12).log()
         logits = logits.masked_fill(~valid, -1e9)
         weights = torch.softmax(logits, dim=0) * valid.to(logits.dtype)
         weights = weights / weights.sum(dim=0, keepdim=True).clamp_min(1e-12)
+        if bool(has_exact.any()):
+            exact_weights = exact_match.to(weights.dtype)
+            exact_weights = exact_weights / exact_weights.sum(dim=0, keepdim=True).clamp_min(1e-12)
+            weights = torch.where(has_exact.unsqueeze(0), exact_weights, weights)
         fused = torch.einsum("nhw,nhwc->hwc", weights, rgb)
         confidence = reliability.clamp(0, 1).amax(dim=0)
         if base is not None:
@@ -273,8 +286,7 @@ class MultiViewCanonicalAggregator:
                 raise ValueError("base albedo/confidence must match the UV dimensions")
             if not bool(torch.isfinite(base_float).all()) or not bool(torch.isfinite(old_conf).all()):
                 raise ValueError("base albedo and confidence must be finite")
-            use_views = ((confidence / 0.1).clamp(0, 1) if base_confidence is None else
-                         confidence / (confidence + old_conf).clamp_min(1e-8))
+            use_views = confidence.clamp(0, 1)
             fused = fused * use_views[..., None] + base_float.clamp(0, 1) * (1 - use_views[..., None])
             confidence = torch.maximum(confidence, old_conf)
         return CanonicalAppearance(fused.clamp(0, 1), confidence.clamp(0, 1), weights)

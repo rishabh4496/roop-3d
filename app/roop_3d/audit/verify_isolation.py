@@ -6,7 +6,10 @@ including added protected files/directories. Exit 0 means all checks passed;
 exit 1 means drift, missing evidence, or a verification error. --legacy-only
 explicitly checks just the historical manifest. See stage00.py --help.
 """
-from stage00 import main
+try:
+    from stage00 import main
+except ImportError:
+    from roop_3d.audit.stage00 import main
 
 
 if __name__ == "__main__":

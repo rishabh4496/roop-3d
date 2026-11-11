@@ -408,9 +408,10 @@ def test_source_identity_is_retained_and_does_not_drift(rigs, performer, source)
 
 
 def test_engine_is_deterministic(rigs, performer):
+    rig = IdentityRig(rigs["horizontal"].asset)
     script = [dict(yaw=15 * np.sin(i / 4), mouth_open=0.2 * abs(np.sin(i / 3)), blink_a=float(i % 17 == 0)) for i in range(40)]
-    a, _, _ = run(rigs["horizontal"], performer, script, seed=11)
-    b, _, _ = run(rigs["horizontal"], performer, script, seed=11)
+    a, _, _ = run(rig, performer, script, seed=11)
+    b, _, _ = run(rig, performer, script, seed=11)
     digest = lambda frames: hashlib.sha256(b"".join(
         (f.image.tobytes() + f.coverage.tobytes() if f.image is not None else f.reason.encode()) + f"{f.confidence:.9f}".encode()
         for f in frames)).hexdigest()

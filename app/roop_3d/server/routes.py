@@ -429,7 +429,7 @@ def download_missing_models_endpoint(
     value: Annotated[DownloadMissingModelsRequest | None, Body()] = None,
 ) -> dict[str, Any]:
     from roop_3d.core.model_downloader import REQUIRED_MODELS, download_model, find_model_path
-    req_models = value.models if (value and value.models) else list(REQUIRED_MODELS.keys())
+    req_models = value.models if (value and value.models is not None) else list(REQUIRED_MODELS.keys())
     results = []
     root = request.app.state.root
     dest_dir = (root / "models") if (root / "models").is_dir() or root.name == "app" else (root / "app/models")

@@ -503,7 +503,7 @@ def _trt_engine_status(state, payload: PreFlightLintRequest, hw) -> dict[str, li
     restorer = _effective_restorer(state.settings, params)
     if restorer in ("gpen", "gfpgan", "codeformer", "ultramax"):
         wanted.append({"gpen": "gpen_bfr_512", "gfpgan": "gfpgan_v14"}.get(restorer, restorer))
-    rows = {row["id"]: row for row in state.models.public() if isinstance(row, dict) and "id" in row}
+    rows = {row["id"]: row for row in (state.models.public() if hasattr(state, "models") and state.models else []) if isinstance(row, dict) and "id" in row}
     built, unbuilt = [], []
     for model_id in dict.fromkeys(wanted):
         row = rows.get(model_id)

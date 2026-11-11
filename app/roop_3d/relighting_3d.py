@@ -341,7 +341,7 @@ class NeuralRelighter3D:
                 manual_light_pitch: float = 25.0,
                 ambient_fill: float = 0.3,
                 color_space: str = "hsv",
-                sss_shadow_warmth: bool = True,
+                sss_shadow_warmth: bool = False,
                 sss_warmth_amount: float = 0.5) -> tuple[np.ndarray, np.ndarray, np.ndarray, dict[str, Any]]:
         """Executes full 3D relighting transfer.
 
