@@ -7,6 +7,7 @@ import IdentityMorphPanel from './components/three/IdentityMorphPanel';
 import { lightDirection, lightingRig, morphRig } from './components/three/PoseGeometryViewer';
 import { viewerLighting, viewerMorph } from './components/three/viewerRigs';
 import { DEFAULT_PARAMETERS, type WorkstationParameters } from './components/workstation/pipeline';
+import { isDisabled, setSlider, sliderValue, thumb } from './sliderTestKit';
 import {
   CELL_COUNT, cellCounts, cellIndex, cellPolygon, coverageGaps, missingProfiles, polarPoint, summarizeRadar, targetCoverage, targetPoseSamples,
 } from './utils/coverageRadar';
@@ -188,13 +189,13 @@ describe('IdentityMorphPanel', () => {
     const host = document.createElement('div'); document.body.append(host); const root = createRoot(host);
     try {
       await act(async () => root.render(<Harness onChange={onChange} />));
-      const blend = host.querySelector<HTMLInputElement>('[aria-label="Jawline and cranial volume blend"]')!;
+      const blend = thumb(host, 'Jawline and cranial volume blend');
       expect(host.querySelector('[aria-label="Forehead and hairline boundary offset"]')).toBeNull();   // moved to the Masking step as "Forehead hairline inset"
-      expect(blend.value).toBe('35');
-      await change(blend, '80');
+      expect(sliderValue(blend)).toBe(35);
+      await setSlider(blend, 80);
       expect(seen.at(-1)?.pose_strength).toBeCloseTo(0.8);
       expect('hairline_offset_px' in seen.at(-1)!).toBe(false);
-      expect(host.querySelector('output')?.textContent).toBe('80%');
+      expect(host.querySelector('.ul-slider__readout')?.textContent).toBe('80%');
     } finally { await act(async () => root.unmount()); host.remove(); }
   });
 
@@ -204,7 +205,7 @@ describe('IdentityMorphPanel', () => {
     const host = document.createElement('div'); document.body.append(host); const root = createRoot(host);
     try {
       await act(async () => root.render(<IdentityMorphPanel parameters={{ ...DEFAULT_PARAMETERS, pose_mode: 'retarget' }} setParameters={value => seen.push(value)} preview={false} onPreview={() => {}} />));
-      expect(host.querySelector<HTMLInputElement>('[aria-label="Jawline and cranial volume blend"]')!.disabled).toBe(true);
+      expect(isDisabled(thumb(host, 'Jawline and cranial volume blend'))).toBe(true);
       const radios = host.querySelectorAll<HTMLButtonElement>('[role="radiogroup"][aria-labelledby="influence-mode-label"] [role="radio"]');
       expect([...radios].map(item => item.getAttribute('aria-checked'))).toEqual(['true', 'false']);
       expect(radios[0].textContent).toContain('3D Pose-Guided Neural Swap');

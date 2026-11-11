@@ -5,9 +5,11 @@ import WorkstationErrorBoundary from './components/common/WorkstationErrorBounda
 import { HotkeyProvider } from './components/controls/Hotkeys';
 import { WorkspaceLayoutProvider } from './components/workstation/WorkspaceLayouts';
 import '@fontsource-variable/inter'; // self-hosted: bundled into dist, no font CDN
+import './index.css'; // Obsidian Studio tokens (ui-layouts foundation): new names only, loaded before the older layers
 import './styles.css';
 import './stage19.css';
 import './shell/shell.css'; // redesign layer: layers over the older stylesheets
+import './components/ui-layouts/ui-layouts.css'; // ui-layouts primitives
 import './workstation3d.css'; // 3D workstation layer (flow bar, coverage radar, morph/light controls, mesh overlay): must stay last
 import { installResourceLedgerIfRequested } from './utils/resourceLedger';
 import { installGlobalErrorHandlers } from './utils/globalErrors';

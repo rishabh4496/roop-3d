@@ -6,6 +6,8 @@
 
 /* ---- Pipeline node flow bar ------------------------------------------------------------------------------------------ */
 .pipeline-flow{display:flex;flex-direction:column;gap:3px;padding:8px 10px 6px;border-bottom:1px solid var(--line);position:relative}
+.pipeline-flow .pipeline-flow-stage{position:relative}
+.pipeline-flow .pipeline-flow-beam{z-index:2}
 .pipeline-flow .pipeline-flow-track{display:flex;align-items:stretch;flex-wrap:nowrap;overflow-x:auto;gap:3px;scrollbar-width:thin}
 .pipeline-flow .pipeline-node{flex:1 1 0;min-width:74px;display:flex;flex-direction:column;gap:3px;padding:0;border:1px solid var(--line);border-radius:8px;background:var(--raised);overflow:hidden;transition:border-color .15s,background .15s}
 .pipeline-flow .pipeline-node:hover{border-color:color-mix(in srgb,var(--accent) 55%,var(--line))}

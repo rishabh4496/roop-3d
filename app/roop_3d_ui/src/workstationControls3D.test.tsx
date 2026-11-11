@@ -6,6 +6,7 @@ import WorkstationControls3D, { LIP_LOCK_KEY, SCENE_ADAPT_KEY, SMOOTHING_COMMIT_
 import { DEFAULT_PARAMETERS, type WorkstationParameters } from './components/workstation/pipeline';
 import { buildLivePayload } from './livePreview';
 import type { Config, JobRequest, Reconstruction } from './contracts';
+import { isDisabled, setSlider, sliderValue, thumb } from './sliderTestKit';
 
 const api = vi.fn();
 vi.mock('./api', () => ({ api: (...args: unknown[]) => api(...args) }));
@@ -74,15 +75,16 @@ describe('skin tone vs ambient adaptation', () => {
 describe('expression offsets', () => {
   it('edit the selected face through the real face_expression_overrides, and clear when back at zero', async () => {
     await mount();
-    await change(slider(host, 'Expression offset smile'), '0.6');
-    await change(slider(host, 'Expression offset mouth open'), '0.3');
+    await setSlider(thumb(host, 'Expression offset smile'), 0.6);
+    await setSlider(thumb(host, 'Expression offset mouth open'), 0.3);
     expect(latest.parameters.face_expression_overrides).toEqual({ track_0001: { mouth_smile: 0.6, mouth_open: 0.3 } });
     await act(async () => { [...host.querySelectorAll('button')].find(b => b.textContent === 'Reset offsets')!.click(); });
     expect(latest.parameters.face_expression_overrides).toEqual({});
   });
   it('are disabled until a target face is selected', async () => {
     await mount({ trackId: null });
-    expect(slider(host, 'Expression offset smile').closest('fieldset')!.disabled).toBe(true);
+    expect(thumb(host, 'Expression offset smile').closest('fieldset')!.disabled).toBe(true);
+    expect(isDisabled(thumb(host, 'Expression offset smile'))).toBe(true); // spans ignore <fieldset disabled>, so the slider carries it itself
     expect(host.textContent).toMatch(/select a target face/);
   });
 });

@@ -3,6 +3,7 @@ import { api } from '../../api';
 import type { Config, Reconstruction } from '../../contracts';
 import type { WorkstationParameters } from '../workstation/pipeline';
 import { faceEditOf, withFaceEdit } from '../three/viewportTools';
+import { PrecisionRangeSlider } from '../ui-layouts';
 import { loadIdentityMesh, type MeshSource } from '../../utils/glbMesh';
 import { skullBlendOf, swapScopeOf, withSkullBlend, withSwapScope } from './swapScope';
 
@@ -223,11 +224,9 @@ export default function WorkstationControls3D({ parameters, setParameters, track
         <summary>Expression offsets &amp; speech<small>{trackId ?? 'select a target face'}</small></summary>
         <fieldset disabled={!trackId} aria-label="Expression offsets for the selected face">
           {NED_OFFSETS.map(item => (
-            <label key={item.key} className="inspector-field">{item.label}
-              <output aria-live="off">{(edit[item.key] ?? 0).toFixed(2)}</output>
-              <input type="range" aria-label={`Expression offset ${item.label.toLowerCase()}`} min={item.min} max={item.max} step={0.01} value={edit[item.key] ?? 0}
-                onChange={event => trackId && setParameters(withFaceEdit(parameters, trackId, { [item.key]: Number(event.target.value) }))} />
-            </label>))}
+            <PrecisionRangeSlider key={item.key} className="inspector-field" label={item.label} ariaLabel={`Expression offset ${item.label.toLowerCase()}`}
+              min={item.min} max={item.max} step={0.01} disabled={!trackId} value={edit[item.key] ?? 0}
+              onChange={value => trackId && setParameters(withFaceEdit(parameters, trackId, { [item.key]: value }))} />))}
           <button type="button" className="button small" disabled={!trackId || !NED_OFFSETS.some(item => edit[item.key])}
             onClick={() => trackId && setParameters(withFaceEdit(parameters, trackId, Object.fromEntries(NED_OFFSETS.map(item => [item.key, 0]))))}>Reset offsets</button>
         </fieldset>

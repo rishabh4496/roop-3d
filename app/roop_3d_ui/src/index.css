@@ -1,0 +1,70 @@
+/*
+ * Obsidian Studio tokens: the foundation layer for the ui-layouts primitives (src/components/ui-layouts).
+ * Imported first in main.tsx. Every name here is new (--ul-* are internal derived values), so nothing in the older
+ * stylesheets or the 37 named themes is overridden; the primitives still follow the active theme through --accent/--text/--muted.
+ * Self-hosted only: fonts come from the bundled @fontsource-variable/inter and system monospace, no external requests.
+ */
+:root {
+  /* deep carbon surfaces */
+  --bg-obsidian: #070709;
+  --bg-panel: #0d0e12;
+  --bg-panel-raised: #14161c;
+  --bg-well: #050507;
+
+  /* hairline specular borders */
+  --hairline: rgba(255, 255, 255, 0.08);
+  --hairline-strong: rgba(255, 255, 255, 0.16);
+  --specular: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+
+  /* electric accents */
+  --accent-indigo: #6366f1;
+  --accent-indigo-glow: rgba(99, 102, 241, 0.45);
+  --accent-cyan: #22d3ee;
+  --accent-cyan-glow: rgba(34, 211, 238, 0.4);
+  --accent-gradient: linear-gradient(135deg, var(--accent-indigo), var(--accent-cyan));
+
+  /* typography: tabular monospace for telemetry numbers */
+  --font-mono: ui-monospace, "Cascadia Mono", "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  --font-telemetry: var(--font-mono);
+
+  /* motion + geometry shared by the primitives */
+  --ul-ease: cubic-bezier(0.16, 1, 0.3, 1);
+  --ul-radius: 14px;
+  --ul-radius-sm: 8px;
+  --ul-focus: 0 0 0 2px var(--bg-panel), 0 0 0 4px var(--accent-cyan);
+}
+
+:root[data-theme="light"] {
+  --bg-obsidian: #eef0f4;
+  --bg-panel: #ffffff;
+  --bg-panel-raised: #f4f5f8;
+  --bg-well: #e4e7ee;
+  --hairline: rgba(10, 12, 20, 0.12);
+  --hairline-strong: rgba(10, 12, 20, 0.24);
+  --specular: inset 0 1px 0 rgba(255, 255, 255, 0.8);
+  --accent-indigo: #4338ca;
+  --accent-cyan: #0e7490;
+  --accent-indigo-glow: rgba(67, 56, 202, 0.28);
+  --accent-cyan-glow: rgba(14, 116, 144, 0.26);
+}
+
+/* Telemetry numerals (FPS, VRAM, latencies, 6DoF angles): fixed-width digits so a changing value never shifts its neighbours. */
+.telemetry,
+.ul-number {
+  font-family: var(--font-telemetry);
+  font-variant-numeric: tabular-nums slashed-zero;
+  font-feature-settings: "tnum" 1, "zero" 1;
+  letter-spacing: -0.01em;
+}
+
+.ul-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}

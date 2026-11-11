@@ -4,6 +4,7 @@ import { createRoot } from 'react-dom/client';
 import { describe, expect, it, vi } from 'vitest';
 import LightProbeSphere from './components/three/LightProbeSphere';
 import { DEFAULT_PARAMETERS } from './components/workstation/pipeline';
+import { isDisabled, setSlider, sliderValue, thumb } from './sliderTestKit';
 
 describe('LightProbeSphere', () => {
   it('renders light probe with auto-detected direction and color temperature', () => {
@@ -34,7 +35,7 @@ describe('LightProbeSphere', () => {
     }
   });
 
-  it('allows switching to Manual 3D Virtual Key Light and adjusting relighting sliders', () => {
+  it('allows switching to Manual 3D Virtual Key Light and adjusting relighting sliders', async () => {
     Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
     const host = document.createElement('div');
     document.body.append(host);
@@ -59,28 +60,19 @@ describe('LightProbeSphere', () => {
       expect(setParameters).toHaveBeenCalledWith(expect.objectContaining({ lighting_mode: 'manual' }));
 
       // Adjust Relight Strength slider
-      const relightInput = host.querySelector<HTMLInputElement>('[aria-label="Relight Strength (0.0–1.0)"]')!;
-      act(() => {
-        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(relightInput, '0.92');
-        relightInput.dispatchEvent(new Event('change', { bubbles: true }));
-      });
+      expect(sliderValue(thumb(host, 'Relight Strength'))).toBe(0.8); // unset parameter shows its default
+      await setSlider(thumb(host, 'Relight Strength'), 0.92);
       expect(setParameters).toHaveBeenCalledWith(expect.objectContaining({ relight_strength: 0.92 }));
 
       // Adjust Specular Skin Sheen slider
-      const sheenInput = host.querySelector<HTMLInputElement>('[aria-label="Specular Skin Sheen (0.0–1.0)"]')!;
-      act(() => {
-        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(sheenInput, '0.45');
-        sheenInput.dispatchEvent(new Event('change', { bubbles: true }));
-      });
+      await setSlider(thumb(host, 'Specular Skin Sheen'), 0.45);
       expect(setParameters).toHaveBeenCalledWith(expect.objectContaining({ specular_sheen: 0.45 }));
 
       // Adjust Shadow Preservation slider
-      const shadowInput = host.querySelector<HTMLInputElement>('[aria-label="Shadow Preservation (0.0–1.0)"]')!;
-      act(() => {
-        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(shadowInput, '0.78');
-        shadowInput.dispatchEvent(new Event('change', { bubbles: true }));
-      });
+      await setSlider(thumb(host, 'Shadow Preservation'), 0.78);
       expect(setParameters).toHaveBeenCalledWith(expect.objectContaining({ shadow_preservation: 0.78 }));
+      // the parameters prop is a constant here, so the mode switch above did not take effect: ambient fill is still gated to manual mode
+      expect(isDisabled(thumb(host, 'Ambient Fill'))).toBe(true);
     } finally {
       act(() => root.unmount());
       host.remove();

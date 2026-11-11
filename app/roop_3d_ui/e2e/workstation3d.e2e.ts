@@ -1,5 +1,6 @@
 import { expect, test, type Page, type Route } from '@playwright/test';
 import { MEDIA_INFO, mockFilmstrip, mockFrame } from './helpers/mockApi';
+import { setSlider } from './helpers/slider';
 
 /**
  * The 3D-native workstation features in a real browser (system Chrome, mocked API, real React / WebGL2 / canvas):
@@ -130,7 +131,7 @@ test('the morph panel writes the engine blend and the masking inset sends the ha
   await page.getByTestId('morph-section').locator(':scope > summary').click();
   await page.getByRole('radio', { name: /3D Geometry \+ Jaw Reshape Weight/ }).click();                   // an opened saved project starts in reference-retarget pose mode
   const blend = page.getByLabel('Jawline and cranial volume blend');
-  await blend.fill('80');
+  await setSlider(page, blend, 80);
   await expect.poll(() => seen.previews.at(-1)?.pose_strength).toBeCloseTo(0.8);
   expect(errors).toEqual([]);
 });

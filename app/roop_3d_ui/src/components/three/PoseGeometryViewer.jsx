@@ -17,6 +17,7 @@ import {
 } from './studioTools';
 import { useStudioEnvironments } from './useStudioEnvironments';
 import { GazeGizmo, JawGizmo, LightGizmo } from './ViewportGizmos';
+import { PrecisionRangeSlider } from '../ui-layouts';
 
 /**
  * @typedef {{
@@ -1016,24 +1017,19 @@ export default function PoseGeometryViewer({
           </div>
           {(gizmos.jaw || gizmos.gaze) && !tools.trackId && <small className="muted" role="status">Select a target face to edit jaw opening and eye gaze.</small>}
           {gizmos.jaw && (
-            <label className="inspector-field gizmo-field">Jaw opening θ <output>{tools.jawDeg.toFixed(0)}°</output>
-              <input type="range" aria-label="Jaw opening angle" min={0} max={JAW_MAX_DEG} step={1} value={Math.round(tools.jawDeg)} disabled={!tools.trackId}
-                onChange={event => tools.onJaw(Number(event.target.value))} /></label>)}
+            <PrecisionRangeSlider className="inspector-field gizmo-field" label="Jaw opening θ" ariaLabel="Jaw opening angle" unit="°" min={0} max={JAW_MAX_DEG} step={1}
+              value={Math.round(tools.jawDeg)} defaultValue={0} disabled={!tools.trackId} onChange={tools.onJaw} />)}
           {gizmos.gaze && (<>
-            <label className="inspector-field gizmo-field">Gaze horizontal <output>{tools.gaze.x.toFixed(2)}</output>
-              <input type="range" aria-label="Gaze horizontal" min={-1} max={1} step={0.01} value={tools.gaze.x} disabled={!tools.trackId}
-                onChange={event => tools.onGaze(Number(event.target.value), tools.gaze.y)} /></label>
-            <label className="inspector-field gizmo-field">Gaze vertical <output>{tools.gaze.y.toFixed(2)}</output>
-              <input type="range" aria-label="Gaze vertical" min={-1} max={1} step={0.01} value={tools.gaze.y} disabled={!tools.trackId}
-                onChange={event => tools.onGaze(tools.gaze.x, Number(event.target.value))} /></label>
+            <PrecisionRangeSlider className="inspector-field gizmo-field" label="Gaze horizontal" min={-1} max={1} step={0.01}
+              value={tools.gaze.x} defaultValue={0} disabled={!tools.trackId} onChange={value => tools.onGaze(value, tools.gaze.y)} />
+            <PrecisionRangeSlider className="inspector-field gizmo-field" label="Gaze vertical" min={-1} max={1} step={0.01}
+              value={tools.gaze.y} defaultValue={0} disabled={!tools.trackId} onChange={value => tools.onGaze(tools.gaze.x, value)} />
           </>)}
           {gizmos.light && (<>
-            <label className="inspector-field gizmo-field">Light yaw <output>{Math.round(tools.light.yaw)}°</output>
-              <input type="range" aria-label="Light yaw" min={-180} max={180} step={1} value={Math.round(tools.light.yaw)}
-                onChange={event => tools.onLight(Number(event.target.value), tools.light.pitch)} /></label>
-            <label className="inspector-field gizmo-field">Light pitch <output>{Math.round(tools.light.pitch)}°</output>
-              <input type="range" aria-label="Light pitch" min={-90} max={90} step={1} value={Math.round(tools.light.pitch)}
-                onChange={event => tools.onLight(tools.light.yaw, Number(event.target.value))} /></label>
+            <PrecisionRangeSlider className="inspector-field gizmo-field" label="Light yaw" unit="°" min={-180} max={180} step={1}
+              value={Math.round(tools.light.yaw)} defaultValue={0} onChange={value => tools.onLight(value, tools.light.pitch)} />
+            <PrecisionRangeSlider className="inspector-field gizmo-field" label="Light pitch" unit="°" min={-90} max={90} step={1}
+              value={Math.round(tools.light.pitch)} defaultValue={0} onChange={value => tools.onLight(tools.light.yaw, value)} />
             {!tools.relightOn && <small className="muted" role="status">3D relighting is off: this sets the manual light only. {tools.onRelight && <button type="button" className="button small" onClick={() => tools.onRelight(true)}>Turn on 3D relighting</button>}</small>}
           </>)}
         </div>

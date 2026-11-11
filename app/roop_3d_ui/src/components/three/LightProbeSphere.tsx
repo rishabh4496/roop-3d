@@ -2,6 +2,10 @@ import React, { useId, useRef, useState, useCallback, useMemo } from 'react';
 import type { WorkstationParameters } from '../workstation/pipeline';
 import { kelvinToRgb } from '../../utils/kelvinToRgb';
 import { DEFAULT_AMBIENT_FILL } from './viewerRigs';
+import { PrecisionRangeSlider } from '../ui-layouts';
+
+// Defaults shown when a render parameter is unset; also the double-click reset targets of the sliders below.
+const DEFAULT_RELIGHT = 0.8, DEFAULT_SHEEN = 0.25, DEFAULT_SHADOW = 0.85;
 
 interface LightProbeSphereProps {
   parameters?: WorkstationParameters;
@@ -20,9 +24,9 @@ export default function LightProbeSphere({
   const [isDragging, setIsDragging] = useState(false);
 
   const mode = parameters?.lighting_mode ?? 'auto';
-  const relightStrength = parameters?.relight_strength ?? 0.8;
-  const specularSheen = parameters?.specular_sheen ?? 0.25;
-  const shadowPreservation = parameters?.shadow_preservation ?? 0.85;
+  const relightStrength = parameters?.relight_strength ?? DEFAULT_RELIGHT;
+  const specularSheen = parameters?.specular_sheen ?? DEFAULT_SHEEN;
+  const shadowPreservation = parameters?.shadow_preservation ?? DEFAULT_SHADOW;
   const ambientFill = parameters?.ambient_fill ?? DEFAULT_AMBIENT_FILL;
   const gradientId = useId().replace(/[^a-zA-Z0-9_-]/g, '');
   const manualYaw = parameters?.manual_light_yaw ?? 35.0;
@@ -199,59 +203,14 @@ export default function LightProbeSphere({
       </div>
 
       <div className="probe-controls">
-        <label className="probe-slider-label">
-          <span>Relight Strength ({relightStrength.toFixed(2)})</span>
-          <input
-            type="range"
-            min="0"
-            max="1"
-            step="0.01"
-            aria-label="Relight Strength (0.0–1.0)"
-            value={relightStrength}
-            onChange={e => updateParam('relight_strength', parseFloat(e.target.value))}
-          />
-        </label>
-
-        <label className="probe-slider-label">
-          <span>Specular Skin Sheen ({specularSheen.toFixed(2)})</span>
-          <input
-            type="range"
-            min="0"
-            max="1"
-            step="0.01"
-            aria-label="Specular Skin Sheen (0.0–1.0)"
-            value={specularSheen}
-            onChange={e => updateParam('specular_sheen', parseFloat(e.target.value))}
-          />
-        </label>
-
-        <label className="probe-slider-label">
-          <span>Ambient Fill ({ambientFill.toFixed(2)})</span>
-          <input
-            type="range"
-            min="0"
-            max="1"
-            step="0.01"
-            aria-label="Ambient Fill (0.0–1.0)"
-            disabled={mode !== 'manual'}
-            title={mode === 'manual' ? 'Ambient (SH band-0) fill of the virtual key light' : 'Applies to the manual virtual key light; the auto light is estimated from the target frame'}
-            value={ambientFill}
-            onChange={e => updateParam('ambient_fill', parseFloat(e.target.value))}
-          />
-        </label>
-
-        <label className="probe-slider-label">
-          <span>Shadow Preservation ({shadowPreservation.toFixed(2)})</span>
-          <input
-            type="range"
-            min="0"
-            max="1"
-            step="0.01"
-            aria-label="Shadow Preservation (0.0–1.0)"
-            value={shadowPreservation}
-            onChange={e => updateParam('shadow_preservation', parseFloat(e.target.value))}
-          />
-        </label>
+        <PrecisionRangeSlider className="probe-slider-label" label="Relight Strength" min={0} max={1} step={0.01} value={relightStrength} defaultValue={DEFAULT_RELIGHT} onChange={v => updateParam('relight_strength', v)} />
+        <PrecisionRangeSlider className="probe-slider-label" label="Specular Skin Sheen" min={0} max={1} step={0.01} value={specularSheen} defaultValue={DEFAULT_SHEEN} onChange={v => updateParam('specular_sheen', v)} />
+        <PrecisionRangeSlider
+          className="probe-slider-label" label="Ambient Fill" min={0} max={1} step={0.01} value={ambientFill} defaultValue={DEFAULT_AMBIENT_FILL} disabled={mode !== 'manual'}
+          title={mode === 'manual' ? 'Ambient (SH band-0) fill of the virtual key light' : 'Applies to the manual virtual key light; the auto light is estimated from the target frame'}
+          onChange={v => updateParam('ambient_fill', v)}
+        />
+        <PrecisionRangeSlider className="probe-slider-label" label="Shadow Preservation" min={0} max={1} step={0.01} value={shadowPreservation} defaultValue={DEFAULT_SHADOW} onChange={v => updateParam('shadow_preservation', v)} />
       </div>
     </div>
   );

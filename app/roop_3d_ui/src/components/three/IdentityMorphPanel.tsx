@@ -1,4 +1,5 @@
 import type { WorkstationParameters } from '../workstation/pipeline';
+import { PrecisionRangeSlider } from '../ui-layouts';
 
 export interface IdentityMorphPanelProps {
   parameters: WorkstationParameters;
@@ -43,14 +44,13 @@ export default function IdentityMorphPanel({ parameters, setParameters, preview,
         </div>
       </div>
 
-      <label className="morph-field">
-        <span>Jaw Reshape Weight <output aria-live="off">{meshBlend ? `${blend}%` : 'off'}</output></span>
-        <input type="range" min={0} max={100} step={1} value={blend} disabled={!meshBlend} aria-label="Jawline and cranial volume blend"
-          aria-valuetext={meshBlend ? `${blend}% source mesh geometry` : 'Geometry mode is off'}
-          onChange={event => set({ pose_strength: Number(event.target.value) / 100 })} />
+      <div className="morph-field">
+        <PrecisionRangeSlider label="Jaw Reshape Weight" ariaLabel="Jawline and cranial volume blend" min={0} max={100} step={1} unit="%" disabled={!meshBlend}
+          value={blend} defaultValue={35} onChange={value => set({ pose_strength: value / 100 })}
+          title={meshBlend ? undefined : 'Geometry mode is off'} />
         <span className="morph-scale" aria-hidden="true"><small>0% target geometry</small><small>100% source 3D mesh</small></span>
         {!meshBlend && <small className="muted">Used only in “3D Geometry + Jaw Reshape Weight” mode.</small>}
-      </label>
+      </div>
       <div className="morph-actions">
         <button type="button" className="button small" disabled={blend === 35} onClick={() => set({ pose_strength: 0.35 })}>Reset weight</button>
       </div>

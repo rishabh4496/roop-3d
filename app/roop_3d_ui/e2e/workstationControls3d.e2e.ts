@@ -1,6 +1,7 @@
 import { createRequire } from 'node:module';
 import { expect, test, type Locator, type Page, type Route } from '@playwright/test';
 import { MEDIA_INFO, mockFilmstrip, mockFrame } from './helpers/mockApi';
+import { setSlider, sliderValue } from './helpers/slider';
 
 /**
  * Stage 8 in a real browser (system Chrome, real WebGL2 through SwiftShader, mocked API): the viewport's buffer switcher renders five
@@ -171,18 +172,18 @@ test('the SH-relit buffer follows the light direction set from the gizmo dock, a
   await page.getByTestId('viewport-buffers').first().getByRole('radio', { name: 'SH Relit' }).click();
   await dock.getByRole('button', { name: 'Light direction' }).click();
   const canvas = page.locator('.pose-canvas-wrapper canvas').first();
-  await dock.getByRole('slider', { name: 'Light yaw' }).fill('85');
-  await dock.getByRole('slider', { name: 'Light pitch' }).fill('0');
+  await setSlider(page, dock.getByRole('slider', { name: 'Light yaw' }), 85);
+  await setSlider(page, dock.getByRole('slider', { name: 'Light pitch' }), 0);
   await page.waitForTimeout(450);
   const fromRight = await headStats(page, canvas);
-  await dock.getByRole('slider', { name: 'Light yaw' }).fill('-85');
+  await setSlider(page, dock.getByRole('slider', { name: 'Light yaw' }), -85);
   await page.waitForTimeout(450);
   const fromLeft = await headStats(page, canvas);
   expect(fromRight.right).toBeGreaterThan(fromRight.left * 1.15);
   expect(fromLeft.left).toBeGreaterThan(fromLeft.right * 1.15);
   // Drag the 3D light handle itself (a point on a shell of radius 1.9 around the head) from the right of the face to the left.
-  await dock.getByRole('slider', { name: 'Light yaw' }).fill('40');
-  await dock.getByRole('slider', { name: 'Light pitch' }).fill('25');
+  await setSlider(page, dock.getByRole('slider', { name: 'Light yaw' }), 40);
+  await setSlider(page, dock.getByRole('slider', { name: 'Light pitch' }), 25);
   await canvas.scrollIntoViewIfNeeded();
   const box = (await canvas.boundingBox())!;
   const perPixel = (box.height / 2) / Math.tan((42 / 2) * Math.PI / 180);               // pixels per world unit at distance 1
@@ -195,8 +196,8 @@ test('the SH-relit buffer follows the light direction set from the gizmo dock, a
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2 - 40, { steps: 6 });
   await page.mouse.move(box.x + box.width / 2 - 80, box.y + box.height / 2 - 20, { steps: 8 });
   await page.mouse.up();
-  await expect.poll(async () => Number(await dock.getByRole('slider', { name: 'Light yaw' }).inputValue())).toBeLessThan(-10);
-  const dragged = Number(await dock.getByRole('slider', { name: 'Light yaw' }).inputValue());
+  await expect.poll(async () => await sliderValue(dock.getByRole('slider', { name: 'Light yaw' }))).toBeLessThan(-10);
+  const dragged = await sliderValue(dock.getByRole('slider', { name: 'Light yaw' }));
   await expect(dock).toContainText('3D relighting is off');
   expect('lighting_mode' in (seen.previews.at(-1) ?? {})).toBe(false);          // relighting off: the manual light is not sent
   await dock.getByRole('button', { name: 'Turn on 3D relighting' }).click();
@@ -211,12 +212,12 @@ test('the jaw and gaze gizmos write the selected face\'s expression overrides, b
   const dock = page.getByTestId('viewport-gizmos').first();
   await dock.getByRole('button', { name: 'Jaw opening' }).click();
   await dock.getByRole('button', { name: 'Eye gaze target' }).click();
-  await dock.getByRole('slider', { name: 'Jaw opening angle' }).fill('14');
+  await setSlider(page, dock.getByRole('slider', { name: 'Jaw opening angle' }), 14);
   await expect.poll(() => seen.previews.at(-1)?.face_expression_overrides?.track_0001?.mouth_open).toBeCloseTo(0.5, 2);
-  await dock.getByRole('slider', { name: 'Gaze horizontal' }).fill('0.4');
-  await dock.getByRole('slider', { name: 'Gaze vertical' }).fill('-0.3');
+  await setSlider(page, dock.getByRole('slider', { name: 'Gaze horizontal' }), 0.4, 0.01);
+  await setSlider(page, dock.getByRole('slider', { name: 'Gaze vertical' }), -0.3, 0.01);
   await expect.poll(() => seen.previews.at(-1)?.face_expression_overrides?.track_0001).toMatchObject({ mouth_open: 0.5, gaze_x: 0.4, gaze_y: -0.3 });
-  await dock.getByRole('slider', { name: 'Jaw opening angle' }).fill('0');
+  await setSlider(page, dock.getByRole('slider', { name: 'Jaw opening angle' }), 0);
   await expect.poll(() => 'mouth_open' in (seen.previews.at(-1)?.face_expression_overrides?.track_0001 ?? {})).toBe(false);
 
   // Drag the chin handle straight down in the viewport: the opening angle must grow from 0 and reach the request.
@@ -245,7 +246,7 @@ test('the new panels reach the live preview only once touched, and the preferenc
   await controls.getByRole('slider', { name: 'Skin tone preservation versus ambient adaptation' }).fill('25');
   await expect.poll(() => seen.previews.at(-1)?.color_strength).toBeCloseTo(0.25);
   await controls.getByTestId('expression-section').locator(':scope > summary').click();
-  await controls.getByRole('slider', { name: 'Expression offset smile' }).fill('0.5');
+  await setSlider(page, controls.getByRole('slider', { name: 'Expression offset smile' }), 0.5, 0.01);
   await expect.poll(() => seen.previews.at(-1)?.face_expression_overrides?.track_0001?.mouth_smile).toBeCloseTo(0.5);
   await controls.getByTestId('adaptation-section').locator(':scope > summary').click();
   await expect(controls.getByText('saved preference only').filter({ visible: true })).toHaveCount(2);   // both unwired toggles say so
