@@ -338,3 +338,71 @@ def _locked_mask(scene, report):
     anchors = inner_anchor_indices()
     p_src = apply_affine(similarity_fit(source[anchors], target[anchors]), source)
     return polygon_mask(head_polygon(p_src, 0.42), scene.frame.shape[:2]) > 0.5
+
+
+def test_hair_behind_the_jaw_continues_into_the_hole_instead_of_the_far_backdrop():
+    """Stock step: hair is excluded from the donors, so the fill reaches past it for the backdrop (a fringe of the wrong colour)."""
+    from roop_3d.pipeline.photorealistic_swap_core import HairDonorReplacer
+    from roop_3d.rendering.silhouette_replacement import SilhouetteReplacer, resolve_scope
+    h = w = 240
+    frame = np.zeros((h, w, 3), np.uint8)
+    frame[:] = (0, 200, 0)                                                   # green backdrop
+    hair = np.zeros((h, w), np.float32)
+    cv2.ellipse(hair, (120, 120), (92, 100), 0, 0, 360, 1.0, -1)             # brown hair mass
+    frame[hair > 0] = (30, 50, 80)
+    target = np.zeros((h, w), np.float32)
+    cv2.ellipse(target, (120, 120), (70, 85), 0, 0, 360, 1.0, -1)            # wide old face
+    frame[target > 0] = (150, 170, 210)
+    source = np.zeros((h, w), np.float32)
+    cv2.ellipse(source, (120, 120), (50, 85), 0, 0, 360, 1.0, -1)            # narrower new face
+    structure = np.clip(hair - target, 0, 1)
+    pts = np.array([[120 + 70 * np.cos(t), 120 + 85 * np.sin(t)] for t in np.linspace(0, 6.28, 16, endpoint=False)])
+    kwargs = dict(target_mask=target, source_mask=source, plan=resolve_scope("full_craniofacial"), structure_mask=structure, perimeter=(pts, pts))
+    stock, _, _ = SilhouetteReplacer().apply(frame, **kwargs)
+    donating, _, report = HairDonorReplacer().apply(frame, **kwargs)
+    ring = (cv2.dilate((target > 0.5).astype(np.uint8), np.ones((3, 3), np.uint8)) > 0) & ~(cv2.dilate((source > 0.5).astype(np.uint8), np.ones((5, 5), np.uint8)) > 0)
+    ring &= (structure < 0.5)
+    green = lambda image: float((image[ring][:, 1].astype(float) - image[ring][:, 2].astype(float)).mean())   # noqa: E731
+    assert report.inpaint.overhang_pixels > 300
+    assert green(donating) < green(stock) - 20, (green(donating), green(stock))
+    assert np.abs(donating[ring].astype(float).mean(0) - np.array([30, 50, 80])).max() < 45     # it is hair-coloured
+
+
+def test_restorer_influence_fades_out_at_the_border_of_its_aligned_crop():
+    scene = make_scene()
+    scene.packet.crop_to_frame = scene.packet.crop_to_frame.copy()          # a smaller footprint: the face reaches the crop border
+    cx, cy, scale = 240.0, 250.0, 1.1
+    scene.packet.crop_to_frame = np.array([[scale, 0, cx - 64 * scale], [0, scale, cy - 64 * scale]])
+    scene.packet.crop_coverage = np.ones((128, 128), np.float32)
+    white = lambda crop, lm5: np.full((512, 512, 3), 255, np.uint8)         # noqa: E731
+    opts = SwapCoreOptions(restoration_blend=1.0, skin_tone_strength=0.0, match_focus=False, match_grain=False, detail_gain=0.0)
+    with_r, rep = Photorealistic3DSwapCore(opts, restorer=white, restorer_name="white").process_face(scene.frame, scene.packet)
+    without, _ = Photorealistic3DSwapCore(opts).process_face(scene.frame, scene.packet)
+    x0 = int(cx - 64 * scale)                                              # left edge of the crop footprint in the frame
+    edge = (slice(236, 262), slice(x0 + 1, x0 + 4))
+    centre = (slice(236, 262), slice(232, 248))
+    assert np.abs(with_r[edge].astype(int) - without[edge]).mean() < 25     # barely touched at the border
+    assert np.abs(with_r[centre].astype(int) - without[centre]).mean() > 60   # fully applied in the middle (white minus skin ~ 80)
+    assert rep.restore["ran"]
+
+
+def test_laplacian_blend_overshoot_is_bounded_by_the_inputs_so_no_colour_specks():
+    rng = np.random.default_rng(11)
+    h = w = 160
+    fg = np.zeros((h, w, 3), np.uint8)
+    fg[:, ::2] = (40, 45, 60)
+    fg[:, 1::2] = (220, 215, 200)                                              # hard vertical stripes (hair-like edges)
+    bg = np.full((h, w, 3), (120, 125, 135), np.uint8)
+    bg[:, :80] = (25, 30, 40)
+    alpha = np.zeros((h, w), np.float32)
+    cv2.circle(alpha, (80, 80), 50, 1.0, -1)
+    alpha = cv2.GaussianBlur(alpha, (0, 0), 4.0)
+    free = ops.laplacian_pyramid_blend(fg, bg, alpha, levels=4, limit_overshoot=False).astype(int)
+    bounded = ops.laplacian_pyramid_blend(fg, bg, alpha, levels=4).astype(int)
+    k = np.ones((5, 5), np.uint8)
+    low = cv2.erode(np.minimum(fg, bg), k).astype(int)
+    high = cv2.dilate(np.maximum(fg, bg), k).astype(int)
+    assert ((free < low) | (free > high)).any()                                # the unbounded blend does overshoot here
+    assert not ((bounded < low) | (bounded > high)).any()                      # the bounded one never leaves the local range
+    exact = ops.laplacian_pyramid_blend(fg, bg, np.ones((h, w), np.float32))
+    assert np.abs(exact.astype(int) - fg).max() <= 1                           # exactness at alpha 1 is untouched

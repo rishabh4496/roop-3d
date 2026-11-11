@@ -39,6 +39,7 @@ import { OPEN_MODEL_HUB } from './components/modelhub/openModelHub';
 import { acquirePipelineStream } from './stores/pipelineStream';
 import { fileName, normalizeFaceSets, normalizeJobs, normalizeTelemetry } from './utils/safeData';
 import QueueDrawer from './components/queue/QueueDrawer';
+import { RenderCompleteModal, newlyCompleted } from './components/output/OutputComparePlayer';
 import PreFlightLinterModalComponent from './components/diagnostics/PreFlightLinterModal';
 import { DEFAULT_EXPORT } from './components/export/VfxExportPanel';
 import type { ExportOptions } from './contracts';
@@ -80,7 +81,7 @@ export default function App() {
   const swapperModelId = rackSwapper ?? (typeof config?.swapper_model_id === 'string' ? config.swapper_model_id : undefined);
   const configDetector = config?.detector_model_id;
   const detectorModelId = configDetector === 'scrfd' || configDetector === 'retinaface' || configDetector === 'yoloface' ? configDetector : undefined;
-  const [sources, setSources] = useState<FaceSet[]>([]), [jobs, setJobs] = useState<Job[]>([]);
+  const [sources, setSources] = useState<FaceSet[]>([]), [jobs, setJobs] = useState<Job[]>([]), [jobsLoaded, setJobsLoaded] = useState(false);
   // `time` is the *committed* playhead (seek / step / pause). Per-tick playback time lives in `playheadStore`, and
   // hardware telemetry in `telemetryStore`: neither is React state here, so neither re-renders the workstation.
   const [target, setTarget] = useState(''), [probe, setProbe] = useState<Probe | null>(null), [time, setCommittedTime] = useState(0), [keys, setKeys] = useState<number[]>([]);
@@ -188,6 +189,16 @@ export default function App() {
   const fileInput = useRef<HTMLInputElement>(null), sourceInput = useRef<HTMLInputElement>(null), projectInput = useRef<HTMLInputElement>(null);
   const uploadAbort = useRef<AbortController | null>(null), queueKey = useRef({ fingerprint: '', key: '' });
   const currentJob = jobs.find(job => job.job_id === selectedJob) ?? null;
+  // Stage 17: when a render FINISHES in this session, load /api/v1/jobs/{id}/download beside the original in the Before / After player.
+  const seenJobStates = useRef<Map<string, string> | null>(null);
+  const [completedJobId, setCompletedJobId] = useState('');
+  useEffect(() => {
+    if (!jobsLoaded) return;          // the baseline is the first REAL list from the server, never the empty initial state
+    const finished = newlyCompleted(seenJobStates.current, jobs);
+    seenJobStates.current = new Map(jobs.map(job => [job.job_id, job.state] as const));
+    if (finished) setCompletedJobId(finished.job_id);
+  }, [jobs, jobsLoaded]);
+  const completedJob = jobs.find(job => job.job_id === completedJobId) ?? null;
   const output = currentJob?.state === 'succeeded' && currentJob.request.target_path === target ? currentJob.output?.output_path ?? '' : '';
   const { sheet } = useContactSheet(inspection, target);
   const currentTrack: Track | null = inspection?.tracks.find(track => track.track_id === selectedTrack) ?? null;
@@ -244,7 +255,7 @@ export default function App() {
       setProjectsLoading(true);
       void api<typeof projects>('/projects').then(setProjects).catch(fail).finally(() => setProjectsLoading(false));
       const [capabilities, settings, sourceList, queue] = await Promise.all([api<Capabilities>('/system/capabilities'), api<Config>('/config'), api<FaceSet[]>('/facesets'), api<Job[]>('/jobs')]);
-      setCaps(capabilities); setConfig(settings); setSources(normalizeFaceSets(sourceList)); setJobs(normalizeJobs(queue)); setError('');
+      setCaps(capabilities); setConfig(settings); setSources(normalizeFaceSets(sourceList)); setJobs(normalizeJobs(queue)); setJobsLoaded(true); setError('');
     } catch (error) { fail(error); }
   }, []);
   useEffect(() => { void connect(); }, [connect]);
@@ -696,6 +707,7 @@ export default function App() {
     </div>
     <footer className="app-footer"><span>ROOP 3D / LOCAL WORKSTATION</span><span>Observed identities. Explicit processing. Synthetic media.</span><span>API :{config?.port ?? '—'}</span></footer>
     </div>
+    {completedJob && <RenderCompleteModal job={completedJob} onClose={() => setCompletedJobId('')} />}
     {projectsOpen && <div className="modal-backdrop" onClick={() => setProjectsOpen(false)}><section ref={projectDialog} role="dialog" aria-modal="true" aria-labelledby="projects-title" className="project-modal" onClick={event => event.stopPropagation()}><div className="panel-heading"><div><span className="eyebrow">VERSIONED .R3DP MANIFESTS</span><h2 id="projects-title">Project library</h2></div><button aria-label="Close projects" className="icon-button" onClick={() => setProjectsOpen(false)}>×</button></div><p className="muted">Reopening verifies target, inspection, FaceSet, and model hashes. Project files contain references and settings, never raw media.</p><button className="button" disabled={!!busy} onClick={() => projectInput.current?.click()}>Import .r3dp</button><input ref={projectInput} hidden type="file" accept=".r3dp,application/json" onChange={event => { importProject(event.target.files?.[0]); event.target.value = ''; }}/>{!projects.length && <p className="empty-note muted" role="status">{projectsLoading ? 'Checking saved projects… each one is verified against its video and models, which can take a few seconds.' : 'No saved projects yet.'}</p>}{projects.map(item => <div key={item.project_id} className="saved-project"><div><strong>{item.name}</strong><small>{new Date(item.saved_at).toLocaleString()} · checkpoint {item.last_completed_frame >= 0 ? item.last_completed_frame : 'none'}</small></div><button className="button small" disabled={!!busy} onClick={() => openProject(item.project_id)}>Verify & open</button><a className="button small" href={`/api/v1/projects/${item.project_id}/download`} download>Export</a></div>)}{project?.checkpoint_job_id && <button className="button accent" disabled={!!busy || !!reason('queue')} onClick={() => void run('Verifying checkpoint continuation', async () => { const resumed = await post<Job>(`/projects/${project.project_id}/resume`, {}); setSelectedJob(resumed.job_id); await refreshJobs(); setProjectsOpen(false); })}>Verify & resume {project.name}</button>}</section></div>}
     {welcomeOpen && route === '#/home' && <WelcomeDialog caps={caps} onClose={dismissWelcome}
       onStart={() => { dismissWelcome(); goto('#/faceswap'); window.setTimeout(focusProjectName, 150); }}

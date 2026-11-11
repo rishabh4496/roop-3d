@@ -101,6 +101,9 @@ def create_app(settings: Settings | None = None, *, repo_root: Path | None = Non
                         pipeline_runner=pipeline_runner, engine_gate=engine_gate) if worker_enabled else None)
     if worker is not None:
         model_hub.engines_registry = worker.engines
+        # Stage 17: FFmpeg-piped photorealistic engine. Opt-in per job (`engine_id`); the default engine is unchanged.
+        from roop_3d.pipeline.video_job_runner import ENGINE_ID as PHOTOREAL_ENGINE, EndToEndVideoJobRunner
+        worker.engines.register(PHOTOREAL_ENGINE, EndToEndVideoJobRunner(root, catalog, media, lambda: app.state.settings))
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -255,6 +258,8 @@ def create_app(settings: Settings | None = None, *, repo_root: Path | None = Non
 
     app.include_router(router)
     app.include_router(workstation_router)
+    from roop_3d.server.video_pipeline_routes import router as video_pipeline_router
+    app.include_router(video_pipeline_router)
     app.include_router(preview_router)
     app.include_router(live_preview_router)
     from roop_3d.server.live_stream import preview_stream, router as live_stream_router

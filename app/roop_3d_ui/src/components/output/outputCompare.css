@@ -1,0 +1,26 @@
+/* Before / After output player. Tokens come from the app theme (--line, --raised, --accent, --text, --muted, --danger). */
+.ocp{display:grid;gap:10px}
+.ocp-modal{width:min(980px,94vw);max-height:92vh;overflow:auto}
+.ocp-stage{position:relative;width:100%;max-height:62vh;margin-inline:auto;background:#000;border:1px solid var(--line);border-radius:8px;overflow:hidden;isolation:isolate}
+.ocp-stage video{display:block;width:100%;height:100%;object-fit:contain;background:#000}
+.ocp-stage.wipe video{position:absolute;inset:0}
+.ocp-stage.wipe .ocp-after{clip-path:inset(0 0 0 var(--ocp-pos,50%))}
+.ocp-divider{position:absolute;top:0;bottom:0;left:var(--ocp-pos,50%);width:2px;margin-left:-1px;background:var(--accent);box-shadow:0 0 0 1px rgba(0,0,0,.45);pointer-events:none;z-index:2}
+.ocp-stage.side{display:grid;grid-template-columns:1fr 1fr;gap:2px;aspect-ratio:auto!important;max-height:none}
+.ocp-stage.side video{position:static;height:auto;max-height:62vh}
+.ocp-tag{position:absolute;top:8px;z-index:3;padding:2px 8px;border-radius:999px;background:rgba(0,0,0,.62);color:#fff;font:600 11px/1.6 ui-sans-serif,system-ui,sans-serif;letter-spacing:.04em;text-transform:uppercase;pointer-events:none}
+.ocp-tag.left{left:8px}.ocp-tag.right{right:8px}
+.ocp-stage.side .ocp-tag.right{right:calc(50% + 8px)}
+.ocp-loading{position:absolute;inset:auto 0 0 0;z-index:3;padding:6px 10px;background:rgba(0,0,0,.6);color:#fff;font-size:12px;text-align:center}
+.ocp-problem{margin:0;padding:8px 10px;border:1px solid var(--danger);border-radius:6px;color:var(--danger);font-size:13px}
+.ocp-controls{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.ocp-seek{flex:1 1 220px;min-width:140px;accent-color:var(--accent)}
+.ocp-time{font:600 12px/1 ui-monospace,Consolas,monospace;color:var(--muted);white-space:nowrap}
+.ocp-mode{display:inline-flex;gap:4px}
+.ocp-mode [aria-pressed="true"]{border-color:var(--accent);color:var(--text);background:var(--raised)}
+.ocp-wipe{display:inline-flex;align-items:center;gap:8px;flex:1 1 200px;font-size:12px;color:var(--muted)}
+.ocp-wipe input{flex:1;accent-color:var(--accent)}
+.ocp-download{margin-left:auto;text-decoration:none}
+.ocp button:focus-visible,.ocp input:focus-visible,.ocp a:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+@media (max-width:640px){.ocp-download{margin-left:0;width:100%;text-align:center}.ocp-stage.side{grid-template-columns:1fr}.ocp-stage.side .ocp-tag.right{right:8px}}
+@media (prefers-reduced-motion:no-preference){.ocp-stage.wipe .ocp-after{transition:clip-path .05s linear}}

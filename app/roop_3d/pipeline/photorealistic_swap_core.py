@@ -124,6 +124,9 @@ class _Geometry:
     contour_from: np.ndarray
     contour_to: np.ndarray
     max_shift_px: float
+    down: np.ndarray = None            # unit vector brow -> chin (ROI axes)
+    brow_mid: np.ndarray = None        # brow centre, ROI px
+    face_height: float = 0.0
 
 
 @dataclass
@@ -134,12 +137,60 @@ class _Layer:
     patch_alpha: np.ndarray | None
 
 
+class HairDonorReplacer(SilhouetteReplacer):
+    """``SilhouetteReplacer`` with one change: warped-away hair / ears / neck may DONATE to the fill.
+
+    The stock step excludes the structure layer from the donor set, so when hair lies behind the old jaw the nearest "background" it
+    can propagate from is whatever lies beyond the hair (a backdrop, a border): a fringe of the wrong colour along the hair edge.
+    Hair is what really is behind a jaw, so here it continues into the hole. Everything else (cage field, structure warp, ``keep``
+    protection of the structure, occluder handling) is the stock behaviour."""
+
+    def apply(self, frame, *, target_mask, source_mask, plan, structure_mask=None, occluder=None, donors=(), perimeter=None, invalid=None):
+        from roop_3d.rendering.perimeter_cage import perimeter_from_masks
+        from roop_3d.rendering.silhouette_inpaint import SilhouetteDeltaInpainter, as_mask
+        from roop_3d.rendering.silhouette_replacement import SilhouetteReplacementReport
+        image = SilhouetteDeltaInpainter._image(frame)
+        shape = image.shape[:2]
+        if not plan.replace_silhouette:
+            return super().apply(frame, target_mask=target_mask, source_mask=source_mask, plan=plan, structure_mask=structure_mask,
+                                 occluder=occluder, donors=donors, perimeter=perimeter, invalid=invalid)
+        target, source = as_mask(target_mask, shape, "target mask"), as_mask(source_mask, shape, "source mask")
+        front = np.zeros(shape, bool) if occluder is None else as_mask(occluder, shape, "occluder") > 0.01
+        structure = np.zeros(shape, np.float32) if structure_mask is None else as_mask(structure_mask, shape, "structure mask") * (~front)
+        has_structure = bool((structure > 0.5).any())
+        warped_structure = warped_image = cage = None
+        origin, vacated = "none", np.zeros(shape, bool)
+        near_source = cv2.dilate((source > 0.5).astype(np.uint8), np.ones((5, 5), np.uint8)) > 0
+        if has_structure:
+            src_xy, tgt_xy = perimeter if perimeter is not None else perimeter_from_masks(source, target)
+            origin = "mesh" if perimeter is not None else "silhouettes"
+            field = self.warper.estimate(src_xy, tgt_xy, shape)
+            cage = field.report
+            if not field.identity:
+                warped_structure = self.warper.warp(field, structure) * (~near_source) * (~front)
+                warped_image = self.warper.warp(field, image)
+                vacated = (structure > 0.5) & (warped_structure < 0.5) & ~near_source & ~front
+        excluded = np.zeros(shape, bool) if invalid is None else as_mask(invalid, shape, "invalid mask") > 0.5
+        filled, inpaint = self.inpainter.fill(image, target, source, occluder=front if front.any() else None, donors=donors,
+                                              extra_hole=vacated if vacated.any() else None,
+                                              extra_excluded=excluded if excluded.any() else None,
+                                              keep=((structure > 0.5) & ~vacated) if has_structure else None)
+        out = filled
+        if warped_structure is not None:
+            alpha = np.clip(warped_structure, 0, 1)[..., None]
+            out = np.clip(np.rint(filled.astype(np.float32) * (1 - alpha) + warped_image.astype(np.float32) * alpha), 0, 255).astype(np.uint8)
+        changed = np.any(out != image, axis=2).astype(np.float32)
+        report = SilhouetteReplacementReport(plan.scope, True, perimeter_source=origin, structure_pixels=int((structure > 0.5).sum()),
+                                             vacated_pixels=int(vacated.sum()), cage=cage, inpaint=inpaint)
+        return out, changed, report
+
+
 class Photorealistic3DSwapCore:
     def __init__(self, options: SwapCoreOptions | None = None, *, replacer: SilhouetteReplacer | None = None,
                  restorer: RestoreFn | None = None, restorer_name: str = "none",
                  calibrator: UnbiasedSkinToneCalibrator | None = None, lighting: SphericalHarmonicsLighting | None = None):
         self.options = options or SwapCoreOptions()
-        self.replacer = replacer or SilhouetteReplacer()
+        self.replacer = replacer or HairDonorReplacer()
         self.restorer, self.restorer_name = restorer, restorer_name
         self.calibrator = calibrator or UnbiasedSkinToneCalibrator()
         self.lighting = lighting or SphericalHarmonicsLighting()
@@ -255,7 +306,8 @@ class Photorealistic3DSwapCore:
             target_mask=ops.polygon_mask(tgt_poly - origin, shape, 0.0),
             locked_mask=ops.polygon_mask(locked_poly - origin, shape, 0.0),
             contour_from=target[contour_ids] - origin, contour_to=locked[contour_ids] - origin,
-            max_shift_px=float(shift.max()) if len(shift) else 0.0)
+            max_shift_px=float(shift.max()) if len(shift) else 0.0,
+            down=frame_axes.down, brow_mid=frame_axes.brow_mid - origin, face_height=frame_axes.height)
         report.geometry = {"mode": "landmark_silhouette" if enabled else f"skipped:{reason}", "scope": opt.swap_scope,
                            "source_identity_lock": lock, "face_width_px": round(frame_axes.width, 1),
                            "max_contour_shift_px": round(geo.max_shift_px, 2), "roi": [x0, y0, x1, y1],
@@ -269,11 +321,21 @@ class Photorealistic3DSwapCore:
             if geo.enabled:
                 report.geometry["silhouette"] = {"applied": False, "reason": "SILHOUETTES_ALREADY_MATCH"}
             return roi
-        x0, y0, x1, y1 = geo.roi
         local = tuple(self._crop_donor(d, geo.roi) for d in donors)
         plan = resolve_scope(self.options.swap_scope, self.options.skull_blend)
+        # Only the part of the outline BELOW the brow line is edited. The forehead arc is a heuristic (the 106 layout stops at the
+        # brows) and the area above it is hair or backdrop, never "old skin to erase": cutting both masks identically keeps the
+        # overhang a jaw / cheek / chin quantity, and the FaceSet photograph already covers the forehead.
+        h, w = roi.shape[:2]
+        yy, xx = np.mgrid[:h, :w].astype(np.float32)
+        below = ((xx - geo.brow_mid[0]) * geo.down[0] + (yy - geo.brow_mid[1]) * geo.down[1] >= -0.02 * geo.face_height).astype(np.float32)
+        keep = structure
+        if structure is not None:
+            # hair edge pixels are anti-aliased: protect them with a margin so they are never "filled with background"
+            grow = max(2, int(round(0.025 * geo.face_width)))
+            keep = cv2.dilate(structure.astype(np.float32), cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * grow + 1,) * 2))
         plate, _, silhouette = self.replacer.apply(
-            roi, target_mask=geo.target_mask, source_mask=geo.locked_mask, plan=plan, structure_mask=structure,
+            roi, target_mask=geo.target_mask * below, source_mask=geo.locked_mask * below, plan=plan, structure_mask=keep,
             occluder=occluder, donors=local, perimeter=(geo.contour_to, geo.contour_from))
         report.geometry["silhouette"] = silhouette.as_dict()
         return plate
@@ -464,7 +526,13 @@ class Photorealistic3DSwapCore:
                 scale = restored.shape[0] / crop_size
                 back = ops.compose_affine(matrix, np.array([[1 / scale, 0, 0], [0, 1 / scale, 0]], np.float64))
                 restored_roi = cv2.warpAffine(restored, back, (w, h), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE)
-                weight = alpha.copy()
+                # Restorers are unreliable on the outermost pixels of their aligned crop (colour specks at the border): fade the restorer's
+                # influence out over the last ~7 % of the crop. The swap itself is unaffected there.
+                margin = max(3, int(round(0.07 * crop_size)))
+                interior = np.zeros((crop_size, crop_size), np.float32)
+                interior[margin:-margin, margin:-margin] = 1.0
+                interior = cv2.GaussianBlur(interior, (0, 0), margin / 2.0)
+                weight = alpha * cv2.warpAffine(interior, matrix, (w, h), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=0)
                 if packet.protect is not None:
                     protect = cv2.warpAffine(np.clip(np.asarray(packet.protect, np.float32), 0, 1), matrix, (w, h),
                                              flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=0)

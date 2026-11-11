@@ -247,12 +247,17 @@ def apply_ratio(linear_bgr: np.ndarray, ratio: np.ndarray, strength: float) -> n
 
 
 # ------------------------------------------------------------------------------------------------------ pyramid blend
-def laplacian_pyramid_blend(foreground: np.ndarray, background: np.ndarray, alpha: np.ndarray, levels: int = 4) -> np.ndarray:
+def laplacian_pyramid_blend(foreground: np.ndarray, background: np.ndarray, alpha: np.ndarray, levels: int = 4, *,
+                            limit_overshoot: bool = True) -> np.ndarray:
     """Blend ``foreground`` over ``background`` with ``levels`` Laplacian bands (+ the Gaussian residual).
 
     Each band is mixed with the mask at the same scale, so low frequencies (colour, shading) cross the seam over a wide
     distance and high frequencies (pores, edges) over a narrow one. ``alpha = 0`` returns the background and ``alpha = 1`` the
     foreground, up to float rounding.
+
+    Per-band mixing of a hard edge under a ramped mask overshoots, and clipping turns the overshoot into saturated colour specks. With
+    ``limit_overshoot`` every output channel is bounded by the local (5x5) min / max of the two inputs, which cannot move an exact
+    alpha 0 / 1 result and removes the specks.
     """
     fg = np.asarray(foreground, np.float32)
     bg = np.asarray(background, np.float32)
@@ -282,6 +287,11 @@ def laplacian_pyramid_blend(foreground: np.ndarray, background: np.ndarray, alph
     out = mixed[levels]
     for i in range(levels - 1, -1, -1):
         out = _keep_channels(cv2.pyrUp(out, dstsize=(mixed[i].shape[1], mixed[i].shape[0])), mixed[i]) + mixed[i]
+    if limit_overshoot:
+        kernel = np.ones((5, 5), np.uint8)
+        low = cv2.erode(np.minimum(fg, bg), kernel)
+        high = cv2.dilate(np.maximum(fg, bg), kernel)
+        out = np.minimum(np.maximum(out, low), high)
     return np.clip(out, 0, 255).astype(np.uint8) if foreground.dtype == np.uint8 else out
 
 

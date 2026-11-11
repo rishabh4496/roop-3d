@@ -301,6 +301,30 @@ class ModelHubService:
                              if ready else "Existing production path is preserved; " + ", ".join(sorted(states or {"missing registry models"})) + "."),
             },
             {
+                "engine_id": "photoreal_3d_ffmpeg",
+                "name": "Photoreal 3D (FFmpeg stream)",
+                "family": "Same detector, ArcFace and INSwapper; then craniofacial warp, quotient-image relight, restorer and Laplacian composite",
+                "engine_type": "ONNX Runtime + FFmpeg decode/encode pipes",
+                "purpose": ("Video swap whose pixels are always photographic (swap + FaceSet photograph + restorer): the source jaw/skull outline "
+                            "is projected into the target, the old overhang is filled with background, and a smooth spherical-harmonics ratio "
+                            "matches the scene light. Streams frames through FFmpeg (NVENC with libx264 fallback) and stream-copies the audio."),
+                "model_ids": [record.model_id for record in required],
+                "minimum_vram_gib": None,
+                "recommended_vram_gib": None,
+                "dependencies": ["The reference engine's three models", "FFmpeg", "BiSeNet / XSeg / occluder (hair, skin and occlusion masks)",
+                                 "A restorer (UltraMax / CodeFormer / GPEN) for the restoration step"],
+                "supported_precision": ["Follows the saved precision policy; the restorer may run on TensorRT when an engine is cached"],
+                "supported_execution_providers": sorted({provider for record in required for provider in record.supported_providers}),
+                "status": reference_state,
+                "benchmark_status": "NOT_RUN",
+                "actual_inference_available": ready,
+                "selectable": self.engines_registry.selectable("photoreal_3d_ffmpeg"),
+                "selected": False,
+                "evidence": ("Not resumable (a paused job restarts at frame 0); SDR sources only; the skull outline is the FaceSet photograph's 106 "
+                             "landmarks aligned to the target, not a per-frame fitted 3DMM; relighting normals are a silhouette ellipsoid. "
+                             "Every manifest records what actually ran."),
+            },
+            {
                 "engine_id": "minimax_h3_ref2va_experimental",
                 "name": "MiniMax H3 Ref2VA (experimental video generation)",
                 "family": "ComfyUI LoRA workflow",

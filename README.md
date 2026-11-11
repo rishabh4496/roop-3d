@@ -146,6 +146,66 @@ origins/Host headers are checked, and errors use JSON envelopes with request IDs
 There is no remote-provider adapter. FaceSet archives use validated local upload
 endpoints. Secrets remain in environment/OS secret stores, never project manifests or logs.
 
+### Photoreal 3D video pipeline (Stage 17)
+
+Engine `photoreal_3d_ffmpeg` (choose it in the Engine rack, or send `engine_id` with `POST /api/v1/jobs`). The face is always
+photographic: the neural swap (`inswapper`) plus the FaceSet's own photograph plus a restorer; geometry only decides *where* those pixels
+land and a smooth spherical-harmonics ratio matches the scene light. Per face: (1) the source skull/jaw outline is projected into the
+target, the old overhang is filled with background and hair/ears/neck are warped onto the new outline; (2) the swap and the FaceSet
+photograph are warped onto that outline; (3) `R_sh = Render_SH(L_target) / (Render_SH(L_source) + 1e-4)` is multiplied on in linear
+light with a bounded skin-tone gain; (4) UltraMax/CodeFormer/GPEN restoration, camera focus and grain matching, occluder-aware alpha and
+a 4-band Laplacian composite. Frames stream through FFmpeg (`h264_nvenc`, automatic `libx264` CRF 16 fallback); the source audio is
+stream-copied. The result is `roop_3d/.runtime/outputs/<job_id>/result.mp4` plus `manifest.json`, which records what actually ran.
+When a job finishes the web UI opens a Before/After player with a **Download MP4** button.
+
+Limits (also in every manifest): not resumable (a paused job restarts at frame 0); SDR sources only; the skull outline comes from the
+FaceSet view's 106 landmarks aligned to the target, not a per-frame fitted 3DMM; SH normals are a silhouette ellipsoid.
+
+- `POST /api/v1/facesets/import?filename=me.fsz` and `POST /api/v1/media/upload?filename=clip.mp4`: raw body, one call. Bounded by
+  `ROOP3D_MAX_BODY_BYTES` (2 MiB default, 64 MiB max); larger files use the chunked `POST/PUT /api/v1/assets/uploads` protocol the UI uses.
+- `POST /api/v1/media/inspect-faces`, then `POST /api/v1/jobs` (header `Idempotency-Key`), then `GET /api/v1/jobs/{id}`.
+- `GET /api/v1/jobs/{id}/download`: the finished MP4 (SHA-256 verified, HTTP Range supported). Progress: `/ws/v1/pipeline/status`.
+
+JavaScript:
+
+```javascript
+const base = 'http://127.0.0.1:8030/api/v1';
+const post = (url, body, headers = {}) => fetch(base + url, { method: 'POST', body, headers }).then(r => r.json());
+const { faceset_id } = await post('/facesets/import?filename=me.fsz', await (await fetch('me.fsz')).blob(), { 'Content-Type': 'application/octet-stream' });
+const { path } = await post('/media/upload?filename=clip.mp4', await (await fetch('clip.mp4')).blob(), { 'Content-Type': 'application/octet-stream' });
+const inspection = await post('/media/inspect-faces', JSON.stringify({ path }), { 'Content-Type': 'application/json' });
+const job = await post('/jobs', JSON.stringify({ engine_id: 'photoreal_3d_ffmpeg', target_path: path, inspection_id: inspection.inspection_id,
+  face_mappings: [{ track_id: inspection.tracks[0].track_id, faceset_id }] }), { 'Content-Type': 'application/json', 'Idempotency-Key': crypto.randomUUID() });
+// when GET /jobs/{job_id} reports state "succeeded": <video src="http://127.0.0.1:8030/api/v1/jobs/{job_id}/download">
+```
+
+Python:
+
+```python
+import httpx, time
+base = "http://127.0.0.1:8030/api/v1"
+octet = {"Content-Type": "application/octet-stream"}
+with httpx.Client(base_url=base, timeout=60) as c:
+    fid = c.post("/facesets/import", params={"filename": "me.fsz"}, content=open("me.fsz", "rb").read(), headers=octet).json()["faceset_id"]
+    path = c.post("/media/upload", params={"filename": "clip.mp4"}, content=open("clip.mp4", "rb").read(), headers=octet).json()["path"]
+    ins = c.post("/media/inspect-faces", json={"path": path}).json()
+    job = c.post("/jobs", headers={"Idempotency-Key": "my-run-1"}, json={"engine_id": "photoreal_3d_ffmpeg", "target_path": path,
+          "inspection_id": ins["inspection_id"], "face_mappings": [{"track_id": ins["tracks"][0]["track_id"], "faceset_id": fid}]}).json()
+    while (state := c.get(f"/jobs/{job['job_id']}").json())["state"] not in {"succeeded", "failed", "cancelled"}:
+        time.sleep(1)
+    open("result.mp4", "wb").write(c.get(f"/jobs/{job['job_id']}/download").content)
+```
+
+Curl:
+
+```shell
+curl -X POST -H "Content-Type: application/octet-stream" --data-binary @me.fsz  "http://127.0.0.1:8030/api/v1/facesets/import?filename=me.fsz"
+curl -X POST -H "Content-Type: application/octet-stream" --data-binary @clip.mp4 "http://127.0.0.1:8030/api/v1/media/upload?filename=clip.mp4"
+curl -X POST -H "Content-Type: application/json" -d '{"path":"roop_3d/.runtime/media/<id>.mp4"}' http://127.0.0.1:8030/api/v1/media/inspect-faces
+curl -X POST -H "Content-Type: application/json" -H "Idempotency-Key: run-1" -d '{"engine_id":"photoreal_3d_ffmpeg","target_path":"...","inspection_id":"...","face_mappings":[{"track_id":"track_0000","faceset_id":"..."}]}' http://127.0.0.1:8030/api/v1/jobs
+curl -o result.mp4 http://127.0.0.1:8030/api/v1/jobs/<job_id>/download
+```
+
 ### Identity panel API (Stage 7)
 
 Local-only additions used by the workstation's identity panel (see
