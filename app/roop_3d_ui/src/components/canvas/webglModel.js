@@ -7,6 +7,8 @@ import { facePose } from './poseHud';
 
 export const MODE_IDS = { wipe: 0, crossfade: 1, blend: 2, diff: 3, loupe: 4, result: 5, matte: 6 };
 export const LOUPE_ZOOM = 3.5;
+/** The pore magnifier runs at 3.5x or 4x (Stage 23); 3.5x stays the default so earlier behaviour is unchanged. */
+export const LOUPE_ZOOMS = [3.5, 4];
 export const LOUPE_RADIUS_PX = 90;
 /** Per-channel difference (0-255) below which a pixel counts as unchanged (JPEG preview noise); matches the 2D diff map. */
 export const DIFF_NOISE_FLOOR = 3;
@@ -23,6 +25,8 @@ export const crossfadeValue = (elapsedMs, periodSeconds) => {
 
 // 10-stop samples of matplotlib's perceptually uniform maps, interpolated piecewise-linearly into a 256-entry LUT texture.
 export const COLORMAP_STOPS = {
+  // Thermal camera ramp (black > indigo > magenta > red > amber > white): Stage 23's "Thermal Pixel Diff Map" default.
+  thermal: ['#000000', '#07062e', '#0b0a4a', '#3a0ca3', '#7b1fa2', '#9d0208', '#e85d04', '#faa307', '#ffd60a', '#ffffff'],
   inferno: ['#000004', '#1b0c41', '#4a0c6b', '#781c6d', '#a52c60', '#cf4446', '#ed6925', '#fb9b06', '#f7d13d', '#fcffa4'],
   viridis: ['#440154', '#482878', '#3e4a89', '#31688e', '#26828e', '#1f9e89', '#35b779', '#6ece58', '#b5de2b', '#fde725'],
 };

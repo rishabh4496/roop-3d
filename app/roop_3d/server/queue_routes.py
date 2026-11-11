@@ -5,12 +5,14 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Body, Header, Request, Response
 from pydantic import Field
 
-from roop_3d.batch_matrix import (
+from roop_3d.queue.batch_matrix import (
     BUILTIN_RECIPES,
     BatchMatrixEngine,
     JobManifest,
     RecipeConfig,
+    plan_segments,
 )
+from roop_3d.queue.lifecycle import LIFECYCLE_ORDER
 from roop_3d.core.errors import DomainError
 from roop_3d.core.settings import Contract
 from roop_3d.queue_manager import CanonicalJobState, QueueJob, QueueSlice, SegmentSlice
@@ -164,31 +166,33 @@ def submit_batch(value: BatchSubmitRequest, request: Request) -> list[QueueJob]:
     spec = value.model_dump(exclude_none=True)
     manifests = BatchMatrixEngine.expand_batch(spec)
     queued_jobs: list[QueueJob] = []
+    plans = {}
+    if value.auto_split:
+        # Each distinct target is split once along its keyframes and the slices are shared by every manifest using it.
+        plans = {plan.manifest_id: plan for plan in plan_segments(
+            manifests, request.app.state.media.path,
+            request.app.state.root / "roop_3d/.runtime/segments",
+            max_segment_duration=value.max_segment_duration)}
 
     for m in manifests:
-        req_payload = m.to_job_payload()
-        slices = None
-        if value.auto_split:
-            target_path = request.app.state.media.path(m.target_path)
-            if target_path.is_file():
-                try:
-                    split_slices = split_video_gop(
-                        target_path,
-                        request.app.state.root / "roop_3d/.runtime/segments",
-                        max_segment_duration=value.max_segment_duration,
-                    )
-                    slices = [s.model_dump() for s in split_slices]
-                except Exception:
-                    slices = None
-
+        plan = plans.get(m.manifest_id)
         job, _ = request.app.state.queue.submit(
-            request=req_payload,
+            request=m.to_job_payload(),
             name=m.name,
-            slices=slices,
+            slices=plan.slices if plan else None,
         )
+        if plan and plan.warning:
+            # Never silent: a target that could not be split is still queued, with the reason on the job.
+            job = request.app.state.queue.update_progress(job.job_id, {**job.progress.model_dump(), "advisory": plan.warning})
         queued_jobs.append(job)
 
     return queued_jobs
+
+
+@router.get("/queue-lifecycle", response_model=list[str])
+def lifecycle_states() -> list[str]:
+    """The 10 workstation job states, in lifecycle order (each queue job carries its own ``lifecycle_state``)."""
+    return [state.value for state in LIFECYCLE_ORDER]
 
 
 # =========================================================================

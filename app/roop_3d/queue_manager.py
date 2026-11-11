@@ -34,11 +34,12 @@ import threading
 from typing import Any, Callable
 import uuid
 
-from pydantic import ConfigDict, Field
+from pydantic import ConfigDict, Field, computed_field
 
 from roop_3d.core.errors import DomainError
 from roop_3d.core.settings import Contract
 from roop_3d.core.storage import atomic_json, owned
+from roop_3d.queue.lifecycle import lifecycle_of
 from roop_3d.engine.pipeline_runner import PipelineCheckpoint, checkpoint_npz_bytes, read_checkpoint_npz
 from roop_3d.segment_dispatcher import SegmentSlice, concat_lossless
 
@@ -213,6 +214,12 @@ class QueueJob(Contract):
     revision: int = 0
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     updated_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def lifecycle_state(self) -> str:
+        """Stage 23: the 10-state workstation vocabulary, derived from the persisted state + progress stage."""
+        return lifecycle_of(self.state.value, self.progress.stage).value
 
 
 class _ClosingConnection(sqlite3.Connection):
@@ -541,7 +548,17 @@ class QueueManager:
                          (relative_path, datetime.now(timezone.utc).isoformat(), job_id))
 
     def reorder(self, ordered_job_ids: list[str]) -> list[QueueJob]:
-        """Drag-and-drop reordering: atomically update queue_order for all supplied job IDs."""
+        """Drag-and-drop reordering: atomically update queue_order for all supplied job IDs.
+
+        Every id must exist and appear once; a typo or a stale id from another tab would otherwise be silently ignored
+        and leave the order half-applied.
+        """
+        if len(set(ordered_job_ids)) != len(ordered_job_ids):
+            raise DomainError("QUEUE_ORDER_DUPLICATE", "A job id appears more than once in the new order", 422)
+        known = {job.job_id for job in self.list_jobs()}
+        missing = [job_id for job_id in ordered_job_ids if job_id not in known]
+        if missing:
+            raise DomainError("QUEUE_JOB_NOT_FOUND", f"Unknown job id(s) in the new order: {', '.join(missing[:5])}", 404)
         with self._lock, self._get_connection() as conn:
             now_iso = datetime.now(timezone.utc).isoformat()
             for order, j_id in enumerate(ordered_job_ids):
@@ -559,10 +576,12 @@ class QueueManager:
         """Duplicate an existing queue job."""
         job = self.get(job_id)
         new_name = f"{job.name} (Copy)"
+        # A copy starts from scratch: carrying over COMPLETED/FAILED segment states would make it look already rendered.
+        fresh = [s.model_copy(update={"status": "PENDING", "rendered_chunk_path": None, "error": None, "retry_count": 0}) for s in job.slices]
         new_job, _ = self.submit(
             request=job.request,
             name=new_name,
-            slices=job.slices,
+            slices=fresh,
         )
         return new_job
 

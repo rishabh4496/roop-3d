@@ -240,7 +240,7 @@ def make_stream_runner(root, catalog, media, settings_provider, *, pipeline_trac
                 and record.request.export is None and record.request.trim_start_seconds is None
                 and record.request.trim_end_seconds is None and record.request.face_segments is None
                 and record.request.workstation_parameters is None and record.request.parameter_curves is None
-                and record.request.mask_base64 is None and settings.audio_policy in ("copy", "drop")
+                and record.request.mask_base64 is None and not record.request.mask_keyframes and settings.audio_policy in ("copy", "drop")
                 and settings.face_restoration_policy in ("off", "auto", "gpen", "codeformer", "ultramax"))
             if requested == "reference" or requested == "auto" and (admission.profile == "cpu" or not basic):
                 return super().run_prepared(record, admission, prepared=prepared, control=control,

@@ -4,6 +4,7 @@ import { PreviewURL } from './state';
 import type { JobRequest } from './contracts';
 import type { WorkstationParameters } from './components/workstation/pipeline';
 import { RUNTIME_SETTINGS_CHANGED } from './runtimeSettings';
+import { maskAtFrame } from './utils/maskRanges';
 
 /** Slider drags coalesce into one request per pause of this length. */
 export const LIVE_DEBOUNCE_MS = 150;
@@ -40,7 +41,8 @@ export function buildLivePayload({ request, time, fps, parameters, maskBase64, r
     pose_strength: parameters.pose_strength,
     solo_node: solo || undefined,
     occlusion: { erosion_px: parameters.erosion_px ?? 0, feather_px: parameters.feather_px },
-    mask_base64: maskBase64 || request.mask_base64 || undefined,
+    // A painted frame range overrides the whole-clip mask on the frames it covers, exactly as the render does.
+    mask_base64: maskAtFrame(maskBase64 || request.mask_base64, request.mask_keyframes, Math.max(0, Math.round(time * fps))) || undefined,
     restorer: restoring ? parameters.restorer_model ?? 'gpen' : 'off',
     identity_blend: request.identity_blend ?? undefined,
     identity_blend_t: parameters.identity_blend_t,

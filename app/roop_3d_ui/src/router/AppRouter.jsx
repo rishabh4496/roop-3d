@@ -16,6 +16,21 @@ const cleanHash = hash => String(hash || '').split('?')[0].replace(/\/$/, '');
 export const isDeepLink = hash => { const route = cleanHash(hash); return route in ROUTE_ALIASES || route in DRAWER_ROUTES; };
 /** 'models' | 'diagnostics' | null: which drawer the hash asks for. */
 export const drawerOf = hash => DRAWER_ROUTES[cleanHash(hash)] ?? null;
+/**
+ * Stage 23: the last screen survives a reload. Pinokio tab switches can reload the page with no hash at all; without this
+ * every switch dropped the person back on the Studio. Only an *empty* hash falls back to it, so a typed or clicked link always wins.
+ */
+export const LAST_ROUTE_KEY = 'roop3d-last-route';
+export function readStoredRoute(storage = typeof localStorage === 'undefined' ? null : localStorage) {
+  try {
+    const stored = storage?.getItem(LAST_ROUTE_KEY);
+    return stored && SCREENS.some(([id]) => stored === `#/${id}`) ? stored : null;
+  } catch { return null; }
+}
+export function storeRoute(route, storage = typeof localStorage === 'undefined' ? null : localStorage) {
+  try { if (SCREENS.some(([id]) => route === `#/${id}`)) storage?.setItem(LAST_ROUTE_KEY, route); } catch { /* storage is optional */ }
+}
+export const isEmptyHash = hash => ['', '#', '#/'].includes(String(hash || ''));
 export function normalizeRoute(hash) {
   const route = cleanHash(hash);
   if (route === '#' || route === '' || route === '#/workstation') return '#/faceswap';
@@ -24,12 +39,13 @@ export function normalizeRoute(hash) {
   return SCREENS.some(([id]) => route === `#/${id}`) ? route : '#/home';
 }
 export function useHashRoute() {
-  const [route, setRoute] = useState(() => normalizeRoute(typeof location === 'undefined' ? '' : location.hash));
+  const [route, setRoute] = useState(() => (typeof location !== 'undefined' && isEmptyHash(location.hash) && readStoredRoute()) || normalizeRoute(typeof location === 'undefined' ? '' : location.hash));
   useEffect(() => {
     const update = () => {
-      const next = normalizeRoute(location.hash);
+      const next = (isEmptyHash(location.hash) && readStoredRoute()) || normalizeRoute(location.hash);
       // Stage 20 deep links keep their own URL (#/studio stays #/studio); only legacy and unknown hashes are rewritten.
       if (location.hash !== next && !isDeepLink(location.hash)) history.replaceState(null, '', `${location.pathname}${location.search}${next}`);
+      storeRoute(next);
       setRoute(next);
     };
     update(); window.addEventListener('hashchange', update);

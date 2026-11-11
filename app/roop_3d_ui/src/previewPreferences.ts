@@ -1,7 +1,7 @@
 export type ViewportPreferences = {
   live_swap: boolean;
   view_mode: 'side' | 'compare';
-  compare_mode: 'result' | 'wipe' | 'crossfade' | 'diff' | 'blend' | 'matte' | 'loupe';
+  compare_mode: 'result' | 'wipe' | 'crossfade' | 'diff' | 'blend' | 'matte' | 'loupe' | 'mesh3d';
   show_landmarks: boolean;
   show_pose: boolean;
   show_overlays: boolean;

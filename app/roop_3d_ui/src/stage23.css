@@ -1,0 +1,21 @@
+/* Stage 23: multi-person actors, frame-range mask scope, 3D mesh canvas mode. Layers over the earlier sheets. */
+.actor-panel { display: grid; gap: 8px; margin-bottom: 12px; padding: 10px; border: 1px solid var(--hairline, rgba(255, 255, 255, .12)); border-radius: 10px; }
+.actor-panel-head { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+.actor-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.actor-row { display: grid; grid-template-columns: 44px 1fr; gap: 10px; align-items: center; }
+.actor-row img, .actor-row .thumb-empty { width: 44px; height: 44px; border-radius: 8px; object-fit: cover; background: rgba(255, 255, 255, .06); }
+.actor-row > div { display: grid; gap: 3px; min-width: 0; }
+.actor-row select { width: 100%; min-width: 0; }
+
+.loupe-zoom { display: inline-flex; gap: 4px; margin-left: 6px; }
+.mask-scope { flex-wrap: wrap; align-items: center; gap: 8px; }
+.mask-range-list { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px; }
+.mask-range-list li { display: inline-flex; align-items: center; border: 1px solid var(--hairline, rgba(255, 255, 255, .18)); border-radius: 999px; overflow: hidden; }
+.mask-range-chip, .mask-range-remove { background: transparent; border: 0; color: inherit; font: inherit; font-size: 11px; padding: 3px 8px; cursor: pointer; }
+.mask-range-chip:hover, .mask-range-remove:hover { background: rgba(255, 255, 255, .1); }
+.mask-range-chip:focus-visible, .mask-range-remove:focus-visible { outline: 2px solid currentColor; outline-offset: -2px; }
+
+.mesh3d-legend { position: absolute; left: 12px; bottom: 12px; z-index: 4; max-width: min(420px, calc(100% - 24px)); display: flex; gap: 8px; align-items: center;
+  padding: 6px 10px; border-radius: 8px; font-size: 11px; background: rgba(8, 10, 18, .72); color: #e8ecf8; backdrop-filter: blur(6px); pointer-events: none; }
+.mesh3d-legend i { flex: none; width: 8px; height: 8px; border-radius: 50%; background: #5eead4; box-shadow: 0 0 8px #5eead4; }
+@media (prefers-reduced-motion: reduce) { .mesh3d-legend { backdrop-filter: none; } }

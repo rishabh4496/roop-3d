@@ -232,13 +232,13 @@ describe('WorkstationCanvas GPU path', () => {
     expect([...host.querySelectorAll('.loupe-sampling button')].map(b => b.textContent)).toEqual(['Bilinear', 'Bicubic']);
   });
 
-  it('switches the loupe between bilinear and bicubic and the diff between Inferno and Viridis from the toolbar', async () => {
+  it('switches the loupe between bilinear and bicubic and the diff between Thermal, Inferno and Viridis from the toolbar', async () => {
     await mount({ mode: 'loupe' });
     await act(async () => ([...host.querySelectorAll('.loupe-sampling button')].find(b => b.textContent === 'Bicubic') as HTMLElement).click()); await flushFrames(1);
     expect(context!.uniforms.get('uBicubic')).toEqual([1]);
     await mount({ mode: 'diff' });
     const select = host.querySelector<HTMLSelectElement>('select[aria-label="Diff colormap"]')!;
-    expect([...select.options].map(option => option.value)).toEqual(['inferno', 'viridis']);
+    expect([...select.options].map(option => option.value)).toEqual(['thermal', 'inferno', 'viridis']);   // Stage 23: thermal first, the default
   });
 
   it('falls back to the DOM + 2D path when WebGL2 is unavailable', async () => {

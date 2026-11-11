@@ -3,7 +3,7 @@ import React, { useRef, useState, useEffect, useCallback, useMemo } from 'react'
 import { calculateLetterbox } from '../../utils/letterbox';
 import WebGLViewport from './WebGLViewport';
 import MaskBrushOverlay from './MaskBrushOverlay';
-import { COLORMAPS, DIFF_NOISE_FLOOR, LOUPE_ZOOM, crossfadeValue, webgl2Available } from './webglModel';
+import { COLORMAPS, DIFF_NOISE_FLOOR, LOUPE_ZOOM, LOUPE_ZOOMS, crossfadeValue, webgl2Available } from './webglModel';
 import { useFaceSelectionStore } from '../../useFaceSelectionStore';
 
 // The shader constants are the single source of truth; these re-exports keep the 2D-path API (and its tests) stable.
@@ -20,6 +20,8 @@ const CANVAS_MODES = [
   { id: 'result', label: 'Result', icon: '◉' },
   { id: 'wipe', label: 'Split Wipe', legacyTitle: 'Split Wipe · Wipe (A/B)', icon: '↔' },
   ...MODES.filter(mode => mode.id !== 'wipe'),
+  // Stage 23: the 6DoF craniofacial mesh (VideoViewport draws it) over the swapped frame.
+  { id: 'mesh3d', label: '3D Mesh Overlay', icon: '⌗' },
   { id: 'matte', label: 'Mask Matte Solo', icon: '▧' },
 ];
 
@@ -78,12 +80,13 @@ function useLoadedImage(url) {
  * @param {{
  *   target?: string; output?: string; originalUrl?: string; swappedUrl?: string;
  *   sourcePreviewUrl?: string; outputPreviewUrl?: string; targetMediaRef?: any; outputMediaRef?: any;
- *   mode?: 'result' | 'wipe' | 'crossfade' | 'diff' | 'blend' | 'matte' | 'loupe'; onModeChange?: (mode: string) => void;
+ *   mode?: 'result' | 'wipe' | 'crossfade' | 'diff' | 'blend' | 'matte' | 'loupe' | 'mesh3d'; onModeChange?: (mode: string) => void;
  *   containerWidth?: number; containerHeight?: number; mediaDimensions?: { width: number; height: number };
  *   fullBleed?: boolean; now?: () => number;
  *   onContextMenuPoint?: (clientX: number, clientY: number) => void;
  *   currentTime?: number; fps?: number; webgl?: boolean;
  *   maskEditing?: boolean; maskBase64?: string | null; onMaskChange?: (mask: string | null) => void;
+ *   maskKeyframes?: { start_frame: number; end_frame: number | null; mask_base64: string }[]; onMaskKeyframesChange?: (value: { start_frame: number; end_frame: number | null; mask_base64: string }[]) => void;
  *   onMaskEditToggle?: (enabled: boolean) => void;
  * }} props
  */
@@ -107,6 +110,8 @@ export default function WorkstationCanvas({
   maskEditing = false,
   maskBase64 = null,
   onMaskChange,
+  maskKeyframes = [],
+  onMaskKeyframesChange,
   onMaskEditToggle,
 }) {
   const containerRef = useRef(null);
@@ -129,7 +134,8 @@ export default function WorkstationCanvas({
   // Stage 11: WebGL2 shader path (native-resolution textures, GPU diff / loupe / wipe / gizmo). Falls back to the DOM + 2D path.
   const [gl2] = useState(webgl2Available);
   const [glFailed, setGlFailed] = useState(false);
-  const [colormap, setColormap] = useState('inferno');
+  const [colormap, setColormap] = useState('thermal');
+  const [loupeZoom, setLoupeZoom] = useState(LOUPE_ZOOM);
   const [bicubic, setBicubic] = useState(false);
   const [showGizmo, setShowGizmo] = useState(true);
   const [loupeHeld, setLoupeHeld] = useState(false);
@@ -242,7 +248,7 @@ export default function WorkstationCanvas({
     canvas.width = size; canvas.height = size;
     context.imageSmoothingEnabled = false;
     const scaleX = image.naturalWidth / stage.width, scaleY = image.naturalHeight / stage.height;
-    const sw = (size / LOUPE_ZOOM) * scaleX, sh = (size / LOUPE_ZOOM) * scaleY;
+    const sw = (size / loupeZoom) * scaleX, sh = (size / loupeZoom) * scaleY;
     context.save();
     context.beginPath();
     context.arc(LOUPE_RADIUS, LOUPE_RADIUS, LOUPE_RADIUS - 2, 0, Math.PI * 2);
@@ -254,7 +260,7 @@ export default function WorkstationCanvas({
     context.strokeStyle = '#00f5d4';
     context.lineWidth = 2.5;
     context.stroke();
-  }, [useGl, activeMode, mousePos, imageA, imageB, stage.left, stage.top, stage.width, stage.height]);
+  }, [useGl, activeMode, mousePos, imageA, imageB, loupeZoom, stage.left, stage.top, stage.width, stage.height]);
 
   const overlayStyle = useMemo(() => {
     if (activeMode === 'wipe') {
@@ -276,8 +282,8 @@ export default function WorkstationCanvas({
         <div className="preview-mode-segmented" role="group" aria-label="Comparison mode">
           {CANVAS_MODES.map(m => (
             <button key={m.id} type="button" className={`preview-mode-btn ${activeMode === m.id ? 'active' : ''}`} aria-pressed={activeMode === m.id}
-              onClick={() => onModeChange && onModeChange(m.id)} disabled={m.id !== 'wipe' && !hasOutput}
-              title={m.id !== 'wipe' && !hasOutput ? 'Available once a swapped frame exists' : (m.legacyTitle ?? m.label)}>
+              onClick={() => onModeChange && onModeChange(m.id)} disabled={m.id !== 'wipe' && m.id !== 'mesh3d' && !hasOutput}
+              title={m.id !== 'wipe' && m.id !== 'mesh3d' && !hasOutput ? 'Available once a swapped frame exists' : (m.legacyTitle ?? m.label)}>
               <span className="mode-icon">{m.icon}</span><span>{m.label}</span>
             </button>
           ))}
@@ -321,7 +327,9 @@ export default function WorkstationCanvas({
           </div>
         )}
 
-        {activeMode === 'loupe' && <div className="loupe-controls"><span className="tiny-badge">3.5x SUB-PIXEL LENS · Hold Z</span>
+        {activeMode === 'loupe' && <div className="loupe-controls"><span className="tiny-badge">{loupeZoom}x SUB-PIXEL LENS · Hold Z</span>
+          <span className="loupe-zoom" role="group" aria-label="Loupe magnification">{LOUPE_ZOOMS.map(zoom =>
+            <button key={zoom} type="button" className={`preview-mode-btn ${loupeZoom === zoom ? 'active' : ''}`} aria-pressed={loupeZoom === zoom} onClick={() => setLoupeZoom(zoom)} title={`${zoom}x pore magnifier`}>{zoom}x</button>)}</span>
           {useGl && <span className="loupe-sampling" role="group" aria-label="Loupe sampling">
             <button type="button" className={`preview-mode-btn ${bicubic ? '' : 'active'}`} aria-pressed={!bicubic} onClick={() => setBicubic(false)} title="Hardware bilinear sampling">Bilinear</button>
             <button type="button" className={`preview-mode-btn ${bicubic ? 'active' : ''}`} aria-pressed={bicubic} onClick={() => setBicubic(true)} title="Catmull-Rom bicubic sampling (sharper at 3.5x)">Bicubic</button>
@@ -335,8 +343,8 @@ export default function WorkstationCanvas({
       {/* The two real frames, aligned to the letterboxed media rectangle. */}
       {useGl && (
         <div className="compare-stage webgl-stage" style={stageStyle}>
-          <WebGLViewport imageA={imageA} imageB={bUrl ? imageB : null} mode={activeMode} split={split} vertical={wipeOrientation === 'vertical'} mix={activeMode === 'blend' ? blendOpacity : fade}
-            gain={diffBoost} colormap={colormap} bicubic={bicubic} faces={faces} showGizmo={showGizmo} width={stage.width} height={stage.height}
+          <WebGLViewport imageA={imageA} imageB={bUrl ? imageB : null} mode={activeMode === 'mesh3d' ? (bUrl ? 'result' : 'wipe') : activeMode} split={split} vertical={wipeOrientation === 'vertical'} mix={activeMode === 'blend' ? blendOpacity : fade}
+            gain={diffBoost} colormap={colormap} bicubic={bicubic} loupeZoom={loupeZoom} faces={faces} showGizmo={showGizmo} width={stage.width} height={stage.height}
             pointer={{ x: mousePos.x - stage.left, y: mousePos.y - stage.top, active: mousePos.active }}
             fadePlaying={fadePlaying} fadeSeconds={fadeSeconds} now={now} onFade={setFade} onUnsupported={() => setGlFailed(true)} />
         </div>
@@ -373,19 +381,21 @@ export default function WorkstationCanvas({
 
       {activeMode === 'blend' && hasOutput && !useGl && <div className="alpha-blend-layer" style={{ opacity: blendOpacity }} />}
 
-      {activeMode === 'loupe' && mousePos.active && useGl && <span className="loupe-badge gl-loupe-badge" style={{ left: mousePos.x + LOUPE_RADIUS - 24, top: mousePos.y + LOUPE_RADIUS - 6 }}>3.5x · {bicubic ? 'bicubic' : 'bilinear'}</span>}
+      {activeMode === 'loupe' && mousePos.active && useGl && <span className="loupe-badge gl-loupe-badge" style={{ left: mousePos.x + LOUPE_RADIUS - 24, top: mousePos.y + LOUPE_RADIUS - 6 }}>{loupeZoom}x · {bicubic ? 'bicubic' : 'bilinear'}</span>}
       {activeMode === 'loupe' && mousePos.active && !useGl && (
         <div className="magnifier-loupe" style={{ left: `${mousePos.x - LOUPE_RADIUS}px`, top: `${mousePos.y - LOUPE_RADIUS}px`, width: `${LOUPE_RADIUS * 2}px`, height: `${LOUPE_RADIUS * 2}px` }}>
           <canvas ref={loupeCanvasRef} className="loupe-canvas" />
-          <span className="loupe-badge">3.5x</span>
+          <span className="loupe-badge">{loupeZoom}x</span>
         </div>
       )}
 
+      {activeMode === 'mesh3d' && <div className="mesh3d-legend" role="note"><i/>6DoF craniofacial mesh · registered to the nose tip, an orientation overlay. Faces appear once the target has been inspected.</div>}
       {coords && <div className="coord-readout" aria-live="off">x {coords.x.toFixed(2)} · y {coords.y.toFixed(2)} px</div>}
       {onMaskEditToggle && <button type="button" className="canvas-mask-toggle" aria-pressed={maskEditing}
         onClick={() => onMaskEditToggle(!maskEditing)} title="Paint include and exclude overrides on this frame">{maskEditing ? 'Done Mask' : 'Mask Brush'}</button>}
       {maskEditing && <MaskBrushOverlay containerWidth={containerWidth} containerHeight={containerHeight}
         mediaDimensions={mediaDimensions} onMaskChange={onMaskChange} initialMask={maskBase64}
+        frame={Math.max(0, Math.round(currentTime * fps))} maskKeyframes={maskKeyframes} onMaskKeyframesChange={onMaskKeyframesChange}
         onClose={() => onMaskEditToggle?.(false)} />}
     </div>
   );

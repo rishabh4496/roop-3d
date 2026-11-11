@@ -247,7 +247,7 @@ class ProjectStore:
             "face_mappings": [m.model_dump(mode="json") for m in item.request.face_mappings],
             "trim_start_seconds": item.request.trim_start_seconds,
             "trim_end_seconds": item.request.trim_end_seconds,
-            "has_mask": bool(item.request.mask_base64),
+            "has_mask": bool(item.request.mask_base64 or item.request.mask_keyframes),
             "has_curves": bool(item.request.parameter_curves),
         }
 

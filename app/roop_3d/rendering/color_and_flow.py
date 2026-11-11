@@ -197,7 +197,9 @@ class CubeLUTColorMatcher:
             src_sorted = np.sort(src[:, channel])
             dst_sorted = np.sort(dst[:, channel])
             ranks = np.searchsorted(src_sorted, points[..., channel], side="right") / max(1, len(src_sorted))
-            out[..., channel] = np.quantile(dst_sorted, np.clip(ranks, 0, 1)).astype(np.float32)
+            # np.quantile takes a scalar or 1-D q only (the 3-D rank grid raised ValueError): flatten, then restore the grid shape.
+            flat = np.quantile(dst_sorted, np.clip(ranks, 0, 1).reshape(-1))
+            out[..., channel] = flat.reshape(ranks.shape).astype(np.float32)
         return CubeLUT(out, title=title)
 
 

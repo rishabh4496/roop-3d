@@ -18,7 +18,7 @@ import numpy as np
 import pytest
 
 from roop_3d.audit.isolation import sha256_file
-from roop_3d.batch_matrix import (
+from roop_3d.queue.batch_matrix import (
     BUILTIN_RECIPES,
     BatchMatrixEngine,
     BatchStrategy,

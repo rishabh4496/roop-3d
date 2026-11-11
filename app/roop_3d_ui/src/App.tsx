@@ -3,6 +3,7 @@ import FacesetBuilder from './components/facemgr/FacesetBuilder';
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ComponentType } from 'react';
 import { api, post, upload, type ApiError } from './api';
 import { renderProbe } from './utils/renderProbe';
+import { readMaskKeyframes, type MaskKeyframe } from './utils/maskRanges';
 import type { Capabilities, Config, Coverage, FaceSet, IdentityLock, Inspection, Job, JobRequest, Probe, Project, Reconstruction, Track } from './contracts';
 import { IdentityLockBar, IdentityTrackStats, lockProblem, useContactSheet } from './components/facemgr/IdentityLockPanel';
 import { EventConnection } from './events';
@@ -31,6 +32,7 @@ import NumericInput from './components/controls/NumericInput';
 import { DEFAULT_PARAMETERS, restorerAvailable, type RestorerModel, type WorkstationParameters } from './components/workstation/pipeline';
 import RenderFooter from './components/studio/RenderFooter';
 import FaceMapping from './components/studio/FaceMapping';
+import ActorPanel from './components/studio/ActorPanel';
 import WorkstationScreens from './components/workstation/WorkstationScreens';
 import PipelinePill from './components/hud/PipelinePill';
 import RunPill from './components/faceswap/PipelinePill';
@@ -99,6 +101,8 @@ export default function App() {
   const [previewView, setPreviewView] = useState<ViewportPreferences>(DEFAULT_VIEWPORT);
   const [trimStart, setTrimStart] = useState(0), [trimEnd, setTrimEnd] = useState<number | null>(null), [includeCheckpoint, setIncludeCheckpoint] = useState(false);
   const [maskBase64, setMaskRaw] = useState<string | null>(null);
+  // Stage 23: paint/erase strokes scoped to a frame range (override the whole-clip mask on the frames they cover).
+  const [maskKeyframes, setMaskKeyframes] = useState<MaskKeyframe[]>([]);
   const [linterOpen, setLinterOpen] = useState(false);
   const [tourOpen, setTourOpen] = useState(false);
   const [guideOpen, setGuideOpen] = useState(false), [guideTab, setGuideTab] = useState<GuideTab>('workflow'), [welcomeOpen, setWelcomeOpen] = useState(() => !onboardingSeen());
@@ -220,6 +224,7 @@ export default function App() {
     || JSON.stringify(project.request.parameter_curves?.tracks ?? {}) !== JSON.stringify(curves)
     || JSON.stringify(normalizeExport(project.request.export ?? DEFAULT_EXPORT)) !== JSON.stringify(normalizeExport(exportOptions))
     || (project.request.mask_base64 ?? null) !== maskBase64
+    || JSON.stringify(readMaskKeyframes(project.request.mask_keyframes)) !== JSON.stringify(maskKeyframes)
     || !!project.request.face_segments && JSON.stringify(project.request.face_segments) !== JSON.stringify(buildFaceSegments(clusters, assigned));
   const reason = (name: string) => featureReason(caps, name);
   /** One undoable assignment through the face-selection store (the same path the tray and video overlay use). */
@@ -314,7 +319,7 @@ export default function App() {
   const loadTarget = async (path: string) => {
     const [info, frames, reconstructionList] = await Promise.all([post<Probe>('/media/probe', { path }), api<{ timestamps: number[] }>(`/media/keyframes?${new URLSearchParams({ path })}`), api<typeof reconstructions>('/reconstructions')]);
     setTarget(path); setProbe(info); setTime(0); setKeys(frames.timestamps); setInspection(null); setIdentityLock(null); setAssigned({}); setSelectedTrack(''); setMesh(null); setTrimStart(0); setTrimEnd(null); setReconstructions(reconstructionList); setSelectedJob(''); setProject(null); setIdentityMesh(null);
-    useFaceSelectionStore.getState().reset(); useHistoryStore.getState().reset(); setMaskRaw(null);
+    useFaceSelectionStore.getState().reset(); useHistoryStore.getState().reset(); setMaskRaw(null); setMaskKeyframes([]);
     return info;
   };
   const importAssets = (files: File[]) => {
@@ -356,7 +361,7 @@ export default function App() {
       const lockIssue = lockProblem(identityLock, Object.fromEntries(selected.map(item => [item.track_id, item.faceset_id])));
       if (lockIssue) throw new Error(`${lockIssue} Re-lock or release the identity lock before rendering.`);
     }
-    return { engine_id: selectedEngine, swapper_model_id: swapperModelId, detector_model_id: detectorModelId, identity_lock_id: identityLock?.lock_id, identity_blend: identitySourceB && sourceId ? {method: 'slerp',source_face_ids: [sourceId, identitySourceB],weights:[1,0]} : undefined, target_path: target, inspection_id: inspection.inspection_id, face_mappings: selected, processing: 'local', remote_consent: false, trim_start_seconds: trimStart || null, trim_end_seconds: trimEnd, mask_base64: maskBase64 || undefined, workstation_parameters: parameters, parameter_curves: { tracks: curves }, face_segments: segments, export: exportOptions };
+    return { engine_id: selectedEngine, swapper_model_id: swapperModelId, detector_model_id: detectorModelId, identity_lock_id: identityLock?.lock_id, identity_blend: identitySourceB && sourceId ? {method: 'slerp',source_face_ids: [sourceId, identitySourceB],weights:[1,0]} : undefined, target_path: target, inspection_id: inspection.inspection_id, face_mappings: selected, processing: 'local', remote_consent: false, trim_start_seconds: trimStart || null, trim_end_seconds: trimEnd, mask_base64: maskBase64 || undefined, mask_keyframes: maskKeyframes.length ? maskKeyframes : undefined, workstation_parameters: parameters, parameter_curves: { tracks: curves }, face_segments: segments, export: exportOptions };
   };
   const executeQueue = () => void run('Queueing local render', async () => {
     const saved = await persistProject(), fingerprint = JSON.stringify({ project: saved.project_id, request: saved.request });
@@ -415,7 +420,7 @@ export default function App() {
     // The probe gives the overlay real pixel → frame mapping; without it every face box falls back to one default rectangle.
     useFaceSelectionStore.getState().populateFromInspection(loaded, savedProbe, restoredMappings);
     if (saved.request.face_segments) hydrateFaceSegments(saved.request.face_segments);
-    replaceCurves(saved.request.parameter_curves?.tracks ?? {}); setMaskRaw(saved.request.mask_base64 ?? null);
+    replaceCurves(saved.request.parameter_curves?.tracks ?? {}); setMaskRaw(saved.request.mask_base64 ?? null); setMaskKeyframes(readMaskKeyframes(saved.request.mask_keyframes));
     setExportOptions(saved.request.export ?? DEFAULT_EXPORT);
     setIdentitySourceB(saved.request.identity_blend?.source_face_ids[1] ?? '');
     setParametersRaw({ ...DEFAULT_PARAMETERS, ...saved.request.workstation_parameters, pose_mode: saved.request.workstation_parameters?.pose_mode ?? 'retarget' });
@@ -446,7 +451,7 @@ export default function App() {
       setSourceId(job.request.face_mappings[0]?.faceset_id ?? '');
       setIdentityLock(job.request.identity_lock_id ? await api<IdentityLock>(`/identity/locks/${job.request.identity_lock_id}?verify=true`) : null);
       if (job.request.face_segments) hydrateFaceSegments(job.request.face_segments);
-      replaceCurves(job.request.parameter_curves?.tracks ?? {}); setMaskRaw(job.request.mask_base64 ?? null);
+      replaceCurves(job.request.parameter_curves?.tracks ?? {}); setMaskRaw(job.request.mask_base64 ?? null); setMaskKeyframes(readMaskKeyframes(job.request.mask_keyframes));
       setExportOptions(job.request.export ?? DEFAULT_EXPORT);
       setIdentitySourceB(job.request.identity_blend?.source_face_ids[1] ?? '');
       setParametersRaw({ ...DEFAULT_PARAMETERS, ...job.request.workstation_parameters, pose_mode: job.request.workstation_parameters?.pose_mode ?? 'retarget' });
@@ -464,7 +469,7 @@ export default function App() {
     await refreshSources();
   };
   const reconstructionPicker = <><FacesetBuilder sourceId={sourceId} onSaved={async id => { await refreshSources(); setSourceId(id); setReconstructAttempt(v => v + 1); }} /><label className="reconstruction-choice">Reconstructed artifact<select value="" disabled={!target || !reconstructions.length || !!reason('reconstruction_viewer')} onChange={event => { const id = event.target.value; if (!id) { setMesh(null); return; } void run('Verifying reconstruction', async () => { setIdentityMesh(null); setMesh(await api<Reconstruction>(`/reconstructions/${id}?${new URLSearchParams({ target_path: target })}`)); }); }}><option value="">{mesh ? 'Choose another artifact' : reconstructions.length ? 'No reconstruction loaded' : 'No reconstruction artifacts'}</option>{reconstructions.map(item => <option key={item.reconstruction_id} value={item.reconstruction_id}>{item.reconstruction_id.slice(0, 12)}</option>)}</select></label>{(mesh || identityMesh) && <button className="button small" onClick={() => { setMesh(null); setIdentityMesh(null); }}>Show pose coverage</button>}</>;
-  const viewport = <VideoViewport previewView={previewView} onPreviewViewChange={setPreviewView} studio={layoutMode === 'studio' ? { panels: panelsSlot, timeline: timelineSlot, tray: traySlot } : null} activeSourceId={sourceId} faceCoverage={coverage} onSourceExtracted={faceset => { setSources(previous => previous.some(item => item.faceset_id === faceset.faceset_id) ? previous : [...previous, faceset]); setSourceId(faceset.faceset_id); void refreshSources(); }} maskBase64={maskBase64} captureWorkspace={captureWorkspace} restoreWorkspace={restoreWorkspace} active={route === "#/faceswap"} parameters={parameters} setParameters={setParameters} previewRequest={previewRequest} restorerAvailable={restorerAvailable(modelCatalog.loaded ? modelCatalog.models : caps?.models, parameters.restorer_model)} onPreviewLatency={setPreviewLatency} inspector={<SettingsInspector namespace="workstation-setting" caps={caps} config={config} save={saveSettings} busy={!!busy}/>} posePanel={<><FacesetBuilder sourceId={sourceId} onSaved={async id => { await refreshSources(); setSourceId(id); setReconstructAttempt(v => v + 1); }} /><Suspense fallback={<p className="muted empty-note">Loading pose inspection…</p>}><PoseCoverageInspector coverage={coverage} track={currentTrack} mesh={mesh} reconstruction={reconstruction} parameters={parameters} setParameters={setParameters}/></Suspense><label className="reconstruction-choice">Reconstructed artifact<select value="" disabled={!target || !reconstructions.length || !!reason('reconstruction_viewer')} onChange={event => { const id = event.target.value; if (!id) { setMesh(null); return; } void run('Verifying reconstruction', async () => setMesh(await api<Reconstruction>(`/reconstructions/${id}?${new URLSearchParams({ target_path: target })}`))); }}><option value="">{mesh ? 'Choose another artifact' : 'No reconstruction loaded'}</option>{reconstructions.map(item => <option key={item.reconstruction_id} value={item.reconstruction_id}>{item.reconstruction_id.slice(0, 12)}</option>)}</select></label>{mesh && <button className="button small" onClick={() => setMesh(null)}>Show pose coverage</button>}</>} target={target} output={output} time={time} setTime={setTime} duration={probe?.duration_seconds ?? 0} enabled={!reason('frame_preview')} keys={keys} probe={probe} sources={sources} onInspectionUpdate={setInspection} onMaskChange={setMaskBase64} trimStart={trimStart} trimEnd={trimEnd} onTrimChange={(start, end) => { setTrimStart(start); setTrimEnd(end); }} onAssignSource={(clusterId, facesetId) => assignTrack(clusterId, facesetId)}/>;
+  const viewport = <VideoViewport previewView={previewView} onPreviewViewChange={setPreviewView} studio={layoutMode === 'studio' ? { panels: panelsSlot, timeline: timelineSlot, tray: traySlot } : null} activeSourceId={sourceId} faceCoverage={coverage} onSourceExtracted={faceset => { setSources(previous => previous.some(item => item.faceset_id === faceset.faceset_id) ? previous : [...previous, faceset]); setSourceId(faceset.faceset_id); void refreshSources(); }} maskBase64={maskBase64} maskKeyframes={maskKeyframes} onMaskKeyframesChange={setMaskKeyframes} captureWorkspace={captureWorkspace} restoreWorkspace={restoreWorkspace} active={route === "#/faceswap"} parameters={parameters} setParameters={setParameters} previewRequest={previewRequest} restorerAvailable={restorerAvailable(modelCatalog.loaded ? modelCatalog.models : caps?.models, parameters.restorer_model)} onPreviewLatency={setPreviewLatency} inspector={<SettingsInspector namespace="workstation-setting" caps={caps} config={config} save={saveSettings} busy={!!busy}/>} posePanel={<><FacesetBuilder sourceId={sourceId} onSaved={async id => { await refreshSources(); setSourceId(id); setReconstructAttempt(v => v + 1); }} /><Suspense fallback={<p className="muted empty-note">Loading pose inspection…</p>}><PoseCoverageInspector coverage={coverage} track={currentTrack} mesh={mesh} reconstruction={reconstruction} parameters={parameters} setParameters={setParameters}/></Suspense><label className="reconstruction-choice">Reconstructed artifact<select value="" disabled={!target || !reconstructions.length || !!reason('reconstruction_viewer')} onChange={event => { const id = event.target.value; if (!id) { setMesh(null); return; } void run('Verifying reconstruction', async () => setMesh(await api<Reconstruction>(`/reconstructions/${id}?${new URLSearchParams({ target_path: target })}`))); }}><option value="">{mesh ? 'Choose another artifact' : 'No reconstruction loaded'}</option>{reconstructions.map(item => <option key={item.reconstruction_id} value={item.reconstruction_id}>{item.reconstruction_id.slice(0, 12)}</option>)}</select></label>{mesh && <button className="button small" onClick={() => setMesh(null)}>Show pose coverage</button>}</>} target={target} output={output} time={time} setTime={setTime} duration={probe?.duration_seconds ?? 0} enabled={!reason('frame_preview')} keys={keys} probe={probe} sources={sources} onInspectionUpdate={setInspection} onMaskChange={setMaskBase64} trimStart={trimStart} trimEnd={trimEnd} onTrimChange={(start, end) => { setTrimStart(start); setTrimEnd(end); }} onAssignSource={(clusterId, facesetId) => assignTrack(clusterId, facesetId)}/>;
   const trimBar = <><div className="trim-bar">
         <span className="eyebrow">EXPORT RANGE</span>
         <button
@@ -640,7 +645,7 @@ export default function App() {
           </aside>
           <aside className="studio-panel studio-mapping" aria-label="Target face mapping">
             <div className="studio-panel-head"><span className="eyebrow">03 · TARGET FACE MAPPING</span></div>
-            <PanelBoundary name="Face mapping"><FaceMapping tracks={inspection?.tracks ?? []} sources={sources} assigned={assigned} selectedTrack={selectedTrack} onSelectTrack={trackId => selectTrack(trackId)} onAssign={assignTrack} /></PanelBoundary>
+            <PanelBoundary name="Face mapping"><ActorPanel inspection={inspection} sources={sources} assigned={assigned} onAssign={assignTrack} /><FaceMapping tracks={inspection?.tracks ?? []} sources={sources} assigned={assigned} selectedTrack={selectedTrack} onSelectTrack={trackId => selectTrack(trackId)} onAssign={assignTrack} /></PanelBoundary>
           </aside>
           <main className="studio-center" aria-label="Preview">
             <div className="studio-center-head"><div><span className="eyebrow">03 · PREVIEW</span><strong>{target ? fileName(target) : 'No target loaded'}</strong></div>

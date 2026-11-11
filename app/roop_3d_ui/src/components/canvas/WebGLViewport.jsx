@@ -119,7 +119,7 @@ export default function WebGLViewport(props) {
     gl.uniform1f(u.uGain, p.gain ?? 3);
     gl.uniform2f(u.uPointer, (pointer?.x ?? -1e4) * dpr, (pointer?.y ?? -1e4) * dpr);
     gl.uniform1f(u.uLoupeRadius, pointer?.active ? LOUPE_RADIUS_PX * dpr : 0);
-    gl.uniform1f(u.uLoupeZoom, LOUPE_ZOOM);
+    gl.uniform1f(u.uLoupeZoom, p.loupeZoom ?? LOUPE_ZOOM);
     gl.uniform1i(u.uBicubic, p.bicubic ? 1 : 0);
     gl.uniform1i(u.uHasSwapped, p.imageB ? 1 : 0);
     gl.bindVertexArray(res.quad);
@@ -171,6 +171,7 @@ export default function WebGLViewport(props) {
 
   useEffect(() => { dirty.current.a = true; schedule(); }, [props.imageA]);   // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { dirty.current.b = true; schedule(); }, [props.imageB]);   // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { schedule(); }, [props.loupeZoom]);                        // eslint-disable-line react-hooks/exhaustive-deps
   // Any visual parameter change redraws once (coalesced); nothing runs while the view is idle.
   useEffect(() => { schedule(); });
 

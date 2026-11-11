@@ -3,6 +3,7 @@ import React, { useRef, useState, useEffect, useCallback, useMemo } from 'react'
 import { calculateLetterbox } from './FaceOverlayCanvas';
 import { useFaceSelectionStore } from '../../useFaceSelectionStore';
 import useHistoryStore from '../../stores/useHistoryStore';
+import { describeRange, insertMaskKeyframe, keyframeAt, removeMaskKeyframe } from '../../utils/maskRanges';
 
 /**
  * Manual & Occlusion Mask Editor.
@@ -28,6 +29,9 @@ export default function MaskBrushOverlay({
   onMaskChange,
   onClose,
   initialMask = null,
+  frame = 0,
+  maskKeyframes = [],
+  onMaskKeyframesChange,
 }) {
   const history = useHistoryStore();   // brush strokes are workspace commands: this is the undo / redo stack
   const visibleCanvasRef = useRef(null);
@@ -37,6 +41,12 @@ export default function MaskBrushOverlay({
   const isPainting = useRef(false);
   const lastPoint = useRef(null);
   const eraseLayer = useRef('include');
+  // Stage 23: 'clip' paints the whole-clip mask, 'range' paints a frame range (an override on just those frames).
+  const [scope, setScope] = useState('clip');
+  const [rangeStart, setRangeStart] = useState(frame);
+  const [rangeEnd, setRangeEnd] = useState(frame);
+  const rangeMask = scope === 'range' ? keyframeAt(maskKeyframes, rangeStart) : null;
+  const activeInitial = scope === 'clip' ? initialMask : (rangeMask && rangeMask.start_frame === rangeStart ? rangeMask.mask_base64 : null);
 
   // Brush settings
   const [brushMode, setBrushMode] = useState('include'); // 'include' | 'exclude' | 'erase'
@@ -156,7 +166,7 @@ export default function MaskBrushOverlay({
     if (!vCtx || !eCtx) return;
     vCtx.clearRect(0, 0, nativeW, nativeH); eCtx.clearRect(0, 0, nativeW, nativeH);
     for (const canvas of [includeCanvasRef.current, excludeCanvasRef.current]) canvas?.getContext('2d')?.clearRect(0, 0, nativeW, nativeH);
-    if (!initialMask) return;
+    if (!activeInitial) return;
     let live = true; const image = new Image();
     image.onload = () => {
       if (!live) return;
@@ -175,9 +185,9 @@ export default function MaskBrushOverlay({
       }
       inc.putImageData(incPixels, 0, 0); exc.putImageData(excPixels, 0, 0); renderVisible();
     };
-    image.src = initialMask;
+    image.src = activeInitial;
     return () => { live = false; };
-  }, [initialMask, nativeW, nativeH, renderVisible]);
+  }, [activeInitial, nativeW, nativeH, renderVisible]);
 
   // Apply brush dab / stroke
   const drawDab = useCallback(
@@ -276,13 +286,15 @@ export default function MaskBrushOverlay({
       }
       out.putImageData(packed, 0, 0);
       const dataUrl = eCanvas.toDataURL('image/png');
-      if (onMaskChange) {
+      if (scope === 'range') {
+        onMaskKeyframesChange?.(insertMaskKeyframe(maskKeyframes, { start_frame: rangeStart, end_frame: rangeEnd, mask_base64: dataUrl }));
+      } else if (onMaskChange) {
         onMaskChange(dataUrl);
       }
     } catch {
       // Cross-origin fallback
     }
-  }, [nativeW, nativeH, onMaskChange]);
+  }, [nativeW, nativeH, onMaskChange, onMaskKeyframesChange, scope, rangeStart, rangeEnd, maskKeyframes]);
 
   // Clear mask
   const handleClearMask = () => {
@@ -296,6 +308,10 @@ export default function MaskBrushOverlay({
     excludeCanvasRef.current?.getContext('2d')?.clearRect(0, 0, nativeW, nativeH);
     eCanvas.getContext('2d')?.clearRect(0, 0, nativeW, nativeH);
 
+    if (scope === 'range') {
+      if (rangeMask) onMaskKeyframesChange?.(removeMaskKeyframe(maskKeyframes, rangeMask.start_frame));
+      return;
+    }
     if (onMaskChange) onMaskChange(null);
   };
 
@@ -462,6 +478,30 @@ export default function MaskBrushOverlay({
               Erase
             </button>
           </div>
+        </div>
+
+        <div className="toolbar-divider" />
+
+        {/* Stage 23: where the strokes apply. A painted frame range overrides the whole-clip mask on the frames it covers. */}
+        <div className="toolbar-section mask-scope" role="group" aria-label="Mask scope">
+          <span className="toolbar-title">APPLY TO</span>
+          <div className="brush-mode-buttons">
+            <button type="button" className={`brush-mode-btn ${scope === 'clip' ? 'active' : ''}`} aria-pressed={scope === 'clip'} onClick={() => setScope('clip')}
+              title="Strokes apply to every frame of the clip">Whole clip</button>
+            <button type="button" className={`brush-mode-btn ${scope === 'range' ? 'active' : ''}`} aria-pressed={scope === 'range'} onClick={() => setScope('range')}
+              title="Strokes apply only to the frame range below (keyframe range)">Frame range</button>
+          </div>
+          {scope === 'range' && <>
+            <div className="brush-setting"><NumericInput label="From frame:" value={rangeStart} min={0} max={100000000} step={1} onChange={value => { const next = Math.max(0, Math.round(value ?? 0)); setRangeStart(next); setRangeEnd(end => Math.max(end, next)); }} /></div>
+            <div className="brush-setting"><NumericInput label="To frame:" value={rangeEnd} min={rangeStart} max={100000000} step={1} onChange={value => setRangeEnd(Math.max(rangeStart, Math.round(value ?? rangeStart)))} /></div>
+            <button type="button" className="mask-action-btn" onClick={() => { setRangeStart(frame); setRangeEnd(frame); }} title="Paint only the frame under the playhead">This frame ({frame})</button>
+          </>}
+          {maskKeyframes.length > 0 && <ul className="mask-range-list" aria-label="Painted frame ranges">
+            {maskKeyframes.map(item => <li key={item.start_frame}>
+              <button type="button" className="mask-range-chip" onClick={() => { setScope('range'); setRangeStart(item.start_frame); setRangeEnd(item.end_frame ?? item.start_frame); }} title="Edit this range">{describeRange(item)}</button>
+              <button type="button" className="mask-range-remove" aria-label={`Remove mask for ${describeRange(item)}`} onClick={() => onMaskKeyframesChange?.(removeMaskKeyframe(maskKeyframes, item.start_frame))}>×</button>
+            </li>)}
+          </ul>}
         </div>
 
         <div className="toolbar-divider" />

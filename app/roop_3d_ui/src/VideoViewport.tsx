@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { renderProbe } from './utils/renderProbe';
+import type { MaskKeyframe } from './utils/maskRanges';
 import { mediaURL, postLivePreview } from './api';
 import { PreviewURL } from './state';
 import type { Coverage, FaceSet, Probe, Inspection, FrameFaceDetectionResponse } from './contracts';
@@ -110,7 +111,7 @@ export function VideoViewport({
   onTrimChange,
   active = true, parameters = DEFAULT_PARAMETERS, setParameters = () => {}, previewRequest = null,
   inspector, posePanel, restorerAvailable = false, onPreviewLatency,
-  maskBase64 = null, captureWorkspace = () => ({}), restoreWorkspace = () => {},
+  maskBase64 = null, maskKeyframes = [], onMaskKeyframesChange, captureWorkspace = () => ({}), restoreWorkspace = () => {},
   onInspectionUpdate, onSourceExtracted, activeSourceId = '', faceCoverage, studio = null,
   previewView, onPreviewViewChange,
 }: {
@@ -137,6 +138,9 @@ export function VideoViewport({
   restorerAvailable?: boolean;
   onPreviewLatency?: (latency: Record<string, number>) => void;
   maskBase64?: string | null;
+  /** Stage 23: paint/erase strokes scoped to a frame range. */
+  maskKeyframes?: MaskKeyframe[];
+  onMaskKeyframesChange?: (value: MaskKeyframe[]) => void;
   captureWorkspace?: () => any;
   restoreWorkspace?: (value: any) => void;
   onInspectionUpdate?: (inspection: Inspection) => void;
@@ -236,7 +240,7 @@ export function VideoViewport({
     } catch (error) { if ((error as Error).name !== 'AbortError') setCaptureError((error as Error).message); }
     finally { if (captureAbort.current === controller) setCaptureBusy(false); }
   };
-  const editFingerprint = JSON.stringify({ parameters, curves: history.curves, maskBase64, roles: previewRequest?.face_segments, finishing: previewRequest?.export });
+  const editFingerprint = JSON.stringify({ parameters, curves: history.curves, maskBase64, maskKeyframes, roles: previewRequest?.face_segments, finishing: previewRequest?.export });
   const previousEdit = useRef(editFingerprint);
   useEffect(() => {
     if (previousEdit.current === editFingerprint) return;
@@ -395,7 +399,9 @@ export function VideoViewport({
   const [showLandmarks, setShowLandmarks] = preference('show_landmarks'), [showPose, setShowPose] = preference('show_pose');
   // 6DoF head-mesh layer (view-only toggles, deliberately not saved in the project): dense wireframe + gimbal, and head-gaze arrows.
   const [showMesh, setShowMesh] = useState(false), [showGaze, setShowGaze] = useState(false);
-  const headMesh = useHeadMesh(activeSourceId || null, showMesh, faceCoverage);
+  // Stage 23 "3D mesh overlay" canvas mode switches the same 6DoF craniofacial layer on while the comparison canvas shows it.
+  const meshOverlayOn = showMesh || (viewMode === 'compare' && compMode === 'mesh3d');
+  const headMesh = useHeadMesh(activeSourceId || null, meshOverlayOn, faceCoverage);
   const faceState = useStoreSelector(faceFlags, state => state);
   const [faceMenu, setFaceMenu] = useState<FaceMenuTarget | null>(null);
   const extraction = useFaceExtraction({ target, frameIndex: currentFrame, activeSourceId: activeSourceId || null, onSourceExtracted, onRefreshPreview: live.retry });
@@ -710,7 +716,7 @@ export function VideoViewport({
                 showLandmarks={showLandmarks}
                 showPose={showPose}
                 onFaceContextMenu={openFaceMenu}
-                showMesh={showMesh}
+                showMesh={meshOverlayOn}
                 showGaze={showGaze}
                 headMesh={headMesh.head}
                 frameFaces={frameFaces}
@@ -1036,11 +1042,13 @@ export function VideoViewport({
             <div className="compare-host">
               <WorkstationCanvas fullBleed output={output} originalUrl={sourcePreview.source} swappedUrl={liveUrl || outputPreview.source}
                 mode={compMode} maskEditing={isMaskEditing} maskBase64={maskBase64} onMaskChange={onMaskChange}
+                maskKeyframes={maskKeyframes} onMaskKeyframesChange={onMaskKeyframesChange}
                 onMaskEditToggle={setIsMaskEditing}
                 onModeChange={(next: string) => { setCompMode(next as typeof compMode); if (next === 'matte') setLiveSwap(true); }} containerWidth={viewportSize.width} containerHeight={viewportSize.height}
                 mediaDimensions={mediaDims} onContextMenuPoint={handleCompareContextMenu} currentTime={time} fps={fps}/>
               {showFaceOverlays && <FaceOverlayCanvas videoRef={original} mediaDimensions={mediaDims} currentTime={time} sources={sources} fps={fps}
-                showOverlays showLandmarks={showLandmarks} showPose={showPose} interactive={false} frameFaces={frameFaces} frameMeta={scrub.meta}/>}
+                showOverlays showLandmarks={showLandmarks} showPose={showPose} interactive={false} frameFaces={frameFaces} frameMeta={scrub.meta}
+                showMesh={compMode === 'mesh3d' || showMesh} showGaze={showGaze} headMesh={headMesh.head}/>}
             </div>
           ) : (
             <>

@@ -111,8 +111,8 @@ class ReferenceStages:
         output = session.composite_frame(
             decoded.image, result,
             options=composite_options,
-            occluder_masks=(edit_plan.occluders(decoded.image, result)
-                            if edit_plan and edit_plan.mask is not None else None),
+            occluder_masks=(edit_plan.occluders(decoded.image, result, decoded.index)
+                            if edit_plan and edit_plan.has_masks else None),
             lip_sync_enabled=self.lip_sync,
             **({"lip_sync_inputs": {replacement.track_id: self.lip_syncer.frame_input(decoded.timestamp.seconds, confidence=next((getattr(face, "confidence", 1.0) for face in result.observations if face.track_id == replacement.track_id), 1.0))
                                    for replacement in result.replacements}} if self.lip_syncer else {}),

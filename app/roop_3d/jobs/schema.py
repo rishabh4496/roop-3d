@@ -54,6 +54,22 @@ def require_transition(before: JobState, after: JobState) -> None:
         raise DomainError("ILLEGAL_JOB_TRANSITION", f"Cannot transition from {before.value} to {after.value}")
 
 
+class MaskKeyframe(Contract):
+    """A hand-painted keep/exclude occlusion mask that applies to one inclusive frame range (Stage 23 paint/erase brush)."""
+    start_frame: int = Field(ge=0, le=100_000_000, strict=True)
+    end_frame: int | None = Field(default=None, ge=0, le=100_000_000, strict=True)
+    mask_base64: str = Field(min_length=16, max_length=12_000_000)
+
+    @model_validator(mode="after")
+    def interval(self) -> "MaskKeyframe":
+        if self.end_frame is not None and self.end_frame < self.start_frame:
+            raise ValueError("Mask range ends before it starts")
+        return self
+
+    def contains(self, frame: int) -> bool:
+        return frame >= self.start_frame and (self.end_frame is None or frame <= self.end_frame)
+
+
 class JobRequest(Contract):
     engine_id: str = Field(default="reference_onnx", pattern=r"^[a-z0-9][a-z0-9_]{0,95}$")
     swapper_model_id: str | None = Field(default=None, pattern=r"^[a-z0-9][a-z0-9_-]{0,95}$")
@@ -67,6 +83,8 @@ class JobRequest(Contract):
     trim_start_seconds: float | None = Field(default=None, ge=0, le=86400)
     trim_end_seconds: float | None = Field(default=None, gt=0, le=86400)
     mask_base64: str | None = Field(default=None)
+    # Stage 23: per-frame-range paint/erase masks. They override ``mask_base64`` on the frames they cover.
+    mask_keyframes: tuple[MaskKeyframe, ...] | None = Field(default=None, max_length=256)
     workstation_parameters: WorkstationParameters | None = None
     identity_blend: IdentityBlendSpec | None = None
     parameter_curves: ParameterCurves | None = None
@@ -90,7 +108,7 @@ class JobRequest(Contract):
             for key, default in (('profile', None), ('hdr_policy', 'tonemap_sdr'), ('subtitles', 'copy'), ('sequence_format', 'png')):
                 if value['export'].get(key) == default:
                     value['export'].pop(key, None)
-        for name in ("swapper_model_id", "detector_model_id", "identity_blend", "trim_start_seconds", "trim_end_seconds", "mask_base64", "workstation_parameters", "parameter_curves", "face_segments", "export", "identity_lock_id"):
+        for name in ("swapper_model_id", "detector_model_id", "identity_blend", "trim_start_seconds", "trim_end_seconds", "mask_base64", "mask_keyframes", "workstation_parameters", "parameter_curves", "face_segments", "export", "identity_lock_id"):
             if value.get(name) is None:
                 value.pop(name, None)
         return value
@@ -110,6 +128,11 @@ class JobRequest(Contract):
                 for left, right in zip(ordered, ordered[1:]):
                     if left.end_frame is None or left.end_frame >= right.start_frame:
                         raise ValueError('Face role intervals must not overlap')
+        if self.mask_keyframes:
+            ordered = sorted(self.mask_keyframes, key=lambda item: item.start_frame)
+            for left, right in zip(ordered, ordered[1:]):
+                if left.end_frame is None or left.end_frame >= right.start_frame:
+                    raise ValueError("Mask frame ranges must not overlap")
         if self.trim_end_seconds is not None and self.trim_end_seconds <= (self.trim_start_seconds or 0):
             raise ValueError("Trim end must exceed trim start")
         if len({item.track_id for item in self.face_mappings}) != len(self.face_mappings):

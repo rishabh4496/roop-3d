@@ -292,6 +292,8 @@ def create_app(settings: Settings | None = None, *, repo_root: Path | None = Non
     app.include_router(finishing_router)
     from roop_3d.server.queue_routes import router as queue_router
     app.include_router(queue_router)
+    from roop_3d.server.actor_routes import router as actor_router
+    app.include_router(actor_router)
     from roop_3d.server.installer_routes import router as installer_router
     app.include_router(installer_router)
     from roop_3d.server.model_manifest_routes import router as model_manifest_router

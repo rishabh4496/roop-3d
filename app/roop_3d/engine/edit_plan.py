@@ -16,32 +16,11 @@ class FrameEditPlan:
         self.documents = {}
         self.mask = None
         self.mask_channels = None
+        self.mask_keyframes = []
         if request.mask_base64:
-            try:
-                value = request.mask_base64.removeprefix('data:image/png;base64,')
-                data = base64.b64decode(value, validate=True)
-                if len(data) > 8 * 1024 * 1024 or not data.startswith(b'\x89PNG\r\n\x1a\n'):
-                    raise ValueError()
-                width, height = int.from_bytes(data[16:20], 'big'), int.from_bytes(data[20:24], 'big')
-                if not 0 < width <= 3840 or not 0 < height <= 3840 or width * height > 3840 * 2160:
-                    raise ValueError()
-                decoded = cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_UNCHANGED)
-                if decoded is None:
-                    raise ValueError()
-                if decoded.ndim == 2:
-                    # Existing workstation masks are grayscale keep-target masks.
-                    self.mask = decoded
-                elif decoded.ndim == 3 and decoded.shape[2] in (3, 4):
-                    alpha = decoded[..., 3].astype(np.float32) / 255 if decoded.shape[2] == 4 else 1.0
-                    blue, green, red = (decoded[..., i].astype(np.float32) / 255 for i in range(3))
-                    if np.any(blue > 0):  # Legacy white PNG with alpha; retain exclude-only meaning.
-                        self.mask = np.clip(blue * alpha * 255, 0, 255).astype(np.uint8)
-                    else:
-                        self.mask_channels = (np.clip(red * alpha, 0, 1), np.clip(green * alpha, 0, 1))
-                else:
-                    raise ValueError()
-            except (ValueError, cv2.error):
-                raise DomainError('MASK_INVALID', 'Manual mask must be a bounded local PNG', 422) from None
+            self.mask, self.mask_channels = self._decode_mask(request.mask_base64)
+        for keyframe in sorted(getattr(request, 'mask_keyframes', None) or (), key=lambda item: item.start_frame):
+            self.mask_keyframes.append((keyframe, *self._decode_mask(keyframe.mask_base64)))
         if self.segments is None:
             return
         path = safe_path(runner.root, f'roop_3d/.runtime/inspections/{request.inspection_id}.json')
@@ -70,6 +49,45 @@ class FrameEditPlan:
                     'medoid_embedding': view.embedding, 'pose_bins': {}})
             self.documents[key] = document
 
+    @staticmethod
+    def _decode_mask(encoded: str):
+        """Return ``(keep_target_mask, (include, exclude))``; exactly one of them is set."""
+        try:
+            value = encoded.removeprefix('data:image/png;base64,')
+            data = base64.b64decode(value, validate=True)
+            if len(data) > 8 * 1024 * 1024 or not data.startswith(b'\x89PNG\r\n\x1a\n'):
+                raise ValueError()
+            width, height = int.from_bytes(data[16:20], 'big'), int.from_bytes(data[20:24], 'big')
+            if not 0 < width <= 3840 or not 0 < height <= 3840 or width * height > 3840 * 2160:
+                raise ValueError()
+            decoded = cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_UNCHANGED)
+            if decoded is None:
+                raise ValueError()
+            if decoded.ndim == 2:
+                # Existing workstation masks are grayscale keep-target masks.
+                return decoded, None
+            if decoded.ndim == 3 and decoded.shape[2] in (3, 4):
+                alpha = decoded[..., 3].astype(np.float32) / 255 if decoded.shape[2] == 4 else 1.0
+                blue, green, red = (decoded[..., i].astype(np.float32) / 255 for i in range(3))
+                if np.any(blue > 0):  # Legacy white PNG with alpha; retain exclude-only meaning.
+                    return np.clip(blue * alpha * 255, 0, 255).astype(np.uint8), None
+                return None, (np.clip(red * alpha, 0, 1), np.clip(green * alpha, 0, 1))
+            raise ValueError()
+        except (ValueError, cv2.error):
+            raise DomainError('MASK_INVALID', 'Manual mask must be a bounded local PNG', 422) from None
+
+    @property
+    def has_masks(self) -> bool:
+        return self.mask is not None or self.mask_channels is not None or bool(self.mask_keyframes)
+
+    def _mask_for(self, frame):
+        """The mask active on ``frame``: a painted frame range wins over the whole-clip mask."""
+        if frame is not None:
+            for keyframe, mask, channels in self.mask_keyframes:
+                if keyframe.contains(frame):
+                    return mask, channels
+        return self.mask, self.mask_channels
+
     def apply(self, session, frame: int):
         if self.segments is None:
             return
@@ -85,11 +103,12 @@ class FrameEditPlan:
                 session.portrait.tracks.pop(track_id, None)
         self.current = active
 
-    def occluders(self, image, result):
-        if self.mask is None and self.mask_channels is None:
+    def occluders(self, image, result, frame=None):
+        mask, mask_channels = self._mask_for(frame)
+        if mask is None and mask_channels is None:
             return None
-        if self.mask_channels is not None:
-            include, exclude = self.mask_channels
+        if mask_channels is not None:
+            include, exclude = mask_channels
             if include.shape != image.shape[:2]:
                 include = cv2.resize(include, (image.shape[1], image.shape[0]), interpolation=cv2.INTER_LINEAR)
                 exclude = cv2.resize(exclude, (image.shape[1], image.shape[0]), interpolation=cv2.INTER_LINEAR)
@@ -97,7 +116,6 @@ class FrameEditPlan:
                 cv2.invertAffineTransform(item.inverse), (item.image.shape[1], item.image.shape[0]),
                 flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT) for mask in (include, exclude))
                 for item in result.replacements}
-        mask = self.mask
         if mask.shape != image.shape[:2]:
             mask = cv2.resize(mask, (image.shape[1], image.shape[0]), interpolation=cv2.INTER_LINEAR)
         return {item.track_id: cv2.warpAffine(mask.astype(np.float32) / 255,
