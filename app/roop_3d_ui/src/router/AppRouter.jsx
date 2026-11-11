@@ -5,9 +5,22 @@ export const SCREENS = [
   ['processing', 'Processing'], ['facemgr', 'Face Manager'], ['extras', 'Editor'],
   ['gallery', 'Outputs'], ['history', 'History'], ['settings', 'Settings'],
 ];
+/**
+ * Stage 20 deep links. Each is a stable, shareable URL that opens the same screen as an existing route, so nothing that links to the
+ * old names (the rail, the tour, saved bookmarks) breaks. The URL the person typed or clicked is kept in the address bar.
+ */
+export const ROUTE_ALIASES = { '#/studio': '#/faceswap', '#/identity-forge': '#/facemgr', '#/queue': '#/processing' };
+/** Deep links that open a slide-over drawer on top of the Studio instead of a screen of their own. */
+export const DRAWER_ROUTES = { '#/models': 'models', '#/diagnostics': 'diagnostics' };
+const cleanHash = hash => String(hash || '').split('?')[0].replace(/\/$/, '');
+export const isDeepLink = hash => { const route = cleanHash(hash); return route in ROUTE_ALIASES || route in DRAWER_ROUTES; };
+/** 'models' | 'diagnostics' | null: which drawer the hash asks for. */
+export const drawerOf = hash => DRAWER_ROUTES[cleanHash(hash)] ?? null;
 export function normalizeRoute(hash) {
-  const route = String(hash || '').split('?')[0].replace(/\/$/, '');
+  const route = cleanHash(hash);
   if (route === '#' || route === '' || route === '#/workstation') return '#/faceswap';
+  if (route in ROUTE_ALIASES) return ROUTE_ALIASES[route];
+  if (route in DRAWER_ROUTES) return '#/faceswap';
   return SCREENS.some(([id]) => route === `#/${id}`) ? route : '#/home';
 }
 export function useHashRoute() {
@@ -15,13 +28,24 @@ export function useHashRoute() {
   useEffect(() => {
     const update = () => {
       const next = normalizeRoute(location.hash);
-      if (location.hash !== next) history.replaceState(null, '', `${location.pathname}${location.search}${next}`);
+      // Stage 20 deep links keep their own URL (#/studio stays #/studio); only legacy and unknown hashes are rewritten.
+      if (location.hash !== next && !isDeepLink(location.hash)) history.replaceState(null, '', `${location.pathname}${location.search}${next}`);
       setRoute(next);
     };
     update(); window.addEventListener('hashchange', update);
     return () => window.removeEventListener('hashchange', update);
   }, []);
   return route;
+}
+/** Which drawer (if any) the current hash opens. Follows hashchange like `useHashRoute`. */
+export function useHashDrawer() {
+  const [drawer, setDrawer] = useState(() => drawerOf(typeof location === 'undefined' ? '' : location.hash));
+  useEffect(() => {
+    const update = () => setDrawer(drawerOf(location.hash));
+    update(); window.addEventListener('hashchange', update);
+    return () => window.removeEventListener('hashchange', update);
+  }, []);
+  return drawer;
 }
 export function Navigation({ route }) {
   return <nav className="screen-nav" aria-label="Workstation screens">{SCREENS.map(([id, label]) =>

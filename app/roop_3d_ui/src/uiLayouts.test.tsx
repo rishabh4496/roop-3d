@@ -153,6 +153,25 @@ describe('AnimatedBeam', () => {
       expect(view.host.querySelector('svg path')!.getAttribute('d')).toBe('M 20,50 Q 150,20 280,50');
     } finally { globalThis.ResizeObserver = OriginalRO; }
   });
+  it('divides CSS zoom out of every measurement, so the path and the SVG stay in layout pixels', async () => {
+    let notify: () => void = () => {};
+    const OriginalRO = globalThis.ResizeObserver;
+    globalThis.ResizeObserver = class { constructor(cb: () => void) { notify = cb; } observe() {} unobserve() {} disconnect() {} } as unknown as typeof ResizeObserver;
+    try {
+      const view = await mount(<Graph />);
+      // The same layout as above rendered at zoom 1.1: the browser reports every rect 10% larger, offsetWidth stays the layout width.
+      const k = 1.1, boxes: Record<string, DOMRect> = { graph: rectOf(0, 0, 300 * k, 100 * k), a: rectOf(10 * k, 40 * k, 20 * k, 20 * k), b: rectOf(10 * k, 70 * k, 20 * k, 20 * k), c: rectOf(270 * k, 40 * k, 20 * k, 20 * k) };
+      for (const [id, box] of Object.entries(boxes)) {
+        const node = document.querySelector<HTMLElement>(`[data-testid=${id}]`)!;
+        node.getBoundingClientRect = () => box;
+        if (id === 'graph') Object.defineProperty(node, 'offsetWidth', { configurable: true, value: 300 });
+      }
+      await act(async () => notify());
+      const svg = view.host.querySelector('svg')!;
+      expect(svg.querySelector('path')!.getAttribute('d')).toBe('M 20,50 Q 150,20 280,50');
+      expect([svg.getAttribute('width'), svg.getAttribute('height')]).toEqual(['300', '100']);
+    } finally { globalThis.ResizeObserver = OriginalRO; }
+  });
   it('ConvergingBeams draws one beam per source into the same target', async () => {
     const view = await mount(<Graph converge />);
     expect(view.host.querySelectorAll('svg.ul-beam').length).toBe(2);

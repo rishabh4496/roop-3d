@@ -65,7 +65,16 @@ export function pulseKeyframes(a: number, b: number, tail: number) {
   return { x1: [a, b + d * tail], x2: [a - d * tail, b] };
 }
 
-const boxOf = (node: Element): Box => { const b = node.getBoundingClientRect(); return { left: b.left, top: b.top, width: b.width, height: b.height }; };
+/**
+ * Bounding box in the element's own CSS pixels. Under CSS `zoom` (the workstation's interface-size control) getBoundingClientRect reports
+ * zoomed pixels, so every box is divided by the zoom factor (rendered width / layout width of the container); without it the SVG came
+ * out too large and the path drifted off its nodes. The factor is 1 wherever the browser already reports unzoomed values.
+ */
+const boxOf = (node: Element, scale = 1): Box => { const b = node.getBoundingClientRect(); return { left: b.left / scale, top: b.top / scale, width: b.width / scale, height: b.height / scale }; };
+const zoomOf = (container: HTMLElement): number => {
+  const factor = container.offsetWidth > 0 ? container.getBoundingClientRect().width / container.offsetWidth : 1;
+  return Number.isFinite(factor) && factor > 0 ? factor : 1;
+};
 
 export function AnimatedBeam({
   containerRef, fromRef, toRef, direction = 'forward', curvature = 0, duration = 2.4, delay = 0,
@@ -83,7 +92,8 @@ export function AnimatedBeam({
     const measure = () => {
       const from = fromRef.current, to = toRef.current;
       if (!from || !to) return;
-      const next = computeBeamPath(boxOf(container), boxOf(from), boxOf(to), { curvature, anchor, startXOffset, startYOffset, endXOffset, endYOffset });
+      const k = zoomOf(container);
+      const next = computeBeamPath(boxOf(container, k), boxOf(from, k), boxOf(to, k), { curvature, anchor, startXOffset, startYOffset, endXOffset, endYOffset });
       setGeometry(prev => (prev && prev.path === next.path && prev.width === next.width && prev.height === next.height ? prev : next));
     };
     measure();

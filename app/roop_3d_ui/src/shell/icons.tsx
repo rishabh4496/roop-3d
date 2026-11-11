@@ -23,4 +23,5 @@ export const IconSave = make(<><path d="M5 3h11l3 3v15H5V3z" /><path d="M8 3v5h7
 export const IconLibrary = make(<><rect x="4" y="4" width="4" height="16" rx="1" /><rect x="10" y="4" width="4" height="16" rx="1" /><path d="M17 6l3 .8-3.6 13.4-3-.8" /></>);
 export const IconMinus = make(<path d="M6 12h12" />);
 export const IconPlus = make(<path d="M12 6v12M6 12h12" />);
+export const IconGauge = make(<><path d="M4.5 17a8.5 8.5 0 1115 0" /><path d="M12 17l4-5.5" /><path d="M12 8.5V7M7 10l-1-1M17 10l1-1" /></>);
 export const IconCube = make(<><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9L12 3z" /><path d="M4 7.5l8 4.5 8-4.5M12 12v9" /></>);

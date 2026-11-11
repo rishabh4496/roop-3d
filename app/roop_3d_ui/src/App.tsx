@@ -19,9 +19,12 @@ import { JOB_START_EVENT } from './livePreview';
 import { useFaceSelectionStore, faceEditState, restoreFaceEdit, buildFaceSegments, hydrateFaceSegments } from './useFaceSelectionStore';
 import useHistoryStore, { executeCommand, replaceCurves } from './stores/useHistoryStore';
 import FaceManager from './components/facemgr/FaceManager';
-import AppRouter, { SCREENS, useHashRoute } from './router/AppRouter';
+import AppRouter, { SCREENS, useHashDrawer, useHashRoute } from './router/AppRouter';
 import Rail from './shell/Rail';
 import TopBar from './shell/TopBar';
+import TelemetryHeader from './shell/TelemetryHeader';
+import MagneticDock from './shell/MagneticDock';
+import ShellDrawers from './shell/ShellDrawers';
 import CommandPalette, { type Command } from './shell/CommandPalette';
 import { useShortcutActions } from './components/controls/Hotkeys';
 import NumericInput from './components/controls/NumericInput';
@@ -157,6 +160,7 @@ export default function App() {
     };
   }, [bumpZoom, resetZoom]);
   const route = useHashRoute();
+  const drawer = useHashDrawer(); // #/models and #/diagnostics open a drawer over the Studio
   useEffect(() => { applyMotionPref(); return watchSystemMotion(); }, []);
   useEffect(() => { document.title = `${SCREENS.find(([id]) => `#/${id}` === route)?.[1] ?? 'Workstation'} · Roop 3D`; }, [route]);
   const [exportOptions, setExportOptions] = useState<ExportOptions>(DEFAULT_EXPORT);
@@ -558,6 +562,11 @@ export default function App() {
   const dismissWelcome = () => { markOnboardingSeen(); setWelcomeOpen(false); };
   const commands: Command[] = [
     ...SCREENS.map(([id, label]: string[]): Command => ({ id: `go-${id}`, label: `Go to ${label}`, group: 'Navigate', keywords: id, run: () => goto(`#/${id}`) })),
+    { id: 'dl-studio', label: 'Open Studio', group: 'Navigate', keywords: 'studio workspace faceswap #/studio', run: () => goto('#/studio') },
+    { id: 'dl-identity-forge', label: 'Open Identity Forge', group: 'Navigate', keywords: 'identity forge faces facemgr fsz #/identity-forge', run: () => goto('#/identity-forge') },
+    { id: 'dl-queue', label: 'Open Batch Queue', group: 'Navigate', keywords: 'queue jobs processing #/queue', run: () => goto('#/queue') },
+    { id: 'dl-models', label: 'Open Model Hub', group: 'Navigate', keywords: 'models download weights #/models', run: () => goto('#/models') },
+    { id: 'dl-diagnostics', label: 'Open Runtime Report', group: 'Navigate', keywords: 'runtime report diagnostics pinokio #/diagnostics', run: () => goto('#/diagnostics') },
     { id: 'save', label: 'Save project', group: 'Project', hint: 'Ctrl S', disabled: !!reason('projects') || !inspection || !!busy, run: saveProject },
     { id: 'projects', label: 'Open project library', group: 'Project', disabled: !!reason('projects'), run: () => { setProjectsOpen(true); void refreshProjects(); } },
     { id: 'undo', label: 'Undo', group: 'Edit', hint: 'Ctrl Z', run: () => useHistoryStore.getState().undo() },
@@ -582,6 +591,7 @@ export default function App() {
       layoutMode={layoutMode} onLayout={() => setLayoutMode(mode => (mode === 'studio' ? 'classic' : 'studio'))}
       projectsDisabled={!!reason('projects')} projectsReason={reason('projects')} busy={!!busy} canSave={!!inspection}
       onPalette={() => setPaletteOpen(true)} onProjects={() => { setProjectsOpen(true); void refreshProjects(); }} onSave={saveProject} onSaveCopy={() => void run('Saving project copy', async () => { await persistProject(true); })} />
+    <TelemetryHeader parameters={parameters} />
     <RequiredModelsBanner onOpenHub={() => setModelHubOpen(true)} />
     {(route === '#/faceswap' || route === '#/facemgr') && <EngineStatusBar />}
     <RunPill />
@@ -731,6 +741,8 @@ export default function App() {
       onApplyParameter={(name: string, value: number | string) => setParameters({ ...parameters, [name]: value, ...(name === 'restorer_model' && parameters.restoration_blend <= 0 ? { restoration_blend: SWEEP_ENHANCER_BLEND } : {}) })}
     />
     {modelHubOpen && <ModelManagerModal onClose={() => setModelHubOpen(false)} />}
+    <MagneticDock route={route} drawer={drawer} onPalette={() => setPaletteOpen(true)} />
+    <ShellDrawers drawer={drawer} />
     <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} commands={commands} />
     {themeGalleryOpen && (
       <DialogFrame title={`Theme Gallery (${THEMES.length} Themes)`} eyebrow="WORKSTATION PALETTE & STYLES" onClose={() => setThemeGalleryOpen(false)} className="theme-gallery-modal" testId="theme-gallery">

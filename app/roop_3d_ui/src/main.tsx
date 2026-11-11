@@ -10,6 +10,7 @@ import './styles.css';
 import './stage19.css';
 import './shell/shell.css'; // redesign layer: layers over the older stylesheets
 import './components/ui-layouts/ui-layouts.css'; // ui-layouts primitives
+import './shell/stage20.css'; // Stage 20: telemetry header, pipeline mini-map, magnetic dock
 import './workstation3d.css'; // 3D workstation layer (flow bar, coverage radar, morph/light controls, mesh overlay): must stay last
 import { installResourceLedgerIfRequested } from './utils/resourceLedger';
 import { installGlobalErrorHandlers } from './utils/globalErrors';
