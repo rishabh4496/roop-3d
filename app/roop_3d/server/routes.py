@@ -267,20 +267,32 @@ def _clear_unverified_legacy_trt_claim(report: dict[str, Any]) -> None:
 @router.post("/models/download")
 def batch_download_models(
     request: Request,
+    response: Response,
     value: Annotated[BatchModelDownloadRequest | None, Body()] = None,
 ) -> dict[str, Any]:
+    """Fetch manifest entries (see `model_manifest_routes`): an empty body queues every missing model that needs no licence
+    acknowledgement, named ids queue just those. Ids that are registry ids rather than manifest ids keep the older
+    synchronous path. Progress arrives as `model_download_progress` frames on `/ws/v1/pipeline/status`."""
+    from roop_3d.server.model_manifest_routes import start_manifest_download
     req = value or BatchModelDownloadRequest()
     target_ids = list(dict.fromkeys(([req.model_id] if req.model_id else []) + req.models))
-    if not target_ids:
-        raise DomainError("MODEL_SELECTION_REQUIRED", "Select one or more registered model IDs; bulk download is disabled", 422)
+    manager = getattr(request.app.state, "universal_models", None)
+    manifest_ids = [i for i in target_ids if manager is not None and i in manager.entries]
+    registry_ids = [i for i in target_ids if i not in manifest_ids]
+    batch = None
+    if manager is not None and (manifest_ids or not target_ids):
+        batch = start_manifest_download(manager, manifest_ids, accepted_license=req.accepted_license, commercial=req.commercial)
+        response.status_code = 202 if batch["queued"] else 200
+    elif not target_ids:
+        raise DomainError("MODEL_MANIFEST_UNAVAILABLE", "The universal model manifest could not be loaded; name registry model IDs instead", 503)
     results = []
-    for model_id in target_ids:
+    for model_id in registry_ids:
         result = request.app.state.models.ensure_available(model_id, accepted_license=req.accepted_license,
                                                            commercial=req.commercial)
         results.append({"model_id": model_id, "status": "VERIFIED_LOCAL", "downloaded": result.downloaded,
                         "resumed": result.resumed})
 
-    return {"status": "ok", "results": results}
+    return {"status": "accepted" if batch and batch["queued"] else "ok", "batch": batch, "results": results}
 
 
 def _legacy_model_verification(root: Path, target_ids: list[str]) -> dict[str, Any]:

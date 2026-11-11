@@ -53,6 +53,24 @@ def release_media_models(media, worker=None) -> None:
             release()
 
 
+def _universal_model_manager(root: Path, events: EventBroker, catalog: ModelCatalog):
+    """The manifest-driven downloader. A broken manifest disables its endpoints (503) instead of taking the app down."""
+    import logging
+    from roop_3d.audit.local_models import UniversalModelDownloadManager
+    rescan_lock = threading.Lock()
+
+    def rescan() -> None:
+        with rescan_lock:           # transfers finish on worker threads; the catalog scan is not re-entrant
+            catalog.rescan_local()
+
+    try:
+        return UniversalModelDownloadManager(root, sink=events.publish, on_installed=rescan,
+                                             hash_cache_path=root / "roop_3d/.runtime/models/verify_cache.json")
+    except (AuditError, OSError, ValueError, KeyError) as error:
+        logging.getLogger("roop3d.models").error("Universal model manifest unavailable: %s", error)
+        return None
+
+
 def create_app(settings: Settings | None = None, *, repo_root: Path | None = None,
                worker_enabled: bool | None = None, pipeline_runner=None, share: ShareMode | None = None) -> FastAPI:
     root = repo_root or Path(__file__).absolute().parents[2]
@@ -74,6 +92,7 @@ def create_app(settings: Settings | None = None, *, repo_root: Path | None = Non
     from roop_3d.models.hub import ModelHubService
     model_downloads = ModelDownloadManager(catalog)
     model_hub = ModelHubService(catalog)
+    universal_models = _universal_model_manager(root, events, catalog)
     media = MediaService(root, catalog, lambda: app.state.settings)
     if worker_enabled and pipeline_runner is None:
         from roop_3d.optimized_processor import make_stream_runner
@@ -134,6 +153,8 @@ def create_app(settings: Settings | None = None, *, repo_root: Path | None = Non
             if worker is not None:
                 await run_in_threadpool(worker.stop)
             await run_in_threadpool(model_downloads.close)
+            if universal_models is not None:
+                await run_in_threadpool(universal_models.close)
             await run_in_threadpool(media.frames.close)
             # The detector and recognizer own GPU sessions; nothing may keep them alive past the app (a later app in the same process
             # would otherwise start with them still resident). The worker is already stopped, so no job can be using them.
@@ -165,6 +186,7 @@ def create_app(settings: Settings | None = None, *, repo_root: Path | None = Non
     app.state.models = catalog
     app.state.model_hub = model_hub
     app.state.model_downloads = model_downloads
+    app.state.universal_models = universal_models
     app.state.media = media
     app.state.projects = ProjectStore(root, media, catalog, jobs)
     app.state.worker = worker
@@ -263,6 +285,8 @@ def create_app(settings: Settings | None = None, *, repo_root: Path | None = Non
     app.include_router(queue_router)
     from roop_3d.server.installer_routes import router as installer_router
     app.include_router(installer_router)
+    from roop_3d.server.model_manifest_routes import router as model_manifest_router
+    app.include_router(model_manifest_router)
     from roop_3d.server.reliability_routes import router as reliability_router
     app.include_router(reliability_router)
     from roop_3d.server.api import benchmark_router

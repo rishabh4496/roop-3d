@@ -8,7 +8,7 @@ import threading
 from typing import Annotated, Any, Callable, Iterator, Literal, Union
 
 from fastapi import WebSocket, WebSocketDisconnect
-from pydantic import Field, TypeAdapter
+from pydantic import Field, TypeAdapter, model_validator
 
 from roop_3d.core.hardware import Hardware
 from roop_3d.core.settings import Contract
@@ -122,14 +122,35 @@ class QueueEvent(EventBase):
 
 
 class ModelDownloadProgressEvent(EventBase):
+    """One transfer frame (`model_download_progress`), also streamed on `/ws/v1/pipeline/status`.
+
+    `speed_mbps` is megabits per second over the last ~5 s; `eta_seconds` is None while the rate is unknown (never a made-up
+    0). `status` is one of queued, downloading, verifying, compiling, ready, failed, cancelled. `mirror_used` is the source
+    currently being read, or the one that supplied the file once ready. `bytes_downloaded` is the older name for
+    `downloaded_bytes` (still sent by the legacy downloaders); the two are kept equal."""
     type: Literal["model_download_progress"] = "model_download_progress"
     model_id: str
+    downloaded_bytes: int = 0
     bytes_downloaded: int = 0
     total_bytes: int = 0
     percent: float = 0.0
     speed_mbps: float = 0.0
-    eta_seconds: float = 0.0
+    eta_seconds: float | None = None
+    mirror_used: str | None = None
+    batch_id: str | None = None
+    detail: str | None = None
     status: str = "downloading"
+
+    @model_validator(mode="before")
+    @classmethod
+    def _keep_byte_counts_equal(cls, value: Any) -> Any:
+        if isinstance(value, dict):
+            new, old = value.get("downloaded_bytes"), value.get("bytes_downloaded")
+            if new is None and old is not None:
+                value = {**value, "downloaded_bytes": old}
+            elif old is None and new is not None:
+                value = {**value, "bytes_downloaded": new}
+        return value
 
 
 QueueEvent.model_rebuild()
@@ -214,18 +235,21 @@ async def event_stream(websocket: WebSocket) -> None:
 
 
 async def pipeline_status_stream(websocket: WebSocket) -> None:
-    """`pipeline.status` and `tracking.telemetry` frames (`/ws/v1/pipeline/status`).
+    """`pipeline.status`, `tracking.telemetry` and `model_download_progress` frames (`/ws/v1/pipeline/status`).
 
     A pipeline snapshot opens the stream and follows every gap; the latest tracking frame (if a run is live or just ended)
-    is sent with it, so a client that connects mid-run is current at once."""
+    and the latest frame of every model transfer in flight are sent with it, so a client that connects mid-run or
+    mid-download is current at once."""
     tracker = websocket.app.state.pipeline
 
     def current() -> list[EventBase]:
         latest = tracker.tracking_snapshot()
-        return [tracker.snapshot(), *([latest] if latest is not None else [])]
+        manager = getattr(websocket.app.state, "universal_models", None)
+        downloads = [EVENT_ADAPTER.validate_python(frame) for frame in (manager.active_progress() if manager else [])]
+        return [tracker.snapshot(), *([latest] if latest is not None else []), *downloads]
 
     def select(event: EventBase) -> EventBase | list[EventBase] | None:
-        if isinstance(event, (PipelineStatusEvent, TrackingTelemetryEvent)):
+        if isinstance(event, (PipelineStatusEvent, TrackingTelemetryEvent, ModelDownloadProgressEvent)):
             return event
         return current() if isinstance(event, StreamGapEvent) else None
 

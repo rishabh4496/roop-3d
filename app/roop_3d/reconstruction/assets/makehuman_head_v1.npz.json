@@ -1,0 +1,12 @@
+{
+ "schema": "roop3d.makehuman_head.v1",
+ "license": "CC0-1.0",
+ "commit": "a8bc2d54ff0ac92e78ff71431b1023eda42bf482",
+ "build_version": 1,
+ "asset_digest": "6f125518e4cc5bd65847702e8539ed48f0c94288a706958f79df1925eb7d8ee4",
+ "vertices": 4289,
+ "faces": 8524,
+ "shape_axes": 50,
+ "expr_axes": 10,
+ "frame": "OpenCV head frame, metres: x right, y down, z away from the camera the face points at (R=I = frontal)"
+}

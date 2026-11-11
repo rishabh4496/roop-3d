@@ -93,9 +93,24 @@ def test_hub_uses_runtime_first_match_for_duplicate_core_model_names(tmp_path, m
 def test_legacy_download_and_trt_routes_no_longer_bulk_download_or_write_fake_engines(tmp_path):
     app = create_app(Settings(), repo_root=tmp_path, worker_enabled=False)
     with TestClient(app, base_url="http://127.0.0.1:8030") as client:
+        # Stage 11 deliberately replaced "bulk download is disabled": an empty body now queues every missing manifest model that
+        # needs no licence acknowledgement (see test_model_downloader.py). The manager is stubbed so this test never downloads.
+        calls = []
+
+        class StubManager:
+            entries = {}
+
+            def start_batch(self, ids, **kwargs):
+                calls.append((ids, kwargs))
+                return {"batch_id": "stub", "state": "completed", "entries": {}, "skipped": [], "queued": [], "already_installed": []}
+
+            def close(self):
+                pass
+
+        app.state.universal_models = StubManager()
         bulk = client.post("/api/v1/models/download", json={})
-        assert bulk.status_code == 422
-        assert bulk.json()["error"]["code"] == "MODEL_SELECTION_REQUIRED"
+        assert bulk.status_code == 200 and bulk.json()["status"] == "ok"
+        assert calls == [(None, {"accepted_license": False, "commercial": False, "force": False})]
         compile_response = client.post("/api/v1/models/compile_trt", json={"model_id": "inswapper_128"})
         assert compile_response.status_code == 409
         assert compile_response.json()["error"]["code"] == "TRT_BUILD_UNAVAILABLE"
