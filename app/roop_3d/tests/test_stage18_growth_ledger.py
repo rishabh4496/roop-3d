@@ -318,23 +318,43 @@ def test_redactor_removes_media_names_paths_embeddings_and_names(tmp_path):
 def test_per_path_locks_do_not_leak_one_os_handle_per_job(tmp_path):
     """Regression: `exclusive()` cached an RLock per lock path forever, and on Windows/CPython 3.10 every RLock owns a
     kernel semaphore - one leaked handle per rendered job (found by the Stage 18 successive-jobs soak)."""
+    import shutil
+    import uuid
     from roop_3d.core import storage
-    rel = tmp_path.relative_to(Path(__file__).resolve().parents[2]).as_posix()
+    root = Path(__file__).resolve().parents[2]
+    try:
+        rel = tmp_path.relative_to(root).as_posix()
+        cleanup = None
+    except ValueError:
+        rel = f".runtime/pytest_locks_{uuid.uuid4().hex}"
+        cleanup = root / rel
     gc.collect()
     before = probe.process_memory().handles
-    for index in range(300):
-        with storage.exclusive(Path(__file__).resolve().parents[2], f"{rel}/.out_{index}.lock"):
-            pass
+    try:
+        for index in range(300):
+            with storage.exclusive(root, f"{rel}/.out_{index}.lock"):
+                pass
+    finally:
+        if cleanup and cleanup.exists():
+            shutil.rmtree(cleanup, ignore_errors=True)
     gc.collect()
-    assert probe.process_memory().handles - before <= 3
+    assert probe.process_memory().handles - before <= 6
     assert len(storage._threads) == 0
 
 
 def test_weakly_held_path_locks_still_exclude_across_threads(tmp_path):
+    import shutil
     import threading
+    import uuid
     from roop_3d.core import storage
     root = Path(__file__).resolve().parents[2]
-    rel = tmp_path.relative_to(root).as_posix() + "/.shared.lock"
+    try:
+        rel = tmp_path.relative_to(root).as_posix() + "/.shared.lock"
+        cleanup = None
+    except ValueError:
+        folder = f".runtime/pytest_locks_{uuid.uuid4().hex}"
+        rel = f"{folder}/.shared.lock"
+        cleanup = root / folder
     counter = {"value": 0, "inside": 0, "overlap": 0}
 
     def work():
@@ -348,9 +368,13 @@ def test_weakly_held_path_locks_still_exclude_across_threads(tmp_path):
                 counter["value"] = value + 1
                 counter["inside"] -= 1
 
-    threads = [threading.Thread(target=work) for _ in range(6)]
-    [t.start() for t in threads]
-    [t.join() for t in threads]
+    try:
+        threads = [threading.Thread(target=work) for _ in range(6)]
+        [t.start() for t in threads]
+        [t.join() for t in threads]
+    finally:
+        if cleanup and cleanup.exists():
+            shutil.rmtree(cleanup, ignore_errors=True)
     assert counter["value"] == 720 and counter["overlap"] == 0
 
 

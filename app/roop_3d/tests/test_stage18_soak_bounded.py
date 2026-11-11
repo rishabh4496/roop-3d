@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import time
 
 import pytest
 
@@ -59,6 +60,9 @@ def test_many_facesets_and_target_identities_in_one_job(tmp_path):
             assert all(identity in manifest for identity in ids[:3])
     finally:
         rig.worker.stop()
+    t0 = time.monotonic()
+    while probe.child_pids() and time.monotonic() - t0 < 3.0:
+        time.sleep(0.05)
     assert LEDGER.live("video_decoder") == 0 and StubSession.live_instances == 0 and not probe.child_pids()
 
 
