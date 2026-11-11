@@ -45,7 +45,11 @@ export function renderAlignedMeshPasses({ width, height, aligned_geometry }) {
       output[name] = values;
     }
     return { width, height, ...output };
-  } finally { for (const object of objects) object.geometry.dispose(); material.dispose(); target.dispose(); renderer.dispose(); }
+  } finally {
+    for (const object of objects) object.geometry.dispose();
+    material.dispose(); target.dispose(); renderer.dispose();
+    renderer.forceContextLoss();   // dispose() alone leaves the GL context alive until GC; browsers allow only ~16 at once
+  }
 }
 
 export function passPFM(width, height, rgba, channels = 3) {

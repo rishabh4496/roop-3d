@@ -22,7 +22,7 @@ function LiveFrameCounter({ currentTime, playing, fps, total }) {
 }
 function LiveNeedle({ currentTime, playing, fps, duration, dragging }) {
   const time = usePlayhead(liveOr(playing, currentTime));
-  const percent = Math.max(0, Math.min(100, (time / duration) * 100));
+  const percent = duration > 0 ? Math.max(0, Math.min(100, (time / duration) * 100)) : 0;     // a clip of unknown length parks the needle at 0, never "NaN%"
   return (
     <div className={`timeline-playhead-needle ${dragging ? 'dragging' : ''}`} style={{ left: `${percent}%` }} aria-label={`Playhead needle at ${formatTimecode(time, fps)}`}>
       <div className="playhead-handle-head">
@@ -36,7 +36,7 @@ function LiveNeedle({ currentTime, playing, fps, duration, dragging }) {
 function LiveScrubber({ currentTime, playing, duration, fps, disabled, onSeek }) {
   const time = usePlayhead(liveOr(playing, currentTime));
   return (
-    <input aria-label="Timeline scrubber" type="range" min="0" max={duration} step={1 / fps} value={Math.min(time, duration)} disabled={disabled}
+    <input aria-label="Timeline scrubber" type="range" min="0" max={duration > 0 ? duration : 0} step={fps > 0 ? 1 / fps : 'any'} value={Math.min(time, duration > 0 ? duration : 0)} disabled={disabled}
       className="timeline-sr-scrubber" onChange={event => { if (!disabled && onSeek) onSeek(+event.target.value); }} />
   );
 }
@@ -416,7 +416,7 @@ export default function TimelineWorkstation({
     const targetElement = trackInnerRef.current || trackRef.current;
     if (!targetElement) return 0;
     const rect = targetElement.getBoundingClientRect();
-    const ratio = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+    const ratio = rect.width > 0 ? Math.max(0, Math.min(1, (clientX - rect.left) / rect.width)) : 0;     // a collapsed (hidden) track has no width to divide by
     const rawTime = ratio * effectiveDuration;
     if (snapToFrames) {
       const frameIdx = Math.round(rawTime * effectiveFps);

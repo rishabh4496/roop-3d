@@ -19,7 +19,7 @@ function ellipsoid(): Float32Array {
 
 describe('buffer views', () => {
   it('lists the five requested buffers plus the default shaded view, each with an honest hint', () => {
-    expect(BUFFER_VIEWS.map(view => view.id)).toEqual(['lit', 'wireframe', 'albedo', 'normals', 'depth', 'sh']);
+    expect(BUFFER_VIEWS.map(view => view.id)).toEqual(['lit', 'wireframe', 'albedo', 'normals', 'depth', 'cavity', 'sh']);
     expect(BUFFER_VIEWS.find(view => view.id === 'albedo')?.hint).toMatch(/not output of the TRUST network/i);
   });
 });

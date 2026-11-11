@@ -1,6 +1,7 @@
 import { memo, useState, type ReactNode } from 'react';
 import type { FaceSet, IdentitySheet, Inspection, Probe, Track } from '../../contracts';
 import { IdentityTrackStats } from '../facemgr/IdentityLockPanel';
+import { fileName } from '../../utils/safeData';
 import { usePlayhead } from '../../stores/playheadStore';
 import { facesetDropProps } from '../../utils/facesetDrag';
 import VirtualList from '../common/VirtualList';
@@ -78,7 +79,7 @@ export interface TargetPanelProps {
 
 export default function TargetPanel(props: TargetPanelProps) {
   const { target, probe, busy, uploadReason, onImport, time, setTime, fps, duration, inspection, inspectReason, onInspect, sheet, selectedTrack, onSelectTrack, sources, assigned, onAssign, lockBar } = props;
-  const name = target ? target.split('/').at(-1) : '';
+  const name = target ? fileName(target) : '';
   return (
     <div className="studio-target">
       <div className="studio-section">

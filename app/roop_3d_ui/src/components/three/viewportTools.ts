@@ -7,7 +7,7 @@
 import type { WorkstationParameters, FaceEditor } from '../workstation/pipeline';
 
 // ------------------------------------------------------------------------------------------------ buffer views
-export type BufferView = 'lit' | 'wireframe' | 'albedo' | 'normals' | 'depth' | 'sh';
+export type BufferView = 'lit' | 'wireframe' | 'albedo' | 'normals' | 'depth' | 'cavity' | 'sh';
 
 export const BUFFER_VIEWS: readonly { id: BufferView; label: string; hint: string }[] = [
   { id: 'lit', label: 'Shaded', hint: 'The default shaded head with the scene lights.' },
@@ -15,6 +15,7 @@ export const BUFFER_VIEWS: readonly { id: BufferView; label: string; hint: strin
   { id: 'albedo', label: 'Albedo', hint: 'The identity atlas texture, unlit. It is intrinsic-estimated by the local pipeline (not output of the TRUST network, which is not installed).' },
   { id: 'normals', label: 'Surface Normals', hint: 'Camera-space surface normals as RGB (x, y, z), computed from the mesh in the browser.' },
   { id: 'depth', label: 'Z-Depth', hint: 'Distance from the camera, near = bright, normalised to the head.' },
+  { id: 'cavity', label: 'Cavity AO', hint: 'Concave areas (eye sockets, nostrils, creases) darkened from the mesh curvature, computed in the browser. It is a curvature map, not ray-traced ambient occlusion.' },
   { id: 'sh', label: 'SH Relit', hint: 'Albedo lit by a 9-coefficient (3-band) Spherical Harmonics model of the key light and ambient fill.' },
 ];
 export const isBufferView = (value: unknown): value is BufferView => BUFFER_VIEWS.some(view => view.id === value);
@@ -79,7 +80,7 @@ void main() {
   gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
 }`;
 export const SH_FRAGMENT_SHADER = /* glsl */`
-uniform float uSH[9];
+uniform vec3 uSH[9];
 uniform sampler2D uMap;
 uniform float uHasMap;
 uniform vec3 uFlatColor;
@@ -89,15 +90,18 @@ void main() {
   vec3 n = normalize(vWorldNormal);
   if (!gl_FrontFacing) n = -n;
   float x = n.x, y = n.y, z = n.z;
-  float e = uSH[0] * 0.282095
+  vec3 e = uSH[0] * 0.282095
     + uSH[1] * 0.488603 * y + uSH[2] * 0.488603 * z + uSH[3] * 0.488603 * x
     + uSH[4] * 1.092548 * x * y + uSH[5] * 1.092548 * y * z + uSH[6] * 0.315392 * (3.0 * z * z - 1.0)
     + uSH[7] * 1.092548 * x * z + uSH[8] * 0.546274 * (x * x - y * y);
   vec3 albedo = uFlatColor;
   if (uHasMap > 0.5) albedo = texture2D(uMap, vUv).rgb;
-  gl_FragColor = vec4(albedo * max(e, 0.0), 1.0);
+  gl_FragColor = vec4(albedo * max(e, vec3(0.0)), 1.0);
   #include <colorspace_fragment>
 }`;
+
+/** The scalar coefficients of a manual key light as the RGB triples the shader takes (white light). */
+export const shLightCoefficientsRGB = (light: SHLight): [number, number, number][] => shLightCoefficients(light).map(value => [value, value, value] as [number, number, number]);
 
 export const DEPTH_VERTEX_SHADER = /* glsl */`
 varying float vViewDepth;

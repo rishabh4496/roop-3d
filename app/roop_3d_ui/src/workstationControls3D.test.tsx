@@ -157,7 +157,7 @@ describe('topology engine and semantic shape', () => {
     vi.useFakeTimers();
     await mount(); await open('topology-section'); await flush();
     expect(onMesh).not.toHaveBeenCalled();
-    await change(slider(host, 'Semantic Jaw Width'), '1.5');
+    await change(slider(host, 'Semantic Jawline Width'), '1.5');
     expect(host.textContent).toContain('+6.0 mm');
     await act(async () => { vi.advanceTimersByTime(350); });
     await flush();
@@ -171,7 +171,7 @@ describe('topology engine and semantic shape', () => {
     vi.useFakeTimers();
     api.mockImplementation(async (path: string) => { if (path.startsWith('/morphable-topologies')) return report; throw new Error('Build the 3D identity asset first'); });
     await mount(); await open('topology-section'); await flush();
-    await change(slider(host, 'Semantic Chin'), '-2');
+    await change(slider(host, 'Semantic Chin Projection'), '-2');
     await act(async () => { vi.advanceTimersByTime(350); });
     await flush();
     expect(host.querySelector('[role=alert]')?.textContent).toContain('Build the 3D identity asset first');
@@ -180,7 +180,7 @@ describe('topology engine and semantic shape', () => {
 
   it('sliders are disabled until a FaceSet exists', async () => {
     await mount({ facesetId: '' }); await open('topology-section'); await flush();
-    expect(slider(host, 'Semantic Jaw Width').disabled).toBe(true);
+    expect(slider(host, 'Semantic Jawline Width').disabled).toBe(true);
   });
 
   it('beta blend switches to the adaptive skull scope and sets the real skull_blend', async () => {

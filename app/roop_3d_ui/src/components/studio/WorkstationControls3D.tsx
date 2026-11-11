@@ -3,6 +3,7 @@ import { api } from '../../api';
 import type { Config, Reconstruction } from '../../contracts';
 import type { WorkstationParameters } from '../workstation/pipeline';
 import { faceEditOf, withFaceEdit } from '../three/viewportTools';
+import { loadIdentityMesh, type MeshSource } from '../../utils/glbMesh';
 import { skullBlendOf, swapScopeOf, withSkullBlend, withSwapScope } from './swapScope';
 
 /**
@@ -51,10 +52,15 @@ export const isTopologyReport = (value: unknown): value is TopologyReport => {
   const item = value as TopologyReport | null;
   return !!item && typeof item === 'object' && Array.isArray(item.topologies) && Array.isArray(item.semantic_sliders) && item.topologies.every(row => typeof row?.id === 'string');
 };
-/** The four sliders the workstation exposes, in display order, with the label the panel shows. The server defines the rest (brow arch, fullness). */
+/**
+ * The six craniofacial sliders the engine defines (`reconstruction/semantic_shape.py`), in display order, with the label the panel shows.
+ * Forehead height and temple width are NOT among them: the 68-point landmark layout has nothing above the brows or at the temples,
+ * and head width is deliberately held fixed (it is one of the nuisance measures the other sliders must not move).
+ */
 export const SEMANTIC_PANEL: readonly { key: string; label: string }[] = [
-  { key: 'jaw_width', label: 'Jaw Width' }, { key: 'cheekbone_prominence', label: 'Cheekbones' },
-  { key: 'chin_projection', label: 'Chin' }, { key: 'nose_bridge', label: 'Nose Bridge' },
+  { key: 'cheekbone_prominence', label: 'Cheekbone Arch' }, { key: 'jaw_width', label: 'Jawline Width' },
+  { key: 'chin_projection', label: 'Chin Projection' }, { key: 'nose_bridge', label: 'Nose Bridge' },
+  { key: 'brow_arch', label: 'Brow Arch' }, { key: 'face_fullness', label: 'Face Fullness' },
 ];
 const TOPOLOGY_LABEL: Record<string, string> = { makehuman_cc0: 'MakeHuman CC0', flame2023_open: 'FLAME 2023 Open' };
 
@@ -71,7 +77,7 @@ function TopologySemantic({ facesetId, parameters, setParameters, onMesh }: {
   const [topology, setTopology] = useState('');
   const [values, setValues] = useState<Record<string, number>>({});
   const [touched, setTouched] = useState(false);
-  const [mesh, setMesh] = useState<{ state: 'idle' | 'loading' | 'ready' | 'error'; message: string; provenance: string }>({ state: 'idle', message: '', provenance: '' });
+  const [mesh, setMesh] = useState<{ state: 'idle' | 'loading' | 'ready' | 'error'; message: string; provenance: string; source?: MeshSource; fallbackReason?: string | null; bytes?: number | null }>({ state: 'idle', message: '', provenance: '' });
   useEffect(() => {
     const controller = new AbortController();
     api<unknown>('/morphable-topologies', { signal: controller.signal })
@@ -89,8 +95,9 @@ function TopologySemantic({ facesetId, parameters, setParameters, onMesh }: {
     let live = true;
     const timer = setTimeout(() => {
       setMesh(previous => ({ ...previous, state: 'loading', message: '' }));
-      api<Reconstruction>(`/facesets/${facesetId}/identity-asset/mesh?${meshQuery(active, values)}`, { signal: controller.signal })
-        .then(value => { if (live) { onMesh(value); setMesh({ state: 'ready', message: '', provenance: value.provenance ?? '' }); } })
+      // Binary glTF first (smaller, one request, normal map included); the JSON route is the fallback.
+      loadIdentityMesh(facesetId, meshQuery(active, values), { signal: controller.signal })
+        .then(loaded => { if (live) { onMesh(loaded.mesh); setMesh({ state: 'ready', message: '', provenance: loaded.mesh.provenance ?? '', source: loaded.source, fallbackReason: loaded.fallbackReason, bytes: loaded.bytes }); } })
         .catch((error: Error) => { if (live && error.name !== 'AbortError') setMesh({ state: 'error', message: error.message, provenance: '' }); });
     }, 300);
     return () => { live = false; clearTimeout(timer); controller.abort(); };
@@ -141,6 +148,11 @@ function TopologySemantic({ facesetId, parameters, setParameters, onMesh }: {
       </div>
       {mesh.state === 'error' && <div className="error-retry" role="alert"><span>{mesh.message}</span></div>}
       {mesh.state === 'ready' && mesh.provenance && <small className="muted" data-testid="topology-provenance">{mesh.provenance}</small>}
+      {mesh.state === 'ready' && mesh.source && (
+        <small className="muted" data-testid="mesh-source" title={mesh.fallbackReason ?? undefined}>
+          {mesh.source === 'glb' ? `Loaded as binary glTF${mesh.bytes ? ` (${(mesh.bytes / 1024).toFixed(0)} KB)` : ''}` : `Loaded as JSON${mesh.fallbackReason ? ` (GLB unavailable: ${mesh.fallbackReason})` : ''}`}
+        </small>)}
+      <small className="muted" data-testid="semantic-limits">Forehead height and temple width are not offered: the engine has no landmarks above the brows or at the temples, and head width is held fixed.</small>
       <small className="muted">Previews the MakeHuman identity asset in the 3D viewport (offline inspection and export); the live swap uses the fitted facial model.</small>
     </div>
   );

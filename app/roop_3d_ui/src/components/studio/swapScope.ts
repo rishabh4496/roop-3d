@@ -8,11 +8,11 @@ export const ADAPTIVE_START_BLEND = 0.5;
 
 /** The three swap scopes, default first. Labels follow the engine's names (`compositor` / `rendering/silhouette_replacement.py`). */
 export const SWAP_SCOPES: readonly { id: SwapScope; label: string; detail: string }[] = [
-  { id: 'full_craniofacial', label: 'Full Craniofacial Lock',
+  { id: 'full_craniofacial', label: '100% Full Craniofacial + Jaw + Forehead + Background Inpaint',
     detail: '100% source bone + jaw + forehead. The target\'s old jaw is filled with background and its hair, ears and neck are re-fitted to the new skull.' },
   { id: 'adaptive_skull', label: 'Adaptive Skull Blend',
     detail: 'Blend the skull between the source (β source) and the target (β target) with the slider below.' },
-  { id: 'inner_face', label: 'Legacy Inner-Face Only',
+  { id: 'inner_face', label: 'Inner Face',
     detail: 'Only the inside of the target\'s own face outline is replaced; its jaw, hair and ears stay exactly as they are.' },
 ];
 

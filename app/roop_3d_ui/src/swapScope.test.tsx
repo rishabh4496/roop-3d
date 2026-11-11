@@ -15,7 +15,7 @@ Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 describe('swap scope helpers keep untouched requests byte-identical', () => {
   it('lists the three scopes with the full craniofacial lock first and as the default', () => {
     expect(SWAP_SCOPES.map(item => item.id)).toEqual(['full_craniofacial', 'adaptive_skull', 'inner_face']);
-    expect(SWAP_SCOPES[0].label).toBe('Full Craniofacial Lock');
+    expect(SWAP_SCOPES[0].label).toBe('100% Full Craniofacial + Jaw + Forehead + Background Inpaint');
     expect(DEFAULT_SWAP_SCOPE).toBe('full_craniofacial');
     expect(swapScopeOf(DEFAULT_PARAMETERS)).toBe('full_craniofacial');
     expect(skullBlendOf(DEFAULT_PARAMETERS)).toBe(1);
@@ -75,7 +75,7 @@ describe('SwapScopeSelector', () => {
   it('shows three options with the full lock selected by default and no slider', async () => {
     const { host } = await mount();
     const options = radios(host);
-    expect(options.map(item => item.querySelector('b')!.textContent)).toEqual(['Full Craniofacial Lock default', 'Adaptive Skull Blend', 'Legacy Inner-Face Only']);
+    expect(options.map(item => item.querySelector('b')!.textContent)).toEqual(['100% Full Craniofacial + Jaw + Forehead + Background Inpaint default', 'Adaptive Skull Blend', 'Inner Face']);
     expect(options.map(item => item.getAttribute('aria-checked'))).toEqual(['true', 'false', 'false']);
     expect(host.querySelector('input[type="range"]')).toBeNull();
     expect(host.querySelector('[role="radiogroup"]')!.getAttribute('aria-labelledby')).toBe('swap-scope-label');

@@ -3,7 +3,8 @@ import NumericInput from '../controls/NumericInput';
 import VirtualList from '../common/VirtualList';
 import { renderProbe } from '../../utils/renderProbe';
 import { useState, useEffect, useMemo, useRef } from 'react';
-import { Canvas } from '@react-three/fiber';
+import GuardedCanvas from '../three/GuardedCanvas';
+import { fileName } from '../../utils/safeData';
 import { OrbitControls } from '@react-three/drei';
 import {
   POSE_BUCKETS,
@@ -43,7 +44,7 @@ export function extractFacesFromInspection(inspection, target = '') {
 
     extracted.push({
       id: `face_${faceIdCounter++}`,
-      sourceFile: target ? target.split('/').at(-1) : track.track_id,
+      sourceFile: target ? fileName(target) : track.track_id,
       thumbnailUrl: thumb,
       yaw: yawAvg,
       pitch: pitchAvg,
@@ -643,7 +644,9 @@ export default function FaceManager({
 
           {/* 3D Canvas */}
           <div className="sphere-canvas-box">
-            <Canvas
+            <GuardedCanvas
+              label="Geometry unit sphere"
+              fallback={({ reason, retry }) => <p className="muted" role="status">The 3D sphere is not drawing. {reason}{retry && <> <button type="button" className="button small" onClick={retry}>Restart 3D view</button></>} The angular coverage radar below still shows the same data.</p>}
               camera={{ position: [2.0, 1.2, 2.6], fov: 42, near: 0.05, far: 50 }}
               dpr={[1, 2]}
               gl={{ antialias: true, alpha: true }}
@@ -653,7 +656,7 @@ export default function FaceManager({
               <directionalLight position={[-4, -2, -3]} intensity={0.6} color="#38bdf8" />
               <FaceSetOrientationSphere lattice={lattice} />
               <OrbitControls enablePan={false} minDistance={1.8} maxDistance={6} />
-            </Canvas>
+            </GuardedCanvas>
           </div>
 
           <AngularCoverageRadar coverage={radarCoverage} name={activePerson?.name} />

@@ -1,7 +1,9 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import * as THREE from 'three';
-import { Canvas, useFrame } from '@react-three/fiber';
+import { useFrame } from '@react-three/fiber';
 import { OrbitControls, GizmoHelper, GizmoViewport } from '@react-three/drei';
+import GuardedCanvas from './GuardedCanvas';
+import WebGLFallbackInspector from './WebGLFallbackInspector';
 import type { Reconstruction } from '../../contracts';
 import { reducedMotion } from '../../utils/motionPrefs';
 
@@ -186,7 +188,8 @@ export default function FlameMeshViewer({
       </div>
 
       <div className="flame-canvas-container" style={{ width: '100%', height: '260px', position: 'relative' }}>
-        <Canvas camera={{ position: [0, 0, 2.8], fov: 45 }}>
+        <GuardedCanvas label="FLAME mesh viewer" camera={{ position: [0, 0, 2.8], fov: 45 }}
+          fallback={({ reason, retry, use3D }) => <WebGLFallbackInspector mesh={mesh} reason={reason} onRetry={retry} onUse3D={use3D} label="Lightweight FLAME inspector" />}>
           <FlameScene
             mesh={mesh}
             poseStrength={blend}
@@ -198,7 +201,7 @@ export default function FlameMeshViewer({
           <GizmoHelper alignment="bottom-right" margin={[40, 40]}>
             <GizmoViewport axisColors={['#ef4444', '#10b981', '#3b82f6']} labelColor="#ffffff" />
           </GizmoHelper>
-        </Canvas>
+        </GuardedCanvas>
       </div>
 
       <div className="flame-blend-slider">

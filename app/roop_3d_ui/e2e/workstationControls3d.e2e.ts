@@ -274,7 +274,7 @@ test('the topology engine and semantic sliders rebuild the identity asset mesh a
   await page.getByTestId('viewport-buffers').first().getByRole('radio', { name: 'Albedo' }).click();
   await page.waitForTimeout(450);
   const before = await headStats(page, canvas);
-  await topology.getByRole('slider', { name: 'Semantic Jaw Width' }).fill('2');
+  await topology.getByRole('slider', { name: 'Semantic Jawline Width' }).fill('2');
   await expect.poll(() => seen.meshQueries.at(-1)).toBe('?template=makehuman&topology=makehuman_cc0&jaw_width=2');
   await expect(topology.getByTestId('topology-provenance')).toContainText('semantic sliders applied');
   await page.waitForTimeout(450);

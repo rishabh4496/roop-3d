@@ -15,6 +15,7 @@ vi.mock('@react-three/fiber', () => ({
   useFrame: vi.fn(),
   useThree: () => ({ camera: { position: { copy: vi.fn() }, up: { copy: vi.fn() }, lookAt: vi.fn() } }),
 }));
+vi.mock('./utils/webglSupport', async importOriginal => ({ ...(await importOriginal<typeof import('./utils/webglSupport')>()), detectWebGL: () => ({ available: true, webgl2: true, software: false, renderer: 'test', vendor: 'test', reason: '' }) }));
 vi.mock('@react-three/drei', () => ({
   OrbitControls: () => null,
   GizmoHelper: ({ children }: any) => <div>{children}</div>,

@@ -1,5 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { post } from '../../api';
+import { fileName, shortId } from '../../utils/safeData';
 import BottleneckFlamegraph from '../diagnostics/BottleneckFlamegraph';
 import RecoveryNotice from '../guide/RecoveryNotice';
 import DialogPanel from '../guide/DialogPanel';
@@ -89,13 +90,14 @@ export default function QueueDrawer({
   // Duplicate Job
   const handleDuplicateJob = async (job) => {
     try {
-      setActionNotice(`Duplicating render for ${job.request.target_path.split('/').at(-1)}…`);
+      setActionNotice(`Duplicating render for ${fileName(job.request?.target_path, 'this render')}…`);
+      if (!job.request) throw new Error('This job has no saved request to copy.');
       const newRequest = { ...job.request };
       const duplicated = await post('/jobs', newRequest, {
         headers: { 'Idempotency-Key': crypto.randomUUID() },
       });
       if (onRefreshJobs) await onRefreshJobs();
-      setActionNotice(`Created duplicate job ${duplicated.job_id.slice(0, 8)}.`);
+      setActionNotice(`Created duplicate job ${shortId(duplicated?.job_id)}.`);
     } catch (err) {
       setActionNotice(`Duplication failed: ${err.message}`);
     }
@@ -104,7 +106,8 @@ export default function QueueDrawer({
   // Retry Failed Job
   const handleRetryJob = async (job) => {
     try {
-      setActionNotice(`Retrying job ${job.job_id.slice(0, 8)}…`);
+      setActionNotice(`Retrying job ${shortId(job.job_id)}…`);
+      if (!job.request) throw new Error('This job has no saved request to retry.');
       await post('/jobs', job.request, {
         headers: { 'Idempotency-Key': crypto.randomUUID() },
       });
@@ -148,7 +151,7 @@ export default function QueueDrawer({
       });
 
       setConcatResult(res);
-      setActionNotice(`Concatenated ${res.segment_count} segments losslessly with zero re-encoding!`);
+      setActionNotice(`Concatenated ${res?.segment_count ?? segments.length} segments losslessly with zero re-encoding!`);
       setSelectedForConcat([]);
     } catch (err) {
       setActionNotice(`Concatenation error: ${err.message}`);
@@ -245,9 +248,9 @@ export default function QueueDrawer({
             </div>
           )}
 
-          {concatResult && (
+          {concatResult?.output_path && (
             <div className="concat-success-banner">
-              <span>★ Master output ready: <b>{concatResult.output_path.split('/').at(-1)}</b></span>
+              <span>★ Master output ready: <b>{fileName(concatResult.output_path, 'master clip')}</b></span>
               <a
                 className="button small primary-soft"
                 href={`/api/v1/media/content?path=${encodeURIComponent(concatResult.output_path)}`}
@@ -262,6 +265,7 @@ export default function QueueDrawer({
           <div className="queue-items-list" role={localJobs.length ? 'list' : undefined}>
             {[...localJobs].reverse().map((job) => {
               const normState = normalizeJobState(job.state);
+              const progress = job.progress ?? { frame: 0, total_frames: null, fps: 0 };
               const isSelected = selectedJobId === job.job_id;
               const hasOutput = job.state === 'succeeded' && job.output?.output_path;
               const hasVideo = hasOutput && job.output.baked_video !== false;
@@ -295,30 +299,30 @@ export default function QueueDrawer({
                     onClick={() => onSelectJob?.(job)}
                   >
                     <div className="job-title-row">
-                      <strong>{job.request.target_path.split('/').at(-1)}</strong>
+                      <strong>{fileName(job.request?.target_path, 'Untitled render')}</strong>
                       <span className={`state-badge ${normState.toLowerCase()}`} title={JOB_STATE_HELP[job.state] ? `${JOB_STATE_HELP[job.state].meaning} ${JOB_STATE_HELP[job.state].action}` : undefined}>
                         {normState}
                       </span>
                     </div>
 
                     <div className="job-meta-row">
-                      <span className="job-id-tag">{job.job_id.slice(0, 8)}</span>
+                      <span className="job-id-tag">{shortId(job.job_id)}</span>
                       <span>
-                        Frame {job.progress.frame}
-                        {job.progress.total_frames ? ` / ${job.progress.total_frames}` : ''}
+                        Frame {progress.frame}
+                        {progress.total_frames ? ` / ${progress.total_frames}` : ''}
                       </span>
-                      {job.progress.fps > 0 && <span>{job.progress.fps.toFixed(1)} fps</span>}
+                      {progress.fps > 0 && <span>{progress.fps.toFixed(1)} fps</span>}
                     </div>
 
                     {/* Progress Bar */}
-                    <div className="job-progress-track" role="progressbar" aria-label={`Progress for ${job.request.target_path.split('/').at(-1)}`} aria-valuemin={0} aria-valuemax={job.progress.total_frames || 100}
-                      aria-valuenow={job.progress.total_frames ? job.progress.frame : job.state === 'succeeded' ? 100 : 0}>
+                    <div className="job-progress-track" role="progressbar" aria-label={`Progress for ${fileName(job.request?.target_path, 'render')}`} aria-valuemin={0} aria-valuemax={progress.total_frames || 100}
+                      aria-valuenow={progress.total_frames ? progress.frame : job.state === 'succeeded' ? 100 : 0}>
                       <div
                         className="job-progress-fill"
                         style={{
                           width: `${
-                            job.progress.total_frames
-                              ? (job.progress.frame / job.progress.total_frames) * 100
+                            progress.total_frames
+                              ? (progress.frame / progress.total_frames) * 100
                               : job.state === 'succeeded' ? 100 : 0
                           }%`,
                         }}
@@ -377,8 +381,8 @@ export default function QueueDrawer({
                         onClick={() => handleControl(job.job_id, 'resume')}
                         title="Resume interrupted render from last checkpoint"
                       >
-                        {job.progress?.frame > 0
-                          ? `Resume Interrupted Render (from Frame ${job.progress.frame})`
+                        {progress.frame > 0
+                          ? `Resume Interrupted Render (from Frame ${progress.frame})`
                           : 'Resume Interrupted Render (from Frame 0)'}
                       </button>
                     )}
@@ -414,7 +418,7 @@ export default function QueueDrawer({
       {inspectedOutput && <div className="modal-backdrop" onClick={() => setInspectedOutput(null)}>
         <DialogPanel className="project-modal" label="Rendered output" onClose={() => setInspectedOutput(null)}>
           <div className="panel-heading"><h2>Rendered output</h2><button className="button" onClick={() => setInspectedOutput(null)}>Close output</button></div>
-          <p>Synthetic media processed locally by Roop 3D · {inspectedOutput.output.frames} verified frames</p>
+          <p>Synthetic media processed locally by Roop 3D · {inspectedOutput.output?.frames ?? 0} verified frames</p>
           <video aria-label="Completed render playback" controls preload="metadata" style={{ width: '100%', maxHeight: '60vh' }} src={`/api/v1/jobs/${inspectedOutput.job_id}/artifacts/video`} />
           <a className="button" href={`/api/v1/jobs/${inspectedOutput.job_id}/artifacts/video`} download>Export video</a>
           <a className="button" href={`/api/v1/jobs/${inspectedOutput.job_id}/artifacts/manifest`} download>Render manifest</a>

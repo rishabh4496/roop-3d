@@ -7,6 +7,7 @@ import { THEMES, themeByName, applyThemeToDom } from '../themes';
 import { useTelemetry } from '../stores/telemetryStore';
 import ModelHubPanel from '../components/modelhub/ModelHubPanel';
 import ModelManager from '../components/modelhub/ModelManager';
+import { openModelHub } from '../components/modelhub/openModelHub';
 
 /** Leaf subscriber: the Settings screen itself never re-renders when the telemetry store first learns the GPU. */
 function GpuName({ override }) {
@@ -699,7 +700,10 @@ export default function SettingsScreen({
         </div>
       )}
 
-      {activeTab === 'models' && <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}><ModelManager /><ModelHubPanel active /></div>}
+      {activeTab === 'models' && <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+        <div className="notice-box" data-testid="open-model-hub-card"><button type="button" className="button small accent" onClick={openModelHub}>Open the Model Hub</button>{' '}
+          <small className="muted">One-click download and SHA-256 verification of every required model, with licences and live progress.</small></div>
+        <ModelManager /><ModelHubPanel active /></div>}
 
       {activeTab === 'installer' && (
         <div className="diagnostics-dashboard installer-dashboard" data-testid="installer-tab-content">

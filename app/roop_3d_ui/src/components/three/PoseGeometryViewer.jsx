@@ -1,14 +1,21 @@
 import React, { useRef, useState, useEffect, useMemo, useCallback } from 'react';
 import * as THREE from 'three';
-import { Canvas, useFrame, useThree } from '@react-three/fiber';
+import { useFrame, useThree } from '@react-three/fiber';
+import GuardedCanvas from './GuardedCanvas';
+import WebGLFallbackInspector from './WebGLFallbackInspector';
 import { OrbitControls, GizmoHelper, GizmoViewport } from '@react-three/drei';
 import { useFaceSelectionStore } from '../../useFaceSelectionStore';
 import { reducedMotion } from '../../utils/motionPrefs';
 import { renderModeInfo } from '../workstation/renderModes';
 import {
   BUFFER_VIEWS, DEFAULT_SH_LIGHT, DEPTH_FRAGMENT_SHADER, DEPTH_VERTEX_SHADER, JAW_MAX_DEG, SH_FRAGMENT_SHADER, SH_VERTEX_SHADER,
-  buildJawRig, eyeAnchors, openJaw, shLightCoefficients,
+  buildJawRig, eyeAnchors, openJaw, shLightCoefficientsRGB,
 } from './viewportTools';
+import {
+  CAVITY_FRAGMENT_SHADER, CAVITY_VERTEX_SHADER, DEFAULT_FOCAL_MM, FOCAL_RANGE_MM, clampFocal, computeVertexCavity, dollyFactor, environmentToViewerSH, exposeEnvironment,
+  horizontalFovDeg, verticalFovDeg,
+} from './studioTools';
+import { useStudioEnvironments } from './useStudioEnvironments';
 import { GazeGizmo, JawGizmo, LightGizmo } from './ViewportGizmos';
 
 /**
@@ -450,27 +457,34 @@ function ReferenceHead() {
   );
 }
 
-/** Albedo / normals / depth / SH-relit surface for the buffer switcher; all computed in the browser from the mesh being shown. */
-function BufferMaterial({ kind, texture, shLight }) {
+/**
+ * Albedo / normals / depth / cavity / SH-relit surface for the buffer switcher; all computed in the browser from the mesh being shown.
+ * `shCoefficients` (nine RGB triples in the viewer's SH basis) overrides the manual key light, which is how a studio environment is previewed.
+ */
+function BufferMaterial({ kind, texture, shLight, shCoefficients = null }) {
   const camera = useThree(state => state.camera);
   const material = useMemo(() => {
     if (kind === 'depth') {
       return new THREE.ShaderMaterial({ vertexShader: DEPTH_VERTEX_SHADER, fragmentShader: DEPTH_FRAGMENT_SHADER, side: THREE.DoubleSide,
         uniforms: { uCenter: { value: CAMERA_DISTANCE }, uRadius: { value: 1.0 } } });
     }
+    if (kind === 'cavity') {
+      return new THREE.ShaderMaterial({ vertexShader: CAVITY_VERTEX_SHADER, fragmentShader: CAVITY_FRAGMENT_SHADER, side: THREE.DoubleSide });
+    }
     if (kind === 'sh') {
       return new THREE.ShaderMaterial({ vertexShader: SH_VERTEX_SHADER, fragmentShader: SH_FRAGMENT_SHADER, side: THREE.DoubleSide,
-        uniforms: { uSH: { value: new Array(9).fill(0) }, uMap: { value: null }, uHasMap: { value: 0 }, uFlatColor: { value: new THREE.Color('#c9b8a6') } } });
+        uniforms: { uSH: { value: Array.from({ length: 9 }, () => new THREE.Vector3()) }, uMap: { value: null }, uHasMap: { value: 0 }, uFlatColor: { value: new THREE.Color('#c9b8a6') } } });
     }
     return null;
   }, [kind]);
   useDisposable(material);
   useEffect(() => {
     if (kind !== 'sh' || !material) return;
-    material.uniforms.uSH.value = shLightCoefficients(shLight);
+    const rows = shCoefficients ?? shLightCoefficientsRGB(shLight);
+    material.uniforms.uSH.value = rows.map(row => new THREE.Vector3(row[0], row[1], row[2]));
     material.uniforms.uMap.value = texture ?? null;
     material.uniforms.uHasMap.value = texture ? 1 : 0;
-  }, [kind, material, shLight, texture]);
+  }, [kind, material, shLight, shCoefficients, texture]);
   useFrame(() => { if (kind === 'depth' && material) material.uniforms.uCenter.value = camera.position.length(); });
   if (kind === 'wireframe') return <meshBasicMaterial color="#0b1220" side={THREE.DoubleSide} polygonOffset polygonOffsetFactor={1} polygonOffsetUnits={1} />;
   if (kind === 'albedo') return <meshBasicMaterial key={texture ? 'albedo-map' : 'albedo-flat'} map={texture} color={texture ? '#ffffff' : '#c9b8a6'} side={THREE.DoubleSide} />;
@@ -483,9 +497,17 @@ function BufferMaterial({ kind, texture, shLight }) {
  * will pose it; the orbit camera moves independently around it.
  */
 function ReconstructedHead({ pose, assets, texture, volumetric, wireframe, landmarks, lighting = null, morph = null, targetAssets = null,
-  bufferView = 'lit', shLight = DEFAULT_SH_LIGHT, tools = null, gizmos = null }) {
+  bufferView = 'lit', shLight = DEFAULT_SH_LIGHT, shCoefficients = null, tools = null, gizmos = null }) {
   const group = useRef(null);
   const jawDeg = tools?.jawDeg ?? 0;
+  // Cavity buffer: the per-vertex concavity attribute must exist before the first frame that uses the shader, so it is attached while
+  // rendering (idempotent, belongs to the geometry and is released with it).
+  useMemo(() => {
+    const geometry = assets?.geometry;
+    if (bufferView !== 'cavity' || !geometry || geometry.getAttribute('aCavity')) return;
+    const position = geometry.getAttribute('position');
+    geometry.setAttribute('aCavity', new THREE.BufferAttribute(computeVertexCavity(position.array, geometry.getIndex()?.array ?? null), 1));
+  }, [assets, bufferView]);
   const rig = useMemo(() => (lighting ? lightingRig(lighting) : null), [lighting]);
   const shape = useMemo(() => (morph ? morphRig(morph) : null), [morph]);
   // Forehead / hairline boundary ring: an ellipse around the head at ~22% below the crown, shifted by the offset control.
@@ -541,7 +563,7 @@ function ReconstructedHead({ pose, assets, texture, volumetric, wireframe, landm
     <group ref={group}>
       <mesh geometry={assets.geometry} name={`head-${bufferView}`}>
         {bufferView !== 'lit' ? (
-          <BufferMaterial kind={bufferView} texture={texture} shLight={shLight} />
+          <BufferMaterial kind={bufferView} texture={texture} shLight={shLight} shCoefficients={shCoefficients} />
         ) : rig ? (
           <meshPhysicalMaterial
             key={texture ? 'textured-lit' : 'flat-lit'}
@@ -715,16 +737,42 @@ function ViewTracker({ onPose, radius, showMarker }) {
   );
 }
 
+/**
+ * Physical-camera preview: sets the lens of the orbit camera. `focalMm` null leaves the viewer's own 42 degree camera alone.
+ * Otherwise the vertical field of view is that of a 36 x 24 mm sensor behind a lens of `focalMm`, and the camera steps back or
+ * forward (`factor`) so the head keeps its size in frame, which is what makes a long lens flatten the face and a wide one stretch it.
+ */
+const BASE_FOV = 42;
+function PhysicalCameraRig({ focalMm, factor }) {
+  const camera = useThree(state => state.camera);
+  const invalidate = useThree(state => state.invalidate);
+  const applied = useRef(1);
+  useEffect(() => {
+    const fov = focalMm == null ? BASE_FOV : verticalFovDeg(focalMm);
+    if (camera.isPerspectiveCamera) {
+      camera.fov = fov;
+      camera.far = 50 * Math.max(1, factor);
+      // Keep the viewing direction; only the distance changes with the lens.
+      camera.position.multiplyScalar(factor / applied.current);
+      applied.current = factor;
+      camera.updateProjectionMatrix();
+      invalidate();
+    }
+  }, [camera, focalMm, factor, invalidate]);
+  return null;
+}
+
 /** Camera snaps to the frontal view (+0.0° Y · +0.0° P) whenever `signal` changes, and on the Reset Camera button. */
-function CameraRig({ controlsRef, resetSignal }) {
+function CameraRig({ controlsRef, resetSignal, factor = 1 }) {
   const { camera } = useThree();
   useEffect(() => {
     camera.position.copy(FRONTAL_CAMERA);
+    if (factor !== 1) camera.position.multiplyScalar(factor);
     camera.up.copy(WORLD_UP);
     camera.lookAt(0, 0, 0);
     const controls = controlsRef.current;
     if (controls) { controls.target.set(0, 0, 0); controls.update(); }
-  }, [resetSignal, camera, controlsRef]);
+  }, [resetSignal, camera, controlsRef]);     // eslint-disable-line react-hooks/exhaustive-deps -- a lens change dollies by itself; only a reset snaps
   return null;
 }
 
@@ -793,6 +841,16 @@ export default function PoseGeometryViewer({
   const toggleWireframe = () => setWireframeByTab(value => ({ ...value, [viewMode]: !value[viewMode] }));
   const [showLandmarks, setShowLandmarks] = useState(true);
   const [showRings, setShowRings] = useState(true);
+
+  // Studio lighting (five CC0 probes) and the physical-camera lens: both are previews in this viewport only.
+  const [studioOpen, setStudioOpen] = useState(false);
+  const studio = useStudioEnvironments(studioOpen);
+  const [environmentId, setEnvironmentId] = useState('');                       // '' = the manual key light
+  const environment = studio.environments.find(item => item.id === environmentId) ?? null;
+  const environmentSH = useMemo(() => (environment ? exposeEnvironment(environmentToViewerSH(environment.sh)) : null), [environment]);
+  const [focalMm, setFocalMm] = useState(null);                                 // null = the viewer's own camera
+  const lensFactor = useMemo(() => (focalMm == null ? 1 : dollyFactor(BASE_FOV, verticalFovDeg(focalMm))), [focalMm]);
+  const chooseEnvironment = id => { setEnvironmentId(id); if (id) setBufferView(view => (view === 'lit' ? 'sh' : view)); };
 
   // Target pose: the selected face, else the selected track, else the first target cluster. Standard frame.
   const activeSelection = useFaceSelectionStore(s => s.activeSelection);
@@ -924,6 +982,28 @@ export default function PoseGeometryViewer({
       </div>
       {bufferView !== 'lit' && <p className="viewport-buffer-note muted" data-testid="viewport-buffer-note">{BUFFER_VIEWS.find(view => view.id === bufferView)?.hint}
         {bufferView === 'depth' && <span className="depth-legend" aria-hidden="true"><i /> near → far</span>}</p>}
+      <details className="viewport-studio" open={studioOpen} onToggle={event => setStudioOpen(event.currentTarget.open)} data-testid="viewport-studio">
+        <summary>Studio lighting &amp; lens <small className="muted">preview in this viewport</small></summary>
+        <div className="viewport-buffers" role="radiogroup" aria-label="Studio lighting environment" data-testid="studio-environments">
+          <button type="button" role="radio" aria-checked={!environmentId} className={`viewer-toggle ${!environmentId ? 'active' : ''}`} disabled={!hasGeometry}
+            title="The manual key light and ambient fill" onClick={() => chooseEnvironment('')}>Manual light</button>
+          {studio.environments.map(item => (
+            <button key={item.id} type="button" role="radio" aria-checked={environmentId === item.id} className={`viewer-toggle ${environmentId === item.id ? 'active' : ''}`} disabled={!hasGeometry}
+              title={`${item.name} · ${Math.round(item.kelvin)} K · ${item.license} · reduced from the Poly Haven HDRI ${item.id}`} onClick={() => chooseEnvironment(item.id)}>{item.name}</button>
+          ))}
+        </div>
+        {studio.state === 'loading' && <small className="muted" role="status">Loading the lighting environments…</small>}
+        {studio.state === 'error' && <small className="identity-warn" role="alert">{studio.error} <button type="button" className="button small" onClick={studio.retry}>Retry</button></small>}
+        {environment && <small className="muted" data-testid="studio-environment-note">{environment.name}: {Math.round(environment.kelvin)} K, {environment.license}. Shown as the SH Relit buffer, auto-exposed so the five can be compared.</small>}
+        <label className="inspector-field gizmo-field">Focal length
+          <output data-testid="focal-readout">{focalMm == null ? 'viewer default' : `${Math.round(focalMm)} mm · ${verticalFovDeg(focalMm).toFixed(1)}° V · ${horizontalFovDeg(focalMm).toFixed(1)}° H`}</output>
+          <input type="range" aria-label="Focal length in millimetres" min={FOCAL_RANGE_MM[0]} max={FOCAL_RANGE_MM[1]} step={1} value={focalMm ?? DEFAULT_FOCAL_MM} disabled={!hasGeometry}
+            aria-valuetext={focalMm == null ? 'viewer default camera' : `${Math.round(focalMm)} millimetres`} onChange={event => setFocalMm(clampFocal(Number(event.target.value)))} />
+          <span className="protection-scale" aria-hidden="true"><small>{FOCAL_RANGE_MM[0]} mm wide</small><small>{FOCAL_RANGE_MM[1]} mm tele</small></span>
+        </label>
+        <div className="morph-actions"><button type="button" className="button small" disabled={focalMm == null} onClick={() => setFocalMm(null)}>Reset lens</button></div>
+        <small className="muted">Previews the look of the lens (36 × 24 mm sensor, head kept the same size) and of the lighting. The physical-camera matcher and the probes are not part of the render pipeline yet, so neither changes an output.</small>
+      </details>
       {tools && (
         <div className="viewport-gizmo-dock" role="group" aria-label="3D gizmos" data-testid="viewport-gizmos">
           <div className="gizmo-toggles">
@@ -974,7 +1054,10 @@ export default function PoseGeometryViewer({
 
       {/* R3F Canvas */}
       <div className="pose-canvas-wrapper">
-        <Canvas
+        <GuardedCanvas
+          label="3D viewport"
+          resetKey={coverage?.faceset_id ?? ''}
+          fallback={({ reason, retry, use3D }) => <WebGLFallbackInspector mesh={displayedMesh} reason={reason} onRetry={retry} onUse3D={use3D} />}
           camera={{ position: [0, 0, CAMERA_DISTANCE], fov: 42, near: 0.05, far: 50 }}
           dpr={[1, 2]}
           gl={{ antialias: true, alpha: true }}
@@ -1001,7 +1084,7 @@ export default function PoseGeometryViewer({
           {tools && gizmos.light && <LightGizmo light={tools.light} onChange={tools.onLight} enabled />}
           {assets ? (
             <ReconstructedHead pose={targetPose} assets={assets} texture={texture} volumetric={volumetric}
-              bufferView={bufferView} shLight={shLight} tools={tools} gizmos={gizmos}
+              bufferView={bufferView} shLight={shLight} shCoefficients={environmentSH} tools={tools} gizmos={gizmos}
               wireframe={wireframe} landmarks={showLandmarks && viewMode === 'estimated_2_5d'}
               lighting={lighting} morph={morph} targetAssets={morph && displayedMesh !== estimatedMesh ? targetAssets : null} />
           ) : !sourceLoaded ? (
@@ -1023,10 +1106,11 @@ export default function PoseGeometryViewer({
             rotateSpeed={0.6}
             enableDamping
             dampingFactor={0.08}
-            minDistance={1.8}
-            maxDistance={8}
+            minDistance={1.8 * lensFactor}
+            maxDistance={8 * lensFactor}
           />
-          <CameraRig controlsRef={controlsRef} resetSignal={resetSignal} />
+          <PhysicalCameraRig focalMm={focalMm} factor={lensFactor} />
+          <CameraRig controlsRef={controlsRef} resetSignal={resetSignal} factor={lensFactor} />
           <ViewTracker onPose={reportView} radius={SPHERE_RADIUS} showMarker={showRings && !targetPose && (observations.length > 0 || !!coverage)} />
 
           {/* Camera Orientation Gizmo: follows the camera */}
@@ -1037,7 +1121,7 @@ export default function PoseGeometryViewer({
               hideNegativeAxes
             />
           </GizmoHelper>
-        </Canvas>
+        </GuardedCanvas>
         {overlay && (
           <div className={`pose-viewer-overlay ${overlay.kind}`} role={overlay.kind === 'error' ? 'alert' : 'status'}>
             <span>{overlay.text}</span>

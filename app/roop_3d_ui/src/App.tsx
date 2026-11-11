@@ -33,6 +33,11 @@ import PipelinePill from './components/hud/PipelinePill';
 import RunPill from './components/faceswap/PipelinePill';
 import EngineStatusBar from './components/hud/EngineStatusBar';
 import ToastHost from './components/common/ToastHost';
+import RequiredModelsBanner from './components/modelhub/RequiredModelsBanner';
+import ModelManagerModal from './components/modelhub/ModelManagerModal';
+import { OPEN_MODEL_HUB } from './components/modelhub/openModelHub';
+import { acquirePipelineStream } from './stores/pipelineStream';
+import { fileName, normalizeFaceSets, normalizeJobs, normalizeTelemetry } from './utils/safeData';
 import QueueDrawer from './components/queue/QueueDrawer';
 import PreFlightLinterModalComponent from './components/diagnostics/PreFlightLinterModal';
 import { DEFAULT_EXPORT } from './components/export/VfxExportPanel';
@@ -99,6 +104,9 @@ export default function App() {
   const [themeName, setThemeName] = useState(() => localStorage.getItem('roop3d-theme-name') ?? 'Default');
   const [themeGalleryOpen, setThemeGalleryOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [modelHubOpen, setModelHubOpen] = useState(false);
+  useEffect(() => { const open = () => setModelHubOpen(true); window.addEventListener(OPEN_MODEL_HUB, open); return () => window.removeEventListener(OPEN_MODEL_HUB, open); }, []);
+  useEffect(() => acquirePipelineStream(), []);   // /ws/v1/pipeline/status with automatic reconnection (model downloads, pipeline snapshots)
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => { if ((event.ctrlKey || event.metaKey) && !event.shiftKey && event.key.toLowerCase() === 'k') { event.preventDefault(); setPaletteOpen(open => !open); } };
     window.addEventListener('keydown', onKey);
@@ -224,8 +232,8 @@ export default function App() {
     const trackId = cluster?.originTrackId ?? storeCluster;
     if (inspection?.tracks.some(item => item.track_id === trackId)) setSelectedTrack(trackId);
   }, [storeCluster, inspection]);
-  const refreshJobs = useCallback(async () => setJobs(await api<Job[]>('/jobs')), []);
-  const refreshSources = useCallback(async () => setSources(await api<FaceSet[]>('/facesets')), []);
+  const refreshJobs = useCallback(async () => setJobs(normalizeJobs(await api<unknown>('/jobs'))), []);
+  const refreshSources = useCallback(async () => setSources(normalizeFaceSets(await api<unknown>('/facesets'))), []);
   const refreshProjects = useCallback(async () => { setProjectsLoading(true); try { setProjects(await api<typeof projects>('/projects')); } finally { setProjectsLoading(false); } }, []);
   const fail = (error: unknown) => { const message = (error as Error).message; setError(message); setErrorInfo({ message, code: (error as ApiError).code ?? null, requestId: (error as ApiError).requestId ?? null }); };
   const run = async (label: string, work: () => Promise<void>) => { setBusy(label); setError(''); setNotice(''); try { await work(); } catch (error) { if ((error as Error).name !== 'AbortError') fail(error); } finally { setBusy(''); } };
@@ -236,7 +244,7 @@ export default function App() {
       setProjectsLoading(true);
       void api<typeof projects>('/projects').then(setProjects).catch(fail).finally(() => setProjectsLoading(false));
       const [capabilities, settings, sourceList, queue] = await Promise.all([api<Capabilities>('/system/capabilities'), api<Config>('/config'), api<FaceSet[]>('/facesets'), api<Job[]>('/jobs')]);
-      setCaps(capabilities); setConfig(settings); setSources(sourceList); setJobs(queue); setError('');
+      setCaps(capabilities); setConfig(settings); setSources(normalizeFaceSets(sourceList)); setJobs(normalizeJobs(queue)); setError('');
     } catch (error) { fail(error); }
   }, []);
   useEffect(() => { void connect(); }, [connect]);
@@ -257,7 +265,7 @@ export default function App() {
   useEffect(() => {
     let refresh: ReturnType<typeof setTimeout> | undefined;
     const events = new EventConnection(`${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/api/v1/ws/events`, event => {
-      if (event.type === 'system.telemetry' && event.hardware) publishHardware(event.hardware);
+      if (event.type === 'system.telemetry') { const hardware = normalizeTelemetry(event.hardware); if (hardware) publishHardware(hardware); }
       if (event.type.startsWith('job.') || event.type === 'stream.ready' || event.type === 'stream.gap') {
         if (!refresh) refresh = setTimeout(() => { refresh = undefined; void refreshJobs().catch(error => setError(error.message)); }, 120);
       }
@@ -547,6 +555,7 @@ export default function App() {
     { id: 'themes', label: 'Browse themes', group: 'Appearance', keywords: 'swatches palette colour color', run: () => setThemeGalleryOpen(true) },
     { id: 'layout', label: `Use ${layoutMode === 'studio' ? 'classic' : 'studio'} layout`, group: 'Appearance', run: () => setLayoutMode(mode => (mode === 'studio' ? 'classic' : 'studio')) },
     { id: 'zoom-reset', label: 'Reset interface zoom', group: 'Appearance', hint: 'Ctrl 0', run: resetZoom },
+    { id: 'model-hub', label: 'Open the Model Hub (download and verify models)', group: 'Models', keywords: 'download models weights verify repair sha licence', run: () => setModelHubOpen(true) },
     { id: 'guide', label: 'Open the guide', group: 'Help', run: () => openGuide() },
     { id: 'tour', label: 'Take the quick tour', group: 'Help', keywords: 'how to use', run: () => setTourOpen(true) },
   ];
@@ -562,6 +571,7 @@ export default function App() {
       layoutMode={layoutMode} onLayout={() => setLayoutMode(mode => (mode === 'studio' ? 'classic' : 'studio'))}
       projectsDisabled={!!reason('projects')} projectsReason={reason('projects')} busy={!!busy} canSave={!!inspection}
       onPalette={() => setPaletteOpen(true)} onProjects={() => { setProjectsOpen(true); void refreshProjects(); }} onSave={saveProject} onSaveCopy={() => void run('Saving project copy', async () => { await persistProject(true); })} />
+    <RequiredModelsBanner onOpenHub={() => setModelHubOpen(true)} />
     {(route === '#/faceswap' || route === '#/facemgr') && <EngineStatusBar />}
     <RunPill />
     <ToastHost />
@@ -612,7 +622,7 @@ export default function App() {
             <PanelBoundary name="Face mapping"><FaceMapping tracks={inspection?.tracks ?? []} sources={sources} assigned={assigned} selectedTrack={selectedTrack} onSelectTrack={trackId => selectTrack(trackId)} onAssign={assignTrack} /></PanelBoundary>
           </aside>
           <main className="studio-center" aria-label="Preview">
-            <div className="studio-center-head"><div><span className="eyebrow">03 · PREVIEW</span><strong>{target ? target.split('/').at(-1) : 'No target loaded'}</strong></div>
+            <div className="studio-center-head"><div><span className="eyebrow">03 · PREVIEW</span><strong>{target ? fileName(target) : 'No target loaded'}</strong></div>
               <button className="button accent" disabled={!!reason('queue') || !inspection || !renderMappings().length || !!busy} title={reason('queue') ?? (renderMappings().length ? 'Render mapped face tracks locally' : 'Assign a FaceSet to at least one track first')} onClick={queue}>Queue render <span>↗</span></button></div>
             {viewport}
           </main>
@@ -639,7 +649,7 @@ export default function App() {
           {queuePanel}
         </section>
       </div> : <>      <div className="workstation-body"><aside className="asset-sidebar" data-tour="source"><div className="section-title"><span>ASSET LIBRARY</span><span className="muted">01</span></div><div className="asset-actions"><button className="button full primary-soft" disabled={!!reason('uploads') || !!busy} title={reason('uploads') ?? ''} onClick={() => fileInput.current?.click()}>＋ Import target video</button></div>
-      <div className={`target-asset ${target ? 'loaded' : ''}`}><span className="asset-symbol">▤</span><div><strong>{target ? target.split('/').at(-1) : 'No target loaded'}</strong><small>{probe ? `${probe.width} × ${probe.height} · ${probe.fps_rational ?? '?'} fps` : 'Your files stay on this machine'}</small></div></div>
+      <div className={`target-asset ${target ? 'loaded' : ''}`}><span className="asset-symbol">▤</span><div><strong>{target ? fileName(target) : 'No target loaded'}</strong><small>{probe ? `${probe.width} × ${probe.height} · ${probe.fps_rational ?? '?'} fps` : 'Your files stay on this machine'}</small></div></div>
       <div className="section-title spaced"><span>SOURCE IDENTITIES</span><span>{sources.length.toString().padStart(2, '0')}</span></div>
       <FacesetLibrary
         sources={sources}
@@ -708,6 +718,7 @@ export default function App() {
       // Choosing a restorer at a blend of 0 would change nothing, so the one-click fix also gives it a visible blend.
       onApplyParameter={(name: string, value: number | string) => setParameters({ ...parameters, [name]: value, ...(name === 'restorer_model' && parameters.restoration_blend <= 0 ? { restoration_blend: SWEEP_ENHANCER_BLEND } : {}) })}
     />
+    {modelHubOpen && <ModelManagerModal onClose={() => setModelHubOpen(false)} />}
     <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} commands={commands} />
     {themeGalleryOpen && (
       <DialogFrame title={`Theme Gallery (${THEMES.length} Themes)`} eyebrow="WORKSTATION PALETTE & STYLES" onClose={() => setThemeGalleryOpen(false)} className="theme-gallery-modal" testId="theme-gallery">

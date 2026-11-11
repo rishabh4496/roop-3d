@@ -160,7 +160,7 @@ export default function BottleneckFlamegraph({
             {activeJob && (
               <div className="metric-pill">
                 <small>Active Job</small>
-                <strong>{activeJob.job_id.slice(0, 8)} ({activeJob.state})</strong>
+                <strong>{(activeJob.job_id ?? '').slice(0, 8)} ({activeJob.state})</strong>
               </div>
             )}
           </div>

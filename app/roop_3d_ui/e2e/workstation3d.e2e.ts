@@ -171,7 +171,7 @@ test('the swap scope selector defaults to the full craniofacial lock, and only a
   await scope.scrollIntoViewIfNeeded();
   const options = scope.getByRole('radio');
   await expect(options).toHaveCount(3);
-  await expect(scope.getByRole('radio', { name: /Full Craniofacial Lock/ })).toHaveAttribute('aria-checked', 'true');
+  await expect(scope.getByRole('radio', { name: /Full Craniofacial/ })).toHaveAttribute('aria-checked', 'true');
   await expect(scope.getByRole('slider')).toHaveCount(0);
 
   await scope.getByRole('radio', { name: /Adaptive Skull Blend/ }).click();
@@ -182,10 +182,10 @@ test('the swap scope selector defaults to the full craniofacial lock, and only a
   await expect(scope).toContainText('β source 80% · β target 20%');
   await page.screenshot({ path: 'test-results/w3d-swap-scope.png' });
 
-  await scope.getByRole('radio', { name: /Legacy Inner-Face Only/ }).click();
+  await scope.getByRole('radio', { name: /Inner Face/ }).click();
   await expect.poll(() => seen.previews.at(-1)?.swap_scope).toBe('inner_face');
   expect('skull_blend' in (seen.previews.at(-1) ?? {})).toBe(false);
-  await scope.getByRole('radio', { name: /Full Craniofacial Lock/ }).click();
+  await scope.getByRole('radio', { name: /Full Craniofacial/ }).click();
   await expect.poll(() => 'swap_scope' in (seen.previews.at(-1) ?? {})).toBe(false);
   expect(errors).toEqual([]);
 });

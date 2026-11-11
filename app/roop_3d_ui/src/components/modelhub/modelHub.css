@@ -1,0 +1,60 @@
+/* Model Hub modal + required-models banner (Stage 13). Tokens only: works in every theme. */
+.required-banner{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:8px 16px;border-bottom:1px solid var(--line);background:var(--soft);font-size:12px}
+.required-banner strong{font-weight:650}
+.required-banner .required-banner-text{flex:1;min-width:220px;display:flex;flex-direction:column;gap:2px}
+.required-banner .required-banner-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.required-banner label{display:inline-flex;align-items:center;gap:6px;font-size:11px;color:var(--muted)}
+.required-banner progress{width:160px}
+.required-banner .banner-dismiss{border:0;background:transparent;font-size:18px;line-height:1;padding:2px 6px;color:var(--muted)}
+
+.model-hub-modal{width:min(1040px,100%)}
+.model-hub-summary{display:flex;gap:16px;flex-wrap:wrap;align-items:center;margin:4px 0 10px;font-size:12px;color:var(--muted)}
+.model-hub-summary b{color:var(--text);font-weight:650}
+.model-hub-actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px}
+.model-hub-actions label{display:inline-flex;align-items:center;gap:6px;font-size:11px;color:var(--muted)}
+.model-hub-filters{display:flex;gap:8px;flex-wrap:wrap;margin:8px 0}
+.model-hub-filters input{flex:1;min-width:160px}
+.model-hub-note{padding:8px 10px;border:1px solid var(--line);border-radius:6px;background:var(--raised);font-size:12px;margin:6px 0}
+.model-hub-note.error{border-color:var(--danger);color:var(--danger)}
+.model-hub-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px}
+.model-hub-row{display:grid;grid-template-columns:minmax(180px,2fr) auto auto minmax(140px,1.4fr) auto;gap:10px;align-items:center;padding:8px 10px;border:1px solid var(--line);border-radius:7px;background:var(--surface)}
+.model-hub-row .model-name{min-width:0;display:flex;flex-direction:column;gap:2px}
+.model-hub-row .model-name strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px}
+.model-hub-row .model-name small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.model-hub-row .model-size{font-variant-numeric:tabular-nums;font-size:11px;color:var(--muted);text-align:right;min-width:62px}
+.license-badge{display:inline-flex;align-items:center;font-size:10px;font-weight:700;letter-spacing:.3px;padding:2px 7px;border-radius:999px;border:1px solid var(--line);white-space:nowrap;max-width:150px;overflow:hidden;text-overflow:ellipsis}
+.license-badge.open{border-color:var(--ok);color:var(--ok)}
+.license-badge.restricted{border-color:var(--warn);color:var(--warn)}
+.license-badge.unverified{border-color:var(--danger);color:var(--danger)}
+.hash-check{display:inline-flex;align-items:center;gap:4px;font-size:11px;white-space:nowrap}
+.hash-check.verified{color:var(--ok)}
+.hash-check.mismatch{color:var(--danger)}
+.hash-check.not_installed{color:var(--muted)}
+.model-progress{display:flex;flex-direction:column;gap:3px;min-width:0}
+.model-progress .bar{height:6px;border-radius:999px;background:var(--line);overflow:hidden}
+.model-progress .bar>i{display:block;height:100%;background:var(--accent);transition:width .25s}
+.model-progress .bar.verifying>i{background:var(--info,#60a5fa)}
+.model-progress .bar.failed>i{background:var(--danger)}
+.model-progress small{font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.model-hub-row .row-action{justify-self:end}
+@media(max-width:760px){.model-hub-row{grid-template-columns:1fr auto}.model-hub-row .model-progress,.model-hub-row .row-action{grid-column:1/-1;justify-self:stretch}}
+
+/* 3D fallback + software notice (WebGL guard) */
+.webgl-fallback{display:flex;flex-direction:column;gap:8px;padding:12px;border:1px solid var(--line);border-radius:8px;background:var(--surface);min-height:200px}
+.webgl-fallback-head{display:flex;gap:8px;align-items:center;justify-content:space-between}
+.webgl-fallback-body{display:grid;grid-template-columns:minmax(120px,200px) 1fr;gap:12px;align-items:start}
+.webgl-fallback-outline{width:100%;aspect-ratio:1;color:var(--accent);background:var(--raised);border-radius:6px}
+.webgl-fallback-stats{margin:0;display:grid;gap:4px;font-size:12px}
+.webgl-fallback-stats>div{display:flex;justify-content:space-between;gap:12px;border-bottom:1px solid var(--line);padding-bottom:3px}
+.webgl-fallback-stats dt{color:var(--muted)}.webgl-fallback-stats dd{margin:0;font-variant-numeric:tabular-nums}
+.webgl-fallback-actions{display:flex;gap:8px}
+.guarded-canvas>canvas{display:block}
+.webgl-software-note{position:absolute;left:8px;bottom:8px;z-index:3;display:flex;align-items:center;gap:8px;font-size:11px;padding:4px 8px;border:1px solid var(--line);border-radius:6px;background:var(--surface);opacity:.92}
+.workstation-boundary-error{display:flex;flex-direction:column;gap:6px;padding:14px;align-items:flex-start}
+.workstation-boundary-error.app{margin:48px auto;max-width:560px}
+
+/* viewport studio panel + hub controls: keep them at the workstation's compact type size */
+.viewport-studio{border-top:1px solid var(--line);padding:6px 0}
+.viewport-studio>summary{cursor:pointer;font-size:12px;font-weight:600;display:flex;gap:8px;align-items:baseline}
+.viewport-studio>*:not(summary){margin-top:6px}
+.model-hub-filters select,.model-hub-filters input{font-size:12px;padding:6px 8px}

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { api, post } from '../../api';
 import type { FaceSet, FaceSetView, IdentityAssetStatus, Reconstruction } from '../../contracts';
 import VirtualList from '../common/VirtualList';
+import { loadIdentityMesh } from '../../utils/glbMesh';
 import { startFacesetDrag } from '../../utils/facesetDrag';
 import { describeCoverage, parseRequest } from '../guide/coverageGuide';
 import { READINESS, SOURCE_PHOTO_RULES } from '../guide/helpContent';
@@ -116,8 +117,8 @@ export default function FaceSetDetail({ faceset, selectedTrackLabel, assignedHer
     if (meshShown) { onShowMesh(null); return; }
     const forId = id; setMeshBusy(true);
     try {
-      const mesh = await api<Reconstruction>(`/facesets/${forId}/identity-asset/mesh${query}`);
-      if (live.current === forId) onShowMesh(mesh);
+      const loaded = await loadIdentityMesh(forId, query.replace(/^\?/, ''));
+      if (live.current === forId) onShowMesh(loaded.mesh);
     } catch (error) {
       if (live.current === forId) setBuild(value => ({ ...value, error: (error as Error).message }));
     } finally { if (live.current === forId) setMeshBusy(false); }

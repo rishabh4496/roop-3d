@@ -6,7 +6,7 @@ import { formatClock, trackLabel } from './TargetPanel';
 
 const COLORS = ['#2dd4bf', '#a78bfa', '#f59e0b', '#38bdf8', '#f472b6', '#84cc16', '#fb7185', '#facc15'];
 export const laneColor = (index: number) => COLORS[index % COLORS.length];
-const pct = (value: number, duration: number) => `${Math.max(0, Math.min(100, (value / Math.max(duration, 1e-6)) * 100))}%`;
+const pct = (value: number, duration: number) => { const share = (value / Math.max(duration, 1e-6)) * 100; return `${Number.isFinite(share) ? Math.max(0, Math.min(100, share)) : 0}%`; };
 
 /** Visible frame spans of a track: the identity sheet's segments when available, else first → last frame. */
 export function trackSpans(track: Track, sheetTrack?: IdentitySheet['tracks'][number]): [number, number][] {
