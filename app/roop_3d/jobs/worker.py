@@ -22,10 +22,19 @@ from roop_3d.models.catalog import ModelCatalog
 from roop_3d.engine.registry import EngineRegistry
 from roop_3d.reliability.classify import classify, classify_domain
 from roop_3d.reliability.monitor import MONITOR
+from roop_3d.telemetry.pinokio_terminal import HUD
 
 
 RENDER_JOB = "RENDER_JOB"
 log = logging.getLogger("roop3d.worker")
+
+
+def _hud(call: Callable[[], object]) -> None:
+    """The terminal HUD is presentation only: whatever it does, it must not fail or slow a render."""
+    try:
+        call()
+    except Exception:
+        log.debug("terminal HUD call failed", exc_info=True)
 
 
 class JobWorker:
@@ -165,6 +174,8 @@ class JobWorker:
         current = self.store.get(job_id)
         if current.state == JobState.running:
             self.store.progress(job_id, progress)
+            _hud(lambda: HUD.frame(job_id, frame=progress.frame, total=progress.total_frames, stage=progress.stage,
+                                   stage_timings_ms=progress.stage_timings_ms))
 
     def _acknowledge_control(self, job_id: str, action: str) -> None:
         current = self.store.get(job_id)
@@ -257,6 +268,7 @@ class JobWorker:
     def _run_job(self, job_id: str) -> None:
         admission: ScheduledJob | None = None
         runner = None
+        hud_job = False
         try:
             record = self.store.get(job_id)
             if record.state != JobState.queued:
@@ -284,6 +296,8 @@ class JobWorker:
                 if admission is None:
                     self._wake_event.wait(self.poll_interval)
                     self._wake_event.clear()
+            hud_job = True
+            _hud(lambda: HUD.job_started(job_id, swap_mode=getattr(record.request.parameters_at(0), "swap_scope", None)))
             output = runner.run_prepared(record, admission.lease.admission, prepared=prepared,
                 control=lambda: self._control(job_id),
                 mark_running=lambda: self._mark_running(job_id),
@@ -343,6 +357,11 @@ class JobWorker:
             else:
                 self._handle_failure(job_id, error)
         finally:
+            if hud_job:
+                def finish() -> None:
+                    # The store holds the truth (succeeded / failed / paused / cancelled / queued for the CPU retry).
+                    HUD.job_finished(job_id, self.store.get(job_id).state.value)
+                _hud(finish)
             if admission is not None:
                 self.scheduler.release(job_id)
 

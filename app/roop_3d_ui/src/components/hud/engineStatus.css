@@ -13,3 +13,11 @@
 .engine-bar-note { color: var(--muted); font-size: 11px; }
 /* Tablet widths: the bar would push the preview below the fold. It stays mounted (polling, failure toasts and the rack's "Loaded in VRAM" list keep working); only the strip is hidden. */
 @media (max-width: 1100px) { .engine-bar { display: none; } }
+/* Visible at every width (unlike .engine-bar): a first-use TensorRT build must never look like a frozen app. */
+.trt-build { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 10px; padding: 5px 18px; border-bottom: 1px solid var(--line); background: var(--soft); font-size: 11px; color: var(--text); }
+.trt-build b { font-family: ui-monospace, Menlo, Consolas, monospace; }
+.trt-build-clock { font: 700 11px ui-monospace, Menlo, Consolas, monospace; color: var(--accent); }
+.trt-build-note { color: var(--muted); }
+.trt-build-spinner { width: 10px; height: 10px; border: 2px solid var(--line); border-top-color: var(--accent); border-radius: 50%; animation: trt-spin 1s linear infinite; }
+@keyframes trt-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .trt-build-spinner { animation: none; border-top-color: var(--line); background: var(--accent); } }

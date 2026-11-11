@@ -1,0 +1,31 @@
+.rr-panel { margin-top: 18px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface); padding: 0 10px 10px; font-size: 10px; }
+.rr-panel > summary { cursor: pointer; display: flex; flex-direction: column; gap: 2px; padding: 10px 0; font-size: 11px; font-weight: 600; }
+.rr-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 4px 0; }
+.rr-actions .button { text-transform: none; }
+.rr-copied, .rr-state { min-height: 14px; color: var(--accent); font-size: 10px; margin: 2px 0 6px; }
+.rr-state { color: var(--muted); margin: 0; }
+.rr-error { color: var(--danger); font-size: 10px; margin: 6px 0; }
+.rr-summary { margin: 6px 0 8px; color: var(--muted); line-height: 1.5; }
+.rr-section { border-top: 1px solid var(--line); }
+.rr-section > summary { cursor: pointer; display: flex; align-items: center; gap: 7px; padding: 7px 0; list-style: none; }
+.rr-section > summary::-webkit-details-marker { display: none; }
+.rr-num { flex: none; width: 18px; height: 18px; display: grid; place-items: center; border: 1px solid var(--line); border-radius: 50%; font: 600 9px ui-monospace, Menlo, Consolas, monospace; color: var(--muted); }
+.rr-title { flex: 1; min-width: 0; font-weight: 600; }
+.rr-badge { flex: none; border-radius: 3px; padding: 2px 5px; font: 700 8px ui-monospace, Menlo, Consolas, monospace; letter-spacing: .6px; border: 1px solid var(--line); color: var(--muted); }
+.rr-badge-ok { color: #34d399; border-color: #34d39966; }
+.rr-badge-warn { color: #fbbf24; border-color: #fbbf2466; }
+.rr-badge-bad { color: var(--danger); border-color: var(--danger); }
+.rr-badge-info { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); }
+/* Narrow inspector: label above value, so long values (paths, provider chains) wrap instead of overflowing. */
+.rr-rows { margin: 0 0 6px; }
+.rr-row { padding: 3px 0 3px 25px; }
+.rr-row dt { color: var(--muted); font-size: 9px; }
+.rr-row dd { margin: 0; overflow-wrap: anywhere; font: 500 10px ui-monospace, Menlo, Consolas, monospace; color: var(--text); }
+.rr-note { margin: 4px 0 6px 25px; color: #fbbf24; font-size: 9px; line-height: 1.5; text-transform: none; }
+.rr-bench { margin-top: 12px; border-top: 1px solid var(--line); padding-top: 10px; }
+.rr-bench h4 { margin: 0 0 4px; font-size: 11px; }
+.rr-table { width: 100%; border-collapse: collapse; margin: 8px 0; font-variant-numeric: tabular-nums; }
+.rr-table th, .rr-table td { text-align: left; padding: 3px 4px; border-bottom: 1px solid var(--line); }
+.rr-table .rr-best { color: var(--accent); font-weight: 700; }
+.rr-reco { line-height: 1.55; }
+.rr-reco small { display: block; color: var(--muted); }

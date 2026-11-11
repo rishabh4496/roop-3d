@@ -37,6 +37,7 @@ from roop_3d.jobs.schema import JobOutput, JobProgress, JobRecord, JobState
 from roop_3d.media.schema import FaceInspection
 from roop_3d.media.video_reader import VideoReader
 from roop_3d.media.video_writer import encode_video
+from roop_3d.telemetry.pinokio_terminal import AUDIO_POLICY_TEXT, HUD
 from roop_3d.models.catalog import ModelCatalog, render_dependencies
 from roop_3d.compositor.pipeline import CompositeOptions
 from roop_3d.compositor.restoration import GpenRestorer
@@ -305,6 +306,9 @@ class MasterPipelineRunner:
             binary_payload.extend(mask_bytes)
         atomic_bytes(self.root, bin_rel, bytes(binary_payload))
         atomic_bytes(self.root, f"roop_3d/.runtime/jobs/{checkpoint.job_id}/checkpoint.npz", checkpoint_npz_bytes(checkpoint))
+        if checkpoint.completed_frame >= 0:  # the initial (nothing rendered yet) checkpoint is not a milestone
+            HUD.milestone("CHECKPOINT", "committed", job=checkpoint.job_id[:8], completed_frame=checkpoint.completed_frame,
+                          resume_frame=resume_frame, profile=checkpoint.runtime_profile)
 
     def _checkpoint(self, checkpoint: PipelineCheckpoint, *, completed_frame: int | None = None,
                     profile: RuntimeProfile | None = None, retry_profile: RuntimeProfile | None = None,
@@ -869,6 +873,10 @@ class MasterPipelineRunner:
                             if completed % self.checkpoint_every == 0:
                                 checkpoint = self._checkpoint(checkpoint, completed_frame=last_completed,
                                                               profile=admission.profile)
+                                HUD.milestone("GOP", "segment complete", job=record.job_id[:8],
+                                              segment=completed // self.checkpoint_every,
+                                              frames=f"{completed - self.checkpoint_every}-{completed - 1}",
+                                              resume_at=completed)
                             if completed % 15 == 0:
                                 if (admission.profile != "cpu" and watchdog.check_and_adapt() is not None
                                         and pipeline is not None):
@@ -1031,6 +1039,9 @@ class MasterPipelineRunner:
                     raise RecoverablePipelineOOM("CUDA allocation failed during mux; checkpoint is ready for one CPU retry") from None
                 raise DomainError("PIPELINE_OOM", "Output encoding exhausted the available memory profiles", 503) from None
             raise
+        HUD.milestone("REMUX", "output written and verified", job=record.job_id[:8], frames=manifest["verified_frames"],
+                      audio=AUDIO_POLICY_TEXT.get(manifest["audio_policy"], manifest["audio_policy"]),
+                      sha256=str(manifest["output_sha256"])[:16])
         result = JobOutput(output_path=manifest["output_path"], manifest_path=manifest["manifest_path"],
                            output_sha256=manifest["output_sha256"], frames=manifest["verified_frames"],
                            audio_policy=manifest["audio_policy"], passes=pass_result['paths'] if pass_result else {},

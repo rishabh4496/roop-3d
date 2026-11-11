@@ -295,6 +295,8 @@ def create_app(settings: Settings | None = None, *, repo_root: Path | None = Non
     app.include_router(reliability_router)
     from roop_3d.server.api import benchmark_router
     app.include_router(benchmark_router)
+    from roop_3d.server.runtime_report_routes import router as runtime_report_router
+    app.include_router(runtime_report_router)
     from roop_3d.server.unified_state import router as unified_state_router, state as unified_state
     app.state.unified_state = unified_state
     app.include_router(unified_state_router)

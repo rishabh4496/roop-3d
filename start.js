@@ -37,7 +37,10 @@ module.exports = {
         venv: "app/roop_3d/.venv",
         env: {
           PYTHONDONTWRITEBYTECODE: "1",
+          // Live terminal: every line (the 14-section report, the frame HUD, [TRT-BUILDER] heartbeats) shows as it happens, as UTF-8.
           PYTHONUNBUFFERED: "1",
+          PYTHONUTF8: "1",
+          PYTHONIOENCODING: "utf-8",
           UV_CACHE_DIR: "{{path.resolve(cwd, 'cache/uv')}}",
           UV_LINK_MODE: "copy",
           UV_PYTHON_DOWNLOADS: "never"

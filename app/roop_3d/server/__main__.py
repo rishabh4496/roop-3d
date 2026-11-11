@@ -8,6 +8,8 @@ import os
 import socket
 import sys
 
+from roop_3d.telemetry.pinokio_terminal import HUD, HudLogHandler, enforce_terminal_environment
+
 # The standalone launcher puts app/ on sys.path before this module is imported.
 try:
     from core.trt_bootstrap import bootstrap_native_library_paths
@@ -94,11 +96,15 @@ class ReadyServer(uvicorn.Server):
                 print(json.dumps({"event": "share", "token": self.share.token,
                                   "urls": [f"http://{address}:{self.config.port}/?token={self.share.token}"
                                            for address in lan_addresses() or ["<this-machine-ip>"]]}), flush=True)
+            # After the ready line: the 14-section report names URLs and Pinokio keeps the first one it sees.
+            HUD.boot(getattr(self.config.app, "state", None))
 
 
 def main(argv: list[str] | None = None) -> int:
     arguments = parse_arguments(sys.argv[1:] if argv is None else argv)
-    handler = logging.StreamHandler(sys.stdout)
+    enforce_terminal_environment()
+    HUD.arm()
+    handler = HudLogHandler(sys.stdout)  # a log record clears the live HUD line, prints, and redraws it
     handler.setFormatter(JsonFormatter())
     logging.basicConfig(level=logging.INFO, handlers=[handler], force=True)
     share = ShareMode.create() if arguments.server_share else None

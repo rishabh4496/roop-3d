@@ -114,12 +114,14 @@ class TensorRTSessionBuilder:
         self.last_build: dict = {}
         self._lock = threading.RLock()
 
-    def _emit(self, state: str, name: str, precision: str, batches: tuple[int, ...] | None = None) -> None:
+    def _emit(self, state: str, name: str, precision: str, batches: tuple[int, ...] | None = None, opt_shape: object = None) -> None:
         payload = {"engine_state": state, "engine_label": "Compiling TensorRT Engine..." if state != "IDLE" else None,
                    "engine_model": name if state != "IDLE" else None,
                    "engine_precision": precision if state != "IDLE" else None,
                    "engine_since": time.time() if state != "IDLE" else None,
                    "engine_batch_profile": list(batches) if state != "IDLE" and batches else None}
+        if opt_shape is not None and state != "IDLE":
+            payload["engine_opt_shape"] = opt_shape  # the optimisation-profile shape; only the heartbeat line uses it
         if self.telemetry:
             try:
                 self.telemetry(payload)
@@ -275,7 +277,7 @@ class TensorRTSessionBuilder:
             started = time.perf_counter()
             session = None
             try:
-                self._emit("COMPILING_TRT" if cold else "RUNNING_CANARY", path.name, precision, profile.batches)
+                self._emit("COMPILING_TRT" if cold else "RUNNING_CANARY", path.name, precision, profile.batches, shape_sets["opt"])
                 provider_list = [(TRT, provider_options), ("CUDAExecutionProvider", cuda_options)]
                 try:
                     session = ort.InferenceSession(str(path), sess_options=options, providers=provider_list)

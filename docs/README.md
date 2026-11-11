@@ -21,6 +21,7 @@ Inside the app, press **Guide** in the header for the same material, tied to wha
 | Read this | When |
 |---|---|
 | [Developer architecture](ARCHITECTURE.md) | Layout, processes, API, jobs, the interface, tests, how to add guidance |
+| [Terminal HUD, runtime report and TensorRT heartbeat](TERMINAL_HUD_AND_RUNTIME_REPORT.md) | What the Pinokio terminal prints, the 14-section report, why a cold TensorRT build freezes the server, and how the heartbeat works around it |
 | [Stage 19 report](UX_STAGE19.md) | What the usability and accessibility review found, fixed, and measured |
 | [Hardware and dependency matrix](HARDWARE_COMPATIBILITY_MATRIX.md) | Verified versions and hardware profiles |
 | [Reliability (Stage 18)](RELIABILITY_STAGE18.md) | Checkpoints, recovery, soak evidence and limits |

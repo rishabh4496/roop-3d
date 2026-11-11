@@ -9,6 +9,10 @@ _app_dir = Path(__file__).resolve().parent
 if str(_app_dir) not in sys.path:
     sys.path.insert(0, str(_app_dir))
 
+# Unbuffered UTF-8 first, so Pinokio's terminal shows every line as it happens and never garbles it (children inherit it).
+from roop_3d.telemetry.pinokio_terminal import enforce_terminal_environment
+enforce_terminal_environment()
+
 # Register CUDA/TensorRT paths before importing the server or ONNX Runtime.
 from core.trt_bootstrap import bootstrap_native_library_paths
 bootstrap_native_library_paths(_app_dir.parent)

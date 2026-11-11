@@ -4,6 +4,7 @@ import type { Capabilities, Config, Schema } from './contracts';
 import { optionReason } from './state';
 import NumericInput from './components/controls/NumericInput';
 import HardwareExplainer from './components/guide/HardwareExplainer';
+import RuntimeReportPanel from './components/diagnostics/RuntimeReportPanel';
 
 const DOMAIN_TABS = [
   { id: 'compute', label: 'Compute', description: 'Hardware acceleration, VRAM allocation, and thread budgets' },
@@ -260,6 +261,8 @@ export function SettingsInspector({
                   </div>
                 );
               })}
+
+              {tab.id === 'ux' && <RuntimeReportPanel />}
             </div>
           );
         })}

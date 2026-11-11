@@ -267,8 +267,10 @@ def _smi(arguments: list[str]) -> str:
     return subprocess.run(["nvidia-smi", *arguments], capture_output=True, text=True, timeout=5, check=True).stdout
 
 
-def gpu_memory(*, max_age: float = 1.0) -> GpuMemory:
-    """Device and (where the driver allows) per-process VRAM from ``nvidia-smi``. Rate-limited; never raises."""
+def gpu_memory(*, max_age: float = 1.0, pid: int | None = None) -> GpuMemory:
+    """Device and (where the driver allows) per-process VRAM from ``nvidia-smi``. Rate-limited; never raises.
+
+    ``pid`` selects whose per-process figure to report (default: this process). The TensorRT build sidecar asks about its parent."""
     global _gpu_cache
     with _gpu_lock:
         now = time.monotonic()
@@ -281,8 +283,8 @@ def gpu_memory(*, max_age: float = 1.0) -> GpuMemory:
             process_mib, per_process = None, False
             try:
                 for row in _smi(["--query-compute-apps=pid,used_memory", "--format=csv,noheader,nounits"]).splitlines():
-                    pid, _, memory = row.partition(",")
-                    if pid.strip() == str(os.getpid()) and memory.strip().replace(".", "").isdigit():
+                    listed, _, memory = row.partition(",")
+                    if listed.strip() == str(os.getpid() if pid is None else pid) and memory.strip().replace(".", "").isdigit():
                         process_mib, per_process = float(memory), True
             except (OSError, subprocess.SubprocessError, ValueError):
                 pass

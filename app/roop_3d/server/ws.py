@@ -153,10 +153,30 @@ class ModelDownloadProgressEvent(EventBase):
         return value
 
 
+class TrtCompilationProgressEvent(EventBase):
+    """1 Hz heartbeat while TensorRT builds an engine (`trt_compilation_progress`), also streamed on `/ws/v1/pipeline/status`.
+
+    `elapsed_seconds` and `vram_gb` are measured; there is deliberately no percentage (TensorRT reports no build progress).
+    `vram_scope` says whether `vram_gb` is this process's own memory or the whole device (Windows WDDM reports only the
+    latter); `opt_shape` is None when the build path does not know it. `status` is `compiling` while the build runs and
+    `finished` once, when its window closes (it does not say whether the engine was written)."""
+    type: Literal["trt_compilation_progress"] = "trt_compilation_progress"
+    status: Literal["compiling", "finished"] = "compiling"
+    model: str
+    precision: str | None = None
+    precision_label: str | None = None
+    opt_shape: str | None = None
+    elapsed_seconds: float = Field(default=0, ge=0)
+    vram_gb: float | None = Field(default=None, ge=0)
+    vram_scope: Literal["process", "device"] | None = None
+    started_at: float | None = None
+    reason: str | None = None
+
+
 QueueEvent.model_rebuild()
 ModelDownloadProgressEvent.model_rebuild()
 
-Event = Annotated[Union[JobStateEvent, JobProgressEvent, TelemetryEvent, PipelineStatusEvent, TrackingTelemetryEvent, StreamGapEvent, StreamReadyEvent, QueueEvent, ModelDownloadProgressEvent],
+Event = Annotated[Union[JobStateEvent, JobProgressEvent, TelemetryEvent, PipelineStatusEvent, TrackingTelemetryEvent, StreamGapEvent, StreamReadyEvent, QueueEvent, ModelDownloadProgressEvent, TrtCompilationProgressEvent],
                   Field(discriminator="type")]
 EVENT_ADAPTER = TypeAdapter(Event)
 EVENT_ADAPTER.rebuild()
@@ -235,21 +255,24 @@ async def event_stream(websocket: WebSocket) -> None:
 
 
 async def pipeline_status_stream(websocket: WebSocket) -> None:
-    """`pipeline.status`, `tracking.telemetry` and `model_download_progress` frames (`/ws/v1/pipeline/status`).
+    """`pipeline.status`, `tracking.telemetry`, `model_download_progress` and `trt_compilation_progress` frames
+    (`/ws/v1/pipeline/status`).
 
-    A pipeline snapshot opens the stream and follows every gap; the latest tracking frame (if a run is live or just ended)
-    and the latest frame of every model transfer in flight are sent with it, so a client that connects mid-run or
-    mid-download is current at once."""
+    A pipeline snapshot opens the stream and follows every gap; the latest tracking frame (if a run is live or just ended),
+    the latest frame of every model transfer in flight and of a TensorRT build in progress are sent with it, so a client
+    that connects mid-run, mid-download or mid-build is current at once."""
     tracker = websocket.app.state.pipeline
 
     def current() -> list[EventBase]:
         latest = tracker.tracking_snapshot()
         manager = getattr(websocket.app.state, "universal_models", None)
         downloads = [EVENT_ADAPTER.validate_python(frame) for frame in (manager.active_progress() if manager else [])]
-        return [tracker.snapshot(), *([latest] if latest is not None else []), *downloads]
+        building = tracker.trt_snapshot()
+        return [tracker.snapshot(), *([latest] if latest is not None else []), *downloads,
+                *([EVENT_ADAPTER.validate_python(building)] if building is not None else [])]
 
     def select(event: EventBase) -> EventBase | list[EventBase] | None:
-        if isinstance(event, (PipelineStatusEvent, TrackingTelemetryEvent, ModelDownloadProgressEvent)):
+        if isinstance(event, (PipelineStatusEvent, TrackingTelemetryEvent, ModelDownloadProgressEvent, TrtCompilationProgressEvent)):
             return event
         return current() if isinstance(event, StreamGapEvent) else None
 

@@ -9,6 +9,8 @@ from roop_3d.core.hardware import Hardware
 from roop_3d.jobs.schema import JobState
 from roop_3d.server.ws import (EngineState, EventBase, JobProgressEvent, JobStateEvent, PipelineStatusEvent,
                                StageId, StageStatus, TrackingTelemetryEvent)
+from roop_3d.telemetry.pinokio_terminal import HUD
+from roop_3d.telemetry.trt_heartbeat import TrtCompilationHeartbeat
 from roop_3d.tracking.telemetry import TrackingTelemetryPublisher
 
 STAGE_ORDER: tuple[StageId, ...] = ("STAGE_1_SPARSE_PRESCAN", "STAGE_2_ACTIVE_PREPASS", "STAGE_3_MAIN_SWAP")
@@ -35,6 +37,9 @@ class PipelineTracker:
         self._engine: dict = {"engine_state": "IDLE", "engine_label": None, "engine_model": None,
                               "engine_precision": None, "engine_since": None, "engine_batch_profile": None}
         self._tracking: dict | None = None
+        # While an engine compiles: a 1 Hz line in the Pinokio terminal and `trt_compilation_progress` frames on the socket.
+        # ONNX Runtime holds the GIL for the whole build, so the terminal line comes from a sidecar process (see trt_heartbeat).
+        self._heartbeat = TrtCompilationHeartbeat(beat=HUD.trt_beat, done=HUD.trt_done, publish=publish, spawn_terminal=HUD.spawn_trt_sidecar)
 
     def snapshot(self) -> PipelineStatusEvent:
         with self._lock:
@@ -48,6 +53,10 @@ class PipelineTracker:
         self._publish(payload)
         with self._lock:
             self._tracking = payload
+
+    def trt_snapshot(self) -> dict | None:
+        """The latest heartbeat frame while a build has been running for at least one interval, else None."""
+        return self._heartbeat.snapshot()
 
     def tracking_snapshot(self) -> TrackingTelemetryEvent | None:
         with self._lock:
@@ -128,7 +137,7 @@ class PipelineTracker:
     # -- engine builds --------------------------------------------------------------
     def set_engine(self, state: EngineState, *, label: str | None = None, model: str | None = None,
                    precision: str | None = None, since: float | None = None,
-                   batches: list[int] | tuple[int, ...] | None = None) -> None:
+                   batches: list[int] | tuple[int, ...] | None = None, opt_shape: object = None) -> None:
         with self._lock:
             previous_since = self._engine["engine_since"]
             if state == "IDLE":
@@ -141,12 +150,17 @@ class PipelineTracker:
                                 "engine_precision": precision, "engine_since": since,
                                 "engine_batch_profile": list(batches) if batches else None}
         self._emit()
+        # After the status frame, so a client always sees `COMPILING_TRT` before its first heartbeat.
+        if state == "COMPILING_TRT":
+            self._heartbeat.begin(model or (label or "engine"), precision, opt_shape)
+        else:
+            self._heartbeat.end("compile finished; canary running" if state == "RUNNING_CANARY" else "ended")
 
     def compilation_event(self, payload: dict) -> None:
         """Strict builder adapter shared by both WebSocket streams."""
         self.set_engine(payload["engine_state"], label=payload["engine_label"], model=payload["engine_model"],
                         precision=payload["engine_precision"], since=payload["engine_since"],
-                        batches=payload.get("engine_batch_profile"))
+                        batches=payload.get("engine_batch_profile"), opt_shape=payload.get("engine_opt_shape"))
 
     def engine_observer(self, state: str, record: dict, precision: str) -> None:
         """`TensorRTBuilder(engine_observer=...)` adapter."""

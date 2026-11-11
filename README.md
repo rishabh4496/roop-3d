@@ -104,6 +104,42 @@ Curl:
 curl http://127.0.0.1:8030/api/v1/health
 ```
 
+### Runtime report and terminal HUD
+
+On start the Pinokio terminal prints a 14-section structured runtime report (host, CPU pools, GPU, providers, TensorRT cache, ring
+buffer, VRAM budget, model hashes, 3D topology, swap lock, camera/SH, GOP and audio, offline audit, URLs) and again at every job
+start. While rendering it keeps one live line (job, mode, progress, current/rolling fps, ETA, VRAM, CPU, per-stage ms) and prints
+`[GOP]`, `[CHECKPOINT]` and `[REMUX]` milestones. A first-use TensorRT build prints a 1 Hz `[TRT-BUILDER]` line and sends
+`trt_compilation_progress` frames on `/ws/v1/pipeline/status`. The same report is in **Settings → UX & Diagnostics** with a copy
+button and a thread/pool benchmark runner. Design, limits and switches: `docs/TERMINAL_HUD_AND_RUNTIME_REPORT.md`.
+
+- `GET /api/v1/system/runtime-report`: `{sections: [{number, key, title, status, rows, notes}], counts, overall, text}`.
+- `POST /api/v1/settings/benchmark_threads` `{"profile": "quick" | "full"}` then `GET /api/v1/settings/benchmark_status`.
+
+JavaScript:
+
+```javascript
+const report = await fetch('http://127.0.0.1:8030/api/v1/system/runtime-report').then(r => r.json());
+console.log(report.overall, report.sections.filter(s => s.status !== 'OK').map(s => s.title));
+console.log(report.text); // the copy-ready box rendering
+```
+
+Python:
+
+```python
+import httpx
+report = httpx.get('http://127.0.0.1:8030/api/v1/system/runtime-report', timeout=30).json()
+print(report['text'])
+httpx.post('http://127.0.0.1:8030/api/v1/settings/benchmark_threads', json={'profile': 'quick'})
+```
+
+Curl:
+
+```shell
+curl http://127.0.0.1:8030/api/v1/system/runtime-report
+curl -X POST -H "Content-Type: application/json" -d '{"profile":"quick"}' http://127.0.0.1:8030/api/v1/settings/benchmark_threads
+```
+
 The host is restricted to 127.0.0.1. Request bodies are bounded (default 2 MiB);
 origins/Host headers are checked, and errors use JSON envelopes with request IDs.
 `ROOP3D_DEV_CORS=1` enables only the development origin `http://127.0.0.1:5174`.

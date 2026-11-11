@@ -1,13 +1,19 @@
+// Every Python step sets PYTHONUNBUFFERED / PYTHONUTF8 / PYTHONIOENCODING (the same contract start.js and the server enforce),
+// so output appears as it happens and is never garbled. `env` is a literal object in each step, as in prototype/system/examples.
 module.exports = {
   requires: { bundle: "ai" },
   run: [{
     method: "shell.run",
-    params: { path: ".", cache: "cache", message: "python -B tools/project_admin.py preflight" }
+    params: {
+      path: ".", cache: "cache",
+      env: { PYTHONUNBUFFERED: "1", PYTHONUTF8: "1", PYTHONIOENCODING: "utf-8" },
+      message: "python -B tools/project_admin.py preflight"
+    }
   }, {
     method: "shell.run",
     params: {
       path: ".", cache: "cache", venv: "app/roop_3d/.venv",
-      env: { PYTHONDONTWRITEBYTECODE: "1", UV_CACHE_DIR: "{{path.resolve(cwd, 'cache/uv')}}", UV_LINK_MODE: "copy", UV_PYTHON_DOWNLOADS: "never" },
+      env: { PYTHONDONTWRITEBYTECODE: "1", PYTHONUNBUFFERED: "1", PYTHONUTF8: "1", PYTHONIOENCODING: "utf-8", UV_CACHE_DIR: "{{path.resolve(cwd, 'cache/uv')}}", UV_LINK_MODE: "copy", UV_PYTHON_DOWNLOADS: "never" },
       message: ["uv pip sync --require-hashes app/roop_3d/requirements.lock"],
       on: [{ event: "/(ROOP3D_GUARD_ERROR|ModuleNotFoundError|error:)/", break: true }]
     }
@@ -27,7 +33,7 @@ module.exports = {
     method: "shell.run",
     params: {
       path: ".", cache: "cache", venv: "app/roop_3d/.venv",
-      env: { PYTHONDONTWRITEBYTECODE: "1" },
+      env: { PYTHONDONTWRITEBYTECODE: "1", PYTHONUNBUFFERED: "1", PYTHONUTF8: "1", PYTHONIOENCODING: "utf-8" },
       message: ["python -B tools/project_admin.py mark-ready"],
       on: [{ event: "/(ROOP3D_GUARD_ERROR|ModuleNotFoundError|error:)/", break: true }]
     }
@@ -37,7 +43,7 @@ module.exports = {
     method: "shell.run",
     params: {
       path: "app", venv: "roop_3d/.venv",
-      env: { PYTHONDONTWRITEBYTECODE: "1" },
+      env: { PYTHONDONTWRITEBYTECODE: "1", PYTHONUNBUFFERED: "1", PYTHONUTF8: "1", PYTHONIOENCODING: "utf-8" },
       message: ["python -B -m roop_3d.tools.check_topology_assets"]
     }
   }]

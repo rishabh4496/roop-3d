@@ -448,6 +448,8 @@ def test_compilation_broadcasts_to_both_live_websockets(fake_trt, tmp_path):
         for expected in ("COMPILING_TRT", "RUNNING_CANARY", "IDLE"):
             for stream in (telemetry, status):
                 frame = stream.receive_json()
+                while frame["type"] == "trt_compilation_progress":   # the build heartbeat is additive; this test pins the status frames
+                    frame = stream.receive_json()
                 assert frame["type"] == "pipeline.status" and frame["engine_state"] == expected
                 if expected != "IDLE":
                     assert frame["engine_model"] == path.name and frame["engine_precision"] == "FP32"
