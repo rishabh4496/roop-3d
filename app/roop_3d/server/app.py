@@ -268,6 +268,8 @@ def create_app(settings: Settings | None = None, *, repo_root: Path | None = Non
     app.include_router(identity_lock_router)
     from roop_3d.server.identity_assets import router as identity_assets_router
     app.include_router(identity_assets_router)
+    from roop_3d.server.blender_routes import router as blender_router
+    app.include_router(blender_router)
     from roop_3d.server.faceset_3d import router as faceset_3d_router
     app.include_router(faceset_3d_router)
     from roop_3d.server.target_lock import router as target_lock_router

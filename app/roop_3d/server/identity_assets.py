@@ -31,6 +31,7 @@ from __future__ import annotations
 import base64
 import re
 import threading
+from dataclasses import dataclass
 from typing import Any, Literal
 
 import cv2
@@ -264,18 +265,29 @@ def _complete_with_prior(mesh, texture: np.ndarray, state: np.ndarray) -> tuple[
     return out, report
 
 
-def _mesh(document, template: str = "canonical", topology: str | None = None, sliders: dict[str, float] | None = None,
-          albedo_prior: bool = False) -> dict[str, Any]:
-    from roop_3d.reconstruction.identity_asset import compute_build_key, to_gltf_frame
+@dataclass
+class _MeshView:
+    """Everything both mesh routes (JSON and GLB) serve, prepared once: the geometry in the identity-asset (y down) frame, the
+    display atlas (BGR, unseen texels grey or prior-filled) and the evidence blocks."""
+    asset: Any
+    source_mesh: Any
+    texture: np.ndarray
+    provenance: str
+    topology_block: dict[str, Any] | None
+    semantic: dict[str, Any] | None
+    prior_block: dict[str, Any] | None
+
+
+def _prepare_mesh(document, template: str, topology: str | None, sliders: dict[str, float], albedo_prior: bool) -> _MeshView:
+    from roop_3d.reconstruction.identity_asset import compute_build_key
     from roop_3d.reconstruction.uv_synthesizer import ConfidenceState
     key = compute_build_key(document, _settings(template))
     asset = _store().load(document.faceset_id, key)
     if asset is None:
         raise DomainError("IDENTITY_ASSET_NOT_BUILT", "Build the identity asset first; it is never built implicitly", 404)
-    source_mesh, source_texture, source_state, topology_block, semantic = _topology_view(asset, template, topology, sliders or {})
+    source_mesh, source_texture, source_state, topology_block, semantic = _topology_view(asset, template, topology, sliders)
     if len(source_mesh.vertices) > MESH_VERTEX_LIMIT or len(source_mesh.faces) > MESH_FACE_LIMIT:
         raise DomainError("IDENTITY_ASSET_TOO_LARGE", "The identity mesh exceeds the viewer bounds", 413)
-    mesh = to_gltf_frame(source_mesh)
     texture = np.array(source_texture, copy=True)
     prior_block = None
     if albedo_prior:
@@ -283,12 +295,24 @@ def _mesh(document, template: str = "canonical", topology: str | None = None, sl
     else:
         # Unseen texels are shown as neutral grey, never as invented skin.
         texture[source_state == int(ConfidenceState.UNSEEN)] = (96, 96, 96)
-    ok, png = cv2.imencode(".png", texture)
-    if not ok:
-        raise DomainError("TEXTURE_ENCODE_FAILED", "Failed to encode the identity atlas", 500)
     provenance = (f"Stage 3 identity asset {asset.manifest.build_key[:12]} · {asset.manifest.reconstruction_level}"
                   f" · {asset.manifest.landmark_layout} landmarks · "
                   + ("unseen texels filled by the data-free albedo prior" if albedo_prior else "unseen texels grey"))
+    if topology_block is not None:
+        if not topology_block["default"]:
+            provenance += f" · topology {topology_block['id']} ({topology_block['license_id']}; UV {topology_block['uv_provenance']})"
+        provenance += " · semantic sliders applied" if semantic else ""
+    return _MeshView(asset, source_mesh, texture, provenance, topology_block, semantic, prior_block)
+
+
+def _mesh(document, template: str = "canonical", topology: str | None = None, sliders: dict[str, float] | None = None,
+          albedo_prior: bool = False) -> dict[str, Any]:
+    from roop_3d.reconstruction.identity_asset import to_gltf_frame
+    view = _prepare_mesh(document, template, topology, sliders or {}, albedo_prior)
+    mesh = to_gltf_frame(view.source_mesh)
+    ok, png = cv2.imencode(".png", view.texture)
+    if not ok:
+        raise DomainError("TEXTURE_ENCODE_FAILED", "Failed to encode the identity atlas", 500)
     out = {
         "method": "identity_asset",
         "coordinate_system": "opengl",
@@ -296,17 +320,91 @@ def _mesh(document, template: str = "canonical", topology: str | None = None, sl
         "faces": mesh.faces.astype(np.int64).tolist(),
         "uvs": np.round(mesh.uvs.astype(np.float64), 6).tolist() if mesh.uvs is not None else None,
         "texture": "data:image/png;base64," + base64.b64encode(png.tobytes()).decode("ascii"),
-        "provenance": provenance,
+        "provenance": view.provenance,
     }
-    if topology_block is not None:
-        if not topology_block["default"]:
-            provenance += f" · topology {topology_block['id']} ({topology_block['license_id']}; UV {topology_block['uv_provenance']})"
-        out["provenance"] = provenance + (" · semantic sliders applied" if semantic else "")
-        out["topology"] = topology_block
-        out["semantic"] = semantic
-    if prior_block is not None:
-        out["albedo_prior"] = prior_block
+    if view.topology_block is not None:
+        out["topology"] = view.topology_block
+        out["semantic"] = view.semantic
+    if view.prior_block is not None:
+        out["albedo_prior"] = view.prior_block
     return out
+
+
+_GLB_SERIALIZER = None
+
+
+def _serializer():
+    global _GLB_SERIALIZER
+    if _GLB_SERIALIZER is None:
+        from roop_3d.io.glb_export import GLBBinarySerializer
+        _GLB_SERIALIZER = GLBBinarySerializer()
+    return _GLB_SERIALIZER
+
+
+def _shape_keys(topology_id: str, sliders: dict[str, float]):
+    """The six semantic sliders as glTF morph targets (delta of +1 slider unit, mesh frame) and the weights that reproduce
+    ``sliders``. Exact: the controller is linear in the slider values, apart from one whole-move limit scale applied to the weights."""
+    from roop_3d.io.glb_export import MorphTarget
+    from roop_3d.reconstruction.semantic_shape import SLIDER_KEYS, SLIDERS
+    from roop_3d.reconstruction.topology import default_registry
+    controller = _semantic_controller(default_registry(), topology_id)
+    targets = []
+    for slider in SLIDERS:
+        unit = controller.solve({slider.key: 1.0})
+        targets.append(MorphTarget(slider.key, controller.displacement(unit.delta_beta / unit.limit_scale)))
+    asked = {k: v for k, v in sliders.items() if v != 0.0}
+    result = controller.solve(asked) if asked else None             # also validates ranges
+    scale = result.limit_scale if result else 1.0
+    return targets, [float(sliders.get(key, 0.0)) * scale for key in SLIDER_KEYS], result.public() if result else None
+
+
+def _normal_map(view: _MeshView, template: str, topology_block: dict[str, Any] | None):
+    """Tangent-space normal map from the asset's UV displacement (metres), or ``None`` with the reason it is absent."""
+    from roop_3d.io.glb_export import metres_per_uv_unit, normal_map_from_height
+    height = getattr(view.asset, "displacement_uv_m", None)
+    if height is None or np.asarray(height).ndim != 2 or np.asarray(height).size == 0:
+        return None, "asset carries no UV displacement"
+    if topology_block is not None and not topology_block["default"]:
+        return None, "displacement is stored in the default topology's UV layout"
+    height = np.asarray(height, np.float32)
+    if float(np.ptp(height)) <= 1e-9:
+        return None, "UV displacement is flat (no measured fine relief)"
+    mesh = view.source_mesh
+    if mesh.uvs is None:
+        return None, "mesh has no UVs"
+    per_texel = metres_per_uv_unit(mesh.vertices, mesh.faces, mesh.uvs) / height.shape[0]
+    return normal_map_from_height(height, per_texel), "baked from the asset's UV displacement"
+
+
+def _glb(document, template: str = "canonical", topology: str | None = None, sliders: dict[str, float] | None = None,
+         albedo_prior: bool = False, shape_keys: bool = False, normal_map: bool = True) -> bytes:
+    """Binary glTF of the identity mesh: albedo atlas, optional normal map, optional shape keys. Same inputs as ``_mesh``."""
+    sliders = sliders or {}
+    if shape_keys and template != "makehuman":
+        raise DomainError("SHAPE_KEYS_REQUIRE_MAKEHUMAN_TEMPLATE", "Shape keys are the semantic sliders and need template=makehuman", 422)
+    # With shape keys the base mesh is the un-slid one and the sliders travel as morph weights, so a viewer / Blender user can
+    # keep editing them; without, the sliders are baked into the vertices exactly as the JSON route does.
+    view = _prepare_mesh(document, template, topology, {} if shape_keys else sliders, albedo_prior)
+    morphs, weights, semantic = [], None, view.semantic
+    if shape_keys:
+        topology_id = view.topology_block["id"]
+        morphs, weights, semantic = _shape_keys(topology_id, sliders)
+    normal_image, normal_note = _normal_map(view, template, view.topology_block) if normal_map else (None, "not requested")
+    asset, mesh = view.asset, view.source_mesh
+    attributes = {}
+    confidence, state = getattr(asset, "vertex_confidence", None), getattr(asset, "vertex_state", None)
+    if confidence is not None and state is not None and len(confidence) == len(mesh.vertices) == len(state):
+        attributes = {"_CONFIDENCE": confidence, "_STATE": np.asarray(state, np.float32)}
+    manifest = asset.manifest
+    extras = {"roop3d_identity_asset": {
+        "build_key": manifest.build_key, "reconstruction_level": manifest.reconstruction_level,
+        "landmark_layout": manifest.landmark_layout, "provenance": view.provenance, "normal_map": normal_note,
+        "shape_keys": [t.name for t in morphs], "semantic": semantic, "topology": view.topology_block,
+        "albedo_prior": view.prior_block,
+        "frame": "converted from the y-down identity-asset frame to glTF (y up, right-handed); metres",
+    }}
+    return _serializer().serialize(mesh, frame="mesh", albedo=view.texture, normal_map=normal_image, morph_targets=morphs,
+                                   morph_weights=weights, vertex_attributes=attributes, extras=extras, name="roop3d_head")
 
 
 @router.get("/facesets/{faceset_id}/identity-asset/mesh")
@@ -322,6 +420,28 @@ async def identity_asset_mesh(
                "nose_bridge": nose_bridge, "brow_arch": brow_arch, "face_fullness": face_fullness}
     document = await run_in_threadpool(load_document, request, faceset_id)
     return await run_in_threadpool(_mesh, document, template, topology, sliders, albedo_prior)
+
+
+@router.get("/facesets/{faceset_id}/identity-asset/mesh.glb")
+async def identity_asset_mesh_glb(
+    faceset_id: str, request: Request, template: TemplateName = Query(default="canonical"),
+    topology: str | None = Query(default=None, max_length=64),
+    jaw_width: float = Query(default=0.0), cheekbone_prominence: float = Query(default=0.0),
+    chin_projection: float = Query(default=0.0), nose_bridge: float = Query(default=0.0),
+    brow_arch: float = Query(default=0.0), face_fullness: float = Query(default=0.0),
+    albedo_prior: bool = Query(default=False),
+    shape_keys: bool = Query(default=False, description="template=makehuman only: emit the six sliders as morph targets"),
+    normal_map: bool = Query(default=True, description="attach a baked normal map when the asset has measured relief"),
+    download: bool = Query(default=False),
+):
+    """The ``/mesh`` payload as a binary glTF 2.0 stream: load it with three.js ``GLTFLoader`` (or import it into Blender)."""
+    sliders = {"jaw_width": jaw_width, "cheekbone_prominence": cheekbone_prominence, "chin_projection": chin_projection,
+               "nose_bridge": nose_bridge, "brow_arch": brow_arch, "face_fullness": face_fullness}
+    document = await run_in_threadpool(load_document, request, faceset_id)
+    data = await run_in_threadpool(_glb, document, template, topology, sliders, albedo_prior, shape_keys, normal_map)
+    disposition = "attachment" if download else "inline"
+    return Response(content=data, media_type="model/gltf-binary",
+                    headers={"Content-Disposition": f'{disposition}; filename="{faceset_id}_head.glb"', "Cache-Control": "private, no-cache"})
 
 
 @router.get("/morphable-topologies")
