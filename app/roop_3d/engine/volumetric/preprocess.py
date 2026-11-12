@@ -37,20 +37,31 @@ def similarity(source: np.ndarray, destination: np.ndarray) -> np.ndarray:
     return np.array(((a, -b, tx), (b, a, ty)), np.float64)
 
 
+def template_points(size: int, template: str = "arcface_112") -> np.ndarray:
+    """The swapper's five canonical landmark positions in a ``size`` px crop."""
+    if size not in (112, 128, 256, 512) or template not in ("arcface_112", "ffhq_512"):
+        raise DomainError("ALIGNMENT_CONTRACT", "Expected five landmarks and a supported canonical crop size", 422)
+    if template == "ffhq_512":
+        return FFHQ_REFERENCE_5PTS_512 * (size / 512.0)
+    reference = ARCFACE_REFERENCE_5PTS.astype(np.float64).copy()
+    if size != 112:
+        reference[:, 0] += 8
+        reference *= size / 128
+    return reference
+
+
+def registration_matrix(landmarks5: np.ndarray, size: int, template: str = "arcface_112") -> np.ndarray:
+    """Similarity (2x3, frame -> crop) that puts the five landmarks on the swapper's template."""
+    if np.asarray(landmarks5).shape != (5, 2):
+        raise DomainError("ALIGNMENT_CONTRACT", "Expected five landmarks and a supported canonical crop size", 422)
+    return similarity(landmarks5, template_points(size, template))
+
+
 def aligned_crop(image: np.ndarray, landmarks5: np.ndarray, size: int = 128, *,
                  template: str = "arcface_112") -> AlignedCrop:
     image_bgr(image)
-    if size not in (112, 128, 256, 512) or template not in ("arcface_112", "ffhq_512") or np.asarray(landmarks5).shape != (5, 2):
-        raise DomainError("ALIGNMENT_CONTRACT", "Expected five landmarks and a supported canonical crop size", 422)
-    if template == "ffhq_512":
-        reference = FFHQ_REFERENCE_5PTS_512 * (size / 512.0)
-    else:
-        reference = ARCFACE_REFERENCE_5PTS.astype(np.float64).copy()
-        if size != 112:
-            reference[:, 0] += 8
-            reference *= size / 128
-    matrix = similarity(landmarks5, reference)
-    crop = cv2.warpAffine(image, matrix, (size, size), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT)
+    matrix = registration_matrix(landmarks5, size, template)
+    crop = cv2.warpAffine(image, matrix, (size, size), flags=cv2.INTER_CUBIC, borderMode=cv2.BORDER_REPLICATE)
     return AlignedCrop(crop, matrix, cv2.invertAffineTransform(matrix))
 
 

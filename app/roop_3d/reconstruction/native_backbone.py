@@ -158,7 +158,7 @@ class NativeMorphableBackbone:
         centre = (low+high)/2
         scale = 223 / side
         matrix = np.array([[scale, 0, (side/2-centre[0])*scale], [0, scale, (side/2-centre[1])*scale]])
-        return cv2.warpAffine(image, matrix, (224, 224), flags=cv2.INTER_LINEAR)
+        return cv2.warpAffine(image, matrix, (224, 224), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE)
 
     def _flame_identity(self, bfm_identity):
         # Transfer IDENTITY DELTAS only, so the FLAME neutral/joints remain in
@@ -210,7 +210,8 @@ class NativeMorphableBackbone:
         # HRN networks consume native position/photograph maps, not RGB crops.
         position = self.uv_map.interpolate(expressed)
         # Sample high-resolution originals directly in the SAME native crop.
-        hd = cv2.warpAffine(image_bgr, crop.matrix * (512/224), (512, 512), flags=cv2.INTER_LINEAR)
+        hd = cv2.warpAffine(image_bgr, crop.matrix * (512/224), (512, 512), flags=cv2.INTER_LINEAR,
+                            borderMode=cv2.BORDER_REPLICATE)
         observed = cv2.warpAffine(np.ones(image_bgr.shape[:2], np.float32), crop.matrix * (512/224),
                                  (512, 512), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT)
         texture, valid = self._hrn_texture(expressed, rotation, translation, hd, k, observed)

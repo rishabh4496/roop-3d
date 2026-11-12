@@ -141,7 +141,7 @@ def test_session_3d_route_never_calls_inner_face_swapper(monkeypatch):
     session.prepared = True
     session.render_mode = "pose_3d"
     session.default_source = SimpleNamespace(faceset_id="test")
-    session.neural_face = SimpleNamespace(sources={"test": ()}, release=lambda: None,
+    session.neural_face = SimpleNamespace(sources={"test": ()}, release=lambda: None, retain_tracks=lambda ids: None, last_diag=None,
         process=lambda *a, **k: SimpleNamespace(image=np.full((512, 512, 3), 210, np.uint8),
             inverse=np.eye(2, 3), coverage=np.ones((512, 512), np.float32), landmarks5=face.landmarks5))
     def inner_crop_forbidden(*args, **kwargs):

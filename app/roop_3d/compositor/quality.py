@@ -65,6 +65,48 @@ def local_illumination_match(source: np.ndarray, target: np.ndarray, alpha: np.n
     return np.clip(np.nan_to_num(out), 0, 255).round().astype(np.uint8)
 
 
+def shading_gain_match(source: np.ndarray, target: np.ndarray, alpha: np.ndarray, *, strength: float = 1.0,
+                       sigma_fraction: float = 0.03, reach_fraction: float = 24 / 512,
+                       gain_range: tuple[float, float] = (0.6, 1.5), work_side: int = 192) -> np.ndarray:
+    """Give a synthesised face the target's low-frequency shading, continued across the mask boundary.
+
+    A neural/restored face carries the lighting of its training data: flat, or lit from the wrong side, so it reads as a
+    2D sticker and its rim is brighter or darker than the head around it. The target's own lightness, low-passed, is the
+    lighting to follow. Both images are low-passed over the same domain, the mask DILATED outward by ``reach_fraction`` of
+    the crop (so the gain at the rim is set by what surrounds the face, not only by what is inside it, and the
+    transition continues smoothly under the feather), and their ratio is a per-pixel gain on lightness only. The mean gain
+    inside the mask is divided out (a mean, so brightness is not shifted): global brightness and colour already belong to the colour-match step, and
+    high-frequency detail is untouched because the gain is a low-pass field.
+    """
+    image, reference = np.asarray(source), np.asarray(target)
+    weight = np.clip(np.asarray(alpha, np.float32), 0.0, 1.0)
+    if (image.ndim != 3 or image.shape[2] != 3 or image.shape[0] != image.shape[1] or reference.shape != image.shape
+            or weight.shape != image.shape[:2] or not np.isfinite(weight).all()):
+        raise DomainError("QUALITY_INPUT_INVALID", "Shading inputs must be matching square crops", 422)
+    if not 0.0 <= strength <= 1.0:
+        raise ValueError("strength must be within 0..1")
+    inside = weight > 0.5
+    if strength == 0.0 or int(inside.sum()) < 64:
+        return image.copy()
+    side = image.shape[0]
+    work = min(work_side, side)
+    shrink = lambda plane: cv2.resize(plane, (work, work), interpolation=cv2.INTER_AREA)
+    lab_s = cv2.cvtColor(image.astype(np.float32) / 255.0, cv2.COLOR_BGR2LAB)
+    lab_t = cv2.cvtColor(reference.astype(np.float32) / 255.0, cv2.COLOR_BGR2LAB)
+    small_inside = shrink(inside.astype(np.float32)) > 0.5
+    reach = max(1, int(round(reach_fraction * work)))
+    domain = cv2.dilate(small_inside.astype(np.uint8), cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * reach + 1, 2 * reach + 1)))
+    sigma = max(1.5, sigma_fraction * work)
+    low_s = _normalised_blur(shrink(lab_s[..., 0]), domain.astype(np.float32), sigma) + 5.0
+    low_t = _normalised_blur(shrink(lab_t[..., 0]), domain.astype(np.float32), sigma) + 5.0
+    gain = np.clip(low_t / low_s, 0.05, 20.0)
+    gain = np.clip(gain / float(gain[small_inside].mean()), gain_range[0], gain_range[1])
+    gain = cv2.resize(gain, (side, side), interpolation=cv2.INTER_CUBIC)
+    lab_s[..., 0] = np.clip(lab_s[..., 0] * (1.0 + (gain - 1.0) * strength), 0.0, 100.0)
+    out = cv2.cvtColor(lab_s, cv2.COLOR_LAB2BGR) * 255.0
+    return np.clip(np.nan_to_num(out), 0, 255).round().astype(np.uint8)
+
+
 def _motion_kernel(dx: float, dy: float, shutter: float, max_length: float) -> np.ndarray | None:
     length = min(math.hypot(dx, dy) * shutter, max_length)
     if length < 1.5:

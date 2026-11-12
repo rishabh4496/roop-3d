@@ -79,6 +79,7 @@ class JobRequest(Contract):
     inspection_id: str = Field(pattern=r"^[0-9a-f]{32}$")
     face_mappings: tuple[TrackToFaceSetMap, ...] = Field(min_length=1, max_length=64)
     processing: Literal["local", "remote"] = "local"
+    angle_diagnostics: Literal["summary", "full"] = "summary"
     remote_consent: bool = False
     trim_start_seconds: float | None = Field(default=None, ge=0, le=86400)
     trim_end_seconds: float | None = Field(default=None, gt=0, le=86400)
@@ -98,6 +99,9 @@ class JobRequest(Contract):
         # Preserve existing idempotency/checkpoint fingerprints for the default engine.
         if self.engine_id == "reference_onnx":
             value.pop("engine_id", None)
+        # Summary is the backward-compatible default; only full changes the render diagnostics artifact.
+        if self.angle_diagnostics == "summary":
+            value.pop("angle_diagnostics", None)
         if self.workstation_parameters:
             # Preserve fingerprints of requests saved before these opt-in controls existed.
             for field in ('swap_weight', 'erosion_px', 'pose_frontalization', 'tps_expression_weight', 'linear_light', 'blend_transfer', 'ambient_fill', 'hairline_offset_px', 'occlusion_threshold', *PROTECTION_FIELDS, *SCOPE_FIELDS):

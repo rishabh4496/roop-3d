@@ -29,6 +29,7 @@ from roop_3d.core.settings import Contract, Settings
 from roop_3d.core.storage import atomic_bytes, atomic_json, owned
 from roop_3d.engine.runtime import RuntimeConfig
 from roop_3d.engine.volumetric.session import ReferencePipeline
+from roop_3d.engine.volumetric.angle_diagnostics import angle_jsonl_name
 from roop_3d.engine.vram_governor import Admission, RuntimeProfile, is_cuda_oom
 from roop_3d.engine.vram_watchdog import VRAMWatchdog
 from roop_3d.faceset.faceset_reader import FaceSetReader
@@ -172,6 +173,34 @@ class PreparedPipeline:
     identity_lock: object | None = None
     identity_guard: object | None = None
     tracking: Mapping | None = None
+
+
+def _restoration_provenance(session, capability: dict) -> tuple[dict, str | None]:
+    """Report the restorer route that actually ran, alongside configured route snapshots."""
+    dense_report = (capability.get("dense_face") or {}).get("enhancer") or {}
+    compositor_report = (capability.get("full_frame_compositor") or {}).get("restorer") or {}
+    dense_restorer = getattr(getattr(session, "neural_face", None), "enhancer", None)
+    compositor_restorer = getattr(getattr(session, "compositor", None), "restorer", None)
+    routes = []
+    if getattr(dense_restorer, "inference_verified", False):
+        routes.append(("dense_face.enhancer", dense_report, dense_restorer))
+    if getattr(compositor_restorer, "inference_verified", False):
+        routes.append(("full_frame_compositor.restorer", compositor_report, compositor_restorer))
+    route, primary, restorer = routes[0] if routes else (None, compositor_report or dense_report, None)
+    report = {
+        **primary,
+        "route": route,
+        "invoked": bool(routes),
+        "invoked_routes": [name for name, _, _ in routes],
+        "routes": {
+            "dense_face.enhancer": dense_report,
+            "full_frame_compositor.restorer": compositor_report,
+        },
+    }
+    model = (getattr(restorer, "model", None) or
+             getattr(getattr(restorer, "runner", None), "model", None))
+    record = getattr(model, "record", None)
+    return report, record.get("sha256") if isinstance(record, dict) else None
 
 
 class MasterPipelineRunner:
@@ -694,6 +723,7 @@ class MasterPipelineRunner:
         last_completed = checkpoint.completed_frame
         capability: dict = {}
         restorer_sha256: str | None = None
+        restoration_report: dict = {}
         export = record.request.export
         hdr_policy = export.hdr_policy if export else 'tonemap_sdr'
         if hdr_policy != 'tonemap_sdr':  # raises HDR_INPUT_REJECTED for PQ/HLG input before any work is done
@@ -701,6 +731,7 @@ class MasterPipelineRunner:
         scene_cuts: list[int] = []
         swapped_ranges: list[list[int]] = []
         identity_report = None
+        diagnostics = None
 
         try:
             signal = self._control_signal(control)
@@ -728,6 +759,12 @@ class MasterPipelineRunner:
                 identity_report = IdentityRunReport(prepared.identity_lock, labels_to_ids)
             if hasattr(session, 'configure_temporal'):
                 session.configure_temporal(settings)
+            diagnostics = getattr(session, 'angle_diagnostics', None)
+            if diagnostics is not None:
+                from roop_3d.core.settings import runtime_path
+                diagnostics.configure(
+                    record.request.angle_diagnostics,
+                    runtime_path(settings.output_root, self.root) / angle_jsonl_name(record.job_id))
             architecture = record.request.parameters_at(0).restorer_model
             if architecture == "auto":
                 # Each family keeps its own engine: UltraMax / GFPGAN are never silently served by GPEN.
@@ -941,13 +978,12 @@ class MasterPipelineRunner:
             checkpoint = self._checkpoint(checkpoint, completed_frame=last_completed,
                                           profile=admission.profile)
             capability = session.capability()
-            # Capture the actual activated restoration model before release clears its session.
-            restorer = getattr(session.compositor, "restorer", None)
-            model = getattr(restorer, "model", None) or getattr(getattr(restorer, "runner", None), "model", None)
-            record_used = getattr(model, "record", None)
-            if record_used:
-                restorer_sha256 = record_used.get("sha256")
+            if diagnostics is not None:
+                diagnostics.close()
+            restoration_report, restorer_sha256 = _restoration_provenance(session, capability)
         except BaseException as error:
+            if diagnostics is not None:
+                diagnostics.discard()
             if is_cuda_oom(error):
                 if checkpoint.oom_retries == 0 and admission.profile != "cpu":
                     checkpoint = self._checkpoint(checkpoint, completed_frame=last_completed,
@@ -958,141 +994,152 @@ class MasterPipelineRunner:
         finally:
             session.release_session()
 
-        self._check_control(control, checkpoint, last_completed)
-
-        report_progress(JobProgress(frame=decoded_count, total_frames=total_frames, stage="mux"))
-
-        def completed_frame(decoded):
+        try:
             self._check_control(control, checkpoint, last_completed)
-            path = owned(self.root, self._frame_relative(record.job_id, decoded.index))
-            image = cv2.imread(str(path), cv2.IMREAD_COLOR)
-            if image is None or expected_shape is None or image.shape != expected_shape:
-                raise DomainError("JOB_CHECKPOINT_FRAME_INVALID", "Processed frame checkpoint failed validation", 409)
-            return image
 
-        if settings.video_timing_policy == "cfr":
-            fps = self.media.probe(record.request.target_path).fps_rational
+            report_progress(JobProgress(frame=decoded_count, total_frames=total_frames, stage="mux"))
+
+            def completed_frame(decoded):
+                self._check_control(control, checkpoint, last_completed)
+                path = owned(self.root, self._frame_relative(record.job_id, decoded.index))
+                image = cv2.imread(str(path), cv2.IMREAD_COLOR)
+                if image is None or expected_shape is None or image.shape != expected_shape:
+                    raise DomainError("JOB_CHECKPOINT_FRAME_INVALID", "Processed frame checkpoint failed validation", 409)
+                return image
+
+            if settings.video_timing_policy == "cfr":
+                fps = self.media.probe(record.request.target_path).fps_rational
+                try:
+                    rate = Fraction(fps) if fps else None
+                except (ValueError, ZeroDivisionError):
+                    rate = None
+                if rate is None or rate <= 0:
+                    raise DomainError("VIDEO_RATE_UNKNOWN", "CFR output requires a verified rational input frame rate", 422)
+                timing, output_rate = "explicit_cfr", rate
+            else:
+                timing, output_rate = "preserve_source_timing", None
+
+            model_hashes: dict[str, str] = {}
             try:
-                rate = Fraction(fps) if fps else None
-            except (ValueError, ZeroDivisionError):
-                rate = None
-            if rate is None or rate <= 0:
-                raise DomainError("VIDEO_RATE_UNKNOWN", "CFR output requires a verified rational input frame rate", 422)
-            timing, output_rate = "explicit_cfr", rate
-        else:
-            timing, output_rate = "preserve_source_timing", None
+                detector_rec = self.catalog.detector()
+                if detector_rec and "sha256" in detector_rec:
+                    model_hashes["detector"] = detector_rec["sha256"]
+            except Exception:
+                pass
+            try:
+                recognizer_rec = self.catalog.recognizer()
+                if recognizer_rec and "sha256" in recognizer_rec:
+                    model_hashes["recognizer"] = recognizer_rec["sha256"]
+            except Exception:
+                pass
+            if capability.get("identity_swapper", {}).get("sha256"):
+                model_hashes["identity_swapper"] = capability["identity_swapper"]["sha256"]
+            if restorer_sha256:
+                model_hashes["restorer"] = restorer_sha256
 
-        model_hashes: dict[str, str] = {}
-        try:
-            detector_rec = self.catalog.detector()
-            if detector_rec and "sha256" in detector_rec:
-                model_hashes["detector"] = detector_rec["sha256"]
-        except Exception:
-            pass
-        try:
-            recognizer_rec = self.catalog.recognizer()
-            if recognizer_rec and "sha256" in recognizer_rec:
-                model_hashes["recognizer"] = recognizer_rec["sha256"]
-        except Exception:
-            pass
-        if capability.get("identity_swapper", {}).get("sha256"):
-            model_hashes["identity_swapper"] = capability["identity_swapper"]["sha256"]
-        if restorer_sha256:
-            model_hashes["restorer"] = restorer_sha256
-
-        metadata = {
-            "stage": "12",
-            "job_id": record.job_id,
-            "runtime_profile": admission.profile,
-            "provider": admission.provider,
-            "identity_transfer": capability.get("identity_swapper", {}).get("inference_state", "UNKNOWN"),
-            "liveportrait": capability.get("portrait", {}).get("state", "UNKNOWN"),
-            "stage08_uv": "UNSUPPORTED" if settings.execution_mode in {"volumetric", "hybrid"} else "NOT_REQUESTED",
-            "pose_projection": capability.get('pose_projection', {}),
-            "pose_mode": record.request.parameters_at(0).pose_mode,
-            "stage10_lip_sync": capability.get("lip_sync", {}).get("state", "UNKNOWN"),
-            "stage11_diffusion_vfx": "UNSUPPORTED" if settings.execution_mode in {"hybrid", "diffusion_vfx"} else "NOT_REQUESTED",
-            "face_mappings": [{"track_id": label, "faceset_id": source_id}
-                               for (label, source_id) in zip(labels_to_ids, faceset_ids)],
-            "model_hashes": model_hashes,
-            "request_sha256": self._request_digest(record),
-            "parameters": record.request.parameters_at(0).model_dump(mode="json"),
-            "source_faceset_sha256": checkpoint.faceset_sha256,
-            "effective_settings": settings.model_dump(mode="json"),
-            "dependency_model_digests": checkpoint.model_digests,
-            "inspection_sha256": checkpoint.inspection_sha256,
-            "identity_assets": capability.get("render_modes", {}).get("identity_assets", {}),
-            "restoration": capability.get("full_frame_compositor", {}).get("restorer", {}),
-        }
-        if identity_report is not None:
-            metadata['identity_lock'] = identity_report.manifest()
-        if export:
-            metadata['timeline'] = {'scene_cuts': scene_cuts, 'swapped_ranges': swapped_ranges}
-        pass_result = None
-        if export and export.passes:
-            from roop_3d.media.vfx import publish_passes
-            pass_result = publish_passes(self.root, record.job_id, target, export.passes, settings.output_root,
-                start=Fraction(str(record.request.trim_start_seconds)) if record.request.trim_start_seconds is not None else None,
-                end=Fraction(str(record.request.trim_end_seconds)) if record.request.trim_end_seconds is not None else None,
-                check=lambda: self._check_control(control, checkpoint, last_completed), timeline=metadata['timeline'])
-            metadata['vfx_manifest'] = pass_result['manifest_path']
-            metadata['vfx_manifest_sha256'] = sha256_file(owned(self.root, pass_result['manifest_path']))[1]
-            if not export.baked_video:
-                first = export.passes[0]
-                result = JobOutput(output_path=pass_result['paths'][first], manifest_path=pass_result['manifest_path'],
-                    output_sha256=pass_result['metadata']['output_sha256'][first], frames=len(pass_result['metadata']['frames']),
-                    audio_policy='drop', passes=pass_result['paths'], baked_video=False,
-                    pass_manifest_path=pass_result['manifest_path'])
-                if self._control_signal(control) is not None:
-                    self.discard_output(result)
-                    self._check_control(control, checkpoint, last_completed)
-                return result
-        try:
-            stage15 = {}
-            output_name = f"roop3d_{record.job_id}.mp4"
-            if export and export.profile:
-                from roop_3d.media.export_profiles import get_profile
-                container = get_profile(export.profile).container
-                output_name = f"roop3d_{record.job_id}" + ('' if container == 'sequence' else container)
-                stage15 = {'profile': export.profile, 'sequence_format': export.sequence_format}
-            if export and export.subtitles != 'copy':
-                stage15['subtitles'] = export.subtitles
-            if hdr_policy != 'tonemap_sdr':
-                stage15['hdr_policy'] = hdr_policy
-            manifest = self.writer(target, output_name, root=self.root,
-                hardware="software" if admission.profile == "cpu" else "auto", timing=timing,
-                rate=output_rate, audio_policy=settings.audio_policy, transform=completed_frame,
-                output_dir=settings.output_root, manifest_metadata=metadata,
-                **({"audio_source": stage15_audio_source} if stage15_audio_source is not None else {}),
-                start=Fraction(str(record.request.trim_start_seconds)) if record.request.trim_start_seconds is not None else None,
-                end=Fraction(str(record.request.trim_end_seconds)) if record.request.trim_end_seconds is not None else None,
-                before_publish=lambda: self._check_control(control, checkpoint, last_completed),
-                **({'finishing': export.finishing} if export else {}), **stage15)
-        except BaseException as error:
-            if pass_result:
-                from roop_3d.media.vfx import discard_sequences
-                discard_sequences(self.root, pass_result['manifest_path'])
-                for relative in (*pass_result['paths'].values(), pass_result['manifest_path']):
-                    owned(self.root, relative).unlink(missing_ok=True)
-            if is_cuda_oom(error):
-                if checkpoint.oom_retries == 0 and admission.profile != "cpu":
-                    self._checkpoint(checkpoint, completed_frame=last_completed, profile=admission.profile,
-                                     retry_profile="cpu", oom_retries=1)
-                    raise RecoverablePipelineOOM("CUDA allocation failed during mux; checkpoint is ready for one CPU retry") from None
-                raise DomainError("PIPELINE_OOM", "Output encoding exhausted the available memory profiles", 503) from None
+            metadata = {
+                "stage": "12",
+                "job_id": record.job_id,
+                "runtime_profile": admission.profile,
+                "provider": admission.provider,
+                "identity_transfer": capability.get("identity_swapper", {}).get("inference_state", "UNKNOWN"),
+                "liveportrait": capability.get("portrait", {}).get("state", "UNKNOWN"),
+                "stage08_uv": "UNSUPPORTED" if settings.execution_mode in {"volumetric", "hybrid"} else "NOT_REQUESTED",
+                "pose_projection": capability.get('pose_projection', {}),
+                "pose_mode": record.request.parameters_at(0).pose_mode,
+                "stage10_lip_sync": capability.get("lip_sync", {}).get("state", "UNKNOWN"),
+                "stage11_diffusion_vfx": "UNSUPPORTED" if settings.execution_mode in {"hybrid", "diffusion_vfx"} else "NOT_REQUESTED",
+                "face_mappings": [{"track_id": label, "faceset_id": source_id}
+                                   for (label, source_id) in zip(labels_to_ids, faceset_ids)],
+                "model_hashes": model_hashes,
+                "request_sha256": self._request_digest(record),
+                "parameters": record.request.parameters_at(0).model_dump(mode="json"),
+                "source_faceset_sha256": checkpoint.faceset_sha256,
+                "effective_settings": settings.model_dump(mode="json"),
+                "dependency_model_digests": checkpoint.model_digests,
+                "inspection_sha256": checkpoint.inspection_sha256,
+                "identity_assets": capability.get("render_modes", {}).get("identity_assets", {}),
+                "restoration": restoration_report,
+            }
+            if identity_report is not None:
+                metadata['identity_lock'] = identity_report.manifest()
+            if export:
+                metadata['timeline'] = {'scene_cuts': scene_cuts, 'swapped_ranges': swapped_ranges}
+            pass_result = None
+            if export and export.passes:
+                from roop_3d.media.vfx import publish_passes
+                pass_result = publish_passes(self.root, record.job_id, target, export.passes, settings.output_root,
+                    start=Fraction(str(record.request.trim_start_seconds)) if record.request.trim_start_seconds is not None else None,
+                    end=Fraction(str(record.request.trim_end_seconds)) if record.request.trim_end_seconds is not None else None,
+                    check=lambda: self._check_control(control, checkpoint, last_completed), timeline=metadata['timeline'])
+                metadata['vfx_manifest'] = pass_result['manifest_path']
+                metadata['vfx_manifest_sha256'] = sha256_file(owned(self.root, pass_result['manifest_path']))[1]
+                if not export.baked_video:
+                    first = export.passes[0]
+                    result = JobOutput(output_path=pass_result['paths'][first], manifest_path=pass_result['manifest_path'],
+                        output_sha256=pass_result['metadata']['output_sha256'][first], frames=len(pass_result['metadata']['frames']),
+                        audio_policy='drop', passes=pass_result['paths'], baked_video=False,
+                        pass_manifest_path=pass_result['manifest_path'])
+                    if diagnostics is not None:
+                        diagnostics.discard()           # a pass-only export has no stage12 manifest to attest the JSONL
+                    if self._control_signal(control) is not None:
+                        self.discard_output(result)
+                        self._check_control(control, checkpoint, last_completed)
+                    return result
+            if diagnostics is not None:
+                diagnostics.finalize()
+                metadata['angle_diagnostics'] = diagnostics.summary()
+            try:
+                stage15 = {}
+                output_name = f"roop3d_{record.job_id}.mp4"
+                if export and export.profile:
+                    from roop_3d.media.export_profiles import get_profile
+                    container = get_profile(export.profile).container
+                    output_name = f"roop3d_{record.job_id}" + ('' if container == 'sequence' else container)
+                    stage15 = {'profile': export.profile, 'sequence_format': export.sequence_format}
+                if export and export.subtitles != 'copy':
+                    stage15['subtitles'] = export.subtitles
+                if hdr_policy != 'tonemap_sdr':
+                    stage15['hdr_policy'] = hdr_policy
+                manifest = self.writer(target, output_name, root=self.root,
+                    hardware="software" if admission.profile == "cpu" else "auto", timing=timing,
+                    rate=output_rate, audio_policy=settings.audio_policy, transform=completed_frame,
+                    output_dir=settings.output_root, manifest_metadata=metadata,
+                    **({"audio_source": stage15_audio_source} if stage15_audio_source is not None else {}),
+                    start=Fraction(str(record.request.trim_start_seconds)) if record.request.trim_start_seconds is not None else None,
+                    end=Fraction(str(record.request.trim_end_seconds)) if record.request.trim_end_seconds is not None else None,
+                    before_publish=lambda: self._check_control(control, checkpoint, last_completed),
+                    **({'finishing': export.finishing} if export else {}), **stage15)
+            except BaseException as error:
+                if pass_result:
+                    from roop_3d.media.vfx import discard_sequences
+                    discard_sequences(self.root, pass_result['manifest_path'])
+                    for relative in (*pass_result['paths'].values(), pass_result['manifest_path']):
+                        owned(self.root, relative).unlink(missing_ok=True)
+                if is_cuda_oom(error):
+                    if checkpoint.oom_retries == 0 and admission.profile != "cpu":
+                        self._checkpoint(checkpoint, completed_frame=last_completed, profile=admission.profile,
+                                         retry_profile="cpu", oom_retries=1)
+                        raise RecoverablePipelineOOM("CUDA allocation failed during mux; checkpoint is ready for one CPU retry") from None
+                    raise DomainError("PIPELINE_OOM", "Output encoding exhausted the available memory profiles", 503) from None
+                raise
+            HUD.milestone("REMUX", "output written and verified", job=record.job_id[:8], frames=manifest["verified_frames"],
+                          audio=AUDIO_POLICY_TEXT.get(manifest["audio_policy"], manifest["audio_policy"]),
+                          sha256=str(manifest["output_sha256"])[:16])
+            result = JobOutput(output_path=manifest["output_path"], manifest_path=manifest["manifest_path"],
+                               output_sha256=manifest["output_sha256"], frames=manifest["verified_frames"],
+                               audio_policy=manifest["audio_policy"], passes=pass_result['paths'] if pass_result else {},
+                               pass_manifest_path=pass_result['manifest_path'] if pass_result else None)
+            signal = self._control_signal(control)
+            if signal is not None:
+                self.discard_output(result)
+                raise signal()
+            return result
+        except BaseException:
+            # Nothing past this point may leave a diagnostics artifact behind: no manifest would attest it.
+            if diagnostics is not None:
+                diagnostics.discard()
             raise
-        HUD.milestone("REMUX", "output written and verified", job=record.job_id[:8], frames=manifest["verified_frames"],
-                      audio=AUDIO_POLICY_TEXT.get(manifest["audio_policy"], manifest["audio_policy"]),
-                      sha256=str(manifest["output_sha256"])[:16])
-        result = JobOutput(output_path=manifest["output_path"], manifest_path=manifest["manifest_path"],
-                           output_sha256=manifest["output_sha256"], frames=manifest["verified_frames"],
-                           audio_policy=manifest["audio_policy"], passes=pass_result['paths'] if pass_result else {},
-                           pass_manifest_path=pass_result['manifest_path'] if pass_result else None)
-        signal = self._control_signal(control)
-        if signal is not None:
-            self.discard_output(result)
-            raise signal()
-        return result
 
     def discard_output(self, output: JobOutput) -> None:
         if output.pass_manifest_path:
@@ -1101,6 +1148,9 @@ class MasterPipelineRunner:
         artifacts = {output.output_path, output.manifest_path, *output.passes.values()}
         if output.pass_manifest_path:
             artifacts.add(output.pass_manifest_path)
+        job = re.search(r"roop3d_([0-9a-f]{32})", output.output_path)
+        if job is not None:       # the full-level angle diagnostics JSONL lives beside the output, named after the job
+            artifacts.add((Path(output.output_path).parent / angle_jsonl_name(job.group(1))).as_posix())
         for relative in artifacts:
             path = owned(self.root, relative)
             if path.exists():

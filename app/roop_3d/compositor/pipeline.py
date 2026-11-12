@@ -152,6 +152,8 @@ class CompositeOptions:
     blend_transfer: str = "srgb"
     sensor_shutter_angle: float = 180.0
     sensor_grain_strength: float = 100.0
+    # Dense 3D replacements only: share of the target's low-frequency lightness (lit side, rim) the synthesised face takes on.
+    dense_shading: float = 1.0
     # Stage 6B swap scope (rendering/silhouette_replacement.py). Only read for full-head (3D silhouette) replacements.
     # full_craniofacial: the old silhouette is removed (hair / ears / neck warped onto the new perimeter, overhang filled with
     # background); adaptive_skull: the same for the blended skull the engine rendered; inner_face: legacy, the swap stays inside
@@ -271,6 +273,7 @@ class FrameCompositor:
         self._occlusion_tracker = None
         self._face_centres: dict[int, tuple[int | None, np.ndarray]] = {}
         self.frames_composited = 0
+        self.angle_diagnostics = None      # AngleDiagnostics installed by the session; only its "full" level reads frames
         self.last_timing: dict[str, float] = {}
         # Stage 5: per-track report of the last robust frame (tier, confidence, reasons, fusion metrics).
         self.last_reports: dict[int, dict] = {}
@@ -515,7 +518,9 @@ class FrameCompositor:
             if self.restorer is None:
                 raise DomainError("RESTORER_UNAVAILABLE", "A positive restoration blend requires an explicit local restorer", 503)
             restore_began = time.perf_counter()
-            restored = self._run_restorer(crop, replacement, alpha, options)
+            # A replacement the dense engine already restored (UltraMax at native resolution, aligned to the swapped
+            # geometry) is not run through a second restorer: that only re-softened and re-sharpened an already restored face.
+            restored = None if getattr(replacement, "restored", False) else self._run_restorer(crop, replacement, alpha, options)
             if restored is not None:
                 size = restored.shape[0]
                 if restored.shape[:2] != (size, size) or size < side:
@@ -568,6 +573,10 @@ class FrameCompositor:
                 getattr(self, "timestamp_seconds", (frame_index if frame_index is not None else self.frames_composited) / 30.0)),
             stats_mask=stats_mask)
         photo = getattr(replacement, 'photometry', None)
+        if (str(getattr(replacement, "method", "")).startswith("dense_3d") and options.dense_shading > 0
+                and not (options.relight and photo is not None)):
+            from roop_3d.compositor.quality import shading_gain_match
+            harmonized = shading_gain_match(harmonized, current_target, current_alpha, strength=options.dense_shading)
         if local_illumination > 0 and not (options.relight and photo is not None):
             from roop_3d.compositor.quality import local_illumination_match
             harmonized = local_illumination_match(harmonized, current_target, current_alpha, strength=local_illumination)
@@ -769,7 +778,12 @@ class FrameCompositor:
                     # The dense 3D crop is synthesised, so the parser's weak opinion of it is noise: close the eye-socket
                     # gaps in the mesh silhouette and keep only confident hair/neck/ear evidence from either crop.
                     coverage = fill_mask_holes(coverage)
-                    dual_forbidden = np.maximum(confident_forbidden(swap_forbidden), target_forbidden)
+                    # Coverage comes from a per-frame monocular fit and lives in the template-registered crop, where an
+                    # EMA blends without ghosting; the geometric/occluder matte above never saw it.
+                    coverage = self.mask_ema.update(replacement.track_id, np.clip(coverage, 0.0, 1.0), frame=frame_index,
+                                                    kind="dense_coverage")
+                    dual_forbidden = (target_forbidden if swap_forbidden is None
+                                      else np.maximum(confident_forbidden(swap_forbidden), target_forbidden))
                 active_mask = compose_active_mask(coverage, xseg_mask, dual_forbidden)
                 matte_options = options
                 if str(getattr(replacement, "method", "")).startswith("dense_3d") and options.neck_protection:
@@ -839,9 +853,9 @@ class FrameCompositor:
                 hr = harmonized.shape[0] != crop.shape[0]
                 observer('color', harmonized, scale_matrix_input(replacement.inverse, harmonized.shape[0] / crop.shape[0]) if hr else replacement.inverse,
                          self._resize_plane(alpha, harmonized.shape[0]) if hr else alpha)
-            effective_alpha = temporal.alpha * options.swap_weight
+            effective_alpha = temporal.alpha * (options.swap_weight * getattr(replacement, "presence", 1.0))
             if coverage is not None:
-                effective_alpha = np.minimum(effective_alpha, coverage)
+                effective_alpha = np.minimum(effective_alpha, coverage * getattr(replacement, "presence", 1.0))
             if observer is not None:
                 observer('vfx', crop, temporal.inverse, effective_alpha)
             fuse_image, fuse_alpha, fuse_inverse = harmonized, effective_alpha, temporal.inverse
@@ -854,6 +868,11 @@ class FrameCompositor:
             output = fuse_crop(output, fuse_image, fuse_inverse, fuse_alpha,
                                mode=options.mode, levels=options.pyramid_levels,
                                linear_light=options.linear_light, transfer=options.blend_transfer)
+            diagnostics = self.angle_diagnostics
+            if diagnostics is not None and diagnostics.full and frame_index is not None:
+                from roop_3d.engine.volumetric.angle_diagnostics import frame_metrics
+                diagnostics.record_composite(frame_index, replacement.track_id,
+                                             frame_metrics(frame, output, fuse_alpha, fuse_inverse))
         self.frames_composited += 1
         total_ms = (time.perf_counter() - compose_began) * 1000
         restorer_ms = restorer_seconds * 1000

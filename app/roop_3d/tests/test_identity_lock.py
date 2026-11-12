@@ -438,7 +438,6 @@ def gated_session(faces, *, selected=frozenset({0, 1}), guard=None):
     session = ReferencePipeline()
     session.prepared, session.tracker, session.selected_ids = True, StubTracker(faces), selected
     session.portrait.retain_tracks = lambda ids: None
-    session.swapper._hysteresis = {}
     calls = []
 
     def swap(image, landmarks5, *, track_id, **kwargs):

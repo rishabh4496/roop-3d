@@ -297,7 +297,6 @@ class IdentitySwapper:
         self.canonical_by_track.clear()
         self._selectors.clear()
         self._matrices.clear()
-        self._hysteresis = {}
         self._logged_cells.clear()
 
     def refine_head_texture(self, rendered, coverage, *, pose, track_id=None):

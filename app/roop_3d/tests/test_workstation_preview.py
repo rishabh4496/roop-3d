@@ -249,9 +249,8 @@ def test_configure_temporal_installs_both_stabilizers():
     from roop_3d.engine.volumetric.session import ReferencePipeline
     from roop_3d.temporal import TrackTemporalStabilizer
     from roop_3d.temporal_stabilizer import TemporalStabilizer
-    stub = SimpleNamespace(tracker=SimpleNamespace(stabilizer=None), compositor=SimpleNamespace(histogram_stabilizer=None),
-                           swapper=SimpleNamespace(pose_deadband=None, _hysteresis={'x': 1}))
+    stub = SimpleNamespace(tracker=SimpleNamespace(stabilizer=None), compositor=SimpleNamespace(histogram_stabilizer=None))
     ReferencePipeline.configure_temporal(stub, Settings())
     assert isinstance(stub.tracker.stabilizer, TrackTemporalStabilizer)
     assert isinstance(stub.compositor.histogram_stabilizer, TemporalStabilizer)
-    assert stub.swapper._hysteresis == {}
+    assert stub.pose_hysteresis_degrees == Settings().pose_hysteresis_degrees

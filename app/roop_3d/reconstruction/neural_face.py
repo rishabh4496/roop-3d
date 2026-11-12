@@ -2,16 +2,24 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import logging
+from types import SimpleNamespace
 
 import cv2
 import numpy as np
 
+from roop_3d.compositor.masks import STRICT_FORBIDDEN_CLASSES
 from roop_3d.core.errors import DomainError
-from roop_3d.engine.volumetric.preprocess import AlignedCrop, aligned_crop, transform_points
+from roop_3d.engine.volumetric.preprocess import AlignedCrop, registration_matrix, transform_points
 from roop_3d.reconstruction.dense_correspondence import (
-    GPUSurfaceRasterizer, WarpField, correspondence_field, project,
+    GPUSurfaceRasterizer, WarpField, correspondence_field,
 )
 from roop_3d.reconstruction.morphable_backbone import MorphableBackbone
+from roop_3d.reconstruction.swap_coverage import feathered_coverage
+from roop_3d.reconstruction.view_selection import ViewSelector, neutral_pitch, view_cost
+from roop_3d.temporal import CoupledTrackSmoother
+
+log = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -85,8 +93,12 @@ WARM_ENGINE = WarmEngineSlot()
 
 
 class NeuralFaceEngine:
-    def __init__(self, backbone, rasterizer, enhancer, *, profile="6gb"):
+    def __init__(self, backbone, rasterizer, enhancer, *, profile="6gb", parser=None):
         self.backbone, self.rasterizer, self.enhancer = backbone, rasterizer, enhancer
+        # Face parser (``predict(bgr) -> HxWx19 class probabilities``) that keeps hair, neck, cloth and background texels
+        # of the source photographs out of the appearance the swapper is conditioned on.
+        self.parser = parser
+        self.parser_unavailable: str | None = None
         self.surface = getattr(backbone, "surface", backbone.topology)
         self.profile = profile
         self.sources = {}
@@ -96,16 +108,22 @@ class NeuralFaceEngine:
         self.last_fields = ()
         self.last_original_fields = ()
         self.last_source_view_indices = ()
+        self.last_diag = None       # angle_diagnostics input of the latest frame (see engine.volumetric.angle_diagnostics)
+        # Per-track, size-normalised filter of the target fit and the landmarks that register the crop (see process()).
+        self.fit_smoother = CoupledTrackSmoother()
+        self.view_selector = ViewSelector()
+        self.neutral_pitch: dict[str, float] = {}
 
     @classmethod
     def load(cls, catalog, config):
+        from roop_3d.compositor.masks import BisenetFaceParser
         from roop_3d.compositor.restoration import UltraMaxPipelineRestorer
         backbone = MorphableBackbone.load(catalog, config)
         rasterizer = GPUSurfaceRasterizer()
         try:
             rasterizer._context()
             return cls(backbone, rasterizer, UltraMaxPipelineRestorer(catalog, config),
-                       profile=config.hardware_profile)
+                       profile=config.hardware_profile, parser=BisenetFaceParser(catalog, config))
         except BaseException:
             rasterizer.release()
             backbone.release()
@@ -145,9 +163,10 @@ class NeuralFaceEngine:
             # Sample the original high-resolution photograph once, never a UV
             # shader or a prefiltered diffuse-albedo atlas.
             matrix = fit.alignment.matrix * (side/128)
-            photograph = cv2.warpAffine(image, matrix, (side, side), flags=cv2.INTER_LINEAR)
+            photograph = self._photograph_cache(image, matrix, side)
             observed = cv2.warpAffine(np.ones(image.shape[:2], np.float32), matrix, (side, side),
                                      flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT)
+            observed[self._non_skin(photograph)] = 0
             k = np.diag((side/224, side/224, 1)) @ fit.intrinsics
             faces = front_faces(fit.camera_vertices, self.surface.faces)
             if not len(faces):
@@ -167,9 +186,56 @@ class NeuralFaceEngine:
         weights = np.asarray(identity_weights, np.float64)
         source_shape = np.average(np.stack(identity_shapes).astype(np.float64), axis=0,
                                   weights=weights).astype(np.float32)
+        if self.parser is not None and hasattr(self.parser, "release"):
+            self.parser.release()           # parsing is a one-off per FaceSet; the compositor owns the resident parser
         self.sources[document.faceset_id] = tuple(surfaces)
         self.source_digests[document.faceset_id] = getattr(document, "source_sha256", None)
         self.source_shapes[document.faceset_id] = source_shape
+        self.neutral_pitch[document.faceset_id] = neutral_pitch([s.view for s in surfaces])
+
+    # BiSeNet classes that are not the face: background, glasses, ears, neck, cloth, hair, hat.
+    NON_SKIN_CLASSES = (0, *STRICT_FORBIDDEN_CLASSES)
+
+    def _non_skin(self, photograph) -> np.ndarray:
+        """Texels of a source photograph that are hair, neck, cloth, hat, glasses, ears or background (bool, dilated).
+
+        Being inside the photograph is not being skin: without this, ``observed`` accepted a fringe of hair, a collar or
+        a hairline shadow, and the correspondence warp then painted that texture onto the face. A texel rejected here is
+        left to the same fallback fill as any other unobserved texel (mirror, else the source's median skin tone).
+        """
+        if self.parser is None or self.parser_unavailable:
+            return np.zeros(photograph.shape[:2], bool)
+        try:
+            probabilities = np.asarray(self.parser.predict(photograph), np.float32)
+        except DomainError as error:
+            # The parser model is optional everywhere else in the pipeline; the loss is reported, never hidden.
+            self.parser_unavailable = f"{error.code}: {error.message}"
+            log.warning("Source photograph parsing unavailable (%s); non-skin texels are not rejected", self.parser_unavailable)
+            return np.zeros(photograph.shape[:2], bool)
+        bad = (probabilities[..., list(self.NON_SKIN_CLASSES)].sum(-1) > 0.5).astype(np.uint8)
+        radius = max(2, round(photograph.shape[0] * 0.006))
+        return cv2.dilate(bad, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * radius + 1, 2 * radius + 1))) > 0
+
+    @staticmethod
+    def _photograph_cache(image, matrix, side: int):
+        """The original photograph in the aligned ``side`` px cache (one resampling of the original pixels).
+
+        A face photograph is usually larger than its cache; ``warpAffine`` has no mip-mapping and aliases a shrink, so
+        the photograph is first area-averaged to about the cache scale. Up-scaling is bicubic; the border replicates so
+        no dark bleed enters the taps next to the photograph's edge (``observed`` marks that region unusable).
+        """
+        matrix = np.asarray(matrix, np.float64)
+        height, width = image.shape[:2]
+        scale = float(np.sqrt(abs(np.linalg.det(matrix[:, :2]))))
+        if scale < 0.75:
+            reduced = cv2.resize(image, (max(1, round(width * scale)), max(1, round(height * scale))),
+                                 interpolation=cv2.INTER_AREA)
+            sx, sy = reduced.shape[1] / width, reduced.shape[0] / height
+            # INTER_AREA maps original pixel x to reduced pixel sx*x + (sx-1)/2.
+            to_original = np.array(((1 / sx, 0, -(sx - 1) / (2 * sx)), (0, 1 / sy, -(sy - 1) / (2 * sy)), (0, 0, 1)))
+            matrix = (np.vstack((matrix, (0, 0, 1))) @ to_original)[:2]
+            image = reduced
+        return cv2.warpAffine(image, matrix, (side, side), flags=cv2.INTER_CUBIC, borderMode=cv2.BORDER_REPLICATE)
 
     @staticmethod
     def _metric_scale(vertices):
@@ -203,42 +269,68 @@ class NeuralFaceEngine:
         return vertices.astype(np.float32), camera_vertices.astype(np.float32), scale_ratio
 
     @staticmethod
-    def _mesh_crop_affine(projected_pixels, size: int, padding: float = 0.12) -> np.ndarray:
-        """Frame the projected source mesh in swapper space without target 2D landmark alignment."""
-        points = np.asarray(projected_pixels, np.float64)
-        if (points.ndim != 2 or points.shape[1] != 2 or len(points) < 3
-                or not np.isfinite(points).all() or not 0 <= padding < 0.5):
-            raise DomainError("DENSE_FACE_SOURCE_PROJECTION_INVALID", "Projected source mesh bounds are invalid", 422)
-        lower, upper = points.min(axis=0), points.max(axis=0)
-        extent = float(np.max(upper - lower))
-        if extent <= 1e-4:
-            raise DomainError("DENSE_FACE_SOURCE_PROJECTION_INVALID", "Projected source mesh is degenerate", 422)
-        scale = size * (1.0 - 2.0 * padding) / extent
-        center = (lower + upper) * 0.5
-        destination = np.array((size * 0.5, size * 0.52), np.float64)
-        translation = destination - scale * center
-        return np.array(((scale, 0.0, translation[0]),
-                         (0.0, scale, translation[1])), np.float64)
-
-    @staticmethod
     def _compose_affines(outer: np.ndarray, inner: np.ndarray) -> np.ndarray:
         return (np.vstack((outer, (0.0, 0.0, 1.0)))
                 @ np.vstack((inner, (0.0, 0.0, 1.0))))[:2]
 
-    def process(self, image, face, document, swapper, *, track_id):
+    @staticmethod
+    def _smoothed_fit(target, step):
+        """The target fit with every quantity that moves the projected surface filtered under the frame's shared beta.
+
+        The monocular regressor answers each frame independently, so its rotation, translation, scale, intrinsics and
+        expression carry frame-to-frame noise the mask edge then shows as shimmer. Rotation is filtered on SO(3), the scale
+        in log space, and the expression as a displacement from the (equally filtered) neutral shape.
+        """
+        if getattr(target, "expression_vertices", None) is None:
+            raise DomainError("DENSE_FACE_EXPRESSION_GEOMETRY_REQUIRED",
+                              "Target fit must expose expression-only geometry before detail offsets", 422)
+        identity = np.asarray(target.identity, np.float64)
+        displacement = np.asarray(target.expression_vertices, np.float64) - identity
+        identity = step.filter("identity", identity)
+        intrinsics = step.filter("intrinsics", target.intrinsics)
+        intrinsics[2] = (0.0, 0.0, 1.0)          # the homogeneous row stays exact whatever beta rounds to
+        return SimpleNamespace(
+            identity=identity.astype(np.float32), vertices=target.vertices, alignment=target.alignment,
+            expression_vertices=(identity + step.filter("expression", displacement)).astype(np.float32),
+            rotation=step.filter_rotation("rotation", target.rotation),
+            translation=step.filter("translation", target.translation).astype(np.float32),
+            scale=float(np.exp(step.filter("log_scale", np.log(float(target.scale))))),
+            intrinsics=intrinsics)
+
+    def reset_tracks(self) -> None:
+        """Forget every track's filtered fit and view selection (a warm engine must not continue an earlier render)."""
+        self.fit_smoother.reset()
+        self.view_selector.reset()
+
+    def retain_tracks(self, active_ids) -> None:
+        self.fit_smoother.retain(active_ids)
+        self.view_selector.retain(active_ids)
+
+    def process(self, image, face, document, swapper, *, track_id, frame_index=None, timestamp=None, scene_cut=False,
+                pose_confidence=1.0):
+        """``frame_index`` (consecutive per render), ``timestamp`` (seconds) and ``scene_cut`` let the per-track fit filter
+        know which frames follow each other; without a ``frame_index`` nothing is filtered (a one-off preview)."""
         self.last_fields = self.last_original_fields = self.last_source_view_indices = ()
+        self.last_diag = None
         if document.faceset_id not in self.sources:
             raise DomainError("DENSE_FACE_NOT_PREPARED", "Prepare source reconstruction before frame inference", 409)
-        target = self.backbone.fit(image, face.landmarks5)
+        # The same filtered landmarks align the image for the regressor, register the swap crop and align UltraMax: the
+        # fit, the crop and the surface rendered into it share one trajectory.
+        landmarks5, step = np.asarray(face.landmarks5, np.float64), None
+        if frame_index is not None:
+            step = self.fit_smoother.advance(track_id, frame_index, landmarks5, timestamp=timestamp, scene_cut=scene_cut)
+            landmarks5 = step.landmarks
+        target = self.backbone.fit(image, landmarks5)
+        if step is not None:
+            target = self._smoothed_fit(target, step)
         model = swapper.model
         if model is None or not callable(getattr(model, "infer", None)):
             raise DomainError("DENSE_FACE_NEURAL_REQUIRED", "Dense face output requires a prepared neural swapper", 503)
         size = model.resolution
-        surfaces = sorted(self.sources[document.faceset_id], key=lambda s:
-            (np.linalg.norm(s.fit.rotation-target.rotation), -s.view.quality.score))
+        surfaces = {s.view.index: s for s in self.sources[document.faceset_id]}
         color = np.zeros((size, size, 3), np.float32)
         support = np.zeros((size, size), np.float32)
-        fields, original_fields, view_indices = [], [], []
+        fields, original_fields, view_indices, view_log = [], [], [], []
         source_identity = self.source_shapes.get(document.faceset_id)
         if source_identity is None or not hasattr(target, "identity") or not hasattr(target, "vertices"):
             raise DomainError("DENSE_FACE_SOURCE_SHAPE_INVALID",
@@ -249,28 +341,33 @@ class NeuralFaceEngine:
         target_faces = front_faces(target_camera_vertices, self.surface.faces)
         if not len(target_faces):
             raise DomainError("DENSE_FACE_NOT_VISIBLE", "Target has no front-facing anatomical face surface", 422)
-        # Project the source-identity mesh through the target camera first.
-        # This geometry-derived transform defines swapper pixels; target 2D
-        # landmarks are not used to align source appearance to target anatomy.
-        fit_pixels = project(target_camera_vertices, target.intrinsics)
-        source_vertices = np.unique(target_faces)
-        mesh_affine = self._mesh_crop_affine(fit_pixels[source_vertices], size)
+        # The swap crop is registered exactly as the 2D swap path registers its crop: a similarity of the tracker-filtered
+        # five landmarks onto the swapper's template. Eyes, nose and mouth therefore land on the same crop pixels at every
+        # yaw/pitch and mouth opening, and the swapper and UltraMax see the framing they were trained on. The mesh is only
+        # rasterised into this crop (never used to frame it): a silhouette bounding box breathes with yaw and jaw opening.
+        template = getattr(model, "spec", {}).get("alignment_template", "arcface_112")
+        crop_matrix = registration_matrix(landmarks5, size, template)
         source_to_fit = np.asarray(target.alignment.matrix, np.float64) * (224.0 / 128.0)
-        crop_matrix = self._compose_affines(mesh_affine, source_to_fit)
+        mesh_affine = self._compose_affines(crop_matrix, cv2.invertAffineTransform(source_to_fit))
         aligned = AlignedCrop(np.zeros((size, size, 3), np.uint8), crop_matrix,
                              cv2.invertAffineTransform(crop_matrix))
         k = np.vstack((mesh_affine, (0.0, 0.0, 1.0))) @ target.intrinsics
-        # Appearance confidence governs photograph sampling. The replacement
-        # boundary is the target's anatomical surface: the neural model owns
-        # unobserved facial skin too, rather than leaving patches of target ID.
-        target_surface = self.rasterizer.rasterize(target_camera_vertices, target_faces,
-            k, target_camera_vertices, (size, size)).valid
-        for source in surfaces[:4 if self.profile == "12gb" else 2]:
+        # Which photographs, and how strongly: lowest pose cost against the filtered tracker pose (view pitches relative to
+        # the FaceSet's own neutral), switched only with hysteresis and faded in and out over a few frames.
+        pitch_zero = self.neutral_pitch.get(document.faceset_id, 0.0)
+        distances = {i: float(np.linalg.norm(s.fit.rotation - target.rotation)) for i, s in surfaces.items()}
+        costs = {i: view_cost(face.pose, (s.view.yaw, s.view.pitch - pitch_zero, getattr(s.view, "roll", 0.0)),
+                              s.view.quality.score, pose_confidence, rotation_distance=distances[i])
+                 for i, s in surfaces.items()}
+        chosen = self.view_selector.select(
+            track_id, frame_index, costs, 4 if self.profile == "12gb" else 2,
+            angular={i: float(np.exp(-2 * d)) for i, d in distances.items()}, timestamp=timestamp, scene_cut=scene_cut)
+        for index, factor in sorted(chosen.items(), key=lambda item: (costs[item[0]], item[0])):
+            source = surfaces[index]
             field = correspondence_field(self.rasterizer, target_faces,
                 source.fit.camera_vertices, source.intrinsics, target_camera_vertices, k, (size, size),
                 source.depth, (source.image.shape[1], source.image.shape[0]), source_support=source.observed)
-            angular = float(np.exp(-2*np.linalg.norm(source.fit.rotation-target.rotation)))
-            weight = field.confidence * max(source.view.quality.score, .01) * angular
+            weight = field.confidence * max(source.view.quality.score, .01) * factor
             color += field.sample(source.image).astype(np.float32) * weight[..., None]
             support += weight
             fields.append(field)
@@ -281,6 +378,9 @@ class NeuralFaceEngine:
             original_fields.append(WarpField(np.where(field.confidence[..., None] > 0,
                                                      original_xy, -1).astype(np.float32), field.confidence))
             view_indices.append(source.view.index)
+            view_log.append({"index": source.view.index, "yaw": source.view.yaw, "pitch": source.view.pitch,
+                             "raw": float(costs[index]),
+                             "weight": float(weight.sum())})
         self.last_fields = tuple(fields)
         self.last_original_fields = tuple(original_fields)
         self.last_source_view_indices = tuple(view_indices)
@@ -305,21 +405,33 @@ class NeuralFaceEngine:
         # alignment and fail closed without it, so the restorer is given the target's five landmarks expressed in this
         # crop's own frame. They only choose the restorer's internal alignment: the result is warped straight back
         # into the same crop frame, so they cannot recenter or reshape the source face.
-        crop_points = transform_points(face.landmarks5, aligned.matrix)
+        crop_points = transform_points(landmarks5, aligned.matrix)
         enhanced = self.enhancer.restore_hires(neural, crop_points)
         if enhanced is None or enhanced.dtype != np.uint8 or enhanced.ndim != 3 or enhanced.shape[2] != 3:
             raise DomainError("DENSE_FACE_ENHANCER_FAILED", "UltraMax did not return a neural face image", 503)
+        # The anatomical facial surface of the target is the replacement boundary: appearance confidence only governs
+        # photograph sampling, the neural model owns unobserved facial skin too (source holes are synthesis from the
+        # identity embedding, never observed appearance and never a shader/albedo completion). It is rasterised at the
+        # resolution the face is composited at, never upsampled from the swap crop, then intersected with the landmark hull
+        # and feathered in proportion to the face's own extent.
         height, width = enhanced.shape[:2]
-        # A feather stays strictly inside the anatomical facial surface. Source
-        # holes are neural synthesis from the identity embedding, not observed
-        # appearance and never a shader/albedo completion.
-        coverage = cv2.resize(target_surface.astype(np.float32), (width, height), interpolation=cv2.INTER_NEAREST)
-        edge = cv2.distanceTransform(coverage.astype(np.uint8), cv2.DIST_L2, 3)
-        coverage *= np.clip(edge / max(width*.01, 1), 0, 1)
+        to_output = np.diag((width / size, height / size, 1.0))
+        surface = self.rasterizer.rasterize(target_camera_vertices, target_faces, to_output @ k,
+                                            target_camera_vertices, (width, height)).valid
+        hull_landmarks = getattr(face, "landmarks106", None)
+        coverage = feathered_coverage(
+            surface,
+            landmarks106=None if hull_landmarks is None else transform_points(hull_landmarks, crop_matrix) * (width / size, height / size),
+            landmarks5=crop_points * (width / size, height / size))
         inverse = aligned.inverse.copy()
         inverse[:, 0] *= size/width
         inverse[:, 1] *= size/height
         points = crop_points * (width/size, height/size)
+        total_weight = max(sum(v["weight"] for v in view_log), 1e-12)
+        for entry in view_log:
+            entry["weight"] /= total_weight
+        self.last_diag = {"crop_matrix": crop_matrix, "landmarks5": np.asarray(face.landmarks5, np.float64),
+                          "coverage": coverage, "coverage_scale": width / size, "views": view_log}
         return NeuralFaceResult(enhanced, inverse, coverage, points)
 
     def capability(self):
@@ -330,6 +442,8 @@ class NeuralFaceEngine:
                 "target_pixels_in_source_holes": False,
                 "conditioning_crop": "projected_source_mesh_in_target_camera",
                 "warp_coordinate_space": "aligned_source_crop_pixels", "original_warp_fields": True,
+                "source_texel_parsing": (f"unavailable: {self.parser_unavailable}" if self.parser_unavailable
+                                         else "bisenet_non_skin_rejected" if self.parser is not None else "none"),
                 "source_views_per_frame": 4 if self.profile == "12gb" else 2,
                 "enhancer": self.enhancer.capability()}
 
@@ -341,6 +455,9 @@ class NeuralFaceEngine:
         self.last_fields = ()
         self.last_original_fields = ()
         self.last_source_view_indices = ()
+        self.last_diag = None
+        self.reset_tracks()
+        self.neutral_pitch.clear()
         self.enhancer.release()
         self.rasterizer.release()
         self.backbone.release()

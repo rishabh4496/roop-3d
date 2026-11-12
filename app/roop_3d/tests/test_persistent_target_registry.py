@@ -161,3 +161,23 @@ def test_clicked_face_uses_whole_frame_assignment_instead_of_rematching_alone():
     lock = store.create('v',1,clicked,cluster_id=pair[0].cluster_id)
     assert lock.cluster_id == 2
     assert lock.public(r)['face_id'] == 1
+
+
+def test_rescanned_identical_embedding_score_never_exceeds_one():
+    """float32 rounding of a re-seen embedding gave cosines like 1.0000002, which AngleDetection rejects."""
+    from roop_3d.angle_tracker import AngleDetection
+    from roop_3d.identity.target_lock import PersonCluster, _unit
+    rng = np.random.default_rng(0)
+    for _ in range(2000):
+        raw = rng.standard_normal(512).astype(np.float32)
+        raw /= np.linalg.norm(raw)
+        cluster = PersonCluster(1)
+        cluster.consider(FaceRef(raw, 0, 0, 0, [0, 0, 100, 100]).entry(0))
+        if float(cluster.bank[0].embedding @ _unit(raw)) > 1.0:
+            break
+    else:
+        raise AssertionError("no seed produced an unclamped dot above 1.0")
+    score, _ = cluster.score(raw)
+    assert score <= 1.0
+    landmarks = np.array([[30, 30], [70, 30], [50, 50], [35, 70], [65, 70]], np.float32)
+    AngleDetection(np.array([0, 0, 100, 100], np.float32), landmarks, (0., 0., 0.), raw, confidence=score)

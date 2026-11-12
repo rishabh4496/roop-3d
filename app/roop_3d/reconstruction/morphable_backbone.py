@@ -232,7 +232,8 @@ class MorphableBackbone:
         alignment = aligned_crop(image_bgr, np.asarray(landmarks5), 128)
         # Warp directly from original pixels at encoder resolution, avoiding an
         # unnecessary 128px bottleneck before expression/detail inference.
-        rgb = cv2.warpAffine(image_bgr, alignment.matrix * (224/128), (224, 224))[:, :, ::-1]
+        rgb = cv2.warpAffine(image_bgr, alignment.matrix * (224/128), (224, 224),
+                             borderMode=cv2.BORDER_REPLICATE)[:, :, ::-1]
         blob = np.ascontiguousarray(rgb.transpose(2, 0, 1)[None], np.float32) / 255
         n = self.topology.vertex_count
         coarse = self.coarse.run({"rgb": blob})
@@ -256,7 +257,7 @@ class MorphableBackbone:
         # cross-topology registration. A 50-to-52 reshape is never used.
         expressed = finite(expr["expressed_vertices_m"], (1, n, 3), "articulated expression")[0]
         rgb_hd = cv2.warpAffine(image_bgr, alignment.matrix * (self.detail_size/128),
-                               (self.detail_size, self.detail_size))[:, :, ::-1]
+                               (self.detail_size, self.detail_size), borderMode=cv2.BORDER_REPLICATE)[:, :, ::-1]
         hd_blob = np.ascontiguousarray(rgb_hd.transpose(2, 0, 1)[None], np.float32) / 255
         detail = self.detail.run({"rgb": blob, "rgb_hd": hd_blob, "vertices_m": expressed[None]})
         mid = finite(detail["mid_offsets_m"], (1, n, 3), "HRN mid geometry")[0]

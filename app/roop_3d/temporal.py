@@ -217,6 +217,109 @@ class TrackTemporalStabilizer:
         return position.copy()
 
 
+def smoothstep(x: float) -> float:
+    x = min(max(float(x), 0.0), 1.0)
+    return x * x * (3.0 - 2.0 * x)
+
+
+@dataclass
+class _CoupledState:
+    frame: int
+    time: float | None
+    values: dict[str, np.ndarray]
+    rotations: dict[str, np.ndarray]
+
+
+class CoupledStep:
+    """One frame of one track: the shared ``beta`` plus filters for every quantity that must move with the landmarks."""
+
+    def __init__(self, state: _CoupledState, previous: _CoupledState | None, beta: float, landmarks: np.ndarray):
+        self._state, self._previous, self.beta, self.landmarks = state, previous, beta, landmarks
+        self.reset = previous is None
+
+    def filter(self, name: str, value) -> np.ndarray:
+        """EMA of any array (extra landmark sets, box, translation, log-scale, intrinsics, expression displacement)."""
+        current = np.asarray(value, np.float64)
+        if not np.isfinite(current).all():
+            raise ValueError("Temporal measurements must be finite")
+        before = None if self._previous is None else self._previous.values.get(name)
+        result = current.copy() if before is None or before.shape != current.shape else self.beta * current + (1.0 - self.beta) * before
+        self._state.values[name] = result
+        return result.copy()
+
+    def filter_rotation(self, name: str, matrix) -> np.ndarray:
+        """SO(3) filter: quaternion SLERP from the previous filtered rotation toward this frame's by ``beta``."""
+        quaternion = TrackTemporalStabilizer._matrix_to_quaternion(matrix)
+        before = None if self._previous is None else self._previous.rotations.get(name)
+        if before is not None:
+            quaternion = TrackTemporalStabilizer._slerp(before, quaternion if np.dot(before, quaternion) >= 0 else -quaternion, self.beta)
+        self._state.rotations[name] = quaternion
+        return TrackTemporalStabilizer._quaternion_to_matrix(quaternion)
+
+
+class CoupledTrackSmoother:
+    """Size-normalised smoothing of everything that defines one face's geometry, under ONE velocity-adaptive factor.
+
+    The five landmarks set ``beta`` for the frame; :meth:`CoupledStep.filter` / ``filter_rotation`` then apply that same
+    ``beta`` to rotation, translation, scale, intrinsics, expression and any other landmark set, so a crop and the surface
+    rendered into it cannot drift apart. ``beta`` rises smoothly from ``BETA_SLOW`` (still head: noise is averaged) to
+    ``BETA_FAST`` (moving head: lag stays under a few pixels) with the face's motion measured against the face's own
+    extent, which, unlike the inter-ocular distance, does not vanish on a profile::
+
+        extent = max(|eye0 - eye1|, ptp_x, ptp_y, 1)          v = mean_i |x_i(t) - x_i^s(t-1)| / extent
+        beta   = .35 + .55 * smoothstep((v - .01) / .02)      x^s(t) = beta x(t) + (1 - beta) x^s(t-1)
+
+    State advances only for the immediately following frame of the same track; a gap, a rewind, a time jump or a scene cut
+    restarts the trajectory from the measurement instead of blending unrelated frames.
+    """
+    BETA_SLOW, BETA_FAST, VELOCITY_LOW, VELOCITY_SPAN = .35, .90, .01, .02
+    MAX_GAP_SECONDS = .25
+    LANDMARKS = "landmarks5"
+
+    def __init__(self):
+        self.states: dict[int, _CoupledState] = {}
+
+    def reset(self) -> None:
+        self.states.clear()
+
+    def forget_track(self, track_id: int) -> None:
+        self.states.pop(track_id, None)
+
+    def retain(self, active_ids) -> None:
+        active = set(active_ids)
+        self.states = {key: value for key, value in self.states.items() if key in active}
+
+    @classmethod
+    def beta_for(cls, velocity: float) -> float:
+        return cls.BETA_SLOW + (cls.BETA_FAST - cls.BETA_SLOW) * smoothstep((velocity - cls.VELOCITY_LOW) / cls.VELOCITY_SPAN)
+
+    @staticmethod
+    def extent(points: np.ndarray) -> float:
+        return max(float(np.linalg.norm(points[0] - points[1])), float(np.ptp(points[:, 0])), float(np.ptp(points[:, 1])), 1.0)
+
+    def advance(self, track_id: int, frame: int, landmarks5, *, timestamp: float | None = None,
+                scene_cut: bool = False) -> CoupledStep:
+        points = np.asarray(landmarks5, np.float64)
+        if points.ndim != 2 or points.shape[0] < 2 or points.shape[1] != 2 or not np.isfinite(points).all():
+            raise ValueError("Coupled smoothing needs finite 2-D landmarks")
+        previous = self.states.get(track_id)
+        contiguous = (previous is not None and not scene_cut and frame == previous.frame + 1
+                      and (timestamp is None or previous.time is None or 0 < timestamp - previous.time <= self.MAX_GAP_SECONDS)
+                      and previous.values.get(self.LANDMARKS) is not None and previous.values[self.LANDMARKS].shape == points.shape)
+        state = _CoupledState(int(frame), timestamp, {}, {})
+        if not contiguous:
+            self.states[track_id] = state
+            step = CoupledStep(state, None, 1.0, points.copy())
+        else:
+            velocity = float(np.mean(np.linalg.norm(points - previous.values[self.LANDMARKS], axis=-1))) / self.extent(points)
+            step = CoupledStep(state, previous, self.beta_for(velocity), np.empty(0))
+            self.states[track_id] = state
+            step.landmarks = step.filter(self.LANDMARKS, points)
+            return step
+        state.values[self.LANDMARKS] = points.copy()
+        return step
+
+
 @dataclass
 class _MaskState:
     value: np.ndarray

@@ -112,8 +112,10 @@ class PersonCluster:
         embedding = _unit(embedding)
         sims = np.array([float(e.embedding @ embedding) for e in self.bank])
         k = int(np.argmax(sims))
-        return max(float(sims[k]), float(self.centroid @ embedding),
-                   float(self.anchor_embedding @ embedding) if self.anchor_embedding is not None else -1.), self.bank[k]
+        best = max(float(sims[k]), float(self.centroid @ embedding),
+                   float(self.anchor_embedding @ embedding) if self.anchor_embedding is not None else -1.)
+        # float32 rounding of a re-seen identical embedding can give 1.0000002; a cosine never exceeds 1.
+        return min(best, 1.0), self.bank[k]
 
     def consider(self, entry: BankEntry, *, force: bool = False) -> bool:
         """Keep the best measurement per angular bucket; retain one out-of-grid anchor."""

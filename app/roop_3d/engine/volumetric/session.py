@@ -15,14 +15,18 @@ import cv2
 import numpy as np
 
 from roop_3d.core.errors import DomainError
+from roop_3d.core.settings import Settings
 from roop_3d.engine.detection.face_tracker import FaceObservation, FaceTracker, TrackedFace
 from roop_3d.engine.runtime import RuntimeConfig, image_bgr
+from roop_3d.engine.volumetric.angle_diagnostics import AngleDiagnostics
 from roop_3d.engine.volumetric.identity_swapper import IdentitySwapper, SwapResult
+from roop_3d.engine.volumetric.presence import PoseFade, SwapPresence
 from roop_3d.engine.volumetric.preprocess import AlignedCrop, landmark_crop, transform_points
 from roop_3d.engine.volumetric.reference_adapter import LivePortraitAdapter
 from roop_3d.faceset.schemas import FaceSetDocument
 from roop_3d.models.catalog import ModelCatalog
 from roop_3d.engine.resources import guarded, inference, register
+from roop_3d.temporal import smoothstep
 from roop_3d.compositor.pipeline import CompositeOptions, FrameCompositor
 from roop_3d.engine.audio_sync.lip_sync_adapter import LipSyncAdapter, LipSyncFrameInput
 from roop_3d.reconstruction.expression_tps import apply_expression_to_crop, group, layout_is_plausible
@@ -73,6 +77,10 @@ class Replacement:
     source_silhouette: np.ndarray | None = None
     photometry: object = None
     face_detail: object = None
+    # Fade factor of a face whose swap is held through, or returning from, a one/two-frame tracker gate.
+    presence: float = 1.0
+    # The crop already went through the restorer at its native resolution (the dense path restores before it composites).
+    restored: bool = False
 
 
 @dataclass(frozen=True)
@@ -110,11 +118,19 @@ def swapped_portrait(portrait: AlignedCrop, swap: SwapResult) -> np.ndarray:
     return np.clip(fake * weight + portrait.image * (1 - weight), 0, 255).astype(np.uint8)
 
 
+PROFILE_TRIM_START, PROFILE_TRIM_FULL = 30.0, 40.0   # |yaw| between which the far-cheek trim fades in (degrees)
+
+
 def profile_aware_mask(shape: tuple[int, int], landmarks5: np.ndarray, yaw: float) -> np.ndarray:
-    """Tighten the far cheek edge for turned faces while leaving the near side untouched."""
+    """Tighten the far cheek edge for turned faces while leaving the near side untouched.
+
+    The trim fades in over ``PROFILE_TRIM_START``..``PROFILE_TRIM_FULL`` degrees of yaw: a threshold would pop the cheek
+    edge in a single frame wherever the head crosses it.
+    """
     height, width = shape
     result = np.ones((height, width), np.float32)
-    if abs(float(yaw)) <= 35.0 or width < 16 or height < 16:
+    amount = smoothstep((abs(float(yaw)) - PROFILE_TRIM_START) / (PROFILE_TRIM_FULL - PROFILE_TRIM_START))
+    if amount <= 0.0 or width < 16 or height < 16:
         return result
     points = np.asarray(landmarks5, np.float64)
     if points.shape != (5, 2) or not np.isfinite(points).all():
@@ -133,7 +149,7 @@ def profile_aware_mask(shape: tuple[int, int], landmarks5: np.ndarray, yaw: floa
         x = np.arange(width, dtype=np.float32)
         ramp = np.clip(((edge + feather) - x) / feather, 0.0, 1.0)
     ramp = 0.5 - 0.5 * np.cos(np.pi * ramp)
-    result *= ramp[None, :]
+    result *= (1.0 - amount * (1.0 - ramp))[None, :]
     return result
 
 
@@ -147,6 +163,9 @@ class ReferencePipeline:
         # does not activate any additional inference model.
         self.compositor = FrameCompositor(self.catalog, config)
         self.compositor.expression_portrait = self.portrait
+        self.angle_diagnostics = AngleDiagnostics()
+        self.dense_enhancer_calls = 0
+        self.compositor.angle_diagnostics = self.angle_diagnostics
         self.lip_sync = LipSyncAdapter(self.catalog)
         self.selected_ids: frozenset[int] | None = None
         self.sources_by_track: dict[int, FaceSetDocument] = {}
@@ -179,6 +198,10 @@ class ReferencePipeline:
         self.angle_trajectories: dict[int, tuple[Any, ...]] = {}
         self.angle_frame_index: int | None = None
         self.reenactment_settings = ReenactmentSettings()
+        self.pose_hysteresis_degrees = Settings.model_fields["pose_hysteresis_degrees"].default
+        self._roll_latched: dict[int, bool] = {}
+        self._presence = SwapPresence()
+        self._pose_fade = PoseFade()
         register(self, "release_session")
 
     def select_swapper(self, model_id: str) -> None:
@@ -338,6 +361,15 @@ class ReferencePipeline:
         with self.lock:
             self.identity_guard = guard
 
+    def _roll_exceeded(self, track_id: int, roll: float) -> bool:
+        """The dense path hands a face to the 2D swap above ``dense_3d_max_roll``; leaving that fallback needs the head to
+        come ``pose_hysteresis_degrees`` back inside the limit, so a roll hovering at the limit does not flip the method
+        (and the whole look of the face) from frame to frame."""
+        limit = dense_3d_max_roll()
+        exceeded = abs(float(roll)) > limit - (self.pose_hysteresis_degrees if self._roll_latched.get(track_id) else 0.0)
+        self._roll_latched[track_id] = exceeded
+        return exceeded
+
     def configure_temporal(self, settings) -> None:
         from roop_3d.temporal import TrackTemporalStabilizer
         from roop_3d.temporal_stabilizer import TemporalStabilizer
@@ -348,8 +380,7 @@ class ReferencePipeline:
         # The histogram stabilizer's One-Euro filter names the derivative cutoff `d_cutoff`.
         self.compositor.histogram_stabilizer = TemporalStabilizer(
             min_cutoff=config['min_cutoff'], beta=config['beta'], d_cutoff=config['derivative_cutoff'])
-        self.swapper.pose_deadband = settings.pose_hysteresis_degrees
-        self.swapper._hysteresis = {}
+        self.pose_hysteresis_degrees = settings.pose_hysteresis_degrees
 
     def set_frame_timestamp(self, seconds: float, *, compositor: bool = True) -> None:
         """``compositor=False`` is for the asynchronous pipeline, where the composite stage sets its own per frame."""
@@ -625,15 +656,22 @@ class ReferencePipeline:
             for track_id in set(self.full_head_engines) - set(active_ids):
                 self.full_head_engines.pop(track_id).rasterizer.release()
             if scene_cut:
-                self.swapper._hysteresis = {}
-            elif hasattr(self.swapper, '_hysteresis'):
-                self.swapper._hysteresis = {key:value for key,value in self.swapper._hysteresis.items() if key in active_ids}
+                self._roll_latched.clear()
+                self._presence.reset()
+                self._pose_fade.reset()
+            else:
+                self._roll_latched = {key: value for key, value in self._roll_latched.items() if key in active_ids}
+                self._pose_fade.retain(active_ids)
+            if self.neural_face is not None:
+                self.neural_face.retain_tracks(active_ids)
             replacements, swap_seconds, retarget_seconds, projection_seconds = [], 0.0, 0.0, 0.0
             withheld: list[Withheld] = []
+            gated: set[int] = set()   # tracker policy closed the gate this frame (not an identity verdict)
             for tracked in faces:
                 if self.selected_ids is not None and tracked.track_id not in self.selected_ids:
                     continue
                 if not tracked.swap_allowed:
+                    gated.add(tracked.track_id)
                     withheld.append(Withheld(tracked.track_id, tracked.reason or tracked.state, tracked.state, tracked.confidence))
                     continue
                 if self.identity_guard is not None:
@@ -654,7 +692,7 @@ class ReferencePipeline:
                 extreme = abs(face.pose[0]) > yaw_limit or abs(face.pose[1]) > pitch_limit
                 face_mode = "pose_3d" if mode == "standard" and extreme else mode
                 dense_fallback = self.dense_face_unavailable if face_mode != "standard" else None
-                if face_mode != "standard" and not dense_fallback and abs(face.pose[2]) > dense_3d_max_roll():
+                if face_mode != "standard" and not dense_fallback and self._roll_exceeded(tracked.track_id, face.pose[2]):
                     # The dense mesh fit breaks down on a strongly rolled head (a close-up lying on a pillow produced a duplicated
                     # eye and a warped mouth, which the compositor then rightly masked away: no swap at all). The standard 2D swap
                     # aligns by the five landmarks, so it copes with roll.
@@ -669,12 +707,20 @@ class ReferencePipeline:
                 if dense_fallback:
                     face_mode = "standard"
                 if face_mode != "standard":
-                    generated = self.neural_face.process(image, face, document, self.swapper,
-                                                         track_id=tracked.track_id)
+                    fade = self._pose_fade.level(tracked.track_id, face.pose, self.pose_hysteresis_degrees)
+                    if fade <= 0.0:
+                        continue          # the head is turned away from the camera: no face is drawn on it
+                    generated = self.neural_face.process(image, face, document, self.swapper, track_id=tracked.track_id,
+                                                         frame_index=self.frames_processed, timestamp=frame_time,
+                                                         scene_cut=scene_cut, pose_confidence=tracked.confidence)
+                    self.dense_enhancer_calls += 1
+                    if self.neural_face.last_diag is not None:
+                        self.angle_diagnostics.record_swap(self.frames_processed, tracked.track_id,
+                                                           {**self.neural_face.last_diag, "presence": fade}, pose=face.pose)
                     projection_seconds += time.perf_counter() - at
                     replacements.append(Replacement(tracked.track_id, generated.image, generated.inverse, -1,
                         "dense_3d_correspondence_neural_ultramax", coverage=generated.coverage,
-                        landmarks5=generated.landmarks5, render_mode=face_mode))
+                        landmarks5=generated.landmarks5, render_mode=face_mode, restored=True, presence=fade))
                     continue
                 swap = self.swapper.infer_frame(image, face.landmarks5, pose=face.pose,
                                                 track_id=tracked.track_id, frontalization=frontalization,
@@ -728,7 +774,7 @@ class ReferencePipeline:
                     generated, coverage, method, fallback_reason, reenactment = self._reenact(
                         tracked, image, generated, inverse, coverage, method)
                     projection_seconds += time.perf_counter() - at
-                if abs(face.pose[0]) > 35.0:
+                if abs(face.pose[0]) > PROFILE_TRIM_START:
                     crop_landmarks = transform_points(face.landmarks5, cv2.invertAffineTransform(inverse))
                     profile_mask = profile_aware_mask(generated.shape[:2], crop_landmarks, face.pose[0])
                     coverage = profile_mask if coverage is None else coverage * profile_mask
@@ -736,6 +782,7 @@ class ReferencePipeline:
                                                 method, coverage, projection,
                                                 transform_points(face.landmarks5, cv2.invertAffineTransform(inverse)),
                                                 mode if fallback_reason is None else "standard", fallback_reason, reenactment))
+            replacements = self._presence.apply(self.frames_processed, replacements, gated)
             ended = time.perf_counter()
             self.frames_processed += 1
             self.last_latency = StageLatency((detection_end - began) * 1000, swap_seconds * 1000,
@@ -966,6 +1013,7 @@ class ReferencePipeline:
                 if warm_key is not None:
                     # A live preview: keep the engine warm for the next one instead of tearing the 3D head down.
                     from roop_3d.reconstruction.neural_face import WARM_ENGINE
+                    self.neural_face.reset_tracks()
                     WARM_ENGINE.put(warm_key, self.neural_face)
                 else:
                     self.neural_face.release()
@@ -973,6 +1021,9 @@ class ReferencePipeline:
                 self._warm_key = None
             self.angle_trajectories.clear()
             self.angle_frame_index = None
+            self._roll_latched.clear()
+            self._presence.reset()
+            self._pose_fade.reset()
 
 
 def dense_3d_max_roll() -> float:
