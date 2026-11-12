@@ -77,7 +77,8 @@ def test_real_local_scrfd_inference_no_faces_is_not_a_stub(video) -> None:
     assert result.tracks == ()
     assert result.sampled_frames == 2 and result.truncated
     assert len(result.detector_sha256) == 64
-    assert service.detector._session.get_providers() == ["CPUExecutionProvider"]
+    # Inspection runs on CUDA on a >=10 GiB card (see test_inspection_gpu) and on the CPU everywhere else.
+    assert service.detector._session.get_providers()[0] in ("CPUExecutionProvider", "CUDAExecutionProvider")
     assert (service.root / f"roop_3d/.runtime/inspections/{result.inspection_id}.json").is_file()
 
 

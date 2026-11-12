@@ -63,8 +63,9 @@ class Detector:
                     # A different detector/file/provider/precision: drop the old session before building the new one.
                     self._session = self._io_runner = None
                     if self._session_factory is not None:
-                        self._session = self._session_factory(record)
-                    else:
+                        from roop_3d.engine.runtime import build_with_cpu_fallback
+                        self._session = build_with_cpu_fallback(self._session_factory, record, "detector")
+                    if self._session is None:
                         data = self.catalog.verified_bytes(record)
                         import onnxruntime as ort
                         options = ort.SessionOptions()
@@ -77,7 +78,11 @@ class Detector:
                         self._io_runner = GpuIoBinding(self._session)
                     self._session_sha = record["sha256"]
                     self._session_key = key
-                    active_models.activate('detector', selected, path or record.get('name'), self._provider,
+                    try:                       # report what the session really runs on (an inspection session may be CUDA)
+                        actual_provider = self._session.get_providers()[0]
+                    except Exception:
+                        actual_provider = self._provider
+                    active_models.activate('detector', selected, path or record.get('name'), actual_provider,
                                            self._precision, record["sha256"])
                 else:
                     active_models.clear_failure('detector')      # the loaded detector served this request

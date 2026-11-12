@@ -401,7 +401,11 @@ class ReferencePipeline:
         last_gray: dict[int, np.ndarray] = {}
         pending_gray: dict[int, list[np.ndarray]] = {}
         flow_scale = 1.0
-        landmark_engine = LandmarkEngine(root=Path(__file__).resolve().parents[3])
+        # The 68-point model runs once per scanned frame: on the job's GPU (CUDA, no TensorRT engine build) instead of the CPU.
+        from roop_3d.engine.runtime import inspection_session_factory
+        landmark_factory = (None if self.config.provider == "CPUExecutionProvider" else inspection_session_factory(
+            self.catalog, config=replace(self.config, provider="CUDAExecutionProvider")))
+        landmark_engine = LandmarkEngine(root=Path(__file__).resolve().parents[3], session_factory=landmark_factory)
         has_landmarks68 = landmark_engine.has_68
         reader = VideoReader(video_path, hardware="auto", hdr_policy=hdr_policy)
         frames = reader.frames()

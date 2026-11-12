@@ -450,6 +450,79 @@ def session_factory(catalog: ModelCatalog, config: RuntimeConfig):
     return lambda record: SessionFacade(factory(catalog, record["name"], config))
 
 
+class InspectionOnCpu(RuntimeError):
+    """The inspection factory chose (or fell back to) the CPU; the caller builds its own CPU session."""
+
+
+def inspection_runtime(settings=None) -> RuntimeConfig | None:
+    """CUDA runtime for the inspection / target-lock models (detector, ArcFace, 68-point landmarks), or None for CPU.
+
+    Inspection and the target-lock keyframe scan analyse every frame of the video, usually while a render job is running.
+    On the CPU that costs ~200 ms (RetinaFace) + ~200 ms (ArcFace) + ~45 ms (1k3d68) per frame and pegs every core; on
+    CUDA the same graphs run in 26 / 17 / 10 ms with identical output.  Cards under 10 GiB stay on the CPU: the resident
+    inspection models would shrink the free VRAM the job admission needs and could push the whole render onto the CPU
+    profile.  ``ROOP3D_INSPECTION_PROVIDER`` = ``cpu`` | ``cuda`` overrides the decision.
+    """
+    import os
+    override = os.environ.get("ROOP3D_INSPECTION_PROVIDER", "").strip().casefold()
+    if override in ("cpu", "off", "0", "false"):
+        return None
+    from roop_3d.core.settings import Settings
+    settings = settings or Settings()
+    if settings.hardware_profile == "cpu" or settings.preferred_provider == "CPUExecutionProvider":
+        return None
+    try:
+        import onnxruntime as ort
+        if "CUDAExecutionProvider" not in ort.get_available_providers():
+            return None
+        from roop_3d.core.hardware import MIN_12GB_PROFILE_VRAM_MIB, probe_hardware, resolve_hardware_profile
+        hardware = probe_hardware(settings)
+    except Exception:
+        return None
+    if not hardware.gpus:
+        return None
+    gpu = hardware.gpus[0]
+    if override != "cuda" and (gpu.total_vram_mib < MIN_12GB_PROFILE_VRAM_MIB or gpu.free_vram_mib < 2048):
+        return None
+    profile = resolve_hardware_profile(gpu.total_vram_mib, gpu.free_vram_mib, settings.hardware_profile)
+    if profile == "cpu":
+        return None
+    return RuntimeConfig(provider="CUDAExecutionProvider", hardware_profile=profile,
+                         reserve_mib=settings.memory_safety_reserve_mb)
+
+
+def inspection_session_factory(catalog: ModelCatalog, settings_provider=None, config: RuntimeConfig | None = None):
+    """``factory(record_or_name_dict) -> session`` on CUDA, raising :class:`InspectionOnCpu` when the CPU should be used.
+
+    The decision is re-evaluated on every call (sessions are built rarely) so it follows the current free VRAM.  A fixed
+    ``config`` (a render job's own runtime) skips the decision; a CPU config always means CPU.
+    """
+    def factory(record):
+        resolved = ((None if config.provider == "CPUExecutionProvider" else config) if config is not None
+                    else inspection_runtime(settings_provider() if settings_provider is not None else None))
+        if resolved is None:
+            raise InspectionOnCpu("inspection models stay on the CPU")
+        return SessionFacade(OrtModel(catalog, record["name"], resolved))
+    factory.cpu_fallback = True      # callers build their own CPU session when this factory raises
+    return factory
+
+
+def build_with_cpu_fallback(factory, record, name: str):
+    """``factory(record)``, or None when an inspection factory declines / fails (the caller then builds its CPU session).
+
+    A factory without ``cpu_fallback`` (the render trackers') keeps its errors: a failed GPU session must stay visible there."""
+    if factory is None:
+        return None
+    try:
+        return factory(record)
+    except Exception as error:
+        if not getattr(factory, "cpu_fallback", False):
+            raise
+        if not isinstance(error, InspectionOnCpu):
+            log.warning("%s could not start on the GPU (%s); using the CPU", name, error)
+        return None
+
+
 def adaptive_session_factory(catalog: ModelCatalog, config: RuntimeConfig):
     """Session factory powered by AdaptiveModelPool for warm GPU residency."""
     from roop_3d.engine.adaptive_runtime import AdaptiveModelPool

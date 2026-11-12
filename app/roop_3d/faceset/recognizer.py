@@ -42,8 +42,11 @@ class Recognizer:
         with self._lock:
             if self._session is None or self._session_sha != record["sha256"]:
                 if self._session_factory is not None:
-                    self._session = self._session_factory(record)
+                    from roop_3d.engine.runtime import build_with_cpu_fallback
+                    self._session = build_with_cpu_fallback(self._session_factory, record, "recognizer")
                 else:
+                    self._session = None
+                if self._session is None:
                     data = self.catalog.verified_bytes(record)
                     import onnxruntime as ort
                     options = ort.SessionOptions()

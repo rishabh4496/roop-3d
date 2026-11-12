@@ -221,6 +221,18 @@ def create_app(settings: Settings | None = None, *, repo_root: Path | None = Non
 
     @app.exception_handler(Exception)
     async def internal_error(request: Request, error: Exception) -> JSONResponse:
+        # Stack traces are redacted from the log on purpose; the exception type and the innermost frame (a source
+        # location, no data) are enough to find a bug without leaking request content.
+        try:
+            import logging
+            import traceback
+            innermost = traceback.extract_tb(error.__traceback__)[-1] if error.__traceback__ else None
+            logging.getLogger("roop3d.requests").error(
+                "unhandled %s on %s %s at %s:%s in %s", type(error).__name__, request.method, request.url.path,
+                Path(innermost.filename).name if innermost else "?", innermost.lineno if innermost else "?",
+                innermost.name if innermost else "?")
+        except Exception:
+            pass
         return envelope(request, "INTERNAL_ERROR", "The local service could not complete the request", 500)
 
     @app.exception_handler(EngineBusy)

@@ -70,3 +70,26 @@ Swap quality in 3D modes (checked on a 5 min clip with harjot):
 
 Still open: leftover lipstick slivers at the mouth corners; the dense path keeps the source's closed mouth when the
 target mouth is open; ~1 s of CPU NumPy per dense frame (`correspondence_field`, `project`).
+
+## Full-craniofacial scan: CPU at 99 %, 3.5 fps (Nov 12, fourth pass)
+
+Found by sampling the running server with py-spy (`py-spy record --pid <server> --threads`), not by reading code. Two
+threads were busy during the `angle_scan` pre-pass:
+
+* `target-scan-<lock>` (the Target Lock keyframe scan, `server/target_lock.py`) took ~68 % of all samples. It analyses
+  EVERY frame of the video (detect + ArcFace + 68/106-pt landmarks) while the job runs, and the whole stack was built
+  for inspection on the **CPU** (`MediaService`: `Detector(catalog)`, `Recognizer(catalog)`, `LandmarkEngine(root)` - no
+  session factory). Measured per face-frame next to the running job: RetinaFace 204 ms, ArcFace 199 ms, 1k3d68 43 ms,
+  i.e. ~1.2 s per frame, all cores busy. On CUDA: 27 / 17 / 10-16 ms, identical output (embedding cosine >= 0.999997,
+  box diff 0.0003 px, 68-pt diff 0.002 px).
+* The job's own scan (`scan_angle_trajectories`) built a CPU-only `LandmarkEngine` for 1k3d68 (43 % of that thread).
+
+Fix: `engine/runtime.inspection_session_factory` / `inspection_runtime` give the inspection detector, ArcFace and
+1k3d68 a CUDA session when the card has >= 10 GiB and >= 2 GiB free (smaller cards stay on the CPU so the resident models
+do not eat the VRAM the job admission needs); any failure falls back to the old CPU session
+(`build_with_cpu_fallback`). The scan's `LandmarkEngine` uses the job's profile on CUDA. `ROOP3D_INSPECTION_PROVIDER=cpu|cuda`
+overrides. 2d106det stays on the CPU on purpose (3 ms there, 134 ms on plain CUDA, 3.5 ms on TensorRT with a 10 s load);
+the 1k3d68 is CUDA, not TensorRT (a TRT engine build costs 26 s once, run time 6 vs 10 ms). `/models/active` now reports the
+provider the detector really runs on.
+
+Unhandled 500s now log `unhandled <Type> on <METHOD> <path> at <file>:<line> in <function>` (tracebacks stay redacted).

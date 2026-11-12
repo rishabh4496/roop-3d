@@ -62,11 +62,19 @@ def _model_dirs(root: Path | None) -> list[Path]:
 class LandmarkEngine:
     """Lazy ``1k3d68`` + ``2d106det`` ONNX runner (insightface protocol: 192 px crop at 1.5x the face box)."""
 
-    def __init__(self, root: Path | None = None, model_dirs: Sequence[Path] | None = None):
+    # Only the 68-point model is routed to the GPU: 43 ms on the CPU vs ~10 ms on CUDA with identical output, whereas the
+    # 106-point model takes ~3 ms on the CPU and 130 ms on plain CUDA (cuDNN fallback mode under its small arena cap).
+    GPU_MODELS = ("1k3d68.onnx",)
+
+    def __init__(self, root: Path | None = None, model_dirs: Sequence[Path] | None = None, *,
+                 session_factory=None, gpu_models: Sequence[str] | None = None):
         self._dirs = [Path(d) for d in model_dirs] if model_dirs is not None else _model_dirs(root)
         self._sessions: dict[str, Any] = {}
         self._io_bindings: dict[str, Any] = {}
         self._lock = threading.Lock()
+        self._run_lock = threading.Lock()          # an I/O binding / OrtModel is not safe for two threads at once
+        self._session_factory = session_factory
+        self._gpu_models = tuple(self.GPU_MODELS if gpu_models is None else gpu_models)
 
     def _path(self, name: str) -> Path | None:
         for d in self._dirs:
@@ -80,24 +88,37 @@ class LandmarkEngine:
                 path = self._path(name)
                 session = None
                 if path is not None:
-                    try:
-                        import onnxruntime as ort
-                        session = ort.InferenceSession(str(path), providers=["CPUExecutionProvider"])
-                        from roop_3d.core.ort_session import GpuIoBinding
-                        self._io_bindings[name] = GpuIoBinding(session)
-                    except Exception as err:                       # unreadable model == unavailable, never fabricated
-                        log.warning("landmark model %s unusable: %s", name, err)
+                    if self._session_factory is not None and name in self._gpu_models:
+                        from roop_3d.engine.runtime import build_with_cpu_fallback
+                        session = build_with_cpu_fallback(self._session_factory, {"name": name}, name)
+                    if session is None:
+                        try:
+                            import onnxruntime as ort
+                            session = ort.InferenceSession(str(path), providers=["CPUExecutionProvider"])
+                            from roop_3d.core.ort_session import GpuIoBinding
+                            self._io_bindings[name] = GpuIoBinding(session)
+                        except Exception as err:                   # unreadable model == unavailable, never fabricated
+                            log.warning("landmark model %s unusable: %s", name, err)
                 self._sessions[name] = session
             return self._sessions[name]
+
+    def provider(self, name: str) -> str | None:
+        """Execution provider the named model really runs on (None when the model is unavailable)."""
+        session = self._session(name)
+        try:
+            return session.get_providers()[0] if session is not None else None
+        except Exception:
+            return None
 
     def _run(self, name: str, session, feeds: dict[str, np.ndarray]) -> list[np.ndarray]:
         names = tuple(node.name for node in session.get_outputs())
         binding = self._io_bindings.get(name)
-        if binding is not None:
-            outputs = binding.run(feeds, output_names=names)
-            return [outputs[output].numpy() for output in names]
-        # SessionFacade routes through OrtModel's persistent I/O binding.
-        return session.run(None, feeds)
+        with self._run_lock:
+            if binding is not None:
+                outputs = binding.run(feeds, output_names=names)
+                return [outputs[output].numpy() for output in names]
+            # SessionFacade routes through OrtModel's persistent I/O binding.
+            return session.run(None, feeds)
 
     @property
     def has_68(self) -> bool:

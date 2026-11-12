@@ -40,7 +40,12 @@ VIDEO_SUFFIXES = {".mp4", ".mov", ".mkv", ".avi", ".webm", ".m4v", ".ts"}
 class MediaService:
     def __init__(self, root: Path, catalog: ModelCatalog, settings: Callable[[], Settings] = Settings):
         self.root = root
-        self.detector = Detector(catalog, model_id=lambda: settings().detector_model_id)
+        # Inspection and the target-lock keyframe scan analyse every frame of the video next to a running job: on the CPU the
+        # RetinaFace + ArcFace + 1k3d68 stack costs ~450 ms per face-frame and pegs every core.  On a >=10 GiB card they run
+        # on CUDA (same output, ~10x faster); otherwise, or when CUDA cannot start, the CPU path is used unchanged.
+        from roop_3d.engine.runtime import inspection_session_factory
+        gpu_factory = inspection_session_factory(catalog, settings)
+        self.detector = Detector(catalog, gpu_factory, model_id=lambda: settings().detector_model_id)
         self.settings = settings
         self._color_cache: dict = {}
         from roop_3d.identity.target_lock import TargetLockStore
@@ -50,7 +55,8 @@ class MediaService:
         from roop_3d.faceset.recognizer import Recognizer
         from roop_3d.faceset_loader import LandmarkEngine
         from roop_3d.media.face_analysis import FaceAnalyzer
-        self.analyzer = FaceAnalyzer(self.detector, Recognizer(catalog), LandmarkEngine(root))
+        self.analyzer = FaceAnalyzer(self.detector, Recognizer(catalog, gpu_factory),
+                                     LandmarkEngine(root, session_factory=gpu_factory))
         self.frames = VideoFrameService(self.path, self.detector, analyzer=self.analyzer)
 
     def path(self, value: str) -> Path:
