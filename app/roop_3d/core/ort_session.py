@@ -99,7 +99,7 @@ _LOG = logging.getLogger("roop_3d.ort")
 # compile, a re-bind) takes the engine, so it never holds VRAM against real work.
 _POOL_LOCK = threading.Lock()
 _POOL: "dict[tuple, SessionInfo]" = {}
-_POOL_LIMIT = 24
+_POOL_LIMIT = 64
 _POOL_SCOPE = threading.local()
 
 
@@ -117,6 +117,31 @@ class pooled_sessions:
     def __exit__(self, *exc):
         _POOL_SCOPE.depth -= 1
         return False
+
+
+_POOL_VRAM: "dict[tuple, int]" = {}           # pooled session key -> VRAM (MiB) its creation added, measured with NVML
+_NVML_HANDLE: list = []
+
+
+def _vram_used_mib() -> int | None:
+    try:
+        if not _NVML_HANDLE:
+            from roop_3d.async_pipeline.hwmon import Nvml
+            _NVML_HANDLE.append(Nvml(0))
+        nvml = _NVML_HANDLE[0]
+        used = nvml.sample().get("vram_used_mib") if nvml.available else None
+        return None if used is None else int(used)
+    except Exception:
+        return None
+
+
+def reclaimable_vram_mib() -> int:
+    """VRAM the warm preview sessions hold and would give back the moment a job needs the GPU.
+
+    The VRAM admission check must count it as available: it used to see this process's own idle pool as "not free", and
+    quietly ran the whole preview (swapper included) on the CPU while the GPU sat idle."""
+    with _POOL_LOCK:
+        return sum(_POOL_VRAM.get(key, 0) for key in _POOL)
 
 
 def pool_scope_active() -> bool:
@@ -141,6 +166,7 @@ def evict_pooled_sessions() -> int:
     with _POOL_LOCK:
         count = len(_POOL)
         _POOL.clear()
+        _POOL_VRAM.clear()
     if count:
         import gc
         gc.collect()
@@ -557,14 +583,19 @@ class SessionManager:
                     _LOG.info("[ORT] %s -> %s (pooled, reused)", model_name or Path(model_path).name,
                               hit.provider.replace("ExecutionProvider", ""))
                     return hit
+        before = _vram_used_mib() if pooled else None
         with build_fence():
             info = self._create(model_path, model_name=model_name, providers=providers,
                                 intra_op_threads=intra_op_threads)
         if pooled and key is not None:
+            after = _vram_used_mib()
             with _POOL_LOCK:
                 while len(_POOL) >= _POOL_LIMIT:
-                    _POOL.pop(next(iter(_POOL)))
+                    evicted = next(iter(_POOL))
+                    _POOL.pop(evicted)
+                    _POOL_VRAM.pop(evicted, None)
                 _POOL[key] = info
+                _POOL_VRAM[key] = max(0, after - before) if before is not None and after is not None else 0
         return info
 
     def _create(self, model_path: str | Path, *, model_name: str | None = None,

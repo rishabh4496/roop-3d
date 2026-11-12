@@ -302,8 +302,55 @@ def _system_memory(result: Hardware) -> None:
         result.probe_notes.append("System memory/core probe incomplete")
 
 
+_PROBE_CACHE: dict = {}      # settings fingerprint -> {"at", "value", "nvml"}; callers use different Settings, so one slot thrashed
+
+
+def _probe_ttl() -> float:
+    try:
+        return max(0.0, float(os.environ.get("ROOP3D_HARDWARE_PROBE_TTL", "120")))
+    except ValueError:
+        return 120.0
+
+
 def probe_hardware(settings: Settings | None = None) -> Hardware:
+    """Hardware snapshot. A full probe spawns a dozen subprocesses (nvidia-smi x3, the memory/core query, ``ffmpeg
+    -encoders`` and ``-decoders``, ...) and took ~1.2 s; the VRAM admission check and the session budget each ran one for
+    every live preview, a third of a warm preview's time.  The static facts are reused for ``ROOP3D_HARDWARE_PROBE_TTL``
+    seconds (default 120, 0 = always probe); free VRAM and the budget derived from it are re-read from NVML on every call,
+    so admission decisions stay current.  Without NVML nothing is cached."""
+    import time as _time
     settings = settings or Settings()
+    ttl = _probe_ttl()
+    key = settings.model_dump_json()
+    entry = _PROBE_CACHE.get(key)
+    if ttl > 0 and entry is not None and _time.monotonic() - entry["at"] < ttl:
+        nvml = entry["nvml"]
+        sample = nvml.sample() if nvml is not None and nvml.available else None
+        if sample and sample.get("vram_total_mib") is not None and sample.get("vram_used_mib") is not None:
+            fresh = entry["value"].model_copy(deep=True)
+            fresh.timestamp = datetime.now(timezone.utc).isoformat()
+            for gpu in fresh.gpus[:1]:
+                gpu.total_vram_mib = int(sample["vram_total_mib"])
+                gpu.free_vram_mib = max(0, int(sample["vram_total_mib"]) - int(sample["vram_used_mib"]))
+                gpu.effective_vram_budget_mib = effective_vram_budget(gpu.total_vram_mib, gpu.free_vram_mib, settings)
+            return fresh
+    result = _probe_hardware_uncached(settings)
+    if ttl > 0 and result.gpus:
+        try:
+            from roop_3d.async_pipeline.hwmon import Nvml
+            nvml = Nvml(result.gpus[0].index)
+        except Exception:
+            nvml = None
+        if nvml is not None and nvml.available:
+            _PROBE_CACHE[key] = {"at": _time.monotonic(), "value": result.model_copy(deep=True), "nvml": nvml}
+            while len(_PROBE_CACHE) > 8:
+                _PROBE_CACHE.pop(next(iter(_PROBE_CACHE)))
+        else:
+            _PROBE_CACHE.pop(key, None)
+    return result
+
+
+def _probe_hardware_uncached(settings: Settings) -> Hardware:
     result = Hardware(timestamp=datetime.now(timezone.utc).isoformat(),
                       os={"system": platform.system(), "release": platform.release(), "machine": platform.machine()},
                       logical_cpu_count=os.cpu_count())

@@ -773,14 +773,12 @@ class FrameCompositor:
                 active_mask = compose_active_mask(coverage, xseg_mask, dual_forbidden)
                 matte_options = options
                 if str(getattr(replacement, "method", "")).startswith("dense_3d") and options.neck_protection:
-                    ratio = turn_ratio(getattr(replacement, "landmarks5", None))
-                    if ratio is not None and ratio < JAW_CUTOFF_MIN_TURN_RATIO:
-                        # Turned past ~40 degrees the 106-point jaw contour collapses, and a gonion-to-menton curve built
-                        # from it cut a straight diagonal through the swapped cheek and left the original nose and lips
-                        # standing in front of it. The mesh silhouette bounds the swap everywhere else; below the chin a
-                        # five-point line (reliable at any yaw) keeps the neck and the source photo's collar out.
-                        matte_options = replace(options, neck_protection=False)
-                        active_mask = chin_line_clamp(active_mask, getattr(replacement, "landmarks5", None))
+                    # The 106-point jaw contour behind the submental cutoff is unreliable as soon as the head turns (it already
+                    # drew a straight diagonal through the swapped cheek at 30 degrees yaw, and collapsed entirely in profile).
+                    # The dense path's mesh silhouette bounds the swap everywhere else, so below the chin a five-point line
+                    # (reliable at any yaw) keeps the neck and the source photo's collar out instead.
+                    matte_options = replace(options, neck_protection=False)
+                    active_mask = chin_line_clamp(active_mask, getattr(replacement, "landmarks5", None))
                 # Submental Chin-to-Neck Gradient Cutoff (gonion-to-menton curve with an inward SDF falloff), then the
                 # edge-preserving Fast Guided Filter for hairline and bangs; each is behind its toggle.
                 active_mask = protect_matte(active_mask, target_crop, points, matte_options)

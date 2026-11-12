@@ -207,6 +207,24 @@ class PreviewService:
             admission = self.scheduler.try_admit(key, settings)
             if admission is None:
                 raise DomainError('PREVIEW_CAPACITY', 'Rendering currently owns the available execution capacity', 409)
+            wants_gpu = settings.hardware_profile != 'cpu' and settings.preferred_provider != 'CPUExecutionProvider'
+            if admission.profile == 'cpu' and wants_gpu:
+                # Admission falls back to the CPU for the WHOLE preview when live free VRAM looks too small (swapper, geometry
+                # and restorer then all run on the CPU while the GPU idles).  Part of that VRAM is this service's own warm
+                # sessions, which are reclaimable: release them and ask once more before accepting the CPU.
+                from roop_3d.core.ort_session import evict_pooled_sessions
+                if evict_pooled_sessions():
+                    self.scheduler.release(key)
+                    admission = self.scheduler.try_admit(key, settings)
+                    if admission is None:
+                        raise DomainError('PREVIEW_CAPACITY', 'Rendering currently owns the available execution capacity', 409)
+                if admission.profile == 'cpu':
+                    try:
+                        from roop_3d.telemetry.pinokio_terminal import HUD
+                        HUD.milestone("ADMISSION", "preview is running on the CPU", reason=getattr(admission.lease.admission, 'reason', '?'),
+                                      hint="free GPU memory or close other GPU apps")
+                    except Exception:
+                        pass
             runner = MasterPipelineRunner(self.state.root, self.state.models, self.state.media, lambda: settings)
             # Reuse target hashes, inspection identity and FaceSet validation without creating a job/checkpoint.
             target, _, _, sources, labels_to_ids, _ = runner._prepare_inputs(JobRecord(request=value.request), settings)

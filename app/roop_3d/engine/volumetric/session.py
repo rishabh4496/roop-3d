@@ -650,6 +650,11 @@ class ReferencePipeline:
                 extreme = abs(face.pose[0]) > yaw_limit or abs(face.pose[1]) > pitch_limit
                 face_mode = "pose_3d" if mode == "standard" and extreme else mode
                 dense_fallback = self.dense_face_unavailable if face_mode != "standard" else None
+                if face_mode != "standard" and not dense_fallback and abs(face.pose[2]) > dense_3d_max_roll():
+                    # The dense mesh fit breaks down on a strongly rolled head (a close-up lying on a pillow produced a duplicated
+                    # eye and a warped mouth, which the compositor then rightly masked away: no swap at all). The standard 2D swap
+                    # aligns by the five landmarks, so it copes with roll.
+                    dense_fallback = f"DENSE_3D_ROLL_LIMIT: head roll {face.pose[2]:.0f} deg exceeds {dense_3d_max_roll():.0f}; standard 2D swap used"
                 if face_mode != "standard" and not dense_fallback:
                     document = self._document_for(tracked.track_id)
                     if document is None:
@@ -964,6 +969,15 @@ class ReferencePipeline:
                 self._warm_key = None
             self.angle_trajectories.clear()
             self.angle_frame_index = None
+
+
+def dense_3d_max_roll() -> float:
+    """Head roll (degrees) beyond which the dense 3D path hands the face to the standard swap (``ROOP3D_3D_MAX_ROLL``, default 40)."""
+    import os
+    try:
+        return float(os.environ.get("ROOP3D_3D_MAX_ROLL", 40.0))
+    except ValueError:
+        return 40.0
 
 
 def auto_3d_limits() -> tuple[float, float]:

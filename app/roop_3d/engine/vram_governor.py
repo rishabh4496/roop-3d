@@ -84,6 +84,11 @@ class VRAMGovernor:
 
             gpu = hardware.gpus[0]
             free = max(0, int(gpu.effective_vram_budget_mib))
+            try:   # idle warm-preview sessions are released the moment a job/compile owns the GPU, so they count as free
+                from roop_3d.core.ort_session import reclaimable_vram_mib
+                free += reclaimable_vram_mib()
+            except Exception:
+                pass
             active_gpu = [value for value in self._active.values() if value.provider == "CUDAExecutionProvider"]
             active_reserved = sum(value.reserved_vram_mib for value in active_gpu)
             usable = max(0, min(free, int(gpu.total_vram_mib) - active_reserved))

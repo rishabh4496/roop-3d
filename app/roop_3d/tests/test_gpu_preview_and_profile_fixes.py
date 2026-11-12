@@ -375,3 +375,111 @@ def test_decode_window_follows_each_frames_own_pts_when_the_first_aac_frame_repo
     odd = av_sync.decode_window("quirky", 1, Fraction(0), 2.5)
     lag = av_sync.measure_lag(reference, odd)
     assert lag.measurable and abs(lag.lag_seconds) <= 0.0005, lag
+
+
+# ------------------------------------------------------------------------------------------------ admission / probes / hashing
+def _fake_hardware(free_budget):
+    from roop_3d.core.hardware import GPU, Hardware
+    return Hardware(timestamp="t", os={"system": "Windows", "release": "11", "machine": "AMD64"}, logical_cpu_count=8,
+                    advertised_providers=["TensorrtExecutionProvider", "CUDAExecutionProvider", "CPUExecutionProvider"],
+                    gpus=[GPU(index=0, name="RTX", total_vram_mib=12282, free_vram_mib=free_budget + 768,
+                              driver_version="1", effective_vram_budget_mib=free_budget)])
+
+
+def test_admission_counts_idle_warm_sessions_as_free_vram_instead_of_falling_back_to_the_cpu(monkeypatch):
+    """Regression: with ~7 GB held by warm preview sessions, free VRAM looked < 4 GB and the whole preview ran on the CPU."""
+    from roop_3d.core.settings import Settings
+    from roop_3d.engine.vram_governor import VRAMGovernor
+    settings = Settings(hardware_profile="12gb", preferred_provider="auto")
+    governor = VRAMGovernor(hardware_probe=lambda _s: _fake_hardware(3000))
+    monkeypatch.setattr(ort_session, "reclaimable_vram_mib", lambda: 0)
+    lease = governor.try_acquire("a", settings)
+    assert lease.admission.provider == "CPUExecutionProvider" and "below" in lease.admission.reason
+    lease.release()
+    monkeypatch.setattr(ort_session, "reclaimable_vram_mib", lambda: 4000)
+    lease = governor.try_acquire("b", settings)
+    assert lease.admission.provider == "CUDAExecutionProvider", lease.admission.reason
+
+
+def test_reclaimable_vram_sums_the_pooled_sessions_and_clears_on_eviction(model_file):
+    manager = _FakeManager(cache_path=model_file.parent)
+    with ort_session.pooled_sessions():
+        manager.create(model_file, model_name="m")
+    key = next(iter(ort_session._POOL))
+    ort_session._POOL_VRAM[key] = 1234
+    assert ort_session.reclaimable_vram_mib() == 1234
+    ort_session.evict_pooled_sessions()
+    assert ort_session.reclaimable_vram_mib() == 0
+
+
+def test_hardware_probe_is_cached_but_free_vram_is_always_read_live(monkeypatch):
+    from roop_3d.core import hardware
+    from roop_3d.core.settings import Settings
+    calls = {"n": 0}
+
+    def fake_uncached(settings):
+        calls["n"] += 1
+        return _fake_hardware(5000)
+
+    class FakeNvml:
+        available = True
+        used = 4000
+
+        def __init__(self, *_):
+            pass
+
+        def sample(self):
+            return {"vram_total_mib": 12282, "vram_used_mib": FakeNvml.used}
+
+    monkeypatch.setattr(hardware, "_probe_hardware_uncached", fake_uncached)
+    monkeypatch.setattr("roop_3d.async_pipeline.hwmon.Nvml", FakeNvml)
+    monkeypatch.setattr(hardware, "_PROBE_CACHE", {})
+    settings = Settings()
+    first = hardware.probe_hardware(settings)
+    FakeNvml.used = 9000
+    second = hardware.probe_hardware(settings)
+    assert calls["n"] == 1, "the second call must not spawn another dozen subprocesses"
+    assert first.gpus[0].free_vram_mib != second.gpus[0].free_vram_mib == 12282 - 9000, "free VRAM is re-read, never stale"
+    monkeypatch.setenv("ROOP3D_HARDWARE_PROBE_TTL", "0")
+    hardware.probe_hardware(settings)
+    assert calls["n"] == 2, "TTL 0 always probes"
+
+
+def test_unchanged_files_keep_their_verified_hash_and_changed_files_do_not(tmp_path, monkeypatch):
+    import hashlib
+    from roop_3d.audit import isolation
+    from roop_3d.core.errors import DomainError
+    from roop_3d.models import verifier
+    monkeypatch.setattr(isolation, "_HASH_MEMO", {})
+    monkeypatch.setattr(verifier, "_VERIFIED", {})
+    path = tmp_path / "w.onnx"
+    path.write_bytes(b"a" * 5000)
+    expected = hashlib.sha256(path.read_bytes()).hexdigest()
+    reads = {"n": 0}
+    original = isolation._sha256_file_uncached
+    monkeypatch.setattr(isolation, "_sha256_file_uncached", lambda p: (reads.__setitem__("n", reads["n"] + 1), original(p))[1])
+    assert isolation.sha256_file(path)[1] == expected and isolation.sha256_file(path)[1] == expected
+    assert reads["n"] == 1, "an unchanged file is hashed once"
+    with verifier.verified_stream(path, expected, 5000):
+        pass
+    with verifier.verified_stream(path, expected, 5000):
+        pass
+    path.write_bytes(b"b" * 5000)                 # same size, new bytes and mtime
+    with pytest.raises(DomainError):
+        with verifier.verified_stream(path, expected, 5000):
+            pass
+    assert isolation.sha256_file(path)[1] != expected and reads["n"] == 2
+    monkeypatch.setenv("ROOP3D_VERIFY_MEMO_SECONDS", "0")
+    isolation.sha256_file(path)
+    isolation.sha256_file(path)
+    assert reads["n"] == 4, "memo seconds 0 hashes every time"
+
+
+def test_the_dense_3d_path_hands_strongly_rolled_heads_to_the_standard_swap(monkeypatch):
+    from roop_3d.engine.volumetric.session import dense_3d_max_roll
+    monkeypatch.delenv("ROOP3D_3D_MAX_ROLL", raising=False)
+    assert dense_3d_max_roll() == 40.0
+    monkeypatch.setenv("ROOP3D_3D_MAX_ROLL", "60")
+    assert dense_3d_max_roll() == 60.0
+    monkeypatch.setenv("ROOP3D_3D_MAX_ROLL", "x")
+    assert dense_3d_max_roll() == 40.0

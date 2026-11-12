@@ -6,10 +6,16 @@ import hashlib
 import os
 from pathlib import Path
 import stat
+import threading
+import time
 from typing import BinaryIO, Iterator
 
-from roop_3d.audit.isolation import safe_path
+from roop_3d.audit.isolation import memo_seconds, safe_path
 from roop_3d.core.errors import DomainError
+
+
+_VERIFIED: dict[tuple, float] = {}
+_VERIFIED_LOCK = threading.Lock()
 
 
 @contextmanager
@@ -20,6 +26,15 @@ def verified_stream(path: Path, expected_sha256: str, byte_size: int) -> Iterato
             before = os.fstat(stream.fileno())
             if not stat.S_ISREG(before.st_mode) or before.st_size != byte_size:
                 raise DomainError("MODEL_DRIFT", "Artifact size or file type differs from the registry")
+            # A registry-verified model is re-read only when its size/mtime/inode changed or the memo expired: every live
+            # preview used to hash ~1 GB of weights on one core before doing any work.
+            ttl = memo_seconds()
+            key = (str(path), before.st_size, before.st_mtime_ns, before.st_ino, before.st_dev, expected_sha256)
+            with _VERIFIED_LOCK:
+                trusted = ttl > 0 and time.monotonic() - _VERIFIED.get(key, -1e9) < ttl
+            if trusted:
+                yield stream
+                return
             digest, total = hashlib.sha256(), 0
             while block := stream.read(min(4 * 1024 * 1024, byte_size - total + 1)):
                 total += len(block)
@@ -34,6 +49,11 @@ def verified_stream(path: Path, expected_sha256: str, byte_size: int) -> Iterato
                     or (current.st_ino, current.st_dev) != (before.st_ino, before.st_dev)
                     or total != byte_size or digest.hexdigest() != expected_sha256):
                 raise DomainError("MODEL_DRIFT", "Artifact bytes differ from the preserved SHA-256")
+            if ttl > 0:
+                with _VERIFIED_LOCK:
+                    _VERIFIED[key] = time.monotonic()
+                    if len(_VERIFIED) > 512:
+                        _VERIFIED.pop(next(iter(_VERIFIED)))
             stream.seek(0)
             yield stream
     except OSError:

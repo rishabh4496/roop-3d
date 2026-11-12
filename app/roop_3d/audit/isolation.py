@@ -66,7 +66,47 @@ def safe_path(root: Path, value: str, *, write: bool = False) -> Path:
     return root / relative
 
 
+_HASH_MEMO: dict[tuple, tuple[float, int, str]] = {}
+_HASH_MEMO_LOCK = __import__("threading").Lock()
+
+
+def memo_seconds() -> float:
+    """How long an unchanged file's verified digest is trusted (``ROOP3D_VERIFY_MEMO_SECONDS``; 0 = hash every time)."""
+    try:
+        return max(0.0, float(os.environ.get("ROOP3D_VERIFY_MEMO_SECONDS", "600")))
+    except ValueError:
+        return 600.0
+
+
+def memo_key(path: Path) -> tuple | None:
+    try:
+        status = Path(path).stat()
+    except OSError:
+        return None
+    return (str(path), status.st_size, status.st_mtime_ns, status.st_ino, status.st_dev)
+
+
 def sha256_file(path: Path) -> tuple[int, str]:
+    """SHA-256 of a regular file. A 500 MB model was re-hashed by every live preview (seconds of single-core CPU each
+    time); an unchanged file (same size, mtime and inode) keeps its digest for ``memo_seconds()``, then is read again."""
+    import time as _time
+    ttl = memo_seconds()
+    key = memo_key(path) if ttl > 0 and not is_link(path) else None
+    if key is not None:
+        with _HASH_MEMO_LOCK:
+            cached = _HASH_MEMO.get(key)
+        if cached is not None and _time.monotonic() - cached[0] < ttl:
+            return cached[1], cached[2]
+    size, digest = _sha256_file_uncached(path)
+    if key is not None:
+        with _HASH_MEMO_LOCK:
+            _HASH_MEMO[key] = (_time.monotonic(), size, digest)
+            if len(_HASH_MEMO) > 512:
+                _HASH_MEMO.pop(next(iter(_HASH_MEMO)))
+    return size, digest
+
+
+def _sha256_file_uncached(path: Path) -> tuple[int, str]:
     if is_link(path):
         raise AuditError("LINK_TRAVERSAL", str(path))
     digest = hashlib.sha256()
