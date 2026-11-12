@@ -159,8 +159,11 @@ class PreviewService:
         self.lock = Lock()
         self.scheduler = state.worker.scheduler if state.worker is not None else RuntimeScheduler()
 
-    def render(self, value: PreviewRequest, cancel: Event, *, raw: bool = False):
+    def render(self, value: PreviewRequest, cancel: Event, *, raw: bool = False, final_only: bool = False):
         """Run one preview. `raw=True` keeps buffers as ndarrays instead of JPEG data URLs.
+
+        `final_only=True` skips diagnostic capture and overlays for interactive final-image consumers.
+        The inference, compositor options and export finishing are identical to the full-buffer path.
 
         Inference is a gate "preview" section: it is refused immediately (EngineBusy, 503) while a
         job, TensorRT compile or Start-button model re-bind owns the engine, and the owner in turn
@@ -170,9 +173,9 @@ class PreviewService:
         EngineRegistry().validate(value.request.engine_id)
         gate = getattr(self.state, 'engine_gate', None)
         with gate.preview_section() if gate is not None else nullcontext():
-            return self._render(value, cancel, raw)
+            return self._render(value, cancel, raw, final_only)
 
-    def _render(self, value: PreviewRequest, cancel: Event, raw: bool):
+    def _render(self, value: PreviewRequest, cancel: Event, raw: bool, final_only: bool = False):
         pack = (lambda image: image) if raw else encode
         if not self.lock.acquire(blocking=False):
             raise DomainError('PREVIEW_BUSY', 'Another preview is running; try again shortly', 409)
@@ -372,9 +375,15 @@ class PreviewService:
                                       'parameters': cell.model_dump(), 'image': pack(buffers['final'])})
                 return {**response, 'cells': cells}
             check()
-            buffers = collect_composite(session, frame.image, result, parameters, occluder_masks=edit_plan.occluders(frame.image, result))
+            # Interactive final previews consume no diagnostic buffers. Capturing them projects every
+            # compositor stage to full resolution and synthesizes normal/lighting maps unnecessarily.
+            buffers = collect_composite(session, frame.image, result, parameters, capture=not final_only,
+                                        occluder_masks=edit_plan.occluders(frame.image, result))
             if value.request.export:
                 buffers['final'] = Finisher(value.request.export.finishing).apply(buffers['final'], frame_index)
+            if final_only:
+                return {**response, 'buffers': {'final': pack(buffers['final'])},
+                        'parameters': parameters.model_dump(), 'latency': result.latency.__dict__}
             detection, pose = frame.image.copy(), frame.image.copy()
             for tracked in result.observations:
                 face = tracked.observation

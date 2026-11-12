@@ -9,6 +9,7 @@ import {
 import { DEFAULT_PARAMETERS } from './components/workstation/pipeline';
 import type { JobRequest } from './contracts';
 import { VideoViewport } from './VideoViewport';
+import { RUNTIME_SETTINGS_CHANGED } from './runtimeSettings';
 
 vi.mock('./components/canvas/FaceOverlayCanvas', () => ({ default: () => null }));
 vi.mock('./components/canvas/WorkstationCanvas', () => ({ default: () => null }));
@@ -88,6 +89,29 @@ function Probe({ payload, out }: { payload: LivePayload | null; out: { current: 
 
 describe('useLiveSwapPreview', () => {
   const mount = async (payload: LivePayload | null, out: { current: LivePreview | null }) => act(async () => { root.render(<Probe payload={payload} out={out}/>); });
+
+  it('revisits exact frames immediately without another request, but renders new settings', async () => {
+    fetchMock.mockImplementation(async () => swapped());
+    const out = { current: null as LivePreview | null };
+    await mount({ frame_index: 1, swap_weight: .5 }, out); await flush(LIVE_DEBOUNCE_MS);
+    await mount({ frame_index: 2, swap_weight: .5 }, out); await flush(LIVE_DEBOUNCE_MS);
+    await mount({ frame_index: 1, swap_weight: .5 }, out);
+    expect(out.current).toMatchObject({ status: 'ready', cached: true, stale: false });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    await mount({ frame_index: 1, swap_weight: .6 }, out); await flush(LIVE_DEBOUNCE_MS);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it.each([RUNTIME_SETTINGS_CHANGED, 'faceset-builder-saved', 'target-angle-scan-completed'])('invalidates cached frames on %s', async event => {
+    fetchMock.mockImplementation(async () => swapped());
+    const out = { current: null as LivePreview | null };
+    await mount({ frame_index: 1 }, out); await flush(LIVE_DEBOUNCE_MS);
+    await act(async () => { window.dispatchEvent(new Event(event)); });
+    await flush(LIVE_DEBOUNCE_MS);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    await act(async () => out.current!.retry()); await flush(LIVE_DEBOUNCE_MS);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
 
   it('debounces slider changes into one POST /api/preview carrying the latest values', async () => {
     fetchMock.mockImplementation(async () => swapped());

@@ -1,0 +1,151 @@
+/* Stage 24: liquid glass HUDs, drag-to-reorder lists, Embla filmstrip dock, persistent queue cards.
+   Plain CSS on the Obsidian tokens in index.css (no Tailwind in this app). Light and dark follow the active theme through --text / --bg-panel. */
+
+/* ── Liquid glass ───────────────────────────────────────────────────────────────── */
+.ul-glass {
+  --ul-glass-blur: 8px; --ul-glass-glow: 12px; --ul-glass-shadow: 12px; --ul-glass-radius: 32px;
+  position: relative;
+  border-radius: var(--ul-glass-radius);
+  color: var(--text, #eef1fb);
+  /* Mostly-opaque panel tint so text stays legible over any video frame; the blur supplies the glass. */
+  background: color-mix(in srgb, var(--bg-panel, #0d0e12) 64%, transparent);
+  -webkit-backdrop-filter: blur(var(--ul-glass-blur)) saturate(165%);
+  backdrop-filter: blur(var(--ul-glass-blur)) saturate(165%);
+  border: 1px solid color-mix(in srgb, var(--text, #fff) 20%, transparent);
+  box-shadow:
+    0 0 var(--ul-glass-glow) var(--accent-cyan-glow, rgba(34, 211, 238, .4)),
+    0 10px 28px rgba(0, 0, 0, .35),
+    inset 0 0 var(--ul-glass-shadow) color-mix(in srgb, var(--text, #fff) 14%, transparent),
+    inset 0 1px 0 color-mix(in srgb, var(--text, #fff) 28%, transparent);
+  overflow: hidden;
+  isolation: isolate;
+  touch-action: manipulation;
+}
+.ul-glass--draggable { touch-action: none; }
+.ul-glass--draggable:not(:has(.ul-glass__grip)) { cursor: grab; }
+.ul-glass--draggable:active:not(:has(.ul-glass__grip)) { cursor: grabbing; }
+.ul-glass--expandable { cursor: pointer; }
+.ul-glass__sheen { position: absolute; inset: 0; z-index: -1; pointer-events: none; border-radius: inherit;
+  background: linear-gradient(120deg, color-mix(in srgb, var(--text, #fff) 18%, transparent), transparent 38%, transparent 62%, color-mix(in srgb, var(--accent-cyan, #22d3ee) 14%, transparent)); }
+.ul-glass__body { position: relative; min-width: 0; }
+.ul-glass__grip, .ul-glass__toggle {
+  position: absolute; top: 6px; z-index: 2; width: 24px; height: 24px; display: grid; place-items: center; padding: 0; border-radius: 50%;
+  border: 1px solid var(--hairline-strong, rgba(255, 255, 255, .16)); background: color-mix(in srgb, var(--bg-panel, #0d0e12) 70%, transparent); color: inherit; font: inherit; line-height: 1; cursor: pointer;
+}
+.ul-glass__grip { left: 8px; cursor: grab; touch-action: none; }
+.ul-glass__toggle { right: 8px; }
+.ul-glass__grip:focus-visible, .ul-glass__toggle:focus-visible { outline: 2px solid var(--accent-cyan, #22d3ee); outline-offset: 2px; }
+.ul-glass:has(.ul-glass__grip) .ul-glass__body { padding-left: 30px; }
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) { .ul-glass { background: var(--bg-panel-raised, #14161c); } }
+@media (prefers-reduced-transparency: reduce) { .ul-glass { -webkit-backdrop-filter: none; backdrop-filter: none; background: var(--bg-panel-raised, #14161c); } }
+
+/* ── Floating canvas HUDs ───────────────────────────────────────────────────────── */
+.canvas-hud { position: absolute; z-index: 6; display: flex; align-items: center; gap: 14px; padding: 7px 16px; font-size: 11px; pointer-events: auto; }
+.canvas-hud--telemetry { top: 54px; right: 14px; max-width: calc(100% - 28px); flex-wrap: wrap; }
+.canvas-hud--loupe { bottom: 54px; right: 14px; padding: 8px 10px; gap: 8px; }
+.canvas-hud .hud-cell { display: grid; gap: 1px; line-height: 1.15; }
+.canvas-hud .hud-cell i { font-style: normal; font-size: 9px; letter-spacing: .08em; opacity: .7; }
+.canvas-hud .hud-cell b { font-weight: 600; font-size: 12px; min-width: 4.4ch; }
+.canvas-hud .hud-cell--meta b { min-width: 0; }
+.canvas-hud--loupe figure { margin: 0; display: grid; gap: 3px; justify-items: center; }
+.canvas-hud--loupe canvas { width: 112px; height: 112px; border-radius: 14px; background: #000; image-rendering: pixelated; border: 1px solid var(--hairline-strong, rgba(255, 255, 255, .16)); }
+.canvas-hud--loupe figcaption { font-size: 9px; letter-spacing: .08em; opacity: .75; }
+.canvas-hud-toggle { position: absolute; right: 14px; bottom: 14px; z-index: 6; }
+
+/* The brush toolbar floats on glass instead of being a bolted-on bar. */
+.mask-glass { position: absolute; left: 50%; bottom: 14px; translate: -50% 0; z-index: 7; width: max-content; max-width: calc(100% - 200px); } /* 200px: room for the canvas's own Done Mask button */
+.mask-glass .mask-editor-toolbar { flex-wrap: wrap; justify-content: center; row-gap: 8px; position: static; transform: none; z-index: auto; background: transparent; border: 0; box-shadow: none; -webkit-backdrop-filter: none; backdrop-filter: none; padding: 6px 10px 6px 4px; }
+.mask-glass { overflow: visible; }
+.studio-dock > .timeline-dock { margin-top: 8px; }
+.extras-dock { margin-top: 18px; }
+
+/* ── Drag items ─────────────────────────────────────────────────────────────────── */
+.ul-drag { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+.ul-drag--x { display: flex; flex-wrap: wrap; gap: 8px; }
+.ul-drag__item { list-style: none; position: relative; }
+.ul-drag__item.is-dragging { z-index: 3; filter: drop-shadow(0 12px 22px rgba(0, 0, 0, .45)); }
+.ul-drag__controls { display: inline-flex; align-items: center; gap: 4px; flex: none; }
+.ul-drag__controls--locked { opacity: .6; width: 28px; justify-content: center; }
+.ul-drag__grip, .ul-drag__move { width: 28px; height: 28px; display: grid; place-items: center; padding: 0; border-radius: 8px; font: inherit; line-height: 1; color: inherit;
+  border: 1px solid var(--hairline, rgba(255, 255, 255, .1)); background: color-mix(in srgb, var(--bg-panel-raised, #14161c) 80%, transparent); cursor: pointer; }
+.ul-drag__grip { cursor: grab; touch-action: none; }
+.ul-drag__grip:active { cursor: grabbing; }
+.ul-drag__move { font-size: 10px; }
+.ul-drag__grip:disabled, .ul-drag__move:disabled { opacity: .35; cursor: not-allowed; }
+.ul-drag__grip:focus-visible, .ul-drag__move:focus-visible { outline: 2px solid var(--accent-cyan, #22d3ee); outline-offset: 2px; }
+
+/* ── Embla ──────────────────────────────────────────────────────────────────────── */
+.ul-embla { position: relative; display: flex; align-items: stretch; gap: 6px; min-width: 0; }
+.ul-embla__viewport { overflow: hidden; flex: 1; min-width: 0; }
+.ul-embla__viewport--plain { overflow-x: auto; overscroll-behavior-x: contain; }
+.ul-embla__track { display: flex; gap: 6px; touch-action: pan-y pinch-zoom; }
+.ul-embla__btn { flex: none; width: 26px; border-radius: 8px; border: 1px solid var(--hairline, rgba(255, 255, 255, .1)); background: var(--bg-panel-raised, #14161c); color: inherit; font-size: 18px; cursor: pointer; }
+.ul-embla__btn:disabled { opacity: .3; cursor: default; }
+.ul-embla__btn:focus-visible { outline: 2px solid var(--accent-cyan, #22d3ee); outline-offset: 2px; }
+
+/* ── Timeline dock ──────────────────────────────────────────────────────────────── */
+.timeline-dock { display: grid; gap: 8px; padding: 10px 12px; border: 1px solid var(--hairline, rgba(255, 255, 255, .1)); border-radius: 12px; background: var(--bg-panel, #0d0e12); min-width: 0; }
+/* Grid items default to min-width:auto, which lets the whole filmstrip push the dock wider than its panel. */
+.timeline-dock > *, .dock-embla, .dock-embla .ul-embla__viewport { min-width: 0; max-width: 100%; }
+.studio-dock { min-width: 0; }
+.timeline-dock .dock-head { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; font-size: 12px; }
+.dock-timecode { font-weight: 700; font-size: 14px; letter-spacing: .02em; }
+.dock-range b { font-size: 9px; letter-spacing: .08em; opacity: .7; margin-left: 6px; }
+.dock-actions, .dock-speed { display: inline-flex; gap: 4px; align-items: center; }
+.dock-speed { margin-left: auto; }
+.dock-btn { padding: 4px 9px; border-radius: 7px; font: inherit; font-size: 11px; color: inherit; cursor: pointer; border: 1px solid var(--hairline-strong, rgba(255, 255, 255, .16)); background: var(--bg-panel-raised, #14161c); }
+.dock-btn:hover:not(:disabled) { border-color: var(--accent-cyan, #22d3ee); }
+.dock-btn.active { background: var(--accent-gradient, linear-gradient(135deg, #6366f1, #22d3ee)); color: #04060d; border-color: transparent; font-weight: 700; }
+.dock-btn:disabled { opacity: .4; cursor: not-allowed; }
+.dock-btn:focus-visible, .dock-thumb:focus-visible, .dock-chapter:focus-visible, .dock-handle:focus-visible { outline: 2px solid var(--accent-cyan, #22d3ee); outline-offset: 2px; }
+.dock-slide { flex: 0 0 auto; width: 92px; display: grid; gap: 3px; justify-items: center; }
+.dock-thumb { position: relative; width: 92px; height: 52px; padding: 0; overflow: hidden; border-radius: 8px; cursor: pointer; color: inherit;
+  border: 1px solid var(--hairline, rgba(255, 255, 255, .1)); background: var(--bg-well, #050507); }
+.dock-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; user-select: none; pointer-events: none; }
+.dock-thumb-empty { position: absolute; inset: 0; background: repeating-linear-gradient(135deg, transparent 0 8px, rgba(255, 255, 255, .04) 8px 16px); }
+.dock-slide.is-active .dock-thumb { border-color: var(--accent-cyan, #22d3ee); box-shadow: 0 0 0 1px var(--accent-cyan, #22d3ee), 0 0 14px var(--accent-cyan-glow, rgba(34, 211, 238, .4)); }
+.dock-slide.is-trimmed { opacity: .38; }
+.dock-flag { position: absolute; top: 2px; right: 3px; font-size: 11px; color: #facc15; text-shadow: 0 1px 2px #000; }
+.dock-tick { font-size: 10px; opacity: .8; }
+.dock-empty { margin: 8px; }
+.dock-rail-wrap { display: grid; gap: 3px; padding: 0 10px; }
+.dock-rail { position: relative; height: 26px; border-radius: 8px; background: var(--bg-well, #050507); border: 1px solid var(--hairline, rgba(255, 255, 255, .1)); touch-action: none; cursor: pointer; }
+.dock-rail.is-disabled { opacity: .5; cursor: not-allowed; }
+.dock-rail__kept { position: absolute; top: 0; bottom: 0; background: color-mix(in srgb, var(--accent-indigo, #6366f1) 38%, transparent); pointer-events: none; }
+.dock-rail__head { position: absolute; top: -3px; bottom: -3px; width: 2px; margin-left: -1px; background: var(--accent-cyan, #22d3ee); box-shadow: 0 0 8px var(--accent-cyan-glow, rgba(34, 211, 238, .4)); pointer-events: none; }
+.dock-handle { position: absolute; top: -4px; bottom: -4px; width: 14px; margin-left: -7px; padding: 0; display: grid; place-items: center; font: 700 13px/1 var(--font-mono, monospace); cursor: ew-resize; touch-action: none;
+  color: #04060d; background: #facc15; border: 0; border-radius: 4px; z-index: 2; }
+.dock-handle--out { background: #fb923c; }
+.dock-handle.is-dragging { filter: brightness(1.15); }
+.dock-handle:disabled { cursor: not-allowed; }
+.dock-chapter { position: absolute; top: 2px; width: 10px; height: 10px; margin-left: -5px; padding: 0; border: 0; background: transparent; cursor: pointer; z-index: 1; }
+.dock-chapter::before { content: ""; position: absolute; inset: 1px 3px; background: #facc15; border-radius: 1px; }
+.dock-rail__scale { display: flex; justify-content: space-between; font-size: 10px; opacity: .65; }
+
+/* ── Persistent queue ───────────────────────────────────────────────────────────── */
+.backend-queue { display: grid; gap: 10px; margin: 18px 0; }
+.backend-queue__head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 12px; }
+.backend-queue__head h2 { margin: 0; }
+.queue-card { display: grid; gap: 7px; padding: 10px 12px; border-radius: 12px; border: 1px solid var(--hairline, rgba(255, 255, 255, .1)); background: var(--bg-panel, #0d0e12); }
+.queue-card.is-failed { border-color: color-mix(in srgb, #fb7185 60%, transparent); }
+.queue-card.is-completed { border-color: color-mix(in srgb, #34d399 55%, transparent); }
+.queue-card__top { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.queue-card__name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.queue-card progress { width: 100%; height: 6px; }
+.queue-card__actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.queue-chip { padding: 2px 9px; border-radius: 999px; font-size: 11px; border: 1px solid var(--hairline-strong, rgba(255, 255, 255, .16)); white-space: nowrap; }
+.queue-chip--rendering, .queue-chip--tracking_3d, .queue-chip--compiling_trt, .queue-chip--preparing, .queue-chip--muxing_audio { border-color: var(--accent-cyan, #22d3ee); color: var(--accent-cyan, #22d3ee); }
+.queue-chip--completed { border-color: #34d399; color: #34d399; }
+.queue-chip--failed, .queue-chip--cancelled { border-color: #fb7185; color: #fb7185; }
+.queue-steps { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 10px; }
+.queue-step { display: inline-flex; align-items: center; gap: 5px; opacity: .55; }
+.queue-step__dot { width: 7px; height: 7px; border-radius: 50%; background: var(--hairline-strong, rgba(255, 255, 255, .3)); }
+.queue-step.is-done { opacity: .85; }
+.queue-step.is-done .queue-step__dot { background: #34d399; }
+.queue-step.is-current { opacity: 1; font-weight: 700; }
+.queue-step.is-current .queue-step__dot { background: var(--accent-cyan, #22d3ee); box-shadow: 0 0 8px var(--accent-cyan-glow, rgba(34, 211, 238, .4)); }
+
+/* Batch recipe order */
+.recipe-order { display: grid; gap: 6px; margin: 10px 0; }
+.recipe-order .ul-drag__item { display: inline-flex; }
+.recipe-order-chip { display: inline-flex; align-items: center; gap: 6px; padding: 4px 8px; border-radius: 10px; border: 1px solid var(--hairline-strong, rgba(255, 255, 255, .16)); background: var(--bg-panel-raised, #14161c); font-size: 12px; }

@@ -5,6 +5,7 @@ import type { JobRequest } from './contracts';
 import type { WorkstationParameters } from './components/workstation/pipeline';
 import { RUNTIME_SETTINGS_CHANGED } from './runtimeSettings';
 import { maskAtFrame } from './utils/maskRanges';
+import { PreviewFrameCache } from './previewFrameCache';
 
 /** Slider drags coalesce into one request per pause of this length. */
 export const LIVE_DEBOUNCE_MS = 150;
@@ -126,25 +127,33 @@ export function useLiveSwapPreview(payload: LivePayload | null, debounceMs: numb
   const [state, setState] = useState<Snapshot>(IDLE);
   const [nonce, setNonce] = useState(0);
   const lease = useRef(new PreviewURL());
+  const cache = useRef(new PreviewFrameCache());
   const key = payload ? JSON.stringify(payload) : '';
 
-  useEffect(() => () => lease.current.clear(), []);
+  useEffect(() => () => { lease.current.clear(); cache.current.clear(); }, []);
   useEffect(() => {
-    const restart = () => setNonce(value => value + 1);
-    window.addEventListener(JOB_START_EVENT, restart);
-    window.addEventListener(RUNTIME_SETTINGS_CHANGED, restart);
-    return () => { window.removeEventListener(JOB_START_EVENT, restart); window.removeEventListener(RUNTIME_SETTINGS_CHANGED, restart); };
+    const restart = () => { cache.current.clear(); setNonce(value => value + 1); };
+    const events = [JOB_START_EVENT, RUNTIME_SETTINGS_CHANGED, 'faceset-builder-saved', 'target-angle-scan-completed'];
+    events.forEach(event => window.addEventListener(event, restart));
+    return () => events.forEach(event => window.removeEventListener(event, restart));
   }, []);
 
   useEffect(() => {
     if (!key) {
       lease.current.clear();
+      cache.current.clear();
       setState(previous => previous.status === 'idle' ? previous : IDLE);
       return;
     }
     let live = true;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const controller = new AbortController();
+    const cached = cache.current.get(key);
+    if (cached) {
+      setState({ status: 'ready', url: lease.current.replace(cached.blob), blob: cached.blob, meta: cached.meta,
+        cached: true, stage: null, error: null, stale: false });
+      return;
+    }
     const run = async () => {
       setState(previous => previous.status === 'busy' ? previous : { ...previous, status: 'loading', error: null, stale: previous.url !== null });
       try {
@@ -154,6 +163,7 @@ export function useLiveSwapPreview(payload: LivePayload | null, debounceMs: numb
           setState(previous => ({ ...previous, status: previous.url !== null ? 'ready' : 'idle', stale: previous.url !== null }));
           return;
         }
+        cache.current.put(key, result);
         setState({ status: 'ready', url: lease.current.replace(result.blob), blob: result.blob, meta: result.meta,
           cached: result.cached, stage: null, error: null, stale: false });
       } catch (error) {
@@ -170,5 +180,5 @@ export function useLiveSwapPreview(payload: LivePayload | null, debounceMs: numb
     return () => { live = false; clearTimeout(timer); controller.abort(); };
   }, [key, nonce, debounceMs]);
 
-  return { ...state, retry: () => setNonce(value => value + 1) };
+  return { ...state, retry: () => { cache.current.clear(); setNonce(value => value + 1); } };
 }

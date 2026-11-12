@@ -12,6 +12,7 @@ import './shell/shell.css'; // redesign layer: layers over the older stylesheets
 import './components/ui-layouts/ui-layouts.css'; // ui-layouts primitives
 import './shell/stage20.css'; // Stage 20: telemetry header, pipeline mini-map, magnetic dock
 import './stage23.css'; // Stage 23: actors, mask frame ranges, 3D mesh canvas mode
+import './stage24.css'; // Stage 24: liquid glass HUDs, drag-reorder lists, Embla frame dock, persistent queue cards
 import './workstation3d.css'; // 3D workstation layer (flow bar, coverage radar, morph/light controls, mesh overlay): must stay last
 import { installResourceLedgerIfRequested } from './utils/resourceLedger';
 import { installGlobalErrorHandlers } from './utils/globalErrors';

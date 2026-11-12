@@ -5,6 +5,7 @@ import { useFaceSelectionStore } from '../../useFaceSelectionStore';
 import { addChapter, adjacentChapter, chapterAt, loadChapters, removeChapter, renameChapter, saveChapters } from './chapters';
 import { getPlayhead, playheadStore, usePlayhead } from '../../stores/playheadStore';
 import { filmstripCount, useFilmstrip } from '../../frameScrub';
+import { setPlaybackRate as setSharedRate, usePlaybackRate } from '../../stores/playbackRateStore';
 
 /**
  * Stage 11 live-playhead leaves. `currentTime` (committed by seek / step / pause) drives the timeline's layout and
@@ -294,7 +295,8 @@ export default function TimelineWorkstation({
   renderProbe('TimelineWorkstation');
   const trackInnerRef = useRef(null);
   const [trackWidth, setTrackWidth] = useState(1000);
-  const [playbackRate, setPlaybackRate] = useState(1);
+  // One speed for the whole workstation: the Stage 24 dock writes the same store, so the two controls always agree.
+  const playbackRate = usePlaybackRate();
   const [chapters, setChapters] = useState(() => loadChapters(target));
   const [renamingChapter, setRenamingChapter] = useState(null);
   const [isPoseTrackExpanded, setIsPoseTrackExpanded] = useState(true);
@@ -374,10 +376,15 @@ export default function TimelineWorkstation({
 
   // Update video playback rate
   const handleRateChange = useCallback((rate) => {
-    setPlaybackRate(rate);
-    if (targetVideoRef?.current) targetVideoRef.current.playbackRate = rate;
-    if (processedVideoRef?.current) processedVideoRef.current.playbackRate = rate;
+    const applied = setSharedRate(rate);
+    if (targetVideoRef?.current) targetVideoRef.current.playbackRate = applied;
+    if (processedVideoRef?.current) processedVideoRef.current.playbackRate = applied;
   }, [targetVideoRef, processedVideoRef]);
+  // A speed picked in the dock (or kept from the last clip) reaches the videos too.
+  useEffect(() => {
+    if (targetVideoRef?.current) targetVideoRef.current.playbackRate = playbackRate;
+    if (processedVideoRef?.current) processedVideoRef.current.playbackRate = playbackRate;
+  }, [playbackRate, target, targetVideoRef, processedVideoRef]);
 
   // Frame stepping controls
   const handleStepFrame = useCallback((step) => {

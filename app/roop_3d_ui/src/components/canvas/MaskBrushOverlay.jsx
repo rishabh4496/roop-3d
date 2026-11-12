@@ -3,6 +3,7 @@ import React, { useRef, useState, useEffect, useCallback, useMemo } from 'react'
 import { calculateLetterbox } from './FaceOverlayCanvas';
 import { useFaceSelectionStore } from '../../useFaceSelectionStore';
 import useHistoryStore from '../../stores/useHistoryStore';
+import { LiquidGlassCard } from '../ui-layouts/LiquidGlassCard';
 import { describeRange, insertMaskKeyframe, keyframeAt, removeMaskKeyframe } from '../../utils/maskRanges';
 
 /**
@@ -448,7 +449,9 @@ export default function MaskBrushOverlay({
         </div>
       )}
 
-      {/* Mask Editor Toolbar */}
+      {/* Mask Editor Toolbar: floats on liquid glass. Only the grip drags it; pointer events stop here so a drag never paints. */}
+      <LiquidGlassCard dragHandle className="mask-glass" borderRadius="22px" blurIntensity="lg" glowIntensity="sm" shadowIntensity="sm" role="toolbar" aria-label="Paint and erase brush"
+        onPointerDown={e => e.stopPropagation()} onPointerMove={e => e.stopPropagation()} onPointerUp={e => e.stopPropagation()}>
       <div className="mask-editor-toolbar" onClick={e => e.stopPropagation()}>
         <div className="toolbar-section">
           <span className="toolbar-title">MASK BRUSH</span>
@@ -580,6 +583,7 @@ export default function MaskBrushOverlay({
           </button>
         </div>
       </div>
+      </LiquidGlassCard>
     </div>
   );
 }

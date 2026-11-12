@@ -42,6 +42,9 @@ export const adjacentChapter = (chapters, time, direction) => {
 
 export const storageKey = target => `roop3d.chapters:${target}`;
 
+/** Fired on `window` after chapters are saved, so other views of the same clip (the Stage 24 dock) refresh without a reload. */
+export const CHAPTERS_CHANGED = 'roop3d:chapters';
+
 /** Parse stored JSON defensively: anything malformed is dropped rather than trusted. */
 export function parseChapters(text) {
   try {
@@ -64,4 +67,5 @@ export function loadChapters(target) {
 export function saveChapters(target, chapters) {
   if (!target) return;
   try { localStorage.setItem(storageKey(target), JSON.stringify(chapters)); } catch { /* storage unavailable: chapters stay in memory */ }
+  try { window.dispatchEvent(new CustomEvent(CHAPTERS_CHANGED, { detail: { target } })); } catch { /* no window (SSR / tests) */ }
 }

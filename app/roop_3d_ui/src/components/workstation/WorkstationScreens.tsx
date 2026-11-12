@@ -11,6 +11,8 @@ import HomeScreen from '../../screens/HomeScreen';
 import type { WorkflowProgress } from '../guide/workflowState';
 import type { WorkflowStepId } from '../guide/helpContent';
 import BatchMatrixScreen from '../../screens/BatchMatrixScreen';
+import BackendQueuePanel from '../queue/BackendQueuePanel';
+import { parseFps } from '../timeline/TimelineWorkstation';
 import HistoryScreen from '../../screens/HistoryScreen';
 import BottleneckFlamegraphComponent from '../diagnostics/BottleneckFlamegraph';
 import SettingsScreenComponent from '../../screens/SettingsScreen';
@@ -79,6 +81,11 @@ type Props = {
   canQueue?: boolean;
   previewRequest?: JobRequest | null;
   timestamp?: number;
+  /** Stage 24: the Editor's frame dock drives the same playhead and trim range as the Studio. */
+  onSeek?: (seconds: number) => void;
+  trimStart?: number;
+  trimEnd?: number | null;
+  onTrimChange?: (start: number, end: number | null) => void;
   route: string;
   caps: Capabilities | null;
   config: Config | null;
@@ -251,6 +258,7 @@ export default function WorkstationScreens(props: Props) {
             </div>
           )} />
           <BottleneckFlamegraph latency={latency} activeJob={renderJobs.find(job => job.state === 'running') || renderJobs[0] || null} />
+          <BackendQueuePanel active={route === '#/processing'} />
           <h2>Measured preview stage timings</h2>
           {latency ? (
             Object.entries(latency).map(([stage, ms]) => (
@@ -271,7 +279,8 @@ export default function WorkstationScreens(props: Props) {
       </AppRouter>
 
       <AppRouter route={route} screen="extras">
-        <ExtrasScreen active={route === '#/extras'} jobs={jobs} target={target} exportOptions={props.exportOptions} onExportChange={props.onExportChange} meshBlend={props.meshBlend} relight={props.relight} onQueue={props.onQueue} canQueue={props.canQueue} previewRequest={props.previewRequest} timestamp={props.timestamp}/>
+        <ExtrasScreen active={route === '#/extras'} jobs={jobs} target={target} exportOptions={props.exportOptions} onExportChange={props.onExportChange} meshBlend={props.meshBlend} relight={props.relight} onQueue={props.onQueue} canQueue={props.canQueue} previewRequest={props.previewRequest} timestamp={props.timestamp}
+          duration={probe?.duration_seconds ?? 0} fps={parseFps(probe?.fps_rational, 30)} onSeek={props.onSeek} trimStart={props.trimStart} trimEnd={props.trimEnd} onTrimChange={props.onTrimChange}/>
       </AppRouter>
 
       <AppRouter route={route} screen="gallery">

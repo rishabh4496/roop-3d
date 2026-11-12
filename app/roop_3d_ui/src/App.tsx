@@ -33,6 +33,7 @@ import { DEFAULT_PARAMETERS, restorerAvailable, type RestorerModel, type Worksta
 import RenderFooter from './components/studio/RenderFooter';
 import FaceMapping from './components/studio/FaceMapping';
 import ActorPanel from './components/studio/ActorPanel';
+import TimelineDock from './components/timeline/TimelineDock';
 import WorkstationScreens from './components/workstation/WorkstationScreens';
 import PipelinePill from './components/hud/PipelinePill';
 import RunPill from './components/faceswap/PipelinePill';
@@ -671,6 +672,9 @@ export default function App() {
             onSelectTrack={trackId => selectTrack(trackId, false)} onSeek={value => setTime(Math.max(0, Math.min(probe?.duration_seconds ?? 0, value)))} onAssign={assignTrack} /></PanelBoundary>
           <div className="studio-timeline-slot" ref={setTimelineSlot} />
           {trimBar}
+          <details className="studio-tray studio-dock" open><summary>Frame navigator <span className="muted">· In/Out, chapters, speed</span></summary>
+            <TimelineDock target={target} duration={probe?.duration_seconds ?? 0} fps={parseFps(probe?.fps_rational, 30)} currentTime={time} disabled={!!busy}
+              onSeek={value => setTime(Math.max(0, Math.min(probe?.duration_seconds ?? 0, value)))} trimStart={trimStart} trimEnd={trimEnd} onTrimChange={(start, end) => { setTrimStart(start); setTrimEnd(end); }} /></details>
           <details className="studio-tray"><summary>Face tray <span className="muted">· faces in the current frame</span></summary><div ref={setTraySlot} /></details>
           {queuePanel}
         </section>
@@ -718,7 +722,7 @@ export default function App() {
       </section>
       {queuePanel}
     </main></div></>}</AppRouter>
-    <WorkstationScreens route={route} caps={caps} config={config} sources={sources} jobs={jobs} projects={projects} busy={!!busy} connection={connection} openProject={openProject} showJob={showJob} controlJob={controlJob} saveSettings={saveSettings} refreshJobs={refreshJobs} openLibrary={() => { setProjectsOpen(true); void refreshProjects(); }} latency={previewLatency} target={target} probe={probe} inspection={inspection} refreshProjects={refreshProjects} exportOptions={exportOptions} onExportChange={setExportOptions} meshBlend={parameters.pose_mode === 'mesh_blend'} relight={!!parameters.relight} onQueue={queue} canQueue={!reason('queue') && !!inspection && !!renderMappings().length && !busy} previewRequest={inspection && renderMappings().length ? previewRequest : null} timestamp={time} themeName={themeName} onThemeChange={setThemeName} onStartTour={() => setTourOpen(true)} workflow={workflow} onWorkflowAction={guideAction} onOpenGuide={() => openGuide()} projectsLoading={projectsLoading}/>
+    <WorkstationScreens route={route} caps={caps} config={config} sources={sources} jobs={jobs} projects={projects} busy={!!busy} connection={connection} openProject={openProject} showJob={showJob} controlJob={controlJob} saveSettings={saveSettings} refreshJobs={refreshJobs} openLibrary={() => { setProjectsOpen(true); void refreshProjects(); }} latency={previewLatency} target={target} probe={probe} inspection={inspection} refreshProjects={refreshProjects} exportOptions={exportOptions} onExportChange={setExportOptions} meshBlend={parameters.pose_mode === 'mesh_blend'} relight={!!parameters.relight} onQueue={queue} canQueue={!reason('queue') && !!inspection && !!renderMappings().length && !busy} previewRequest={inspection && renderMappings().length ? previewRequest : null} timestamp={time} onSeek={(value: number) => setTime(Math.max(0, Math.min(probe?.duration_seconds ?? 0, value)))} trimStart={trimStart} trimEnd={trimEnd} onTrimChange={(start: number, end: number | null) => { setTrimStart(start); setTrimEnd(end); }} themeName={themeName} onThemeChange={setThemeName} onStartTour={() => setTourOpen(true)} workflow={workflow} onWorkflowAction={guideAction} onOpenGuide={() => openGuide()} projectsLoading={projectsLoading}/>
     </div>
     <footer className="app-footer"><span>ROOP 3D / LOCAL WORKSTATION</span><span>Observed identities. Explicit processing. Synthetic media.</span><span>API :{config?.port ?? '—'}</span></footer>
     </div>

@@ -5,4 +5,8 @@ export { MultiAccordion, type MultiAccordionProps, type AccordionItem } from './
 export { AnimatedTabs, type AnimatedTabsProps, type TabItem } from './AnimatedTabs';
 export { ClipPathSplitReveal, clipLeftOf, loupeOffset, type ClipPathSplitRevealProps } from './ClipPathSplitReveal';
 export { MotionDrawer, type MotionDrawerProps, type DrawerSide } from './MotionDrawer';
+export { LiquidGlassCard, glassVars, BLUR_PX, GLOW_PX, SHADOW_PX, ELASTIC, type LiquidGlassCardProps, type BlurIntensity, type EffectIntensity } from './LiquidGlassCard';
+export { DragItems, moveItem, sameOrder, type DragItemsProps, type DragRowContext } from './DragItems';
+export { TimelineAnimation, revealDelay, defaultVariants, DEFAULT_VIEWPORT, type TimelineAnimationProps } from './TimelineAnimation';
+export { EmblaCarousel, DEFAULT_OPTIONS as EMBLA_DEFAULT_OPTIONS, type EmblaCarouselProps } from './EmblaCarousel';
 export { PrecisionRangeSlider, snapToStep, fillSegment, type PrecisionRangeSliderProps, type SingleSliderProps, type SplitSliderProps, type Sides } from './PrecisionRangeSlider';

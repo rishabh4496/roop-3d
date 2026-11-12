@@ -599,7 +599,7 @@ class LivePreviewService:
         request = base.model_copy(update={"timestamp": min(timestamp, 86400.0),
                                          "frame_index": index if payload.frame_index is not None else None})
         try:
-            raw = self.state.previews.render(request, cancel, raw=True)
+            raw = self.state.previews.render(request, cancel, raw=True, final_only=payload.solo_node == 'final')
         except DomainError as error:
             if error.code == "PREVIEW_CAPACITY":
                 raise EngineBusy(self._running_stage() or "GPU_CAPACITY") from None

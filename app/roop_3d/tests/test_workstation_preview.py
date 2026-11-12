@@ -112,6 +112,27 @@ def test_buffers_and_bypass_match_parameter_contract(tmp_path, monkeypatch):
     assert parameters.composite_options().restoration_blend == parameters.composite_options().color_strength == 0
 
 
+def test_final_only_preview_matches_pixels_without_diagnostic_work(tmp_path, monkeypatch):
+    app, payload = preview_fixture(tmp_path, monkeypatch)
+    request = PreviewRequest.model_validate(payload)
+    expected = app.state.previews.render(request, Event(), raw=True)
+    assert {'final', 'pose', 'detector', 'normal_map', 'sh_lighting'} <= expected['buffers'].keys()
+
+    def unexpected(*args, **kwargs):
+        pytest.fail('Final-only preview must not build diagnostic maps or draw overlays')
+
+    from roop_3d.relighting_3d import SurfaceNormalEstimator
+    monkeypatch.setattr(SurfaceNormalEstimator, 'compute_normals', unexpected)
+    monkeypatch.setattr(module.cv2, 'rectangle', unexpected)
+    actual = app.state.previews.render(request, Event(), raw=True, final_only=True)
+    assert set(actual['buffers']) == {'final'}
+    np.testing.assert_array_equal(actual['buffers']['final'], expected['buffers']['final'])
+    for name in ('frame_index', 'timestamp', 'faces', 'parameters', 'width', 'height', 'profile'):
+        assert actual[name] == expected[name]
+    assert FixtureSession.instances[-1].released
+    assert app.state.previews.scheduler.active_count == 0
+
+
 @pytest.mark.parametrize('extra', [
     {'x': {'parameter': 'feather_px', 'values': [0, 5, 10]}},
     {'x': {'parameter': 'feather_px', 'values': [0, 5, 10]}, 'y': {'parameter': 'feather_px', 'values': [1, 2, 3]}},

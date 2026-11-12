@@ -6,6 +6,7 @@ import EngineModelRack from '../components/modelhub/EngineModelRack';
 import { featureReason } from '../state';
 import NumericInput from '../components/controls/NumericInput';
 import { SKIP_KEY, describeLint, lintBatch } from '../components/diagnostics/batchLint';
+import { DragItems } from '../components/ui-layouts/DragItems';
 
 export const BUILTIN_RECIPES = [
   {
@@ -360,7 +361,10 @@ export default function BatchMatrixScreen({
     }
 
     const payloads = [];
-    for (const cell of recipeSelection) {
+    // Jobs are queued in the order of the dragged recipe chips; within one recipe, in the order the targets were ticked.
+    const recipeRank = new Map(recipes.map((entry, position) => [entry.id, position]));
+    const orderedCells = [...recipeSelection].sort((a, b) => (recipeRank.get(a.split(':')[1]) ?? 0) - (recipeRank.get(b.split(':')[1]) ?? 0));
+    for (const cell of orderedCells) {
       const [targetId, recipeId] = cell.split(':');
       const item = targetPool.find(t => t.id === targetId);
       const recipe = recipes.find(r => r.id === recipeId);
@@ -842,6 +846,12 @@ export default function BatchMatrixScreen({
               </select>
             </label>
             <button className="button small" onClick={() => setShowNewRecipeModal(true)}>＋ Create Custom Preset</button>
+          </div>
+
+          <div className="recipe-order">
+            <span className="muted">Recipe order: drag a recipe (or Alt+arrow keys on its grip) to reorder the columns and the order jobs are queued.</span>
+            <DragItems axis="x" items={recipes} getKey={entry => entry.id} getLabel={entry => entry.name} label="Batch recipes" onReorder={setRecipes}
+              renderItem={(entry, { controls }) => <span className="recipe-order-chip">{controls}{entry.name}</span>} />
           </div>
 
           <div className="matrix-scroll-wrapper">

@@ -3,6 +3,7 @@ import React, { useRef, useState, useEffect, useCallback, useMemo } from 'react'
 import { calculateLetterbox } from '../../utils/letterbox';
 import WebGLViewport from './WebGLViewport';
 import MaskBrushOverlay from './MaskBrushOverlay';
+import { BeforeAfterLoupeHud, ViewportTelemetryPill } from './CanvasHuds';
 import { COLORMAPS, DIFF_NOISE_FLOOR, LOUPE_ZOOM, LOUPE_ZOOMS, crossfadeValue, webgl2Available } from './webglModel';
 import { useFaceSelectionStore } from '../../useFaceSelectionStore';
 
@@ -139,9 +140,11 @@ export default function WorkstationCanvas({
   const [bicubic, setBicubic] = useState(false);
   const [showGizmo, setShowGizmo] = useState(true);
   const [loupeHeld, setLoupeHeld] = useState(false);
+  const [showCompareHud, setShowCompareHud] = useState(false);   // Stage 24: before / after lens HUD
   const activeMode = loupeHeld ? 'loupe' : mode;
   const getFacesAtTimestamp = useFaceSelectionStore(state => state.getFacesAtTimestamp);
   const detectedFaces = useFaceSelectionStore(state => state.detectedFaces);
+  const activeFaceId = useFaceSelectionStore(state => state.activeSelection);
   const faces = useMemo(() => (detectedFaces?.length ? getFacesAtTimestamp(currentTime, fps) : []), [detectedFaces, currentTime, fps, getFacesAtTimestamp]);
 
   const letterbox = useMemo(
@@ -334,6 +337,8 @@ export default function WorkstationCanvas({
             <button type="button" className={`preview-mode-btn ${bicubic ? '' : 'active'}`} aria-pressed={!bicubic} onClick={() => setBicubic(false)} title="Hardware bilinear sampling">Bilinear</button>
             <button type="button" className={`preview-mode-btn ${bicubic ? 'active' : ''}`} aria-pressed={bicubic} onClick={() => setBicubic(true)} title="Catmull-Rom bicubic sampling (sharper at 3.5x)">Bicubic</button>
           </span>}</div>}
+        {fullBleed && hasOutput && <button type="button" className={`preview-mode-btn ${showCompareHud ? 'active' : ''}`} aria-pressed={showCompareHud} onClick={() => setShowCompareHud(value => !value)}
+          title="Floating before / after lens at the cursor">◧ Before/After lens</button>}
         {useGl && <div className="gizmo-controls">
           <button type="button" className={`preview-mode-btn ${showGizmo ? 'active' : ''}`} aria-pressed={showGizmo} onClick={() => setShowGizmo(value => !value)} title="3D pose axes over each face's nose bridge">âŒ– Pose gizmo</button>
           {showGizmo && <span className="gizmo-legend" aria-label="Gizmo axes"><i style={{ background: '#ef4444' }}/>Pitch <i style={{ background: '#22c55e' }}/>Yaw <i style={{ background: '#3b82f6' }}/>Roll</span>}
@@ -390,6 +395,8 @@ export default function WorkstationCanvas({
       )}
 
       {activeMode === 'mesh3d' && <div className="mesh3d-legend" role="note"><i/>6DoF craniofacial mesh · registered to the nose tip, an orientation overlay. Faces appear once the target has been inspected.</div>}
+      {fullBleed && !maskEditing && <ViewportTelemetryPill faces={faces} activeFaceId={activeFaceId} mode={activeMode} frame={Math.max(0, Math.round(currentTime * fps))} zoom={loupeZoom} />}
+      {fullBleed && !maskEditing && showCompareHud && hasOutput && <BeforeAfterLoupeHud imageA={imageA} imageB={imageB} stage={stage} pointer={mousePos} zoom={loupeZoom === LOUPE_ZOOM ? 4 : loupeZoom} />}
       {coords && <div className="coord-readout" aria-live="off">x {coords.x.toFixed(2)} · y {coords.y.toFixed(2)} px</div>}
       {onMaskEditToggle && <button type="button" className="canvas-mask-toggle" aria-pressed={maskEditing}
         onClick={() => onMaskEditToggle(!maskEditing)} title="Paint include and exclude overrides on this frame">{maskEditing ? 'Done Mask' : 'Mask Brush'}</button>}
