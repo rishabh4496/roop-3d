@@ -238,7 +238,8 @@ def test_gpen_default_profile_is_batch_one(fake_trt):
         TensorRTSessionBuilder().build(gpen, profile=BatchProfile())
 
 
-def test_static_mixed_graph_retries_without_tensor_rt_cuda_graph(fake_trt):
+def test_static_mixed_graph_retries_without_tensor_rt_cuda_graph(fake_trt, monkeypatch):
+    monkeypatch.setenv("ROOP3D_CUDA_GRAPH", "1")      # graphs are off by default since the async pipeline (see cuda_graphs_enabled)
     state, path = fake_trt
     gpen = path.with_name("GPEN-BFR-512.onnx")
     onnx.save(graph(), gpen)
@@ -250,6 +251,7 @@ def test_static_mixed_graph_retries_without_tensor_rt_cuda_graph(fake_trt):
 
 
 def test_session_manager_retries_mixed_static_graph_without_cuda_graph(tmp_path, monkeypatch):
+    monkeypatch.setenv("ROOP3D_CUDA_GRAPH", "1")      # graphs are off by default since the async pipeline (see cuda_graphs_enabled)
     source = tmp_path / "GPEN-BFR-512.onnx"
     onnx.save(graph(), source)
     import roop_3d.core.ort_session as module

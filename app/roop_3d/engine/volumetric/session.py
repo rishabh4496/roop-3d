@@ -234,10 +234,14 @@ class ReferencePipeline:
 
     def _prepare_identity_rigs(self, source: FaceSetDocument, mapped: Mapping[int, FaceSetDocument], store=None) -> None:
         """Prepare face-only 3D correspondence; no MakeHuman render path."""
-        from roop_3d.reconstruction.neural_face import NeuralFaceEngine
+        from roop_3d.reconstruction.neural_face import NeuralFaceEngine, WARM_ENGINE
+        from roop_3d.core.ort_session import pool_scope_active
         if self.neural_face is None:
             try:
-                self.neural_face = NeuralFaceEngine.load(self.catalog, self.config)
+                self._warm_key = (id(self.catalog), self.config.provider, self.config.hardware_profile,
+                                  self.config.precision_policy, self.config.cpu_threads) if pool_scope_active() else None
+                warm = WARM_ENGINE.take(self._warm_key) if self._warm_key is not None else None
+                self.neural_face = warm if warm is not None else NeuralFaceEngine.load(self.catalog, self.config)
             except DomainError as error:
                 if not self.dense_face_optional or error.code != "DENSE_FACE_ASSETS_MISSING":
                     raise
@@ -372,8 +376,14 @@ class ReferencePipeline:
     def scan_angle_trajectories(self, video_path, track_ids: set[int], *, fps: float = 30.0,
                                 hdr_policy: str = "tonemap_sdr", min_cutoff: float = 0.15,
                                 beta: float = 0.04, derivative_cutoff: float = 1.0,
-                                on_frame=None) -> dict[int, tuple[Any, ...]]:
-        """Run Stage A/B/C over the video, then reset association state for deterministic render replay."""
+                                on_frame=None, window: tuple[Any, Any] | None = None) -> dict[int, tuple[Any, ...]]:
+        """Run Stage A/B/C over the video, then reset association state for deterministic render replay.
+
+        ``window`` is the job's ``(start, end)`` trim in source seconds (start inclusive, end exclusive, either
+        may be None). Frames outside it are not analysed - they get empty detections so every index still
+        lines up with the render - and decoding stops at ``end``: a 6 s trim of a 7 min file no longer pays for
+        a 7 min tracker pass.
+        """
         if not self.prepared or self.tracker is None:
             raise DomainError("SESSION_NOT_PREPARED", "Prepare a session before scanning target angles", 409)
         if any(type(track_id) is not int or track_id < 0 for track_id in track_ids):
@@ -396,7 +406,14 @@ class ReferencePipeline:
         reader = VideoReader(video_path, hardware="auto", hdr_policy=hdr_policy)
         frames = reader.frames()
         try:
+            window_start, window_end = window if window is not None else (None, None)
             for frame_index, decoded in enumerate(frames):
+                if window_end is not None and decoded.timestamp.seconds >= window_end:
+                    break
+                if window_start is not None and decoded.timestamp.seconds < window_start:
+                    detections.append({})
+                    barriers.append(set())
+                    continue
                 if decoded.image is None:
                     detections.append({})
                     barriers.append(set(track_ids))
@@ -629,7 +646,8 @@ class ReferencePipeline:
                         face = replace(face, landmarks68=measured)
                         tracked = replace(tracked, observation=face)
                 at = time.perf_counter()
-                extreme = abs(face.pose[0]) > 30 or abs(face.pose[1]) > 25
+                yaw_limit, pitch_limit = auto_3d_limits()
+                extreme = abs(face.pose[0]) > yaw_limit or abs(face.pose[1]) > pitch_limit
                 face_mode = "pose_3d" if mode == "standard" and extreme else mode
                 dense_fallback = self.dense_face_unavailable if face_mode != "standard" else None
                 if face_mode != "standard" and not dense_fallback:
@@ -857,6 +875,12 @@ class ReferencePipeline:
                                  "identity_assets": dict(self.rig_status),
                                  "active_reenactors": len(self.reenactors)}}
 
+    def prefetch_composite_inputs(self, image: np.ndarray, result: FrameResult, options: CompositeOptions = CompositeOptions()) -> int:
+        """Warm the compositor's face-parser cache for ``result`` (no state is touched; safe next to ``composite_frame``)."""
+        if not result.replacements or getattr(self, "compositor", None) is None:
+            return 0
+        return self.compositor.prefetch_parser(image, result.replacements, options)
+
     def composite_frame(self, image: np.ndarray, result: FrameResult, *,
                         options: CompositeOptions = CompositeOptions(),
                         occluder_masks: dict[int, np.ndarray] | None = None,
@@ -929,10 +953,32 @@ class ReferencePipeline:
             self.full_head_engines.clear()
             self.head_landmarks = None
             if self.neural_face is not None:
-                self.neural_face.release()
+                warm_key = getattr(self, "_warm_key", None)
+                if warm_key is not None:
+                    # A live preview: keep the engine warm for the next one instead of tearing the 3D head down.
+                    from roop_3d.reconstruction.neural_face import WARM_ENGINE
+                    WARM_ENGINE.put(warm_key, self.neural_face)
+                else:
+                    self.neural_face.release()
                 self.neural_face = None
+                self._warm_key = None
             self.angle_trajectories.clear()
             self.angle_frame_index = None
+
+
+def auto_3d_limits() -> tuple[float, float]:
+    """(yaw, pitch) in degrees beyond which a face leaves the 2D swap for the dense 3D path (default 30 / 25).
+
+    ``ROOP3D_AUTO_3D_YAW`` / ``ROOP3D_AUTO_3D_PITCH`` change them; a value of 180 disables the automatic switch.
+    """
+    import os
+
+    def read(name: str, default: float) -> float:
+        try:
+            return float(os.environ.get(name, default))
+        except ValueError:
+            return default
+    return read("ROOP3D_AUTO_3D_YAW", 30.0), read("ROOP3D_AUTO_3D_PITCH", 25.0)
 
 
 def prepare_session(source: FaceSetDocument, *, catalog: ModelCatalog | None = None,

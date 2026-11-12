@@ -119,6 +119,28 @@ def read_checkpoint_npz(data: bytes) -> PipelineCheckpoint:
     return value
 
 
+def windowed_frames(frames, start, end):
+    """Yield only the frames the writer will keep (``start <= t < end``) and stop decoding at ``end``.
+
+    Indices are the source's own, so checkpoints, angle trajectories and the muxer's frame lookup stay aligned.
+    """
+    if start is None and end is None:
+        return frames
+
+    def keep():
+        try:
+            for decoded in frames:
+                at = decoded.timestamp.seconds
+                if end is not None and at >= end:
+                    break
+                if start is not None and at < start:
+                    continue
+                yield decoded
+        finally:
+            frames.close()
+    return keep()
+
+
 class PipelinePaused(Exception):
     pass
 
@@ -740,6 +762,19 @@ class MasterPipelineRunner:
                 # Show the saved position immediately; inference replays the earlier frames to rebuild tracker state.
                 report_progress(JobProgress(frame=checkpoint.completed_frame + 1, total_frames=total_frames, stage="resume"))
 
+            # The writer keeps frames with start <= t < end. Analysing anything outside that window is pure waste.
+            trim_window = (Fraction(str(record.request.trim_start_seconds)) if record.request.trim_start_seconds is not None else None,
+                           Fraction(str(record.request.trim_end_seconds)) if record.request.trim_end_seconds is not None else None)
+            # Progress counts the frames of the work actually requested, not of the whole source file.
+            scan_origin = 0
+            if trim_window[1] is not None and total_frames is not None:
+                try:
+                    window_fps = float(self.media.probe(record.request.target_path).fps or 30.0)
+                    window_seconds = float(trim_window[1] - (trim_window[0] or 0))
+                    total_frames = max(1, min(total_frames, int(window_seconds * window_fps) + 1))
+                    scan_origin = int(float(trim_window[0] or 0) * window_fps)
+                except (TypeError, ValueError, ZeroDivisionError):
+                    pass
             angle_scan = getattr(session, "scan_angle_trajectories", None)
             install_angle_scan = getattr(session, "set_angle_trajectories", None)
             if callable(angle_scan) and callable(install_angle_scan):
@@ -751,20 +786,23 @@ class MasterPipelineRunner:
 
                 def scan_progress(scanned: int) -> None:
                     self._check_control(control, checkpoint, last_completed)
-                    if scanned % 30 == 0 or scanned == total_frames:
+                    scanned -= scan_origin
+                    if scanned > 0 and scanned % 30 == 0 or scanned == total_frames:
                         reported = min(scanned, total_frames) if total_frames is not None else scanned
                         report_progress(JobProgress(frame=reported, total_frames=total_frames, stage="angle_scan"))
 
                 trajectories = angle_scan(target, numeric_ids, fps=scan_fps, hdr_policy=hdr_policy,
                     min_cutoff=settings.temporal_min_cutoff, beta=settings.temporal_beta,
-                    derivative_cutoff=settings.temporal_d_cutoff, on_frame=scan_progress)
+                    derivative_cutoff=settings.temporal_d_cutoff, on_frame=scan_progress,
+                    **({"window": trim_window} if trim_window != (None, None) else {}))
                 install_angle_scan(trajectories)
                 if total_frames is None:
                     report_progress(JobProgress(frame=max((len(items) for items in trajectories.values()), default=0),
                                                 total_frames=None, stage="angle_scan"))
 
             reader = VideoReader(target, hardware="auto", hdr_policy=hdr_policy)
-            frames = reader.frames()
+            frames = windowed_frames(reader.frames(), *trim_window)
+            first_index = [None]
             # Frames <= resume_after were saved by an earlier attempt: they are still inferred (tracker / temporal state)
             # but never written again.
             resume_after = checkpoint.completed_frame
@@ -856,12 +894,16 @@ class MasterPipelineRunner:
                         self._check_control(control, checkpoint, last_completed)
                         mapped_seen.update(entry.track_id for entry in result.replacements if entry.track_id in numeric_ids)
                         decoded_count += 1
+                        if first_index[0] is None:
+                            # The window's origin is its first DECODED frame: replayed frames after a resume come first,
+                            # so progress keeps counting from the same base on every attempt (never goes backwards).
+                            first_index[0] = decoded.index
                         if hub is not None:
                             hub.publish(item.payload, frame_index=decoded.index, timestamp_s=float(decoded.timestamp.seconds),
                                         stage_ms=(walls.get("track", 0.0), walls.get("swap", 0.0), walls.get("composite", 0.0)))
                         if item.meta.get("saved"):
                             last_completed = decoded.index
-                            completed = decoded.index + 1
+                            completed = decoded.index + 1 - first_index[0]
                             elapsed = max(time.monotonic() - started, 1e-6)
                             work_ms = sum(walls.get(name, 0.0) for name, _ in stages)
                             advisory_msg = watchdog.advisory_badges[-1]["badge"] if watchdog.advisory_badges else None

@@ -4,6 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from functools import cached_property
 import logging
+import time
 from typing import Any
 
 import numpy as np
@@ -47,13 +48,24 @@ class RuntimeConfig:
 
     @cached_property
     def gpu_budget_bytes(self) -> int:
+        # Every preview builds a fresh RuntimeConfig, and the probe shells out to nvidia-smi three times (~3 s on
+        # Windows).  The value only sets a session memory limit, so a 20 s old reading is as good as a new one.
+        key = (self.hardware_profile, self.reserve_mib)
+        cached = _BUDGET_CACHE.get(key)
+        if cached is not None and time.monotonic() - cached[0] < 20.0:
+            return cached[1]
         from roop_3d.core.hardware import probe_hardware
         from roop_3d.core.settings import Settings
         hardware = probe_hardware(Settings(hardware_profile=self.hardware_profile,
             preferred_provider="CUDAExecutionProvider", memory_safety_reserve_mb=self.reserve_mib))
         if not hardware.gpus or hardware.gpus[0].effective_vram_budget_mib <= 0:
             raise DomainError("VRAM_BUDGET_UNAVAILABLE", "No verified free CUDA budget is available", 503)
-        return hardware.gpus[0].effective_vram_budget_mib * 1048576
+        value = hardware.gpus[0].effective_vram_budget_mib * 1048576
+        _BUDGET_CACHE[key] = (time.monotonic(), value)
+        return value
+
+
+_BUDGET_CACHE: dict[tuple, tuple[float, int]] = {}
 
 
 def tensor(value: np.ndarray, shape: tuple[int, ...], *, dtype: np.dtype = np.dtype("float32")) -> np.ndarray:

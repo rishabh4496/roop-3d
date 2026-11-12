@@ -60,11 +60,32 @@ def decode_window(path: Path, stream_index: int, window_start: Fraction, seconds
     end = window_start + Fraction(seconds).limit_denominator(1000)
     position: int | None = None  # buffer index of the next resampled sample
 
+    # Frames are normally contiguous, but a decoder can report an odd pts for a frame after skipping encoder priming
+    # (the source clip's first AAC frame arrives at pts 512 with 1024 samples while the next one is at 1024).  Laying
+    # everything out from that first frame shifted the whole window by 512 samples = 11.6 ms and failed any trimmed
+    # job.  So each frame is anchored on its own presentation time whenever it disagrees with the running position by
+    # more than the resampler's own latency.
+    reanchor_tolerance = max(2, round(0.004 * rate))
+    latency: int | None = None   # samples the resampler holds back; measured once from a silent probe of the real format
+
+    def resampler_latency(frame: av.AudioFrame) -> int:
+        probe = av.AudioResampler(format="flt", layout="mono", rate=rate)
+        silent = av.AudioFrame(format=frame.format.name, layout=frame.layout.name, samples=frame.samples)
+        silent.sample_rate = frame.sample_rate
+        for plane in silent.planes:
+            plane.update(bytes(plane.buffer_size))
+        silent.pts, silent.time_base = 0, Fraction(1, frame.sample_rate)
+        produced = sum(o.samples for o in probe.resample(silent))
+        return max(0, round(frame.samples * rate / frame.sample_rate) - produced)
+
     def place(frames, at_seconds: Fraction) -> None:
         nonlocal position
+        anchor = round((at_seconds - window_start) * rate)
+        if position is not None and abs(anchor - position) > reanchor_tolerance and at_seconds != window_start:
+            position = anchor - (latency or 0)
         for out in frames:
             if position is None:  # the first output sample sits at the first input frame's time
-                position = round((at_seconds - window_start) * rate)
+                position = anchor
             data = out.to_ndarray().reshape(-1)
             lo, hi = max(position, 0), min(position + data.size, size)
             if hi > lo:
@@ -76,6 +97,11 @@ def decode_window(path: Path, stream_index: int, window_start: Fraction, seconds
             at = (frame.pts * Fraction(frame.time_base)) if frame.pts is not None else Fraction(0)
             if at >= end:
                 break
+            if latency is None:
+                try:
+                    latency = resampler_latency(frame)
+                except Exception:        # a probe failure only disables the correction
+                    latency = 0
             place(resampler.resample(frame), at)
         place(resampler.resample(None), window_start)
     return buffer

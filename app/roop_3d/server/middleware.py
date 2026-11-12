@@ -147,6 +147,11 @@ class IntakeMiddleware:
         try:
             await self.app(scope, replay, tracked_send)
         finally:
-            log.info(json.dumps({"event": "request", "request_id": request_id, "method": scope["method"],
-                                 "path": scope["path"], "status": status,
-                                 "duration_ms": round((time.monotonic() - start) * 1000, 3)}))
+            elapsed_ms = round((time.monotonic() - start) * 1000, 3)
+            # The UI polls job / pipeline / target status several times a second.  Each healthy, fast GET used to
+            # print one JSON line, which buried the processing HUD in the Pinokio terminal.  Writes, failures and
+            # slow requests still log at INFO; the quiet ones stay available at DEBUG.
+            routine = scope["method"] in ("GET", "HEAD") and status < 400 and elapsed_ms < 1500
+            log.log(logging.DEBUG if routine else logging.INFO,
+                    json.dumps({"event": "request", "request_id": request_id, "method": scope["method"],
+                                "path": scope["path"], "status": status, "duration_ms": elapsed_ms}))

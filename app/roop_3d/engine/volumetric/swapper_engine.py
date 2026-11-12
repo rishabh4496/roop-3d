@@ -32,21 +32,33 @@ def _static_dim(value: Any, fallback: int) -> int:
     return value if type(value) is int and value > 0 else fallback
 
 
+_VALIDATED_GRAPHS: set[tuple[str, int, int]] = set()
+
+
 def load_local_session(catalog, model_id: str, path: Path, config: RuntimeConfig):
     """Validate a local graph and load it within the selected hardware profile."""
     try:
-        import onnx
-        from onnx import TensorProto
-        graph = onnx.load(str(path), load_external_data=False)
-        if any(item.data_location == TensorProto.EXTERNAL or item.external_data
-               for item in graph.graph.initializer):
-            raise ValueError("external tensors are not supported")
-        if any(node.domain not in ("", "ai.onnx", "ai.onnx.ml") for node in graph.graph.node):
-            raise ValueError("custom operator domains are not supported")
-        onnx.checker.check_model(graph)
-    except Exception as error:
-        raise DomainError("LOCAL_MODEL_GRAPH_UNSUPPORTED",
-            f"Local ONNX model graph failed safety/format checks ({type(error).__name__})", 422) from None
+        status = Path(path).stat()
+        version = (str(path), status.st_size, status.st_mtime_ns)
+    except OSError:
+        version = None
+    if version is None or version not in _VALIDATED_GRAPHS:
+        # Parsing and checking a 500 MB graph took seconds on every preview; one pass per file version is enough.
+        try:
+            import onnx
+            from onnx import TensorProto
+            graph = onnx.load(str(path), load_external_data=False)
+            if any(item.data_location == TensorProto.EXTERNAL or item.external_data
+                   for item in graph.graph.initializer):
+                raise ValueError("external tensors are not supported")
+            if any(node.domain not in ("", "ai.onnx", "ai.onnx.ml") for node in graph.graph.node):
+                raise ValueError("custom operator domains are not supported")
+            onnx.checker.check_model(graph)
+        except Exception as error:
+            raise DomainError("LOCAL_MODEL_GRAPH_UNSUPPORTED",
+                f"Local ONNX model graph failed safety/format checks ({type(error).__name__})", 422) from None
+        if version is not None:
+            _VALIDATED_GRAPHS.add(version)
     from roop_3d.core.ort_session import CUDA, CPU, TRT, SessionManager
     model_name = path.name
     if config.provider == CUDA and config.precision_policy == "fp16":

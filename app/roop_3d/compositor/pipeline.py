@@ -30,6 +30,7 @@ from roop_3d.compositor.strand_matte import StrandMatteOptions
 from roop_3d.compositor.masks import (
     BisenetFaceParser, FaceParser, build_face_mask, landmark_hull_mask,
     compute_dual_bisenet_forbidden_mask, compose_active_mask, apply_submental_jaw_cutoff,
+    fill_mask_holes, confident_forbidden, turn_ratio, chin_line_clamp, JAW_CUTOFF_MIN_TURN_RATIO,
     INCLUDED_SKIN_FACE_CLASSES, STRICT_FORBIDDEN_CLASSES, OCCLUDER_CLASS_IDS
 )
 
@@ -301,6 +302,31 @@ class FrameCompositor:
         frame_to_crop = cv2.invertAffineTransform(np.asarray(inverse, dtype=np.float32))
         return cv2.warpAffine(frame, frame_to_crop, (shape[1], shape[0]), flags=cv2.INTER_LINEAR,
                               borderMode=cv2.BORDER_REFLECT_101)
+
+    def prefetch_parser(self, frame: np.ndarray, replacements, options: "CompositeOptions") -> int:
+        """Run the face parser on the crops :meth:`compose` will ask about, so it can start on the next frame at once.
+
+        Called from the (light) swap stage while the composite stage is still busy with the previous frame.  The parser
+        is stateless and its results are cached by image content, so this changes no output: a miss merely costs the
+        same inference later.  Only the standard occlusion path parses these crops.  Returns the crops parsed.
+        """
+        parser = self.parser
+        if parser is None or not getattr(parser, "cache_enabled", False) or options.occlusion_mode != "standard":
+            return 0
+        done = 0
+        for replacement in replacements:
+            try:
+                if parser.prefetch_pressure() >= parser.PREFETCH_LEAD_CROPS:
+                    return done          # far enough ahead of the composite stage; more would only cost memory
+                crop = np.asarray(replacement.image)
+                if crop.dtype != np.uint8 or crop.ndim != 3 or crop.shape[2] != 3:
+                    continue
+                parser.predict(self._crop_to_frame(frame, replacement.inverse, crop.shape[:2]), prefetch=True)
+                parser.predict(crop, prefetch=True)
+                done += 2
+            except Exception:
+                return done      # the composite stage reports real errors itself
+        return done
 
     @staticmethod
     def _landmarks_to_crop(landmarks: np.ndarray | None, inverse: np.ndarray) -> np.ndarray | None:
@@ -739,10 +765,25 @@ class FrameCompositor:
                 # Hard-subtract STRICT_FORBIDDEN_CLASSES from 3D mesh silhouette mask:
                 # active_mask = mesh_face_only_mask * xseg_face_mask * (1.0 - forbidden_hair_neck_ear_mask)
                 xseg_mask = (1.0 - front) if front is not None else np.ones(crop.shape[:2], np.float32)
+                if str(getattr(replacement, "method", "")).startswith("dense_3d"):
+                    # The dense 3D crop is synthesised, so the parser's weak opinion of it is noise: close the eye-socket
+                    # gaps in the mesh silhouette and keep only confident hair/neck/ear evidence from either crop.
+                    coverage = fill_mask_holes(coverage)
+                    dual_forbidden = np.maximum(confident_forbidden(swap_forbidden), target_forbidden)
                 active_mask = compose_active_mask(coverage, xseg_mask, dual_forbidden)
+                matte_options = options
+                if str(getattr(replacement, "method", "")).startswith("dense_3d") and options.neck_protection:
+                    ratio = turn_ratio(getattr(replacement, "landmarks5", None))
+                    if ratio is not None and ratio < JAW_CUTOFF_MIN_TURN_RATIO:
+                        # Turned past ~40 degrees the 106-point jaw contour collapses, and a gonion-to-menton curve built
+                        # from it cut a straight diagonal through the swapped cheek and left the original nose and lips
+                        # standing in front of it. The mesh silhouette bounds the swap everywhere else; below the chin a
+                        # five-point line (reliable at any yaw) keeps the neck and the source photo's collar out.
+                        matte_options = replace(options, neck_protection=False)
+                        active_mask = chin_line_clamp(active_mask, getattr(replacement, "landmarks5", None))
                 # Submental Chin-to-Neck Gradient Cutoff (gonion-to-menton curve with an inward SDF falloff), then the
                 # edge-preserving Fast Guided Filter for hairline and bangs; each is behind its toggle.
-                active_mask = protect_matte(active_mask, target_crop, points, options)
+                active_mask = protect_matte(active_mask, target_crop, points, matte_options)
                 alpha = active_mask * options.swap_weight
             else:
                 alpha = alpha * options.swap_weight

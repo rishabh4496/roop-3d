@@ -280,6 +280,7 @@ class JobHud:
     last_frame: int = 0
     last_timings: dict | None = None
     muxing: bool = False
+    stage: str = "render"          # the phase whose frames the live line is counting
 
     def __post_init__(self) -> None:
         self.samples = deque(maxlen=512)
@@ -301,6 +302,10 @@ def bar(percent: float | None, width: int = 14, *, color: bool = True) -> str:
     return paint("█" * filled, "green", enabled=color) + paint("░" * (width - filled), "dim", enabled=color)
 
 
+#: Live-line label for the phases that count frames but are not the render itself.
+PHASE_LABEL = {"angle_scan": "SCAN"}
+
+
 def render_frame_line(job: JobHud, *, frame: int, rolling: float | None, reading: ResourceReading, peak_mib: float | None,
                       timings: Mapping[str, float] | None, width: int, color: bool = True) -> str:
     """One status line, composed of segments dropped from the right until it fits ``width`` columns.
@@ -313,7 +318,8 @@ def render_frame_line(job: JobHud, *, frame: int, rolling: float | None, reading
     vram_tag = "VRAM" if reading.vram_scope == "process" else "VRAM(dev)" if reading.vram_scope == "device" else "VRAM"
     stage_cells = [f"{label} {fmt_ms(timings.get(key)) if key else '--'}" for label, key in STAGE_COLUMNS]
     segments = [
-        f"{paint('▶', 'cyan', enabled=color)} {paint(job.job_id[:8], 'bold', enabled=color)} {paint(job.swap_mode, 'magenta', enabled=color)}",
+        f"{paint('▶', 'cyan', enabled=color)} {paint(job.job_id[:8], 'bold', enabled=color)} {paint(job.swap_mode, 'magenta', enabled=color)}"
+        + (f" {paint(PHASE_LABEL[job.stage], 'yellow', enabled=color)}" if job.stage in PHASE_LABEL else ""),
         f"{bar(pct, color=color)} {'--' if pct is None else f'{pct:5.1f}'}% {frame}/{job.total if job.total else '?'}",
         f"{fmt_ms(job.current_fps)}/{fmt_ms(rolling)} fps",
         f"ETA {fmt_duration(eta)}",
@@ -531,11 +537,19 @@ class PinokioTerminalHUD:
             job = self._jobs.get(job_id)
             if job is None:
                 return
-            if stage != "render":
+            if stage not in ("render", "angle_scan"):
                 self._stage_change(job, stage, frame)
                 return
             now = self.clock()
-            if total and not job.total:
+            if job.stage != stage:
+                # A new phase has its own frame counter, rate and ETA.
+                job.stage, job.last, job.last_frame, job.current_fps = stage, None, 0, None
+                job.samples.clear()
+                if stage == "angle_scan":
+                    self.milestone("SCAN", "pre-pass: tracking the target's head angles", job=job.job_id[:8], frames=total)
+                elif job.total and total:
+                    job.total = total
+            if total and (not job.total or stage == "angle_scan"):
                 job.total = total
             if job.last is not None and now > job.last[0] and frame >= job.last[1]:
                 job.current_fps = (frame - job.last[1]) / (now - job.last[0])

@@ -609,6 +609,16 @@ class LivePreviewService:
         image = raw["buffers"].get(payload.solo_node)
         if image is None:
             raise DomainError("SOLO_NODE_UNAVAILABLE", f"Pipeline node '{payload.solo_node}' produced no buffer for this frame", 422)
+        try:   # a live preview used to leave the terminal silent for its whole 10-60 s
+            from roop_3d.telemetry.pinokio_terminal import HUD
+            latency = raw.get("latency", {}) or {}
+            path = "dense-3D" if latency.get("projection_ms", 0) > latency.get("swap_ms", 0) else "2D-swap"
+            HUD.milestone("PREVIEW", "frame rendered", frame=raw["frame_index"], path=path,
+                          total=f"{latency.get('total_ms', 0) / 1000:.1f}s", detect=f"{latency.get('detection_ms', 0):.0f}ms",
+                          swap=f"{latency.get('swap_ms', 0):.0f}ms", projection=f"{latency.get('projection_ms', 0):.0f}ms",
+                          provider=str(raw.get("provider")).replace("ExecutionProvider", ""))
+        except Exception:
+            pass
         meta = {"media_id": payload.inspection_id, "frame_index": raw["frame_index"], "swap_config_hash": digest,
                 "solo_node": payload.solo_node, "width": int(image.shape[1]), "height": int(image.shape[0]),
                 "decoded_frame_index": raw["frame_index"], "timestamp": raw["timestamp"], "faces": raw.get("faces", []),

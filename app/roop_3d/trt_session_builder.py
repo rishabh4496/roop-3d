@@ -24,7 +24,7 @@ from roop_3d.engine.resources import guarded
 from roop_3d.core.ort_session import (GpuIoBinding, _fp32_safe_model_path,
                                       _profiles, _static_input_contract, _static_model_path,
                                       _static_graph_inputs, _trt_excluded_ops,
-                                      _is_cuda_graph_partition_error)
+                                      _is_cuda_graph_partition_error, cuda_graphs_enabled)
 
 LOG = logging.getLogger(__name__)
 TRT = "TensorrtExecutionProvider"
@@ -242,7 +242,7 @@ class TensorRTSessionBuilder:
             "trt_builder_optimization_level": 5,
             "trt_force_sequential_engine_build": False,
             "trt_auxiliary_streams": 2,
-            "trt_cuda_graph_enable": static_inputs,
+            "trt_cuda_graph_enable": static_inputs and cuda_graphs_enabled(),
             "trt_layer_norm_fp32_fallback": True,
             "trt_op_types_to_exclude": excluded_ops,
             "trt_detailed_build_log": False,

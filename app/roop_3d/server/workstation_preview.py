@@ -8,6 +8,7 @@ from fractions import Fraction
 from threading import Event, Lock
 import time
 from typing import Literal
+import os
 import uuid
 from dataclasses import replace
 from roop_3d.reconstruction.pose_blend import reblend
@@ -150,6 +151,14 @@ def collect_composite(session, image, result, parameters, *, capture=True, occlu
     return buffers
 
 
+def preview_preroll() -> int:
+    """Frames before the target that still run the full swap (``ROOP3D_PREVIEW_PREROLL``; 0 = every replayed frame)."""
+    try:
+        return max(0, int(os.environ.get("ROOP3D_PREVIEW_PREROLL", "6")))
+    except ValueError:
+        return 6
+
+
 class PreviewService:
     MAX_FRAMES = 1200
     TIME_BUDGET = 120
@@ -172,8 +181,11 @@ class PreviewService:
         from roop_3d.engine.registry import EngineRegistry
         EngineRegistry().validate(value.request.engine_id)
         gate = getattr(self.state, 'engine_gate', None)
+        from roop_3d.core.ort_session import pooled_sessions
         with gate.preview_section() if gate is not None else nullcontext():
-            return self._render(value, cancel, raw, final_only)
+            # Warm sessions: the models a preview builds are kept for the next one (see core/ort_session.py).
+            with pooled_sessions():
+                return self._render(value, cancel, raw, final_only)
 
     def _render(self, value: PreviewRequest, cancel: Event, raw: bool, final_only: bool = False):
         pack = (lambda image: image) if raw else encode
@@ -265,6 +277,13 @@ class PreviewService:
             replay = (target_time <= seek_threshold or value.frame_index is not None or bool(tracking)
                       or value.request.identity_lock_id is not None
                       or self.state.media.probe(value.request.target_path).vfr is True)
+            # Replay re-creates tracker state from frame 0, but only the last few frames before the target need the
+            # swapper's own state: older frames are tracked (detector, association, pose filters) and nothing else.
+            # Their composite was always a no-op for the target (collect_composite clears temporal state and
+            # composes with scene_cut=True), and a guard that verifies identity per frame must still see every frame.
+            full_from = None
+            if value.frame_index is not None and identity_guard is None and preview_preroll() > 0:
+                full_from = value.frame_index - preview_preroll()
             if replay:
                 with closing(VideoReader(target, hardware='software', cancel=cancel).frames()) as frames:
                     for frame in frames:
@@ -285,13 +304,15 @@ class PreviewService:
                         parameters = value.request.parameter_curves.evaluate(frame.index, base_parameters) if value.request.parameter_curves else base_parameters
                         if hasattr(session, 'set_frame_timestamp'):
                             session.set_frame_timestamp(float(frame.timestamp.seconds))
+                        if full_from is not None and frame.index < full_from and hasattr(session, 'track_frame'):
+                            options = parameters.inference_options()
+                            session.track_frame(frame.image, pose_blend=options.get('pose_blend'), render_mode=options.get('render_mode'))
+                            continue
                         result = session.infer_frame(frame.image, **parameters.inference_options())
                         selected = (frame, result, float(frame.timestamp.seconds - origin), frame.index)
                         if (frame.index >= value.frame_index if value.frame_index is not None
                                 else frame.timestamp.seconds - origin >= target_time):
                             break
-                        collect_composite(session, frame.image, result, parameters, capture=False,
-                                          occluder_masks=edit_plan.occluders(frame.image, result))
                     else:
                         raise DomainError('PREVIEW_FRAME_MISSING', 'No frame exists at the requested playhead time', 422)
             else:

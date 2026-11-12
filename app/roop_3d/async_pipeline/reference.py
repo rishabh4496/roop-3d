@@ -90,6 +90,10 @@ class ReferenceStages:
                 else:
                     ranges.append([decoded.index, decoded.index + 1])
         item.meta["result"] = result
+        if self.staged and hasattr(session, "prefetch_composite_inputs"):
+            # The composite stage is the slowest; let this lighter stage parse the faces for it, in parallel.
+            parameters = item.meta.get("parameters")
+            session.prefetch_composite_inputs(decoded.image, result, parameters.composite_options() if parameters else CompositeOptions())
         return result
 
     # -- Stage 3 ----------------------------------------------------------------------------------------------

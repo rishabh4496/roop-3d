@@ -45,12 +45,52 @@ def front_faces(camera_vertices, faces):
     return faces[np.einsum("ij,ij->i", normal, triangles.mean(1)) < 0]
 
 
+class WarmEngineSlot:
+    """One idle ``NeuralFaceEngine`` kept between live previews.
+
+    Building it loads the native backbone, re-verifies its weights and re-fits every FaceSet photograph (10-15 s) and was
+    repeated for every preview.  The slot is single-use-at-a-time (``take`` removes the engine), is keyed by the runtime
+    configuration, and is emptied together with the ORT session pool the moment a job or compile needs the GPU.
+    """
+
+    def __init__(self):
+        import threading
+        self._lock = threading.Lock()
+        self._key = None
+        self._engine = None
+        from roop_3d.core.ort_session import on_pool_eviction
+        on_pool_eviction(self.clear)
+
+    def take(self, key):
+        with self._lock:
+            if self._engine is not None and self._key == key:
+                engine, self._engine = self._engine, None
+                return engine
+        return None
+
+    def put(self, key, engine) -> None:
+        with self._lock:
+            previous, self._engine, self._key = self._engine, engine, key
+        if previous is not None and previous is not engine:
+            previous.release()
+
+    def clear(self) -> None:
+        with self._lock:
+            engine, self._engine, self._key = self._engine, None, None
+        if engine is not None:
+            engine.release()
+
+
+WARM_ENGINE = WarmEngineSlot()
+
+
 class NeuralFaceEngine:
     def __init__(self, backbone, rasterizer, enhancer, *, profile="6gb"):
         self.backbone, self.rasterizer, self.enhancer = backbone, rasterizer, enhancer
         self.surface = getattr(backbone, "surface", backbone.topology)
         self.profile = profile
         self.sources = {}
+        self.source_digests = {}
         self.source_shapes = {}
         self.last_source_shape_scale_ratio = 1.0
         self.last_fields = ()
@@ -72,7 +112,8 @@ class NeuralFaceEngine:
             raise
 
     def prepare(self, document):
-        if document.faceset_id in self.sources:
+        # A warm engine outlives one preview: reuse a prepared FaceSet only while its content is unchanged.
+        if document.faceset_id in self.sources and self.source_digests.get(document.faceset_id) == getattr(document, "source_sha256", None):
             return
         real = [v for v in document.views if not v.is_synthetic and v.landmarks_trusted]
         if not real:
@@ -127,6 +168,7 @@ class NeuralFaceEngine:
         source_shape = np.average(np.stack(identity_shapes).astype(np.float64), axis=0,
                                   weights=weights).astype(np.float32)
         self.sources[document.faceset_id] = tuple(surfaces)
+        self.source_digests[document.faceset_id] = getattr(document, "source_sha256", None)
         self.source_shapes[document.faceset_id] = source_shape
 
     @staticmethod
@@ -293,6 +335,7 @@ class NeuralFaceEngine:
 
     def release(self):
         self.sources.clear()
+        self.source_digests.clear()
         self.source_shapes.clear()
         self.last_source_shape_scale_ratio = 1.0
         self.last_fields = ()

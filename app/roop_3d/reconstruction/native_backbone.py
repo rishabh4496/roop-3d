@@ -20,7 +20,7 @@ from roop_3d.models.owned_files import owned_path
 from roop_3d.reconstruction.dense_correspondence import GPUSurfaceRasterizer, project
 from roop_3d.reconstruction.displaced_surface import DisplacementSurface, detail_levels
 from roop_3d.reconstruction.morphable_backbone import (
-    FaceTopology, FittedFace, NamedGraph, finite,
+    FaceTopology, FittedFace, NamedGraph, finite, load_geometry_session,
 )
 from roop_3d.reconstruction.native_face_geometry import (
     CV_AXES, FlameExpressionRig, NativeCrop, SurfaceTransfer, UVSurfaceMap,
@@ -126,14 +126,17 @@ class NativeMorphableBackbone:
             bfm_topology = FaceTopology.load("bfm35709", paths["bfm_topology"])
             bfm, registration = _arrays(paths["bfm"]), _arrays(paths["registration"])
             rig = FlameExpressionRig(_arrays(paths["flame_rig"]))
-            from roop_3d.engine.volumetric.swapper_engine import load_local_session
-            cpu = replace(config, provider="CPUExecutionProvider", precision_policy="fp32")
+            used = set()
             for role in ("coarse", "expression", "hrn_mid", "hrn_high"):
-                graphs[role] = NamedGraph(load_local_session(catalog, f"native_face_{role}", paths[role], cpu))
+                session, provider = load_geometry_session(catalog, f"native_face_{role}", paths[role], config)
+                used.add(provider)
+                graphs[role] = NamedGraph(session)
                 validate_graph_contract(role, graphs[role].session)
             rasterizer = GPUSurfaceRasterizer()
-            return cls(topology, bfm_topology, bfm, rig, registration, graphs, rasterizer, spec,
-                       detail_subdivisions=detail_levels(spec.get("detail_subdivisions", 1), config.hardware_profile))
+            instance = cls(topology, bfm_topology, bfm, rig, registration, graphs, rasterizer, spec,
+                           detail_subdivisions=detail_levels(spec.get("detail_subdivisions", 1), config.hardware_profile))
+            instance.geometry_provider = used.pop() if len(used) == 1 else "mixed"
+            return instance
         except Exception as error:
             for graph in graphs.values():
                 graph.release()
@@ -257,7 +260,7 @@ class NativeMorphableBackbone:
                 "native_vertex_count": self.topology.vertex_count, "active_face_vertices": len(self.topology.vertex_ids),
                 "warp_surface_vertices": self.surface.vertex_count, "detail_subdivisions": self.surface.levels,
                 "expression_basis": "smirk_flame50", "jaw_articulation": True, "separate_eyelids": True,
-                "geometry_tiers": 3, "geometry_provider": "CPUExecutionProvider", "detail_crop_size": 512,
+                "geometry_tiers": 3, "geometry_provider": getattr(self, "geometry_provider", "CPUExecutionProvider"), "detail_crop_size": 512,
                 "detail": "native_hrn_uv_mid_high", "implementation": "native_encoder_decoders",
                 "expression_crop": self.spec["smirk_crop"], "geometry_rasterizer": "hardware_opengl",
                 "camera_gauge": "bfm_0.1m_per_unit_distance_1m_minus_predicted_tz", "predicted_metric_scale": False,

@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import hashlib
+import logging
+import time
 from pathlib import Path
 import os
 import threading
@@ -83,6 +85,85 @@ def _trt_excluded_ops(model, name: str) -> str:
     # dozens of tiny TensorRT engines. The FP32-safe enhancer graph inserts local
     # Cast boundaries around normalization, softmax and terminal scaling instead.
     return ",".join(sorted({"NonMaxSuppression", "GridSample"}))
+
+
+_LOG = logging.getLogger("roop_3d.ort")
+
+
+# -- preview session pool ----------------------------------------------------------------------------------------
+# A live preview used to build every ORT session from scratch (11 models; LivePortrait's warping network alone took
+# 20-40 s under TensorRT), so each preview of an uncached frame cost 40-60 s however cheap the frame was.  Inside
+# ``pooled_sessions()`` (entered by the preview service only) ``SessionManager.create`` hands back the session it built
+# for the same model and options last time.  Previews are serialised and ORT sessions are safe to ``Run`` from any
+# thread, so sharing is sound.  The pool is bounded and is emptied the moment anything else (a render job, a TensorRT
+# compile, a re-bind) takes the engine, so it never holds VRAM against real work.
+_POOL_LOCK = threading.Lock()
+_POOL: "dict[tuple, SessionInfo]" = {}
+_POOL_LIMIT = 24
+_POOL_SCOPE = threading.local()
+
+
+def session_pool_enabled() -> bool:
+    return os.environ.get("ROOP3D_PREVIEW_SESSION_POOL", "1") != "0"
+
+
+class pooled_sessions:
+    """Context manager: sessions created on this thread are pooled (re-entrant, thread-local)."""
+
+    def __enter__(self):
+        _POOL_SCOPE.depth = getattr(_POOL_SCOPE, "depth", 0) + 1
+        return self
+
+    def __exit__(self, *exc):
+        _POOL_SCOPE.depth -= 1
+        return False
+
+
+def pool_scope_active() -> bool:
+    return getattr(_POOL_SCOPE, "depth", 0) > 0 and session_pool_enabled()
+
+
+_EVICTION_HOOKS: list = []
+
+
+def on_pool_eviction(callback) -> None:
+    """Register something else that is kept warm for previews (e.g. the 3D-head engine) and must go with the sessions."""
+    _EVICTION_HOOKS.append(callback)
+
+
+def evict_pooled_sessions() -> int:
+    """Drop every pooled session (their VRAM returns once ORT collects them). Returns how many were dropped."""
+    for hook in list(_EVICTION_HOOKS):
+        try:
+            hook()
+        except Exception:
+            pass
+    with _POOL_LOCK:
+        count = len(_POOL)
+        _POOL.clear()
+    if count:
+        import gc
+        gc.collect()
+        _LOG.info("[ORT] preview session pool released (%d sessions) so the engine is free", count)
+    return count
+
+
+def pooled_session_count() -> int:
+    return len(_POOL)
+
+
+def cuda_graphs_enabled() -> bool:
+    """TensorRT-EP CUDA-graph replay is only safe when ONE thread runs inference.
+
+    Capture happens on the first runs of a session; any other thread that synchronises a stream meanwhile
+    (the swap, track and composite stages of the async pipeline do) invalidates the capture with CUDA 906
+    ("operation would make the legacy stream depend on a capturing blocking stream"), the run fails, the
+    runtime rebuilds a session while other stages are mid-inference and the process dies with an access
+    violation.  So graphs are off by default; ``ROOP3D_CUDA_GRAPH=1`` opts back in (e.g. single-thread use).
+    The engine cache key still records the model's static-ness, so existing engines stay valid.
+    """
+    import os
+    return os.environ.get("ROOP3D_CUDA_GRAPH", "0") == "1"
 
 
 def _is_cuda_graph_partition_error(error: BaseException) -> bool:
@@ -435,7 +516,7 @@ class SessionManager:
                    "trt_max_workspace_size": (1024 if self.hardware_profile == "6gb" else 2048) * 1024**2,
                    "trt_auxiliary_streams": 2,
                    "trt_force_sequential_engine_build": False,
-                   "trt_cuda_graph_enable": static,
+                   "trt_cuda_graph_enable": static and cuda_graphs_enabled(),
                    "trt_layer_norm_fp32_fallback": True,
                    "trt_op_types_to_exclude": excluded_ops}
         for key, profile in zip(("min", "opt", "max"), profiles):
@@ -459,9 +540,32 @@ class SessionManager:
         from roop_3d.engine.resources import build_fence
         from roop_3d.core.transfer_ledger import TRANSFERS
         TRANSFERS.install()          # idempotent; makes every later ORT host<->device copy measurable
+        pooled = getattr(_POOL_SCOPE, "depth", 0) > 0 and session_pool_enabled()
+        key = None
+        if pooled:
+            try:
+                status = Path(model_path).resolve(strict=True).stat()
+                key = (str(Path(model_path).resolve()), status.st_mtime_ns, status.st_size, model_name, tuple(providers),
+                       intra_op_threads or self.intra_op_threads, self.fp16, self.hardware_profile, self.gpu_id,
+                       str(self.cache_path), cuda_graphs_enabled())   # the memory limit is a measured, moving budget: not identity
+            except OSError:
+                pooled = False
+            else:
+                with _POOL_LOCK:
+                    hit = _POOL.get(key)
+                if hit is not None:
+                    _LOG.info("[ORT] %s -> %s (pooled, reused)", model_name or Path(model_path).name,
+                              hit.provider.replace("ExecutionProvider", ""))
+                    return hit
         with build_fence():
-            return self._create(model_path, model_name=model_name, providers=providers,
+            info = self._create(model_path, model_name=model_name, providers=providers,
                                 intra_op_threads=intra_op_threads)
+        if pooled and key is not None:
+            with _POOL_LOCK:
+                while len(_POOL) >= _POOL_LIMIT:
+                    _POOL.pop(next(iter(_POOL)))
+                _POOL[key] = info
+        return info
 
     def _create(self, model_path: str | Path, *, model_name: str | None = None,
                 providers: tuple[str, ...] = (TRT, CUDA, CPU), intra_op_threads: int | None = None) -> SessionInfo:
@@ -481,6 +585,7 @@ class SessionManager:
             raise ValueError("At least one provider is required")
         errors = []
         for provider in order:
+            attempt_started = time.perf_counter()
             try:
                 session_path = path
                 if provider == TRT:
@@ -515,9 +620,14 @@ class SessionManager:
                 if provider != CPU:
                     session.disable_fallback()
                     session._model_path = str(session_path)
+                _LOG.info("[ORT] %s -> %s in %.1f s%s", name, provider.replace("ExecutionProvider", ""),
+                          time.perf_counter() - attempt_started,
+                          f" (after: {'; '.join(e[:90] for e in errors)})" if errors else "")
                 return SessionInfo(session, provider, order, tuple(errors))
             except Exception as error:
                 errors.append(f"{provider}: {type(error).__name__}: {error}")
+                _LOG.warning("[ORT] %s on %s failed after %.1f s: %s", name, provider.replace("ExecutionProvider", ""),
+                             time.perf_counter() - attempt_started, str(error).splitlines()[0][:160] if str(error) else type(error).__name__)
         raise RuntimeError("No requested ONNX Runtime provider could initialize: " + " | ".join(errors))
 
 

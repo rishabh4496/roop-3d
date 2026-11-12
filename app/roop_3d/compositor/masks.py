@@ -7,7 +7,12 @@ candidate that can be replaced by explicit indices when model evidence differs.
 """
 from __future__ import annotations
 
+from collections import OrderedDict
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+import hashlib
+import os
+import threading
 from typing import Protocol
 
 import cv2
@@ -84,6 +89,94 @@ def compute_dual_bisenet_forbidden_mask(
     else:
         combined = target_forbidden
     return target_forbidden, swap_forbidden, np.clip(combined, 0.0, 1.0).astype(np.float32)
+
+
+def turn_ratio(landmarks5) -> float | None:
+    """Inter-ocular distance over eye-midpoint-to-mouth-midpoint distance from the five face points.
+
+    About 0.85-1.0 for a frontal face; it falls roughly with cos(yaw) as the far eye disappears behind the nose
+    (about 0.65 at 45 degrees, about 0.1 in profile).  None when the points are unusable.
+    """
+    try:
+        points = np.asarray(landmarks5, np.float64).reshape(-1, 2)
+    except (TypeError, ValueError):
+        return None
+    if points.shape[0] < 5 or not np.isfinite(points[:5]).all():
+        return None
+    eyes_gap = float(np.linalg.norm(points[0] - points[1]))
+    eye_mouth = float(np.linalg.norm(points[:2].mean(axis=0) - points[3:5].mean(axis=0)))
+    return eyes_gap / eye_mouth if eye_mouth > 1e-6 else None
+
+
+def chin_line_clamp(mask: np.ndarray, landmarks5, *, fraction: float = 0.78, feather: float = 0.10) -> np.ndarray:
+    """Cut a matte below the chin using only the five face points (robust at every yaw).
+
+    The line is perpendicular to the face's up-vector (eye midpoint -> mouth midpoint), ``fraction`` of the eye-to-mouth
+    distance below the mouth centre (about where the chin ends), and fades over ``feather`` of that distance.  It replaces
+    the 106-point submental curve on turned faces, where that contour collapses, so the neck and the collar of the source
+    photograph that the mesh also covers never reach the frame.
+    """
+    values = np.clip(np.asarray(mask, np.float32), 0.0, 1.0)
+    try:
+        points = np.asarray(landmarks5, np.float64).reshape(-1, 2)
+    except (TypeError, ValueError):
+        return values
+    if points.shape[0] < 5 or not np.isfinite(points[:5]).all():
+        return values
+    eyes, mouth = points[:2].mean(axis=0), points[3:5].mean(axis=0)
+    axis = mouth - eyes
+    length = float(np.linalg.norm(axis))
+    if length < 1e-6:
+        return values
+    axis /= length
+    height, width = values.shape[:2]
+    ys, xs = np.mgrid[0:height, 0:width].astype(np.float32)
+    below = ((xs - mouth[0]) * axis[0] + (ys - mouth[1]) * axis[1]) / length       # 0 at the mouth, 1 = one eye-mouth distance
+    keep = np.clip((fraction + feather - below) / max(feather, 1e-3), 0.0, 1.0)
+    return (values * keep).astype(np.float32)
+
+
+#: Below this turn ratio (about 40 degrees of yaw) the jaw contour that feeds the submental cutoff is unreliable.
+JAW_CUTOFF_MIN_TURN_RATIO = 0.7
+
+
+def fill_mask_holes(mask: np.ndarray, *, max_hole_fraction: float = 0.04) -> np.ndarray:
+    """Close enclosed holes of a soft 0..1 silhouette (eye sockets, a missed mouth corner).
+
+    A face silhouette is one solid region; a hole inside it can only be a mesh gap, and nothing downstream can refill
+    it, so the original eye or lip shows through the swap.  Only holes not touching the border and smaller than
+    ``max_hole_fraction`` of the image are filled (a real gap such as a hand or a microphone stays open).
+    """
+    values = np.clip(np.asarray(mask, np.float32), 0.0, 1.0)
+    binary = (values > 0.5).astype(np.uint8)
+    if not binary.any():
+        return values
+    inverse = 1 - binary
+    count, labels, stats, _ = cv2.connectedComponentsWithStats(inverse, connectivity=4)
+    height, width = binary.shape
+    limit = max_hole_fraction * height * width
+    filled = values.copy()
+    for label in range(1, count):
+        x, y, w, h, area = stats[label]
+        touches_border = x == 0 or y == 0 or x + w >= width or y + h >= height
+        if touches_border or area > limit:
+            continue
+        region = labels == label
+        # Feather the patch inwards so the filled eye does not start at a hard edge.
+        filled[region] = 1.0
+    return np.maximum(filled, cv2.GaussianBlur(filled, (0, 0), 1.2) * (filled > 0.5))
+
+
+def confident_forbidden(forbidden: np.ndarray, *, low: float = 0.5, high: float = 0.85) -> np.ndarray:
+    """Keep confident hair/neck/ear evidence from a parser run on a SYNTHESISED crop and drop its weak fringe.
+
+    BiSeNet on a generated face over a flat canvas reports a diffuse 0.2-0.5 non-face probability across the mouth,
+    chin and cheek; subtracting that softly erodes the swap exactly where the identity lives.  Values below ``low``
+    become 0, values above ``high`` stay 1, with a smooth ramp between.
+    """
+    values = np.clip(np.asarray(forbidden, np.float32), 0.0, 1.0)
+    ramp = np.clip((values - low) / max(high - low, 1e-6), 0.0, 1.0)
+    return (ramp * ramp * (3.0 - 2.0 * ramp)).astype(np.float32)
 
 
 def compose_active_mask(
@@ -297,6 +390,45 @@ def build_face_mask(
     return FaceMask(alpha, confidence, "bisenet_candidate_19_class", skin.astype(np.float32), occluder.astype(np.float32))
 
 
+_SOFTMAX_POOL: ThreadPoolExecutor | None = None
+_SOFTMAX_POOL_LOCK = threading.Lock()
+
+
+def _softmax_pool() -> ThreadPoolExecutor:
+    global _SOFTMAX_POOL
+    with _SOFTMAX_POOL_LOCK:
+        if _SOFTMAX_POOL is None:
+            _SOFTMAX_POOL = ThreadPoolExecutor(max_workers=max(2, min(8, (os.cpu_count() or 4) // 2)), thread_name_prefix="parser-softmax")
+        return _SOFTMAX_POOL
+
+
+def softmax_last_axis(logits: np.ndarray, *, chunks: int = 8) -> np.ndarray:
+    """Softmax over the last axis, split into row bands that numpy evaluates in parallel (it releases the GIL).
+
+    Element-for-element the same arithmetic as the single-thread version (so bit-identical); on a 512x512x19 map the
+    19-class softmax was a visible slice of every composite frame.
+    """
+    logits = np.asarray(logits, np.float32)
+    out = np.empty(logits.shape, np.float32)
+    rows = logits.shape[0]
+    if rows < 64 or chunks <= 1:
+        bands = [slice(0, rows)]
+    else:
+        edges = np.linspace(0, rows, chunks + 1, dtype=int)
+        bands = [slice(int(a), int(b)) for a, b in zip(edges[:-1], edges[1:]) if b > a]
+
+    def work(band: slice) -> None:
+        part = logits[band]
+        exp = np.exp(np.clip(part - np.max(part, axis=-1, keepdims=True), -80, 0))
+        out[band] = exp / np.maximum(np.sum(exp, axis=-1, keepdims=True), 1e-12)
+
+    if len(bands) == 1:
+        work(bands[0])
+    else:
+        list(_softmax_pool().map(work, bands))
+    return out
+
+
 class BisenetFaceParser:
     """Lazy, hash-checked adapter for the observed local BiSeNet ONNX artifact (resnet34 / resnet18).
 
@@ -317,6 +449,14 @@ class BisenetFaceParser:
         self.model_name = model_name
         self.model = None
         self.inference_verified = False
+        # The parser is stateless and deterministic, and the compositor asks for the same crop twice per frame (face
+        # mask and dual-forbidden mask).  A few results are kept by image content, which also lets a spare thread compute
+        # a frame's parses ahead of the composite stage (``prefetch``).  ``ROOP3D_PARSER_CACHE=0`` disables it.
+        self.cache_enabled = os.environ.get("ROOP3D_PARSER_CACHE", "1") != "0"
+        self._cache: "OrderedDict[tuple, np.ndarray]" = OrderedDict()
+        self._inflight: dict[tuple, threading.Event] = {}
+        self._unconsumed: set[tuple] = set()          # prefetched results the composite stage has not read yet
+        self._cache_lock = threading.Lock()
 
     def _load(self):
         if self.model is None:
@@ -347,12 +487,50 @@ class BisenetFaceParser:
                 logits = array[0]
             # The 19-class candidate mapping is intentionally explicit and shape checked.
             logits = logits[..., :19]
-            shifted = logits - np.max(logits, axis=-1, keepdims=True)
-            exp = np.exp(np.clip(shifted, -80, 0))
-            return (exp / np.maximum(np.sum(exp, axis=-1, keepdims=True), 1e-12)).astype(np.float32)
+            return softmax_last_axis(logits)
         raise DomainError("PARSER_OUTPUT_UNSUPPORTED", "Local parser returned no supported 19-class tensor", 503)
 
-    def predict(self, image: np.ndarray) -> np.ndarray:
+    #: Frames the swap stage may parse ahead of the composite stage (2 crops each); bounds the cache and its memory.
+    PREFETCH_LEAD_CROPS = 6
+
+    def prefetch_pressure(self) -> int:
+        with self._cache_lock:
+            return len(self._unconsumed)
+
+    def predict(self, image: np.ndarray, *, prefetch: bool = False) -> np.ndarray:
+        if not self.cache_enabled:
+            return self._predict(image)
+        array = np.ascontiguousarray(image)
+        key = (array.shape, hashlib.blake2b(array.view(np.uint8).reshape(-1), digest_size=16).digest())
+        while True:
+            with self._cache_lock:
+                hit = self._cache.get(key)
+                if hit is not None:
+                    self._cache.move_to_end(key)
+                    if not prefetch:
+                        self._unconsumed.discard(key)
+                    return hit
+                pending = self._inflight.get(key)
+                if pending is None:
+                    self._inflight[key] = threading.Event()
+                    break
+            pending.wait(30.0)
+        try:
+            result = self._predict(array)
+            result.setflags(write=False)          # shared between callers: nobody may edit it in place
+            with self._cache_lock:
+                self._cache[key] = result
+                if prefetch:
+                    self._unconsumed.add(key)
+                while len(self._cache) > self.PREFETCH_LEAD_CROPS * 2 + 8:
+                    evicted, _ = self._cache.popitem(last=False)
+                    self._unconsumed.discard(evicted)
+            return result
+        finally:
+            with self._cache_lock:
+                self._inflight.pop(key).set()
+
+    def _predict(self, image: np.ndarray) -> np.ndarray:
         from roop_3d.engine.runtime import image_bgr as validate_image
 
         validate_image(image)
@@ -376,6 +554,9 @@ class BisenetFaceParser:
                 "preprocessing": "CANDIDATE", "class_mapping": "CANDIDATE"}
 
     def release(self) -> None:
+        with self._cache_lock:
+            self._cache.clear()
+            self._unconsumed.clear()
         if self.model is not None:
             self.model.release()
         self.model = None

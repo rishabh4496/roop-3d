@@ -54,4 +54,28 @@ def register_native_libraries() -> tuple[Path, ...]:
                 if not loaded:
                     break
                 pending -= loaded
+        quiet_onnxruntime()
         return paths
+
+
+_quiet = False
+
+
+def quiet_onnxruntime() -> None:
+    """Keep ONNX Runtime's *global* logger at ERROR so the Pinokio terminal stays readable.
+
+    ``SessionOptions.log_severity_level`` does not reach the TensorRT EP, which logs through the process-wide
+    default logger: a single cold start printed thousands of "Cache result detected as invalid" /
+    "Detected layernorm nodes in FP16" warnings (written as wide characters, so also garbled) and buried the
+    frame HUD.  ``ROOP3D_ORT_LOG_LEVEL`` (0 verbose .. 4 fatal, default 3) overrides.
+    """
+    global _quiet
+    if _quiet:
+        return
+    try:
+        import onnxruntime as ort
+        level = int(os.environ.get("ROOP3D_ORT_LOG_LEVEL", "3"))
+        ort.set_default_logger_severity(max(0, min(4, level)))
+        _quiet = True
+    except (ImportError, ValueError, AttributeError):
+        pass

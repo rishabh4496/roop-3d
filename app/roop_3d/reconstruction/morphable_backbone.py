@@ -122,6 +122,31 @@ class FittedFace:
     expression_vertices: np.ndarray | None = None  # expression-only geometry before HRN/detail offsets
 
 
+def load_geometry_session(catalog, name: str, path, config):
+    """Session for one dense-face geometry graph: ``(session, provider_name)``.
+
+    These graphs (coarse pose, SMIRK expression, HRN mid/high detail) were pinned to the CPU, which made the 3D-head
+    stage cost 10-15 s per frame on a machine whose GPU sat idle.  On a 12 GB card they now run on the CUDA EP in fp32
+    (the same precision, so identical maths); 6 GB and CPU profiles keep the CPU so the neural swapper and enhancer
+    still own the VRAM.  Any GPU initialisation failure falls back to the CPU.  ``ROOP3D_GEOMETRY_PROVIDER`` =
+    ``cpu`` | ``cuda`` | ``auto`` (default) overrides the profile rule.
+    """
+    import logging
+    import os
+    from dataclasses import replace
+    from roop_3d.engine.volumetric.swapper_engine import load_local_session
+    wanted = os.environ.get("ROOP3D_GEOMETRY_PROVIDER", "auto").strip().lower()
+    on_gpu_stack = config.provider in ("TensorrtExecutionProvider", "CUDAExecutionProvider")
+    use_gpu = wanted != "cpu" and on_gpu_stack and (wanted == "cuda" or config.hardware_profile == "12gb")
+    if use_gpu:
+        try:
+            session = load_local_session(catalog, name, path, replace(config, provider="CUDAExecutionProvider", precision_policy="fp32"))
+            return session, "CUDAExecutionProvider"
+        except Exception as error:   # no GPU session -> the proven CPU path, loudly
+            logging.getLogger("roop_3d.ort").warning("[ORT] %s could not start on CUDA (%s); using CPU", name, type(error).__name__)
+    return load_local_session(catalog, name, path, replace(config, provider="CPUExecutionProvider", precision_policy="fp32")), "CPUExecutionProvider"
+
+
 class NamedGraph:
     def __init__(self, session):
         self.session = session
@@ -188,17 +213,16 @@ class MorphableBackbone:
                     raise ValueError(f"Bundle digest mismatch: {role}")
                 verified[role] = asset
             topology = FaceTopology.load(spec["topology"], verified["topology"])
-            from roop_3d.engine.volumetric.swapper_engine import load_local_session
-            # CPU inference avoids three independent CUDA arenas competing with
-            # the neural swapper/enhancer on a 6 GB card. Rasterization stays GPU.
-            # 12 GB also defaults to CPU until a combined VRAM budget is profiled.
-            from dataclasses import replace
-            graph_config = replace(config, provider="CPUExecutionProvider", precision_policy="fp32")
+            providers = set()
             for role in ("coarse", "expression", "detail"):
-                graphs.append(NamedGraph(load_local_session(catalog, f"dense_face_{role}", verified[role], graph_config)))
-            return cls(topology, *graphs, expression_basis=spec["expression_basis"], evidence=spec,
-                       detail_size=spec["detail_crop_size"],
-                       detail_subdivisions=detail_levels(spec.get("detail_subdivisions", 1), config.hardware_profile))
+                session, used = load_geometry_session(catalog, f"dense_face_{role}", verified[role], config)
+                providers.add(used)
+                graphs.append(NamedGraph(session))
+            instance = cls(topology, *graphs, expression_basis=spec["expression_basis"], evidence=spec,
+                           detail_size=spec["detail_crop_size"],
+                           detail_subdivisions=detail_levels(spec.get("detail_subdivisions", 1), config.hardware_profile))
+            instance.geometry_provider = providers.pop() if len(providers) == 1 else "mixed"
+            return instance
         except Exception as error:
             for graph in graphs:
                 graph.release()
@@ -255,7 +279,7 @@ class MorphableBackbone:
                 "warp_surface_vertices": self.surface.vertex_count, "detail_subdivisions": self.surface.levels,
                 "expression_basis": self.expression_basis, "geometry_tiers": 3,
                 "detail_crop_size": self.detail_size,
-                "geometry_provider": "CPUExecutionProvider", "detail": "hrn_refined_surface_uv_displacement",
+                "geometry_provider": getattr(self, "geometry_provider", "CPUExecutionProvider"), "detail": "hrn_refined_surface_uv_displacement",
                 "output": "dense_correspondence_neural_synthesis", "raw_mesh_compositing": False}
 
     def release(self):

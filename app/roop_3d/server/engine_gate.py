@@ -89,6 +89,13 @@ class EngineGate:
                 token = next(self._tokens)
                 self._owners[token] = label
                 self._domains[token] = domain
+                if domain == "gpu":
+                    # A render job, TensorRT compile or re-bind now owns the GPU: warm preview sessions must not keep VRAM.
+                    try:
+                        from roop_3d.core.ort_session import evict_pooled_sessions
+                        evict_pooled_sessions()
+                    except Exception:
+                        pass
                 return token
             finally:
                 if domain == "gpu":
