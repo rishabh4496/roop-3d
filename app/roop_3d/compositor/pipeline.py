@@ -309,19 +309,21 @@ class FrameCompositor:
         return float(motion[0]), float(motion[1])
 
     def _finish_sensor(self, replacement, enhanced, target, alpha, skin, frame_motion, options, frame_index,
-                       *, grain_strength: float | None = None, match_optics: bool = True):
+                       *, grain_strength: float | None = None, match_optics: bool | None = None):
         """Run the target sensor model on the restored face before it reaches the final mask blend."""
         if options.restoration_blend <= 0 or self.restorer is None:
             return enhanced, {"backend": "skipped", "reason": "restoration_not_active"}
         from roop_3d.compositor.sensor_physics import finish_target_sensor
         motion = self._crop_motion(frame_motion, replacement.inverse, np.asarray(replacement.image).shape[0],
                                   enhanced.shape[0])
+        # When restoration (e.g. UltraMax) is active, do not blur high-frequency details away to match target optics
+        optics_flag = match_optics if match_optics is not None else (False if options.restoration_blend > 0 else True)
         output, report = finish_target_sensor(
             enhanced, target, alpha, skin, flow=self.detail_temporal.flow_for(replacement.track_id),
             crop_motion=motion, shutter_angle=options.sensor_shutter_angle,
             grain_strength=options.sensor_grain_strength if grain_strength is None else grain_strength,
             seed=((frame_index or 0) * 1_000_003 + replacement.track_id * 9_176) % (2**31 - 1),
-            match_optics=match_optics, transfer=options.blend_transfer)
+            match_optics=optics_flag, transfer=options.blend_transfer)
         return output, report
 
     @staticmethod
@@ -1019,7 +1021,8 @@ class FrameCompositor:
             context.report["target_sensor"] = sensor_report
             context.report["temporal_detail"] = detail_report
             context.report["mask_watchdog"] = mask_report
-            temporal = self.temporal.update(replacement.track_id, replacement.inverse, face_alpha, color_stats,
+            face_blend_alpha = (visible_alpha / max(options.swap_weight, 1e-8)) if coverage is not None else face_alpha
+            temporal = self.temporal.update(replacement.track_id, replacement.inverse, face_blend_alpha, color_stats,
                                             frame_index=frame_index, scene_cut=False)
             if getattr(replacement, "full_head", False):
                 # Pose was already filtered in 3D before rasterization. Filtering
@@ -1032,8 +1035,6 @@ class FrameCompositor:
                          scale_matrix_input(replacement.inverse, enhanced_side / side) if enhanced_side != side else replacement.inverse,
                          self._resize_plane(alpha_native, enhanced_side) if enhanced_side != side else alpha_native)
             smoothed_face = temporal.alpha * options.swap_weight
-            if coverage is not None:
-                smoothed_face = np.minimum(smoothed_face, coverage)
             if observer is not None:
                 observer('vfx', crop, temporal.inverse, cv2.resize(smoothed_face, (side, side), interpolation=cv2.INTER_AREA) if work != side else smoothed_face)
             skin_for_fusion = analysis.skin if analysis.parser_trusted else None

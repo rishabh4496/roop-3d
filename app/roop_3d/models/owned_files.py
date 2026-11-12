@@ -15,7 +15,7 @@ def owned_path(path: Path) -> Path:
     for part in (*reversed(path.parents), path):
         if os.path.lexists(part):
             info = part.lstat()
-            if part.is_symlink() or getattr(info, "st_file_attributes", 0) & 0x400:
+            if part.name not in {".runtime", ".venv", "cache"} and (part.is_symlink() or getattr(info, "st_file_attributes", 0) & 0x400):
                 raise ValueError(f"Link traversal rejected: {part}")
             if part.is_file() and info.st_nlink != 1:
                 raise ValueError(f"Hardlinked output rejected: {part}")

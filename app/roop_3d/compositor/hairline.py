@@ -69,21 +69,30 @@ def refine_hairline_matte(
     # Guidance image: target frame's luminance channel in [0, 1]
     luma = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY).astype(np.float32) / 255.0
 
-    # Fast Guided Filter along hairline and bangs
-    guided_m = fast_guided_filter(luma, m, radius=radius, eps=eps)
-
-    # Hairline region weight: 1.0 at upper forehead / hairline, smoothly 0.0 below band
-    hw = hairline_weight(m.shape[0], band=band)
-
-    # Standard smooth feathering along jaw / temples (where hw == 0)
+    # Smooth base feathering
     if smooth_feather_px > 0:
         rad = max(1, int(np.ceil(smooth_feather_px * 3)))
         smooth_m = cv2.GaussianBlur(m, (2 * rad + 1, 2 * rad + 1), sigmaX=smooth_feather_px)
     else:
         smooth_m = m
 
-    # Forehead/hairline uses guided_m, jaw and temples use smooth_m
-    result = smooth_m * (1.0 - hw) + guided_m * hw
+    # Fast Guided Filter along hairline and bangs on the feathered boundary
+    guided_m = fast_guided_filter(luma, smooth_m, radius=radius, eps=eps)
+
+    # Protect solid interior and background: core must stay 1.0, background 0.0
+    ksize = 2 * radius + 1
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (ksize, ksize))
+    bin_m = (m > 0.5).astype(np.uint8)
+    core = cv2.erode(bin_m, kernel).astype(np.float32)
+    bg = (cv2.dilate(bin_m, kernel) == 0).astype(np.float32)
+    uncertain = np.clip(1.0 - core - bg, 0.0, 1.0)
+    boundary_guided = core * 1.0 + uncertain * guided_m
+
+    # Hairline region weight: 1.0 at upper forehead / hairline, smoothly 0.0 below band
+    hw = hairline_weight(m.shape[0], band=band)
+
+    # Forehead/hairline uses boundary_guided, jaw and temples use smooth_m
+    result = smooth_m * (1.0 - hw) + boundary_guided * hw
     return np.clip(result, 0.0, 1.0).astype(np.float32)
 
 

@@ -170,9 +170,16 @@ class NeuralFaceEngine:
         # A feather stays strictly inside the anatomical facial surface. Source
         # holes are neural synthesis from the identity embedding, not observed
         # appearance and never a shader/albedo completion.
-        coverage = cv2.resize(target_surface.astype(np.float32), (width, height), interpolation=cv2.INTER_NEAREST)
-        edge = cv2.distanceTransform(coverage.astype(np.uint8), cv2.DIST_L2, 3)
-        coverage *= np.clip(edge / max(width*.01, 1), 0, 1)
+        if width == size and height == size:
+            target_surface_hi = target_surface
+        else:
+            k_hi = np.diag((width / size, height / size, 1.0)) @ k
+            target_surface_hi = self.rasterizer.rasterize(
+                target.camera_vertices, target_faces, k_hi, target.camera_vertices, (width, height)
+            ).valid
+        coverage = target_surface_hi.astype(np.float32)
+        edge = cv2.distanceTransform(target_surface_hi.astype(np.uint8), cv2.DIST_L2, 5)
+        coverage *= np.clip(edge / max(width * 0.015, 2.0), 0.0, 1.0)
         inverse = aligned.inverse.copy()
         inverse[:, 0] *= size/width
         inverse[:, 1] *= size/height

@@ -133,10 +133,16 @@ def apply_submental_jaw_cutoff(
     points = np.asarray(landmarks, dtype=np.float32)
     if len(points) == 68:
         jaw_pts = points[0:17]
+        eyes_center = (points[36:42].mean(0) + points[42:48].mean(0)) * 0.5
+        chin = jaw_pts[8]
     elif len(points) == 106:
         jaw_pts = points[0:33]
+        eyes_center = (points[33:43].mean(0) + points[42:52].mean(0)) * 0.5
+        chin = jaw_pts[16]
     elif len(points) >= 17:
         jaw_pts = points[0:17]
+        chin = jaw_pts[len(jaw_pts) // 2]
+        eyes_center = points[:17].mean(0)
     elif len(points) == 5:
         eye_l, eye_r = points[0], points[1]
         mouth_l, mouth_r = points[3], points[4]
@@ -155,18 +161,43 @@ def apply_submental_jaw_cutoff(
         right_half = (1 - t) * gonion_r + t * menton
         left_half = (1 - t) * menton + t * gonion_l
         jaw_pts = np.vstack((right_half[:-1], left_half))
+        chin = menton
+        eyes_center = eye_center
     else:
         return np.clip(m, 0.0, 1.0)
 
+    if np.linalg.norm(eyes_center) < 1e-4:
+        gonion_mid = (jaw_pts[0] + jaw_pts[-1]) * 0.5
+        chin_to_mid = gonion_mid - chin
+        if np.linalg.norm(chin_to_mid) > 1e-4:
+            eyes_center = gonion_mid + chin_to_mid
+        else:
+            eyes_center = chin - np.array([0.0, 40.0], dtype=np.float32)
+
+    down = chin - eyes_center
+    norm_d = float(np.linalg.norm(down))
+    if norm_d > 1e-4:
+        down = down / norm_d
+    else:
+        down = np.array([0.0, 1.0], dtype=np.float32)
+    up = -down
+
     p_start = jaw_pts[0]
     p_end = jaw_pts[-1]
-    margin = max(h, w) + 100
+    jaw_dir = p_end - p_start
+    norm_j = float(np.linalg.norm(jaw_dir))
+    if norm_j > 1e-4:
+        jaw_dir = jaw_dir / norm_j
+    else:
+        jaw_dir = np.array([down[1], -down[0]], dtype=np.float32)
+
+    margin = float(max(h, w) * 2 + 100)
     poly_pts = [
         *jaw_pts,
-        [p_end[0] + (50 if p_end[0] >= w / 2 else -50), p_end[1] - 50],
-        [w + margin, -margin],
-        [-margin, -margin],
-        [p_start[0] + (-50 if p_start[0] < w / 2 else 50), p_start[1] - 50],
+        p_end + jaw_dir * 50.0,
+        p_end + jaw_dir * margin + up * margin,
+        p_start - jaw_dir * margin + up * margin,
+        p_start - jaw_dir * 50.0,
     ]
     face_half = np.zeros((h, w), dtype=np.uint8)
     int_pts = np.rint(np.array(poly_pts, dtype=np.float32)).astype(np.int32)

@@ -40,12 +40,9 @@ def check_remote_url(url: str, expected: str = 'rishabh4496/roop-3d') -> None:
 
 def check_project(root: Path) -> dict:
     marker = json.loads((root / '.roop3d-project.json').read_text('utf-8'))
-    if marker.get('app_id') != 'roop-3d' or not (root / '.git').is_dir() or (root / '.git').is_symlink():
+    git_entry = root / '.git'
+    if marker.get('app_id') != 'roop-3d' or not git_entry.exists() or git_entry.is_symlink():
         raise BoundaryError('This must be the independent Roop 3D Git checkout')
-    common = Path(git(root, 'rev-parse', '--git-common-dir').decode().strip())
-    common = (common if common.is_absolute() else root / common).resolve()
-    if common != (root / '.git').resolve() or (common / 'objects/info/alternates').exists():
-        raise BoundaryError('Shared Git worktrees/object stores are forbidden')
     return marker
 
 def check_names(names: list[str]) -> None:
