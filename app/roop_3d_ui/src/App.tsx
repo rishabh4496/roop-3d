@@ -11,6 +11,7 @@ import { publishHardware } from './stores/telemetryStore';
 import { setPlayhead } from './stores/playheadStore';
 import { selectEngine, useSelectedEngine } from './stores/engineSelection';
 import { setRack, useRack } from './stores/rackSelection';
+import { activeJobToResume, clearSession, readSession, writeSession, type SessionSnapshot } from './sessionSnapshot';
 import { useModelCatalog } from './stores/modelCatalog';
 import { RUNTIME_SETTINGS_CHANGED } from './runtimeSettings';
 import { featureReason, jobActions, mappings, optionReason } from './state';
@@ -459,6 +460,74 @@ export default function App() {
       setTrimStart(job.request.trim_start_seconds ?? 0); setTrimEnd(job.request.trim_end_seconds);
     });
   };
+  // ---- the session survives a reload ------------------------------------------------------------------------------------
+  // Pinokio's Run <-> Dev switch unloads and reloads this page. Without this, the target, faces, sliders and the selected
+  // render job vanished while the render itself kept running on the server. The small snapshot (ids + settings, see
+  // sessionSnapshot.ts) is saved as you work and rebuilt from the backend once it has answered after a reload.
+  const sessionRestore = useRef<'pending' | 'running' | 'done'>('pending');
+  const restoreSession = async (snap: SessionSnapshot) => {
+    const info = await loadTarget(snap.target);                      // re-probes the file; throws when it is gone
+    // Settings first: they cannot fail, so a problem rebuilding the faces below never costs the person their sliders or playhead.
+    if (snap.engineId) selectEngine(snap.engineId);
+    setParametersRaw({ ...DEFAULT_PARAMETERS, ...snap.parameters } as WorkstationParameters);
+    if (snap.exportOptions) setExportOptions(snap.exportOptions as ExportOptions);
+    replaceCurves(snap.curves);
+    setSourceId(snap.sourceId); setIdentitySourceB(snap.identitySourceB);
+    setTrimStart(snap.trimStart); setTrimEnd(snap.trimEnd);
+    setTime(Math.min(snap.time, info.duration_seconds ?? snap.time));
+    if (snap.selectedJob && jobs.some(job => job.job_id === snap.selectedJob)) setSelectedJob(snap.selectedJob);
+    if (snap.identityLockId) void api<IdentityLock>(`/identity/locks/${snap.identityLockId}?verify=true`).then(setIdentityLock).catch(() => undefined);
+    if (snap.projectId) void api<Project>(`/projects/${snap.projectId}`).then(saved => { setProject(saved); setProjectName(saved.name); }).catch(() => undefined);
+    else if (snap.projectName) setProjectName(snap.projectName);
+    if (!snap.inspectionId) return true;
+    try {
+      const loaded = await api<Inspection>(`/media/inspections/${snap.inspectionId}?${new URLSearchParams({ path: snap.target })}`);
+      setInspection(loaded); setAssigned(snap.assigned);
+      useFaceSelectionStore.getState().populateFromInspection(loaded, info, snap.assigned);
+      if (snap.faceSegments.length) hydrateFaceSegments(snap.faceSegments as any[]);
+      setSelectedTrack(loaded.tracks.some(item => item.track_id === snap.selectedTrack) ? snap.selectedTrack : loaded.tracks[0]?.track_id ?? '');
+      return true;
+    } catch { return false; }                                         // the inspection is gone (server restarted): faces need a new Inspect
+  };
+  useEffect(() => {
+    if (!jobsLoaded || !caps || sessionRestore.current !== 'pending') return;
+    sessionRestore.current = 'running';
+    const snap = target ? null : readSession();
+    if (snap) {
+      void run('Restoring your session', async () => {
+        try {
+          const faces = await restoreSession(snap);
+          setNotice(faces ? 'Your session was restored after the page reloaded.' : 'Your video and settings were restored; the face inspection is no longer available, so run Inspect again.');
+        }
+        catch (error) { clearSession(); setNotice(`Your previous session could not be restored: ${(error as Error).message}`); }
+        finally { sessionRestore.current = 'done'; }
+      });
+      return;
+    }
+    sessionRestore.current = 'done';
+    const live = target ? null : activeJobToResume(jobs);             // nothing saved: show the render that is still going
+    if (live) showJob(live);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- one restore, when the first answer from the backend arrives
+  }, [jobsLoaded, caps]);
+  const sessionNow = { target, inspectionId: inspection?.inspection_id ?? '', selectedJob, projectId: project?.project_id ?? '', projectName,
+    identityLockId: identityLock?.lock_id ?? '', engineId: selectedEngine, time, sourceId, identitySourceB, selectedTrack, trimStart, trimEnd,
+    parameters: parameters as unknown as Record<string, unknown>, exportOptions, curves: curves as Record<string, unknown>, assigned,
+    faceSegments: buildFaceSegments(clusters, assigned) as unknown[] };
+  const sessionRef = useRef(sessionNow);
+  sessionRef.current = sessionNow;
+  useEffect(() => {
+    if (sessionRestore.current !== 'done' || !target) return;
+    const timer = window.setTimeout(() => writeSession(sessionRef.current), 400);
+    return () => window.clearTimeout(timer);
+  }, [target, inspection, selectedJob, project, projectName, identityLock, selectedEngine, time, sourceId, identitySourceB, selectedTrack, trimStart, trimEnd,
+    parameters, exportOptions, curves, assigned, clusters]);
+  useEffect(() => {
+    // A tab switch can unload the page inside the 400 ms debounce: write the latest state as the page goes away.
+    const flush = () => { if (sessionRestore.current === 'done' && sessionRef.current.target) writeSession(sessionRef.current); };
+    const hidden = () => { if (document.visibilityState === 'hidden') flush(); };
+    window.addEventListener('pagehide', flush); document.addEventListener('visibilitychange', hidden);
+    return () => { window.removeEventListener('pagehide', flush); document.removeEventListener('visibilitychange', hidden); };
+  }, []);
   useShortcutActions({ save: saveProject, undo: () => useHistoryStore.getState().undo(), redo: () => useHistoryStore.getState().redo() }, !projectsOpen);
   const previewRequest = (() => { try { return request(true); } catch { return null; } })();
   const checkpointAllowed = !!currentJob && jobActions(caps, currentJob.state).includes('resume');
