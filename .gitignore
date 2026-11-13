@@ -1,4 +1,4 @@
-# Roop 3D - Unified Gitignore
+﻿# Roop 3D - Unified Gitignore
 
 # Virtual environments
 **/.venv/
@@ -71,3 +71,6 @@ app/roop_3d/audit/stage01_verification.json
 # License-gated FLAME model downloads (never commit)
 flame/
 FLAME*.zip
+
+# Local assistant & IDE state
+.claude/
