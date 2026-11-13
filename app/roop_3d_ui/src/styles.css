@@ -2453,7 +2453,7 @@ body {
    ========================================================================= */
 .studio{display:flex;flex-direction:column;flex:1 1 0;min-width:0;min-height:0;height:100%;max-height:100%;padding:6px 10px 8px;gap:8px;overflow:hidden;box-sizing:border-box}
 .studio-grid{display:grid;flex:1 1 0;gap:8px;min-width:0;min-height:0;height:100%;max-height:100%;
-  grid-template-columns:320px minmax(0,1fr) 340px;grid-template-rows:minmax(0,1fr) auto;
+  grid-template-columns:320px minmax(0,1fr) 340px;grid-template-rows:minmax(320px,1fr) fit-content(38%);
   grid-template-areas:"source center inspector" "source timeline queue";
   overflow:hidden;box-sizing:border-box}
 @media(max-width:1279px){.studio-grid{grid-template-columns:280px minmax(0,1fr) 320px}}

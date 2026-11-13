@@ -33,6 +33,9 @@ body { background: var(--bg-gradient, var(--bg)); background-attachment: fixed; 
 .workstation { display: flex; height: 100dvh; max-height: 100dvh; width: 100%; overflow: hidden; }
 .app-main { flex: 1 1 0; min-width: 0; min-height: 0; display: flex; flex-direction: column; height: 100dvh; max-height: 100dvh; overflow: hidden; }
 .workspace-root { flex: 1 1 0; min-width: 0; min-height: 0; height: 100%; max-height: 100%; overflow: hidden; display: flex; flex-direction: column; }
+/* The router wraps each screen in a plain <div data-screen>. The Studio sizes itself with height:100%, which collapses to content
+   height (the whole grid rendered 0px tall: blank workspace) unless that wrapper fills the flex column it sits in. */
+.workspace-root > [data-screen='faceswap']:not([hidden]) { flex: 1 1 0; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
 .skip-link { position: absolute; left: 8px; top: -48px; z-index: 100; }
 .skip-link:focus { top: 8px; }
 
