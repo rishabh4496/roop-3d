@@ -134,6 +134,7 @@ test.describe('in-place guidance', () => {
 
   test('export preset: explained, saved with the project, and clears back to the default', async ({ page }) => {
     const { seen } = await boot(page, { openProject: true });
+    await page.getByTestId('dock-tab-range').click();   // the export preset lives on the dock's Range & export tab
     const bar = page.locator('.studio-bottom').getByTestId('export-preset');   // the Editor screen has a second copy (hidden)
     const preset = bar.locator('select[aria-label="Export preset"]');
     await expect(preset.locator('option')).toHaveCount(7);

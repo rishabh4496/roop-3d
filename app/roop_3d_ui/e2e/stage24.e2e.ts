@@ -72,6 +72,7 @@ test.describe('batch recipes (#/batch)', () => {
 test.describe('studio HUDs and frame dock (#/faceswap)', () => {
   test('the dock follows the playhead, trims with the keyboard and shares the speed with the timeline', async ({ page }) => {
     const { errors } = await boot(page, { openProject: true });
+    await page.getByTestId('dock-tab-frames').click();   // the frame dock is the dock's Frames tab
     const dock = page.getByTestId('studio-layout').getByTestId('timeline-dock');
     await expect(dock).toBeVisible();
     await expect(dock.locator('.dock-slide')).not.toHaveCount(0);
@@ -113,6 +114,7 @@ test.describe('route persistence', () => {
 
 test('visual review: the studio with the frame dock', async ({ page }) => {
   await boot(page, { openProject: true });
+  await page.getByTestId('dock-tab-frames').click();
   const dock = page.getByTestId('studio-layout').getByTestId('timeline-dock');
   await expect(dock).toBeVisible();
   const box = await dock.boundingBox();

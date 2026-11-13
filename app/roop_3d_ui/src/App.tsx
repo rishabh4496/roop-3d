@@ -22,6 +22,7 @@ import { useFaceSelectionStore, faceEditState, restoreFaceEdit, buildFaceSegment
 import useHistoryStore, { executeCommand, replaceCurves } from './stores/useHistoryStore';
 import FaceManager from './components/facemgr/FaceManager';
 import AppRouter, { SCREENS, useHashDrawer, useHashRoute } from './router/AppRouter';
+import { DOCK_TABS, DockTabs, type DockTabId } from './components/studio/DockTabs';
 import Rail from './shell/Rail';
 import TopBar from './shell/TopBar';
 import TelemetryHeader from './shell/TelemetryHeader';
@@ -128,6 +129,9 @@ export default function App() {
   // keeps the previous stacked workstation intact. Stored per browser only (a convenience, never project state).
   const [layoutMode, setLayoutMode] = useState<'studio' | 'classic'>(() => { try { return localStorage.getItem('roop3d-workstation-layout') === 'classic' ? 'classic' : 'studio'; } catch { return 'studio'; } });
   const [centerMode, setCenterMode] = useState<'2d' | '3d'>('2d');
+  // The bottom dock holds ~1500px of tools (lanes, trim/export, frame strip, faces, curves). Tabs show one at a time so each fits without scrolling.
+  const [dockTab, setDockTab] = useState<DockTabId>(() => { try { const stored = localStorage.getItem('roop3d-dock-tab'); return DOCK_TABS.some(tab => tab.id === stored) ? stored as DockTabId : 'timeline'; } catch { return 'timeline'; } });
+  const chooseDockTab = useCallback((id: DockTabId) => { setDockTab(id); try { localStorage.setItem('roop3d-dock-tab', id); } catch { /* optional */ } }, []);
   useEffect(() => { try { localStorage.setItem('roop3d-workstation-layout', layoutMode); } catch { /* per-session only */ } }, [layoutMode]);
   const [panelsSlot, setPanelsSlot] = useState<HTMLDivElement | null>(null), [timelineSlot, setTimelineSlot] = useState<HTMLDivElement | null>(null), [traySlot, setTraySlot] = useState<HTMLDivElement | null>(null);
   const [identityMesh, setIdentityMesh] = useState<Reconstruction | null>(null);
@@ -145,7 +149,21 @@ export default function App() {
   const resetZoom = useCallback(() => setZoom(1), []);
   useEffect(() => {
     (document.documentElement.style as any).zoom = String(zoom);
+    // CSS zoom scales every length inside the page but not the viewport units, so "100dvh" would overflow at 125% and leave a gap at 80%.
+    // The shell divides its viewport height by this factor (see premium.css) so the workspace always fills the window exactly.
+    document.documentElement.style.setProperty('--ui-zoom', String(zoom));
     localStorage.setItem('roop3d_zoom', String(zoom));
+    // Media queries ignore CSS zoom, so breakpoints would fire at the wrong widths once the person zooms. Publish the *effective* size instead.
+    const root = document.documentElement;
+    const measure = () => {
+      const width = window.innerWidth / zoom, height = window.innerHeight / zoom;
+      root.dataset.w = width >= 2300 ? 'xl' : width >= 1900 ? 'lg' : width >= 1600 ? 'md' : 'sm';
+      if (width < 1100) root.dataset.xs = ''; else delete root.dataset.xs;
+      root.dataset.h = height >= 1000 ? 'tall' : height >= 860 ? 'mid' : 'short';
+    };
+    measure();
+    window.addEventListener('resize', measure);
+    return () => window.removeEventListener('resize', measure);
   }, [zoom]);
   useEffect(() => {
     const handleKey = (e: KeyboardEvent) => {
@@ -999,16 +1017,17 @@ export default function App() {
                 startBlockedReason={reason('queue') ?? (!target ? 'Load a target video first.' : !inspection ? 'Inspect the target faces first.' : !renderMappings().length ? 'Assign a source FaceSet to at least one target face first.' : busy ? 'Busy' : null)}
                 frameBlockedReason={reason('frame_preview') ?? (!target ? 'Load a target video first.' : !previewRequest ? 'Assign a source FaceSet to a target face first: the preview needs a face mapping.' : null)} />} /></PanelBoundary>
           </aside>
-        <section className="studio-bottom" aria-label="Timeline" data-studio-zone="timeline">
-          <PanelBoundary name="Track lanes"><TrackLanes tracks={inspection?.tracks ?? []} sheet={sheet} sceneCuts={sheet?.scene_cut_frames ?? inspection?.scene_cut_frames ?? []} fps={parseFps(probe?.fps_rational, 30)} duration={probe?.duration_seconds ?? 0}
+        <section className="studio-bottom" aria-label="Timeline" data-studio-zone="timeline" data-tab={dockTab}>
+          <DockTabs active={dockTab} onChange={chooseDockTab} />
+          <div className="dock-pane" data-pane="timeline"><PanelBoundary name="Track lanes"><TrackLanes tracks={inspection?.tracks ?? []} sheet={sheet} sceneCuts={sheet?.scene_cut_frames ?? inspection?.scene_cut_frames ?? []} fps={parseFps(probe?.fps_rational, 30)} duration={probe?.duration_seconds ?? 0}
             trimStart={trimStart} trimEnd={trimEnd} job={currentJob && currentJob.request.target_path === target ? currentJob : null} selectedTrack={selectedTrack} assigned={assigned} sources={sources}
-            onSelectTrack={trackId => selectTrack(trackId, false)} onSeek={value => setTime(Math.max(0, Math.min(probe?.duration_seconds ?? 0, value)))} onAssign={assignTrack} /></PanelBoundary>
+            onSelectTrack={trackId => selectTrack(trackId, false)} onSeek={value => setTime(Math.max(0, Math.min(probe?.duration_seconds ?? 0, value)))} onAssign={assignTrack} /></PanelBoundary></div>
           <div className="studio-timeline-slot" ref={setTimelineSlot} />
-          {trimBar}
-          <details className="studio-tray studio-dock" open><summary>Frame navigator <span className="muted">· In/Out, chapters, speed</span></summary>
+          <div className="dock-pane" data-pane="range">{trimBar}</div>
+          <details className="studio-tray studio-dock" data-pane="frames" open><summary>Frame navigator <span className="muted">· In/Out, chapters, speed</span></summary>
             <TimelineDock target={target} duration={probe?.duration_seconds ?? 0} fps={parseFps(probe?.fps_rational, 30)} currentTime={time} disabled={!!busy}
               onSeek={value => setTime(Math.max(0, Math.min(probe?.duration_seconds ?? 0, value)))} trimStart={trimStart} trimEnd={trimEnd} onTrimChange={(start, end) => { setTrimStart(start); setTrimEnd(end); }} /></details>
-          <details className="studio-tray" open><summary>Face tray <span className="muted">· faces in the current frame</span></summary><div ref={setTraySlot} /></details>
+          <details className="studio-tray" data-pane="faces" open><summary>Face tray <span className="muted">· faces in the current frame</span></summary><div ref={setTraySlot} /></details>
         </section>
         <aside className="studio-queue" aria-label="Queue and logs" data-studio-zone="queue">{queuePanel}</aside>
        </div>

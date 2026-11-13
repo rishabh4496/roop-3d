@@ -14,6 +14,7 @@ import './shell/stage20.css'; // Stage 20: telemetry header, pipeline mini-map, 
 import './stage23.css'; // Stage 23: actors, mask frame ranges, 3D mesh canvas mode
 import './stage24.css'; // Stage 24: liquid glass HUDs, drag-reorder lists, Embla frame dock, persistent queue cards
 import './workstation3d.css'; // 3D workstation layer (flow bar, coverage radar, morph/light controls, mesh overlay): must stay last
+import './premium.css'; // Premium layout layer: zoom-correct shell, compact chrome, tabbed dock, one scrollbar per panel. Must stay last
 import { installResourceLedgerIfRequested } from './utils/resourceLedger';
 import { installGlobalErrorHandlers } from './utils/globalErrors';
 installResourceLedgerIfRequested(); // Stage 18: opt-in (?r3d-diag=1) object-URL / WebSocket / WebGL-context accounting

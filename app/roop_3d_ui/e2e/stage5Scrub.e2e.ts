@@ -1,5 +1,8 @@
-import { expect, test } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
 import { boot, FRAME_FACES, mockFrame } from './helpers/mockApi';
+
+/** The bottom dock shows one tool at a time; this opens the given tab before the page loads (it is remembered in localStorage). */
+const dockTab = (page: Page, id: string) => page.addInitScript(tab => { try { localStorage.setItem('roop3d-dock-tab', tab); } catch { /* optional */ } }, id);
 
 /**
  * Stage 5: timeline scrubbing, the filmstrip, and on-canvas face selection, in real Chrome with the REST API mocked.
@@ -36,6 +39,7 @@ test('loading a target fetches info and the filmstrip, and the filmstrip shows r
 });
 
 test('the playhead frame is requested without faces while moving and with faces once it rests; the strip lists them', async ({ page }) => {
+  await dockTab(page, 'faces');
   const { seen, errors } = await boot(page, { openProject: true });
   await expect(page.locator('img.frame-preview').first()).toBeVisible();
   const strip = page.getByTestId('frame-face-strip');
@@ -49,8 +53,10 @@ test('the playhead frame is requested without faces while moving and with faces 
 });
 
 test('dragging the playhead keeps one frame request in flight, skips stale frames and lands on the last one', async ({ page }) => {
+  await dockTab(page, 'faces');
   const { errors } = await boot(page, { openProject: true });
   await expect(page.getByTestId('frame-face-strip').locator('.frame-face-card')).toHaveCount(2);
+  await page.getByTestId('dock-tab-timeline').click();            // the drag happens on the timeline; the strip is checked again afterwards
   let inflight = 0, peak = 0;
   const wanted: number[] = [];
   await page.route('**/api/v1/media/frame**', async route => {
@@ -75,11 +81,13 @@ test('dragging the playhead keeps one frame request in flight, skips stale frame
   expect(moving.length).toBeGreaterThan(0);
   const last = wanted.at(-1)!;
   expect(last).toBeGreaterThan(70);                                    // ended near 90% of a 100-frame clip
+  await page.getByTestId('dock-tab-faces').click();
   await expect(page.getByTestId('frame-face-strip').locator('.frame-face-card')).toHaveCount(2);   // faces came back for the resting frame
   expect(errors).toEqual([]);
 });
 
 test('a face that is already a target is selected, never locked twice; Live Pose follows it', async ({ page }) => {
+  await dockTab(page, 'faces');
   const { errors } = await boot(page, { openProject: true });
   let locks = 0;
   await page.route('**/api/v1/media/detect-frame-faces', route => { locks++; return lockResponse(route); });
@@ -96,6 +104,7 @@ test('a face that is already a target is selected, never locked twice; Live Pose
 });
 
 test('clicking a card of a new face locks it: its track is created, it is mapped to the active source, and Live Pose follows it', async ({ page }) => {
+  await dockTab(page, 'faces');
   const { errors } = await boot(page, { openProject: true });
   await newFacesInFrame(page);
   const locks: { path: string; timestamp: number }[] = [];
@@ -120,6 +129,7 @@ test('clicking a card of a new face locks it: its track is created, it is mapped
 });
 
 test('clicking a new face box on the canvas locks it (sub-pixel letterbox mapping)', async ({ page }) => {
+  await dockTab(page, 'faces');
   const { errors } = await boot(page, { openProject: true });
   await newFacesInFrame(page);
   let locks = 0;

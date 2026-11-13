@@ -46,7 +46,7 @@ export default function LiveStudio({ sourceId }: { sourceId: string }) {
     finally { setBusy(false); }
   };
   return <>
-    <button className="button small" aria-pressed={open} onClick={() => setOpen(!open)}>Live Studio Mode</button>
+    <button className="button small live-studio-btn" aria-pressed={open} onClick={() => setOpen(!open)}>Live Studio Mode</button>
     {open && <section className="studio-live-panel" aria-label="Live Studio Mode" style={{ position: 'fixed', top: 64, right: 16, zIndex: 100, width: 680, maxWidth: '95vw', maxHeight: '85vh', overflow: 'auto', padding: 20, background: 'var(--panel, #181b22)', border: '1px solid var(--border, #555)' }}>
       <h2>Live Studio</h2>
       <fieldset disabled={running || busy}>

@@ -1,0 +1,382 @@
+/*
+ * Premium layout layer. Loaded LAST (see main.tsx), so it wins over the older stylesheets without touching them.
+ *
+ * What it fixes, in one place:
+ *   1. Zoom: CSS zoom scales lengths but not viewport units, so `100dvh` overflowed at 125% and left a gap at 80%.
+ *      App.tsx publishes --ui-zoom, and every full-height shell box divides by it.
+ *   2. Breakpoints: media queries ignore CSS zoom, so App.tsx publishes the *effective* size as :root[data-w] / [data-h]:
+ *        data-w  xl >= 2300 | lg >= 1900 | md >= 1600 | sm < 1600 (and data-xs below 1100)      data-h  tall >= 1000 | mid >= 860 | short < 860
+ *   3. Chrome: the top bar no longer overflows, the status strips are compact, banners float instead of pushing the work area down.
+ *   4. Studio grid: preview and inspector always get real height; the bottom dock is tabbed instead of a 1500px scroll.
+ *   5. Scrolling: one scrollbar per panel (no scroll inside scroll), thin and themed.
+ */
+
+:root {
+  --ui-zoom: 1;
+  --studio-left: clamp(280px, 17vw, 340px);
+  --studio-right: clamp(300px, 20vw, 380px);
+  --pane-gap: 10px;
+  --panel-radius: 14px;
+  --hair: color-mix(in srgb, var(--text, #e8eaf0) 9%, transparent);
+  --scroll-thumb: color-mix(in srgb, var(--text, #e8eaf0) 22%, transparent);
+  --scroll-thumb-hover: color-mix(in srgb, var(--accent, #e11d48) 70%, transparent);
+}
+:root[data-w='xl'] { --studio-left: 340px; --studio-right: 390px; }
+:root[data-w='lg'] { --studio-left: 320px; --studio-right: 360px; }
+:root[data-w='md'] { --studio-left: 290px; --studio-right: 324px; }
+:root[data-w='sm'] { --studio-left: 256px; --studio-right: 292px; }
+
+/* ── 1. Zoom-correct full-height shell ─────────────────────────────────── */
+.workstation,
+.workstation > .app-main { height: calc(100dvh / var(--ui-zoom, 1)); max-height: calc(100dvh / var(--ui-zoom, 1)); }
+.workstation > .rail { height: calc(100dvh / var(--ui-zoom, 1)); max-height: calc(100dvh / var(--ui-zoom, 1)); }
+html, body { overflow: hidden; }
+.workstation > .app-main { position: relative; }
+
+/* ── 5. Scrollbars: thin, themed, no layout shift ──────────────────────── */
+.workstation * { scrollbar-width: thin; scrollbar-color: var(--scroll-thumb) transparent; }
+.workstation ::-webkit-scrollbar { width: 8px; height: 8px; }
+.workstation ::-webkit-scrollbar-track { background: transparent; }
+.workstation ::-webkit-scrollbar-thumb { background: var(--scroll-thumb); border-radius: 999px; border: 2px solid transparent; background-clip: content-box; }
+.workstation ::-webkit-scrollbar-thumb:hover { background: var(--scroll-thumb-hover); background-clip: content-box; }
+.workstation ::-webkit-scrollbar-corner { background: transparent; }
+
+/* ── 3. Top bar: one row, never wider than the window ──────────────────── */
+.workstation .app-header.topbar {
+  flex-wrap: nowrap; gap: 8px; height: 52px; min-height: 52px; padding: 0 14px; align-items: center; min-width: 0;
+}
+.topbar > * { flex: 0 0 auto; }
+.topbar .topbar-spacer { flex: 1 1 0; min-width: 0; }
+.topbar .project-name { flex: 0 1 auto; min-width: 0; }
+.topbar .project-name input { width: clamp(70px, 9vw, 160px); }
+.topbar .topbar-title { font-size: 16px; }
+.topbar .pipeline-hud-container { flex: 0 0 auto; }
+.topbar .pipeline-pill-btn { height: 34px; white-space: nowrap; flex-wrap: nowrap; padding: 0 12px; gap: 10px; }
+.topbar .pipeline-pill-btn * { white-space: nowrap; }
+.topbar .palette-trigger { height: 34px; min-width: 0; padding: 0 10px; gap: 8px; }
+.topbar .topbar-group { padding: 2px; }
+.topbar .button.small, .topbar .icon-button { min-height: 30px; height: 30px; }
+.topbar .icon-button { width: 30px; min-width: 30px; }
+.topbar .ui-zoom-group { height: 34px; }
+.topbar .local-status, .topbar .topbar-models-btn { white-space: nowrap; }
+/* Progressive collapse: each step drops the least useful item first, so the bar never overflows (checked by scratch/topbar sweep).
+   The VRAM badge repeats the telemetry strip below it; the zoom buttons repeat Ctrl + / - / 0; the guide icon replaces "How to Use". */
+.topbar .topbar-telemetry-badge { display: none; }
+.topbar .tour-button { display: none; }
+:root[data-w='xl'] .topbar .tour-button, :root[data-w='lg'] .topbar .tour-button, :root[data-w='md'] .topbar .tour-button { display: inline-flex; }
+:root[data-w='lg'] .topbar .local-status .isolation-text,
+:root[data-w='md'] .topbar .local-status .isolation-text,
+:root[data-w='sm'] .topbar .local-status .isolation-text { display: none; }
+:root[data-w='xl'] .topbar .palette-trigger > span:not(.kbd) { display: inline; }
+:root[data-w='lg'] .topbar .palette-trigger > span, :root[data-w='md'] .topbar .palette-trigger > span, :root[data-w='sm'] .topbar .palette-trigger > span { display: none; }
+:root[data-w='md'] .topbar .palette-trigger > kbd, :root[data-w='sm'] .topbar .palette-trigger > kbd { display: none; }
+:root[data-w='md'] .topbar .palette-trigger, :root[data-w='sm'] .topbar .palette-trigger { width: 34px; justify-content: center; padding: 0; }
+:root[data-w='lg'] .topbar .topbar-models-btn, :root[data-w='md'] .topbar .topbar-models-btn, :root[data-w='sm'] .topbar .topbar-models-btn { font-size: 0; gap: 0; padding: 0 9px; }
+:root[data-w='sm'] .topbar .topbar-group:has(> .layout-toggle) { display: none; }
+:root[data-w='md'] .topbar .project-name > span, :root[data-w='sm'] .topbar .project-name > span { display: none; }
+:root[data-w='sm'] .topbar .pipeline-hud-container { display: none; }
+
+/* The diagnostics pill is the widest item in the bar (dot, engine, GPU %, VRAM, FPS, stage). It sheds segments, the popup keeps all of them. */
+:root[data-w='lg'] .topbar .pill-sep:nth-of-type(2), :root[data-w='lg'] .topbar .pill-metric,
+:root[data-w='md'] .topbar .pill-metric, :root[data-w='md'] .topbar .pill-badge, :root[data-w='md'] .topbar .pill-sep:nth-of-type(1),
+:root[data-w='md'] .topbar .pill-sep:nth-of-type(2) { display: none; }
+:root[data-w='sm'] .topbar .pill-fps, :root[data-w='sm'] .topbar .pill-gpu-util, :root[data-w='sm'] .topbar .pill-sep { display: none; }
+
+/* ── 3b. Status strips: compact, one line each ─────────────────────────── */
+.studio-telemetry { flex: 0 0 auto; }
+.studio-telemetry .telemetry-header { min-height: 0; height: 46px; padding: 0 16px; gap: 20px; align-items: center; }
+.studio-telemetry .thm-map { transform-origin: right center; }
+:root[data-w='lg'] .studio-telemetry .thm-map, :root[data-w='md'] .studio-telemetry .thm-map { transform: scale(.82); }
+:root[data-h='short'] .studio-telemetry .thm-map, :root[data-w='md'] .studio-telemetry .thm-badge, :root[data-w='sm'] .studio-telemetry .thm-badge { display: none; }
+.engine-bar { flex: 0 0 auto; padding: 4px 16px; min-height: 0; border-top: 1px solid var(--hair); border-bottom: 1px solid var(--hair); }
+.engine-bar .engine-chips { gap: 6px; flex-wrap: nowrap; overflow: hidden; }
+:root[data-h='short'] .engine-bar { display: none; }
+.next-step-bar { flex: 0 0 auto; margin: 8px 12px 0; padding: 6px 14px; min-height: 0; gap: 12px; align-items: center; }
+.next-step-bar .next-step-goal { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; flex: 1 1 0; }
+.next-step-bar .button { min-height: 26px; height: 26px; white-space: nowrap; }
+:root[data-h='short'] .next-step-bar .next-step-goal { display: none; }
+/* Banners float over the work area instead of pushing it down by 50px each time something happens. */
+.app-main > .notification {
+  position: absolute; z-index: 60; top: 58px; right: 16px; left: auto; margin: 0; width: min(440px, calc(100% - 32px)); max-height: 30vh; overflow: auto;
+  box-shadow: 0 18px 44px -14px rgba(0, 0, 0, .65); backdrop-filter: blur(14px);
+}
+.toast-host { max-width: min(440px, calc(100vw - 32px)); }
+
+/* ── 4. Studio grid ────────────────────────────────────────────────────── */
+.workspace-root { overflow: hidden; }
+.workspace-root > [data-screen='faceswap']:not([hidden]) { flex: 1 1 0; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+.studio { padding: 8px 12px 10px; gap: 0; }
+.studio-grid {
+  gap: var(--pane-gap);
+  grid-template-columns: var(--studio-left) minmax(0, 1fr) var(--studio-right);
+  grid-template-rows: minmax(0, 1fr) clamp(190px, 34%, 340px);
+  grid-template-areas: "source center inspector" "source timeline queue";
+}
+:root[data-h='short'] .studio-grid { grid-template-rows: minmax(0, 1fr) clamp(170px, 38%, 260px); }
+:root[data-h='tall'] .studio-grid { grid-template-rows: minmax(0, 1fr) clamp(240px, 32%, 420px); }
+.studio-left-dock, .studio-center, .studio-right, .studio-bottom, .studio-queue { min-height: 0; min-width: 0; }
+.studio-left-dock { width: auto; min-width: 0; max-width: none; }
+.studio-right { width: auto; min-width: 0; max-width: none; }
+.studio-panel, .studio-center, .studio-queue, .studio-bottom {
+  border-radius: var(--panel-radius); border: 1px solid var(--hair);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--surface, #12141c) 96%, var(--text, #fff) 4%), var(--surface, #12141c));
+  box-shadow: 0 1px 0 color-mix(in srgb, var(--text, #fff) 6%, transparent) inset, 0 14px 34px -22px rgba(0, 0, 0, .7);
+}
+.studio-panel-head, .studio-center-head {
+  min-height: 40px; padding: 0 14px; background: transparent; border-bottom: 1px solid var(--hair);
+}
+.studio-panel-head .eyebrow, .studio-center-head .eyebrow { font-size: 10px; letter-spacing: .16em; opacity: .85; }
+/* Narrow windows keep all three columns (the inspector holds Render); the side columns just get slimmer (see the --studio-* tokens). */
+
+/* Left dock: one scroll area, headers stay in flow (sticky headers clipped the first panel). */
+.studio-left-dock { gap: var(--pane-gap); overflow-y: auto; overflow-x: hidden; padding-right: 2px; }
+.studio-left-dock > .studio-panel { flex: 0 0 auto; overflow: visible; }
+.studio-left-dock .studio-panel-head { position: static; }
+
+/* Center: header on one line, viewport takes every spare pixel. */
+.studio-center { display: flex; flex-direction: column; overflow: hidden; }
+.studio-center-head { flex: 0 0 auto; display: flex; flex-wrap: nowrap; align-items: center; gap: 12px; height: 50px; padding: 0 12px 0 16px; }
+.studio-center-head .studio-viewport-title { flex: 1 1 0; min-width: 0; max-width: none; }
+.studio-center-head .studio-viewport-title strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.studio-center-head .viewport-mode-switcher { flex: 0 0 auto; flex-direction: row; flex-wrap: nowrap; }
+.studio-center-head .viewport-mode-switcher .button { white-space: nowrap; min-height: 28px; }
+.studio-center-head > .button.accent { flex: 0 0 auto; white-space: nowrap; min-height: 32px; height: 32px; padding: 0 14px; }
+:root[data-w='md'] .studio-center-head .viewport-mode-switcher .button { padding: 2px 8px; font-size: 10.5px; }
+.studio-viewport-body { flex: 1 1 0; min-height: 0; overflow: hidden; display: flex; flex-direction: column; }
+.studio-center .viewport-section { flex: 1 1 0; min-height: 0; overflow: hidden; display: flex; flex-direction: column; border: 0; }
+.studio-center .viewport-section > * { flex: 0 0 auto; }
+.studio-center .viewport-section > .viewport { flex: 1 1 0; min-height: 0; height: auto; max-height: none; }
+.studio-center .viewport.dual { display: grid; grid-template-columns: 1fr 1fr; gap: 1px; background: #05060a; overflow: hidden; }
+.studio-center .viewport-toolbar {
+  flex-wrap: nowrap; overflow-x: auto; overflow-y: hidden; gap: 6px; padding: 6px 12px; min-height: 0; scrollbar-width: none;
+  border-bottom: 1px solid var(--hair);
+}
+.studio-center .viewport-toolbar::-webkit-scrollbar { display: none; }
+.studio-center .viewport-toolbar > * { flex: 0 0 auto; white-space: nowrap; }
+.studio-center .viewport-toolbar .button.small { min-height: 28px; padding: 0 10px; font-size: 11.5px; }
+.studio-center .snapshot-toolbar { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; gap: 6px; padding: 6px 12px; }
+.studio-center .snapshot-toolbar::-webkit-scrollbar { display: none; }
+.studio-center .snapshot-toolbar > * { flex: 0 0 auto; white-space: nowrap; }
+.studio-center .preview-tools > summary { padding: 6px 14px; font-size: 11.5px; }
+.studio-center .pipeline-flow { flex: 0 0 auto; padding: 4px 12px; max-height: 64px; }
+
+/* ── Inspector: ONE scroll area, sticky render footer ──────────────────── */
+.studio-right { display: flex; flex-direction: column; overflow: hidden; }
+.studio-right > .panel-boundary { display: contents; }
+.studio-right .studio-panel-head { flex: 0 0 auto; position: static; }
+.studio-right .workflow-inspector {
+  flex: 1 1 0; height: auto; min-height: 0; overflow-y: auto; overflow-x: hidden; display: flex; flex-direction: column; scroll-behavior: smooth;
+}
+.studio-right .workflow-scroll { flex: 0 0 auto; overflow: visible; min-height: auto; padding: 12px; gap: 12px; }
+.studio-right .advanced-drawer, .studio-right .advanced-drawer[open] { flex: 0 0 auto; max-height: none; overflow: visible; }
+.studio-right .advanced-drawer .advanced-body { max-height: none; overflow: visible; }
+.studio-right .advanced-drawer > summary { position: sticky; top: 0; z-index: 2; background: var(--surface, #12141c); }
+.studio-right .render-footer {
+  position: sticky; bottom: 0; z-index: 4; margin-top: auto; flex: 0 0 auto; padding: 10px 12px;
+  background: color-mix(in srgb, var(--surface, #12141c) 94%, transparent); backdrop-filter: blur(14px); border-top: 1px solid var(--hair);
+}
+.studio-right .render-footer .render-actions { grid-template-columns: 1fr 1fr; gap: 8px; }
+.studio-right .render-footer .button { min-height: 34px; white-space: nowrap; }
+.studio-right .workflow-step h3 { font-size: 12.5px; letter-spacing: .03em; }
+.studio-right .workflow-step { padding-bottom: 14px; }
+.studio-right .mode-cards { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.studio-right .mode-card { min-height: 38px; padding: 6px 10px; white-space: normal; line-height: 1.2; overflow: visible; }
+.studio-right .inspector-subsection > summary { gap: 8px; }
+.studio-right .inspector-viewer { max-height: 220px; overflow: hidden; border-radius: 10px; }
+.studio-right select, .studio-right input:not([type='range']):not([type='checkbox']):not([type='radio']) { max-width: 100%; }
+
+/* ── Bottom dock: tabs, one pane at a time ─────────────────────────────── */
+.studio-bottom { display: flex; flex-direction: column; gap: 0; padding: 0; overflow: hidden; }
+.dock-tabs {
+  flex: 0 0 auto; display: flex; gap: 2px; padding: 6px 8px 0; border-bottom: 1px solid var(--hair); overflow-x: auto; scrollbar-width: none;
+  background: color-mix(in srgb, var(--bg, #0b0c12) 35%, transparent);
+}
+.dock-tabs::-webkit-scrollbar { display: none; }
+.dock-tab {
+  position: relative; flex: 0 0 auto; padding: 8px 14px 9px; border: 0; border-radius: 9px 9px 0 0; background: transparent; color: var(--muted);
+  font-size: 11.5px; font-weight: 600; letter-spacing: .02em; white-space: nowrap; transition: color .2s, background .2s;
+}
+.dock-tab:hover { color: var(--text); background: color-mix(in srgb, var(--text, #fff) 5%, transparent); }
+.dock-tab.active { color: var(--text); background: var(--surface, #12141c); }
+.dock-tab.active::after { content: ''; position: absolute; left: 12px; right: 12px; bottom: -1px; height: 2px; border-radius: 2px; background: var(--accent); box-shadow: 0 0 12px var(--accent); }
+.dock-tab:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--accent) inset; }
+/* Every pane is mounted; only the active one is shown. The panes scroll themselves, the dock never does. */
+.studio-bottom > .dock-pane, .studio-bottom > .studio-tray, .studio-bottom > .studio-timeline-slot { display: none; min-height: 0; }
+.studio-bottom[data-tab='timeline'] > .dock-pane[data-pane='timeline'],
+.studio-bottom[data-tab='range'] > .dock-pane[data-pane='range'] { display: block; flex: 0 0 auto; overflow: auto; max-height: 100%; }
+.studio-bottom[data-tab='frames'] > .studio-tray[data-pane='frames'],
+.studio-bottom[data-tab='faces'] > .studio-tray[data-pane='faces'] { display: block; flex: 1 1 0; overflow: auto; }
+.studio-bottom[data-tab='timeline'] > .studio-timeline-slot,
+.studio-bottom[data-tab='faces'] > .studio-timeline-slot,
+.studio-bottom[data-tab='curves'] > .studio-timeline-slot { display: block; flex: 1 1 0; overflow: auto; }
+.studio-bottom[data-tab='timeline'] .studio-timeline-slot .frame-face-strip,
+.studio-bottom[data-tab='timeline'] .studio-timeline-slot .curve-editor,
+.studio-bottom[data-tab='faces'] .studio-timeline-slot .timeline-workstation,
+.studio-bottom[data-tab='curves'] .studio-timeline-slot .frame-face-strip { display: none; }
+.studio-bottom[data-tab='curves'] .studio-timeline-slot .timeline-workstation > :not(.curve-editor) { display: none; }
+.studio-bottom[data-tab='curves'] .studio-timeline-slot .timeline-workstation { display: block; }
+.studio-bottom .studio-tray > summary { display: none; }
+.studio-bottom .timeline-workstation { max-height: none; }
+.studio-bottom .trim-bar { margin: 10px 12px 0; }
+.studio-bottom .export-preset { margin: 10px 12px 12px; }
+.studio-bottom .track-lanes { margin: 0; }
+
+/* ── Queue: cards that never collide ───────────────────────────────────── */
+.studio-queue { padding: 0; overflow-y: auto; overflow-x: hidden; }
+.studio-queue .queue-drawer-panel { margin: 0; border: 0; background: transparent; }
+.studio-queue .queue-drawer-content { padding: 10px; }
+.studio-queue .queue-items-list { max-height: none; overflow: visible; }
+.queue-job-card { flex-wrap: wrap; align-items: flex-start; gap: 8px; padding: 10px 12px; border-radius: 10px; }
+.queue-job-card .job-info-block { flex: 1 1 100%; min-width: 0; overflow: hidden; }
+.queue-job-card .job-info-block * { overflow-wrap: anywhere; }
+.queue-job-card .job-actions-col { flex: 1 1 100%; flex-wrap: wrap; gap: 6px; justify-content: flex-start; }
+.queue-job-card .job-actions-col .button { min-height: 26px; padding: 0 9px; font-size: 11px; white-space: nowrap; }
+.queue-job-card .concat-check { flex: 0 0 auto; }
+.queue-drawer-toggle { padding: 8px 12px; }
+
+/* Reduced motion: no smooth scrolling or tab transitions. */
+@media (prefers-reduced-motion: reduce) { .studio-right .workflow-inspector { scroll-behavior: auto; } .dock-tab { transition: none; } }
+
+/* ── Center refinements: flow bar and HUD take one slim row each, the video gets the rest ───────────────────────── */
+.studio-center .pipeline-flow { padding: 6px 10px; gap: 0; max-height: none; border-bottom: 1px solid var(--hair); }
+.studio-center .pipeline-flow .pipeline-flow-track { gap: 2px; align-items: center; overflow-x: auto; scrollbar-width: none; }
+.studio-center .pipeline-flow .pipeline-flow-track::-webkit-scrollbar { display: none; }
+.studio-center .pipeline-flow .pipeline-node { flex: 1 1 0; min-width: 0; padding: 0; border-radius: 8px; background: transparent; border-color: transparent; }
+.studio-center .pipeline-flow .pipeline-node.selected, .studio-center .pipeline-flow .pipeline-node.solo { background: var(--glow); border-color: var(--accent); }
+.studio-center .pipeline-flow .node-select { display: flex; align-items: center; gap: 6px; width: 100%; min-height: 28px; padding: 3px 7px; text-align: left; }
+.studio-center .pipeline-flow .node-name { display: block; -webkit-line-clamp: unset; min-height: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 11px; }
+.studio-center .pipeline-flow .node-ms, .studio-center .pipeline-flow .node-ms-bar, .studio-center .pipeline-flow .pipeline-flow-status { display: none; }
+.studio-center .pipeline-flow .node-ms:not(.unmeasured) { display: inline; margin-left: auto; }
+.studio-center .pipeline-flow .pipeline-arrow { display: none; }
+.studio-center .pipeline-flow .pipeline-node:not(.selected) .node-actions { display: none; }
+.studio-center .pipeline-flow .node-actions { position: absolute; z-index: 5; margin-top: 30px; }
+:root[data-w='md'] .studio-center .pipeline-flow .node-index, :root[data-w='sm'] .studio-center .pipeline-flow .node-index { display: none; }
+:root[data-h='short'] .studio-center .pipeline-flow { padding: 3px 8px; }
+/* Snapshots: a single quiet row when closed. */
+.studio-center .preview-tools { flex: 0 0 auto; }
+.studio-center .preview-tools > summary { min-height: 30px; padding: 4px 14px; }
+/* The HUD sits on the video as one centred row; it scrolls sideways instead of wrapping over the picture. */
+.studio-center .preview-hud-toolbar {
+  top: 8px; left: 50%; right: auto; transform: translateX(-50%); max-width: calc(100% - 20px); flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none;
+  border-radius: 12px; padding: 3px 5px; gap: 4px; background: rgba(8, 10, 16, .72); border-color: rgba(255, 255, 255, .10);
+}
+.studio-center .preview-hud-toolbar::-webkit-scrollbar { display: none; }
+.studio-center .preview-hud-toolbar > * { flex: 0 0 auto; white-space: nowrap; }
+.studio-center .preview-hud-toolbar .hud-btn { min-height: 24px; padding: 0 8px; font-size: 11px; }
+:root[data-h='short'] .studio-center .viewport-toolbar > .muted, :root[data-w='md'] .studio-center .viewport-toolbar > .muted { display: none; }
+
+/* Very small effective widths (a laptop at 150% zoom): the bar keeps only what you need to save or open a project. */
+:root[data-xs] .topbar .local-status, :root[data-xs] .topbar .palette-trigger, :root[data-xs] .topbar .live-studio-btn, :root[data-xs] .topbar .topbar-models-btn,
+:root[data-xs] .topbar .pipeline-hud-container, :root[data-xs] .topbar .topbar-group:last-child > .button:last-child { display: none; }
+:root[data-xs] .topbar .project-name input { width: 70px; min-width: 60px; }
+
+/* ── Polish pass ───────────────────────────────────────────────────────── */
+.studio-center .pipeline-flow .pipeline-flow-track { justify-content: flex-start; }
+.studio-panel-head .eyebrow { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+:root[data-w='md'] .studio-panel-head .eyebrow, :root[data-w='sm'] .studio-panel-head .eyebrow { letter-spacing: .1em; }
+.studio-right .mode-card, .studio-right .mode-card b { font-size: 12px; line-height: 1.25; font-weight: 650; }
+.studio-right .mode-card { display: flex; align-items: center; }
+/* Queue cards: title row never lets the status badge sit on the filename. */
+.queue-job-card .job-title-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.queue-job-card .job-title-row > strong { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; line-height: 1.3; }
+.queue-job-card .job-title-row > .state-badge { flex: 0 0 auto; }
+.queue-job-card .job-meta-row { display: flex; gap: 10px; flex-wrap: wrap; }
+.queue-job-card .failure-text, .queue-job-card .recovery { min-width: 0; overflow-wrap: anywhere; }
+.queue-job-card .job-hint { overflow-wrap: anywhere; }
+.studio-queue .persistent-queue-title, .studio-queue .queue-drawer-toggle strong { white-space: nowrap; }
+
+/* ── Compact telemetry: key and value share a line, so the strip is ~34px instead of 46px ─────────────────────── */
+.studio-telemetry .telemetry-header { height: 36px; padding: 0 16px; gap: 6px 26px; flex-wrap: nowrap; overflow: hidden; }
+.studio-telemetry .thm-cell { display: flex; align-items: baseline; gap: 8px; }
+.studio-telemetry .thm-key { font-size: 9.5px; flex: 0 0 auto; }
+.studio-telemetry .thm-val { font-size: 12px; max-width: 26ch; }
+.studio-telemetry .thm-vram { min-width: 0; display: grid; grid-template-columns: auto auto; align-items: center; column-gap: 8px; }
+.studio-telemetry .thm-vram .thm-bar { grid-column: 1 / -1; margin: 0; height: 3px; }
+.studio-telemetry .thm-badge { padding: 3px 12px; font-size: 10px; }
+.studio-telemetry .thm-map { transform-origin: right center; }
+:root[data-w='lg'] .studio-telemetry .thm-map, :root[data-w='md'] .studio-telemetry .thm-map { transform: scale(.7); margin-right: -16px; }
+:root[data-w='xl'] .studio-telemetry .thm-map { transform: scale(.78); margin-right: -24px; }
+:root[data-w='md'] .studio-telemetry .thm-cell.thm-trt, :root[data-w='sm'] .studio-telemetry .thm-cell.thm-trt { display: none; }
+:root[data-w='sm'] .studio-telemetry .thm-map { display: none; }
+.engine-bar { padding: 3px 16px; }
+.engine-bar .engine-chip { font-size: 10.5px; padding: 1px 8px; }
+
+/* ── Inspector footer: actions first, the rest on thin lines ───────────── */
+.studio-right .render-footer { gap: 6px; padding: 8px 12px; }
+.studio-right .render-footer .render-progress { height: 4px; }
+.studio-right .render-footer .render-status { font-size: 10.5px; line-height: 1.2; }
+.studio-right .render-footer .gpu-pill { padding: 2px 8px; font-size: 10.5px; }
+:root[data-h='short'] .studio-right .render-footer .gpu-pill { display: none; }
+.studio-right .render-footer .render-actions .button { min-height: 32px; padding: 0 10px; font-size: 11.5px; }
+
+/* ── HUD: never clip its first buttons ─────────────────────────────────── */
+.studio-center .preview-hud-toolbar { left: 10px; right: 10px; transform: none; width: auto; max-width: none; justify-content: safe center; margin: 0 auto; }
+
+/* ── Bottom dock: a little shorter on short screens, denser transport ──── */
+:root[data-h='short'] .studio-grid { grid-template-rows: minmax(0, 1fr) clamp(170px, 34%, 230px); }
+.studio-bottom .timeline-engine-bar { padding: 6px 12px; gap: 8px; }
+.studio-bottom .frame-face-strip { margin: 0; border-radius: 0; }
+.dock-tab { padding: 7px 13px 8px; }
+
+/* Mode cards hold a title and a description: stack them (a row layout made the two overlap in the narrow inspector). */
+.studio-right .mode-card { display: flex; flex-direction: column; align-items: flex-start; justify-content: center; gap: 3px; text-align: left; }
+.studio-right .mode-card small { display: block; font-size: 10.5px; line-height: 1.3; font-weight: 450; white-space: normal; overflow-wrap: anywhere; }
+.studio-right .swap-scope .mode-cards { grid-template-columns: 1fr; }
+/* The pipeline mini-map is only legible near full size, so it shows on wide windows only. */
+:root[data-w='lg'] .studio-telemetry .thm-map, :root[data-w='md'] .studio-telemetry .thm-map, :root[data-w='sm'] .studio-telemetry .thm-map { display: none; }
+:root[data-w='xl'] .studio-telemetry .thm-map { transform: scale(.86); margin-right: -12px; }
+
+/* ── Every other screen scrolls inside the workspace (the workspace clips, so tall screens such as Settings were cut off with no scrollbar) ── */
+.workspace-root > [data-screen]:not([data-screen='faceswap']):not([hidden]) {
+  flex: 1 1 0; min-height: 0; min-width: 0; overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain; scroll-padding-top: 12px;
+}
+.workspace-root > [data-screen]:not([data-screen='faceswap']):not([hidden]) > .screen-page { min-height: 0; }
+
+
+/* ── Toolbars wrap instead of scrolling sideways (a scrolled-off control is a clipped control) ─────────────────────────── */
+.studio-center .viewport-toolbar, .studio-center .snapshot-toolbar { flex-wrap: wrap; overflow: visible; row-gap: 4px; }
+.studio-center .preview-hud-toolbar { flex-wrap: wrap; overflow: visible; justify-content: center; left: 8px; right: 8px; max-width: none; border-radius: 12px; }
+/* Below the widest tier the HUD keeps its icons and drops the words (every button keeps its tooltip); text-only buttons (Fit, 1:1...) stay. */
+:root:not([data-w='xl']) .studio-center .preview-hud-toolbar .hud-btn:has(> span:first-child) { font-size: 0; gap: 0; padding: 0 8px; }
+:root:not([data-w='xl']) .studio-center .preview-hud-toolbar .hud-btn:has(> span:first-child) > span:first-child { font-size: 13px; }
+:root:not([data-w='xl']) .studio-center .viewport-toolbar .button.small, :root:not([data-w='xl']) .studio-center .viewport-toolbar .mask-toggle-btn { padding: 0 8px; }
+
+/* ── Short screens: every pixel goes to the preview (it must stay tall enough to judge a face) ─────────────────────────── */
+:root[data-h='short'] .studio-telemetry { display: none; }
+:root[data-h='short'] .studio-grid { grid-template-rows: minmax(0, 1fr) 168px; }
+:root[data-h='short'] .studio-center-head { height: 44px; }
+:root[data-h='short'] .studio-center .preview-tools > summary { min-height: 26px; padding: 2px 14px; }
+:root[data-h='short'] .studio-center .viewport-toolbar { padding: 4px 12px; }
+:root[data-h='short'] .studio-center .viewport-toolbar .button.small, :root[data-h='short'] .studio-center .viewport-toolbar .mask-toggle-btn { min-height: 26px; }
+:root[data-h='short'] .studio-center .pipeline-flow .node-select { min-height: 24px; }
+:root[data-h='short'] .next-step-bar { margin-top: 6px; padding: 4px 12px; }
+:root[data-h='short'] .studio { padding-top: 6px; }
+
+/* ── Narrow windows (< 1100 effective px): one column, preview first, the page scrolls ─────────────────────────────── */
+:root[data-xs] .studio { overflow-y: auto; overflow-x: hidden; height: auto; max-height: none; flex: 1 1 0; }
+:root[data-xs] .studio-grid { display: flex; flex-direction: column; height: auto; max-height: none; min-height: 0; overflow: visible; gap: var(--pane-gap); }
+:root[data-xs] .studio-center { order: 1; flex: 0 0 auto; height: max(520px, 72vh); max-height: none; }
+:root[data-xs] .studio-right { order: 2; flex: 0 0 auto; height: min(640px, 85vh); max-height: none; overflow: hidden; }
+:root[data-xs] .studio-left-dock { order: 3; flex: 0 0 auto; height: auto; max-height: none; overflow: visible; }
+:root[data-xs] .studio-bottom { order: 4; flex: 0 0 auto; height: 380px; }
+:root[data-xs] .studio-queue { order: 5; flex: 0 0 auto; height: auto; max-height: 440px; }
+
+/* Stacked layout: the inspector's scroll area has no fixed height to fill, so it must size to its content (flex-basis 0 collapsed it to the header). */
+/* Medium windows: the diagnostics pill repeats the telemetry strip, so it makes room for the controls. */
+:root[data-w='md'] .topbar .pipeline-hud-container { display: none; }
+
+/* ── Fit-on-one-row pass for ~1366px windows ──────────────────────────────────────────────────────────────────────── */
+/* Flow bar: nodes shrink to fit (names ellipsize) instead of scrolling the first stages out of view. */
+.studio-center .pipeline-flow .pipeline-flow-track { overflow: hidden; }
+.studio-center .pipeline-flow .pipeline-node { min-width: 0; overflow: hidden; }
+.studio-center .pipeline-flow .pipeline-node:hover, .studio-center .pipeline-flow .pipeline-node:focus-within { overflow: visible; }
+/* Small windows: the media toolbar keeps its icons (labels live in the tooltips) so it stays one row. */
+:root[data-w='sm'] .studio-center .viewport-toolbar .button:has(> span:first-child),
+:root[data-w='sm'] .studio-center .viewport-toolbar .mask-toggle-btn { font-size: 0; gap: 0; padding: 0 9px; }
+:root[data-w='sm'] .studio-center .viewport-toolbar .button:has(> span:first-child) > span:first-child,
+:root[data-w='sm'] .studio-center .viewport-toolbar .mask-toggle-btn > span:first-child { font-size: 14px; }
+:root[data-w='sm'] .studio-center .preview-hud-toolbar .hud-btn { padding: 0 6px; }
+:root[data-w='sm'] .studio-center .preview-hud-toolbar { gap: 2px; padding: 3px; }
+:root[data-h='short'] .studio-grid { grid-template-rows: minmax(0, 1fr) 156px; }
+:root[data-h='short'] .studio-grid { grid-template-rows: minmax(0, 1fr) 144px; }
+.studio-center .pipeline-flow .pipeline-flow-track { overflow: clip; }

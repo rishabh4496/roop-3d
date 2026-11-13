@@ -1,6 +1,9 @@
 import { expect, test, type Page, type Route } from '@playwright/test';
 import { boot, FRAME_FACES, mockFrame } from './helpers/mockApi';
 
+/** The bottom dock shows one tool at a time; this opens the given tab before the page loads (it is remembered in localStorage). */
+const dockTab = (page: Page, id: string) => page.addInitScript(tab => { try { localStorage.setItem('roop3d-dock-tab', tab); } catch { /* optional */ } }, id);
+
 /**
  * Target Face Bank: persistent FACE n pills (canvas + bank), click-to-toggle lock, live angle-capture HUD with the 5 x 3 grid,
  * hover inspector, Re-Scan, source binding, and the engine status bar with its switch-failure toast. Real Chrome and React, REST mocked
@@ -69,6 +72,7 @@ test('persistent FACE pills, click-to-lock, live angle capture, hover inspector,
   const { errors } = await boot(page, { openProject: true });
   const seen = await mockBank(page);
   await page.route('**/api/v1/pipeline/status', route => route.fulfill({ status: 200, json: engines() }));
+  await dockTab(page, 'faces');
   await page.reload();
   await page.getByRole('button', { name: 'Projects' }).click();
   await page.getByRole('dialog').getByRole('button', { name: 'Verify & open' }).click();
@@ -133,6 +137,7 @@ test('clicking a face box on the canvas toggles its lock, and the canvas shows t
   const { errors } = await boot(page, { openProject: true });
   const seen = await mockBank(page);
   await page.route('**/api/v1/pipeline/status', route => route.fulfill({ status: 200, json: engines() }));
+  await dockTab(page, 'faces');
   await page.reload();
   await page.getByRole('button', { name: 'Projects' }).click();
   await page.getByRole('dialog').getByRole('button', { name: 'Verify & open' }).click();
