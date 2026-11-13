@@ -12,8 +12,9 @@ from roop_3d.compositor.masks import STRICT_FORBIDDEN_CLASSES
 from roop_3d.core.errors import DomainError
 from roop_3d.engine.volumetric.preprocess import AlignedCrop, registration_matrix, transform_points
 from roop_3d.reconstruction.dense_correspondence import (
-    GPUSurfaceRasterizer, WarpField, correspondence_field,
+    GPUSurfaceRasterizer, ViewWorkers, WarpField, correspondence_field,
 )
+from roop_3d.reconstruction.fit_ahead import FitAhead, fit_ahead_enabled
 from roop_3d.reconstruction.morphable_backbone import MorphableBackbone
 from roop_3d.reconstruction.swap_coverage import feathered_coverage
 from roop_3d.reconstruction.view_selection import ViewSelector, neutral_pitch, view_cost
@@ -92,9 +93,24 @@ class WarmEngineSlot:
 WARM_ENGINE = WarmEngineSlot()
 
 
+def view_worker_count(profile: str) -> int:
+    """Threads for the per-view correspondence jobs: one per source view of the profile (4 on 12 GB, 2 otherwise);
+    ``ROOP3D_VIEW_WORKERS`` overrides it, and ``1`` runs them sequentially."""
+    import os
+    default = 4 if profile == "12gb" else 2
+    try:
+        return max(1, min(8, int(os.environ.get("ROOP3D_VIEW_WORKERS", default))))
+    except ValueError:
+        return default
+
+
 class NeuralFaceEngine:
     def __init__(self, backbone, rasterizer, enhancer, *, profile="6gb", parser=None):
         self.backbone, self.rasterizer, self.enhancer = backbone, rasterizer, enhancer
+        # The 2-4 source views of a frame are independent; ROOP3D_VIEW_WORKERS=1 restores the one-after-another loop.
+        self.view_workers = ViewWorkers(view_worker_count(profile), rasterizer)
+        # Target fits for frame N+1 are made on the (idle) track thread while the swap thread works on frame N.
+        self.fit_ahead = FitAhead(backbone) if fit_ahead_enabled() else None
         # Face parser (``predict(bgr) -> HxWx19 class probabilities``) that keeps hair, neck, cloth and background texels
         # of the source photographs out of the appearance the swapper is conditioned on.
         self.parser = parser
@@ -301,6 +317,13 @@ class NeuralFaceEngine:
         """Forget every track's filtered fit and view selection (a warm engine must not continue an earlier render)."""
         self.fit_smoother.reset()
         self.view_selector.reset()
+        if self.fit_ahead is not None:
+            self.fit_ahead.clear()
+
+    def begin_fit_ahead(self, base_frame: int) -> None:
+        """A pipelined render is starting: ``base_frame`` is the ``frame_index`` its first frame will be processed with."""
+        if self.fit_ahead is not None:
+            self.fit_ahead.begin(base_frame)
 
     def retain_tracks(self, active_ids) -> None:
         self.fit_smoother.retain(active_ids)
@@ -320,7 +343,13 @@ class NeuralFaceEngine:
         if frame_index is not None:
             step = self.fit_smoother.advance(track_id, frame_index, landmarks5, timestamp=timestamp, scene_cut=scene_cut)
             landmarks5 = step.landmarks
-        target = self.backbone.fit(image, landmarks5)
+        # In a pipelined render the track thread may already have fitted this exact frame (see fit_ahead); the fit is used
+        # only if it was made from these very landmarks and this very image, otherwise it is computed here as always.
+        target = None
+        if step is not None and self.fit_ahead is not None:
+            target = self.fit_ahead.take(track_id, frame_index, image, landmarks5, timestamp)
+        if target is None:
+            target = self.backbone.fit(image, landmarks5)
         if step is not None:
             target = self._smoothed_fit(target, step)
         model = swapper.model
@@ -362,11 +391,16 @@ class NeuralFaceEngine:
         chosen = self.view_selector.select(
             track_id, frame_index, costs, 4 if self.profile == "12gb" else 2,
             angular={i: float(np.exp(-2 * d)) for i, d in distances.items()}, timestamp=timestamp, scene_cut=scene_cut)
-        for index, factor in sorted(chosen.items(), key=lambda item: (costs[item[0]], item[0])):
-            source = surfaces[index]
-            field = correspondence_field(self.rasterizer, target_faces,
+        ordered = sorted(chosen.items(), key=lambda item: (costs[item[0]], item[0]))
+
+        def field_job(source):
+            return lambda: correspondence_field(self.rasterizer, target_faces,
                 source.fit.camera_vertices, source.intrinsics, target_camera_vertices, k, (size, size),
                 source.depth, (source.image.shape[1], source.image.shape[0]), source_support=source.observed)
+        # The fields are computed side by side but consumed in `ordered`, so the accumulated colour is unchanged.
+        computed = self.view_workers.run([field_job(surfaces[index]) for index, _ in ordered])
+        for (index, factor), field in zip(ordered, computed):
+            source = surfaces[index]
             weight = field.confidence * max(source.view.quality.score, .01) * factor
             color += field.sample(source.image).astype(np.float32) * weight[..., None]
             support += weight
@@ -459,5 +493,6 @@ class NeuralFaceEngine:
         self.reset_tracks()
         self.neutral_pitch.clear()
         self.enhancer.release()
+        self.view_workers.close()
         self.rasterizer.release()
         self.backbone.release()

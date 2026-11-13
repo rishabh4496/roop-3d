@@ -172,6 +172,59 @@ class GPUSurfaceRasterizer:
             self.local.context = None
 
 
+class ViewWorkers:
+    """Runs independent per-source-view jobs on a small persistent thread pool and returns the results in job order.
+
+    Each view's ``correspondence_field`` is whole-mesh numpy plus an OpenGL pass, and a frame needs up to four of them in
+    a row on the one swap thread (the measured bottleneck of a dense-3D render).  The views do not depend on each other,
+    so they overlap; the caller still accumulates them in its own fixed order, which keeps the output bit-identical to the
+    sequential loop.  ``GPUSurfaceRasterizer`` keeps one GL context per thread, so every worker lazily owns one;
+    ``close`` releases them on the threads that created them.  One worker (or one job) runs inline, exactly as before.
+    """
+
+    def __init__(self, workers: int, rasterizer):
+        self.workers = max(1, int(workers))
+        self.rasterizer = rasterizer
+        self._pool = None
+        self._lock = threading.Lock()
+
+    def run(self, jobs):
+        jobs = list(jobs)
+        if len(jobs) <= 1 or self.workers <= 1:
+            return [job() for job in jobs]
+        with self._lock:
+            if self._pool is None:
+                from concurrent.futures import ThreadPoolExecutor
+                self._pool = ThreadPoolExecutor(self.workers, thread_name_prefix="r3d-view")
+            pool = self._pool
+        from concurrent.futures import wait
+        futures = [pool.submit(job) for job in jobs]
+        wait(futures)                       # never leave a view running while the caller unwinds or tears down
+        return [future.result() for future in futures]   # the first failure in view order, like the sequential loop
+
+    def close(self) -> None:
+        with self._lock:
+            pool, self._pool = self._pool, None
+        if pool is None:
+            return
+        barrier = threading.Barrier(self.workers)
+
+        def drop():
+            try:
+                barrier.wait(timeout=10)    # forces the tasks onto distinct threads, one per context
+            except threading.BrokenBarrierError:
+                pass
+            self.rasterizer.release()       # releases the calling worker thread's GL context
+
+        try:
+            for future in [pool.submit(drop) for _ in range(self.workers)]:
+                future.result(timeout=30)
+        except Exception:
+            pass
+        finally:
+            pool.shutdown(wait=True)
+
+
 @dataclass(frozen=True)
 class WarpField:
     source_xy: np.ndarray  # target pixel -> supplied source-image pixel; -1 outside support

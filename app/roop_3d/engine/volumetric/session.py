@@ -816,6 +816,40 @@ class ReferencePipeline:
             return TrackedFrame(faces, bool(self.tracker.scene_cut), frozenset(self.tracker.active_ids), frame_time,
                                 (time.perf_counter() - began) * 1000)
 
+    def begin_fit_ahead(self) -> None:
+        """A pipelined render is about to start: let the track thread fit target faces for the swap stage ahead of time."""
+        if self.neural_face is not None:
+            self.neural_face.begin_fit_ahead(self.frames_processed)
+
+    def prefetch_target_fits(self, image: np.ndarray, tracked: TrackedFrame, *, render_mode: str | None = None) -> None:
+        """Stage 1 helper: fit the faces Stage 2 is likely to swap with the dense-3D path (``fit_ahead``).
+
+        Only a *prediction*: Stage 2 re-derives its own decision (identity guard, pose fade, roll latch) and uses a
+        precomputed fit only when it was made from identical inputs, so a face predicted wrongly just wastes this work.
+        Read-only on session state; the one call per frame also keeps the lookahead's frame counter in step."""
+        engine = self.neural_face
+        if engine is None or engine.fit_ahead is None or not self.prepared:
+            return
+        mode = self.render_mode if render_mode is None else render_mode
+        candidates = []                                         # an unknown mode or missing dense assets: nothing to fit
+        if mode in RENDER_MODES and not self.dense_face_unavailable:
+            yaw_limit, pitch_limit = auto_3d_limits()
+            roll_limit = dense_3d_max_roll()
+            for face in tracked.faces:
+                if (self.selected_ids is not None and face.track_id not in self.selected_ids) or not face.swap_allowed:
+                    continue
+                pose = face.observation.pose
+                if mode == "standard" and abs(pose[0]) <= yaw_limit and abs(pose[1]) <= pitch_limit:
+                    continue                                    # the standard 2D swap handles it: no dense fit needed
+                if abs(pose[2]) > roll_limit:
+                    continue
+                document = self._document_for(face.track_id)
+                if document is None or document.faceset_id not in engine.sources:
+                    continue
+                candidates.append((face.track_id, face.observation.landmarks5))
+        engine.fit_ahead.submit(image, candidates, timestamp=tracked.frame_time, scene_cut=tracked.scene_cut,
+                                active_ids=tracked.active_ids)
+
     def _refine_full_head(self, tracked, image, rendered, coverage, inverse, strength):
         """Condition the portrait appearance encoder on the entire UV render.
 

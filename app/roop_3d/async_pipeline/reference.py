@@ -15,12 +15,14 @@ records timestamps and ``infer_frame`` tracks inline.
 """
 from __future__ import annotations
 
+import logging
 from typing import Any, Callable
 
 from roop_3d.async_pipeline.stages import Item
 from roop_3d.compositor.pipeline import CompositeOptions
 
 STAGE_NAMES = ("track", "swap", "composite", "write")
+logger = logging.getLogger(__name__)
 
 
 class ReferenceStages:
@@ -38,6 +40,8 @@ class ReferenceStages:
         self.swapped_ranges = swapped_ranges if swapped_ranges is not None else []
         self.staged = hasattr(session, "track_frame")
         self.expected_shape: tuple | None = None
+        if self.staged and hasattr(session, "begin_fit_ahead"):
+            session.begin_fit_ahead()       # the swap stage's frame counter is read here, before any frame is processed
 
     def _transfer(self):
         """``working_transfer`` may be a callable: the reader only knows its working colour after the first frame."""
@@ -66,8 +70,17 @@ class ReferenceStages:
             session.set_angle_frame(decoded.index)
         if not self.staged:
             return None
-        return session.track_frame(decoded.image, pose_blend=options.get("pose_blend"),
-                                   render_mode=options.get("render_mode"))
+        tracked = session.track_frame(decoded.image, pose_blend=options.get("pose_blend"),
+                                      render_mode=options.get("render_mode"))
+        if hasattr(session, "prefetch_target_fits"):
+            # This thread is mostly idle: fit frame N+1's target faces now, while the swap stage is still on frame N.
+            try:
+                session.prefetch_target_fits(decoded.image, tracked, render_mode=options.get("render_mode"))
+            except Exception:
+                logger.warning("Target-fit lookahead failed; the swap stage fits its own faces", exc_info=True)
+                if getattr(session, "neural_face", None) is not None:
+                    session.neural_face.fit_ahead = None
+        return tracked
 
     # -- Stage 2 ----------------------------------------------------------------------------------------------
     def swap(self, item: Item):
