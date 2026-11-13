@@ -75,6 +75,7 @@ class TrackingTelemetryEvent(EventBase):
     Not part of the global event sequence and delivered only to subscribers that ask for it
     (`/ws/v1/pipeline/status`): at video rate it would otherwise look like a gap to `/ws/events` and `/ws/telemetry`
     clients. Counters (`shot_cuts`, `shot_index`) are cumulative, so a frame dropped for a slow client hides nothing."""
+    schema_version: Literal[2] = 2
     type: Literal["tracking.telemetry"] = "tracking.telemetry"
     job_id: str | None = None
     track_id: int = Field(default=0, ge=0)
@@ -101,6 +102,20 @@ class TrackingTelemetryEvent(EventBase):
     identity_frames: int = Field(default=0, ge=0)
     lighting_key: tuple[float, float, float] | None = None
     adapted: bool = False
+    # 6DoF pose + temporal-stability block (all optional: older producers omit them; None = not measured).
+    quat_wxyz: tuple[float, float, float, float] | None = None
+    translation_px: tuple[float, float] | None = None
+    pose_scale_px_per_m: float | None = Field(default=None, ge=0)
+    translation_m: tuple[float, float, float] | None = None
+    reproj_rms_px: float | None = Field(default=None, ge=0)
+    pose_source: str | None = None
+    spherical_bin: str | None = None
+    jitter_px: float | None = Field(default=None, ge=0)
+    one_euro_cutoff_hz: float | None = Field(default=None, ge=0)
+    stability_score: float | None = Field(default=None, ge=0, le=1)
+    scene_flash: bool | None = None
+    mask_flow_confidence: float | None = Field(default=None, ge=0, le=1)
+    self_occluded_fraction: float | None = Field(default=None, ge=0, le=1)
 
 
 class StreamGapEvent(EventBase):

@@ -11,8 +11,12 @@ Honest limits (also written into every manifest):
 * Output is constant-frame-rate at the source's average rate; a variable-frame-rate source is flagged ``vfr_source`` in the manifest.
 * HDR (PQ / HLG) sources are refused (``HDR_INPUT_UNSUPPORTED``): a raw BGR pipe cannot tone-map them correctly. Use the
   reference engine for HDR.
-* Output carries no source metadata (``-map_metadata -1``) and no subtitle tracks; audio is stream-copied when the MP4
-  container accepts the codec, otherwise re-encoded to AAC and reported as ``transcode``.
+* The remux maps EVERY source audio and subtitle stream plus the global metadata and chapters (``-map 1:a? -map 1:s?
+  -map_metadata 1 -map_chapters 1``, input 1 being the source). Audio is stream-copied when the MP4 container accepts the codec,
+  otherwise all audio is re-encoded to AAC (``transcode``). Subtitles are stream-copied when accepted, else text tracks are
+  converted to ``mov_text`` (the only text subtitle codec MP4 carries); if even that is refused (e.g. bitmap PGS/DVD subtitles)
+  the subtitles are dropped and the manifest says so (``subtitle_policy = "drop"``). Per-stream codec detail is not preserved
+  through a conversion.
 """
 from __future__ import annotations
 
@@ -67,6 +71,7 @@ class VideoInfo:
     audio_codec: str | None
     audio_streams: int
     rotation: int = 0
+    subtitle_streams: int = 0
 
     @property
     def decode_matrix(self) -> str:
@@ -116,7 +121,8 @@ def probe_video(path: Path | str, *, ffprobe: str | None = None) -> VideoInfo:
         duration = None
     return VideoInfo(path, width, height, rate, frames, duration, video.get("color_space"), video.get("color_transfer"),
                      video.get("color_range"), bool(average and real and abs(average - real) > Fraction(1, 1000)),
-                     audio[0].get("codec_name") if audio else None, len(audio), rotation)
+                     audio[0].get("codec_name") if audio else None, len(audio), rotation,
+                     sum(1 for s in document["streams"] if s.get("codec_type") == "subtitle"))
 
 
 # ================================================================================================================ decode
@@ -209,22 +215,41 @@ class ColourManagedWriter(NVHardwareVideoWriter):
         REGISTRY.track(self._process, "encode")
 
 
-def _remux(video: Path, source: Path, output: Path, *, seconds: float, policy: str, has_audio: bool, ffmpeg: str) -> str:
-    """Video stream-copied from ``video``; the source's first audio stream stream-copied (or AAC when the MP4 refuses the codec)."""
-    if policy == "drop" or not has_audio:
-        shutil.copyfile(video, output)
-        return "drop"
-    base = [ffmpeg, "-y", "-v", "error", "-i", str(video), "-i", str(source), "-map", "0:v:0", "-map", "1:a:0", "-c:v", "copy",
-            "-map_metadata", "-1", "-t", f"{seconds:.6f}", "-movflags", "+faststart"]
-    if policy != "transcode":
-        run = subprocess.run(base + ["-c:a", "copy", str(output)], capture_output=True, text=True)
-        if run.returncode == 0:
-            return "copy"
-        log.info("audio stream copy refused by the MP4 container (%s); re-encoding to AAC", run.stderr.strip()[-120:])
-    run = subprocess.run(base + ["-c:a", "aac", "-b:a", "256k", str(output)], capture_output=True, text=True)
-    if run.returncode != 0:
-        raise DomainError("AUDIO_REMUX_FAILED", f"Audio remux failed: {run.stderr.strip()[-200:]}", 500)
-    return "transcode"
+@dataclass(frozen=True)
+class RemuxReport:
+    """What the remux actually did to the non-video streams. ``audio``: copy|transcode|drop; ``subtitles``: copy|mov_text|drop|none."""
+    audio: str
+    subtitles: str
+    audio_streams: int
+    subtitle_streams: int
+
+
+def _remux(video: Path, source: Path, output: Path, *, seconds: float, policy: str, audio_streams: int, subtitle_streams: int,
+           ffmpeg: str) -> RemuxReport:
+    """Video stream-copied from ``video``; ALL audio and subtitle streams, global metadata and chapters taken from ``source``.
+
+    Fallback ladder (the first ffmpeg run that succeeds wins): audio ``copy`` then ``aac`` (skipped to ``aac`` for policy
+    ``transcode``; omitted for ``drop``) x subtitles ``copy`` then ``mov_text`` then dropped."""
+    base = [ffmpeg, "-y", "-v", "error", "-i", str(video), "-i", str(source), "-map", "0:v:0", "-c:v", "copy",
+            "-map_metadata", "1", "-map_chapters", "1", "-t", f"{seconds:.6f}", "-movflags", "+faststart"]
+    audio_options: list[tuple[str, list[str]]]
+    if policy == "drop" or audio_streams == 0:
+        audio_options = [("drop", ["-an"])]
+    else:
+        audio_options = [] if policy == "transcode" else [("copy", ["-map", "1:a?", "-c:a", "copy"])]
+        audio_options.append(("transcode", ["-map", "1:a?", "-c:a", "aac", "-b:a", "256k"]))
+    subtitle_options: list[tuple[str, list[str]]] = [("none", ["-sn"])] if subtitle_streams == 0 else [
+        ("copy", ["-map", "1:s?", "-c:s", "copy"]), ("mov_text", ["-map", "1:s?", "-c:s", "mov_text"]), ("drop", ["-sn"])]
+    last_error = ""
+    for audio_name, audio_args in audio_options:
+        for subtitle_name, subtitle_args in subtitle_options:
+            run = subprocess.run(base + audio_args + subtitle_args + [str(output)], capture_output=True, text=True)
+            if run.returncode == 0:
+                return RemuxReport(audio_name, subtitle_name, audio_streams if audio_name != "drop" else 0,
+                                   subtitle_streams if subtitle_name in ("copy", "mov_text") else 0)
+            last_error = run.stderr.strip()[-200:]
+            log.info("remux attempt audio=%s subtitles=%s refused: %s", audio_name, subtitle_name, last_error[-120:])
+    raise DomainError("AUDIO_REMUX_FAILED", f"Audio remux failed: {last_error}", 500)
 
 
 # ================================================================================================================ the loop
@@ -244,6 +269,7 @@ class StreamResult:
     decode_ms: float
     encode_ms: float
     info: VideoInfo = field(repr=False, default=None)
+    remux: RemuxReport | None = None
 
 
 def verify_output(path: Path, *, ffprobe: str | None = None) -> dict:
@@ -255,7 +281,8 @@ def verify_output(path: Path, *, ffprobe: str | None = None) -> dict:
     if run.returncode != 0 or video is None:
         raise DomainError("OUTPUT_UNREADABLE", "The finished file could not be read back", 500)
     audio = [s for s in document["streams"] if s.get("codec_type") == "audio"]
-    return {"frames": int(video.get("nb_read_packets") or 0), "rate": _rational(video.get("avg_frame_rate")),
+    subtitles = [s for s in document["streams"] if s.get("codec_type") == "subtitle"]
+    return {"subtitle_streams": len(subtitles), "frames": int(video.get("nb_read_packets") or 0), "rate": _rational(video.get("avg_frame_rate")),
             "width": int(video["width"]), "height": int(video["height"]), "codec": video.get("codec_name"),
             "audio_streams": len(audio), "audio_codec": audio[0].get("codec_name") if audio else None,
             "colorspace": video.get("color_space"), "pix_fmt": video.get("pix_fmt")}
@@ -306,14 +333,16 @@ def stream_video(target: Path | str, output: Path | str, frame_fn: Callable[[np.
             raise DomainError("MEDIA_EMPTY", "Target video contains no decodable frames", 422)
         writer.close()
         seconds = count * info.rate.denominator / info.rate.numerator
-        actual = _remux(silent, target, staged, seconds=seconds, policy=audio_policy, has_audio=info.audio_streams > 0, ffmpeg=ffmpeg)
+        report = _remux(silent, target, staged, seconds=seconds, policy=audio_policy, audio_streams=info.audio_streams,
+                        subtitle_streams=info.subtitle_streams, ffmpeg=ffmpeg)
+        actual = report.audio
         check = verify_output(staged)
         if check["frames"] != count:
             raise DomainError("OUTPUT_FRAME_MISMATCH", f"Encoded {count} frames but the file holds {check['frames']}", 500)
         os.replace(staged, output)
         return StreamResult(output, count, check["frames"], info.rate, info.width, info.height, writer.encoder,
                             writer.fallback_reason if writer.encoder == "libx264" else None, actual, seconds,
-                            bool(pad_w or pad_h), decode_s * 1000 / count, encode_s * 1000 / count, info)
+                            bool(pad_w or pad_h), decode_s * 1000 / count, encode_s * 1000 / count, info, report)
     except BaseException:
         writer._closed = True
         try:
@@ -488,7 +517,9 @@ class EndToEndVideoJobRunner(MasterPipelineRunner):
             "encoder": result.encoder, "encoder_fallback_reason": result.encoder_fallback,
             "color": {"matrix": "bt709", "range": "tv", "decoded_with": info.decode_matrix, "source_space": info.color_space},
             "audio_policy": result.audio_policy, "audio_policy_text": AUDIO_POLICY_TEXT.get(result.audio_policy),
-            "source_audio_codec": info.audio_codec, "metadata_stripped": True,
+            "source_audio_codec": info.audio_codec, "metadata_stripped": False,
+            "audio_streams_out": result.remux.audio_streams, "subtitle_policy": result.remux.subtitles,
+            "subtitle_streams_out": result.remux.subtitle_streams, "metadata_and_chapters": "copied_from_source",
             "restorer": restorer_name, "restorer_capability": restorer_capability,
             "swap_scope": core.options.swap_scope, "skull_blend": core.options.skull_blend,
             "per_frame_mean_ms": processor.mean_stage_ms(), "decode_ms": round(result.decode_ms, 3), "encode_ms": round(result.encode_ms, 3),

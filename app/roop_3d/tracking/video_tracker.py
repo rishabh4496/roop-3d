@@ -132,6 +132,8 @@ class FrameEvidence:
     scene_cut: bool = False
     frame_index: int | None = None
     arkit52: np.ndarray | None = None        # optional ARKit blendshape vector, standard order, [0,1]
+    pose_6dof: dict | None = None                # upstream dense-PnP measurement from the existing face observation
+    pose_source: str | None = None               # provenance for the upstream pose estimate or fallback
 
 
 @dataclass(frozen=True)
@@ -169,6 +171,8 @@ class TrackedHeadFrame:
     components: dict[str, float | None]
     camera: CameraPose | None = None
     pose_residual_iod: float | None = None
+    pose_6dof: dict | None = None
+    pose_source: str | None = None
     identity: IdentitySnapshot | None = None
     expression: dict[str, float] | None = None
     expression_held: bool = False
@@ -373,7 +377,8 @@ class VideoHeadTracker3D:
             expression=expression, held=held, energy=energy, calibrated=calibrated, psi=psi, jaw=jaw, jaw_source=jaw_source,
             gaze=gaze, lighting=lighting, lighting_source=lighting_source, lighting_coefficients=lighting_coefficients,
             theta_jaw=None if bridge_output is None else bridge_output.theta_jaw,
-            theta_eyes=None if bridge_output is None else bridge_output.theta_eyes, cut=cut))
+            theta_eyes=None if bridge_output is None else bridge_output.theta_eyes, cut=cut,
+            pose_6dof=ev.pose_6dof, pose_source=ev.pose_source))
 
     # ------------------------------------------------------------------ pose
     def _valid5(self, ev: FrameEvidence) -> bool:
@@ -612,15 +617,16 @@ class VideoHeadTracker3D:
                camera: CameraPose | None = None, residual: float | None = None, identity=None, expression=None,
                held: bool = False, energy: float | None = None, calibrated: bool = False, psi=None, jaw=None,
                jaw_source=None, gaze=None, lighting=None, lighting_source=None, lighting_coefficients=None,
-               cut: str | None = None, theta_jaw=None, theta_eyes=None) -> TrackedHeadFrame:
+               cut: str | None = None, theta_jaw=None, theta_eyes=None, pose_6dof=None,
+               pose_source: str | None = None) -> TrackedHeadFrame:
         self.status_counts[status] += 1
         if status == "coasting":
             confidence = 0.0
         return TrackedHeadFrame(
             frame_index=index, timestamp=t, shot_index=self.shot_index, shot_cut=cut is not None, cut_reason=cut,
             status=status, reason=reason, confidence=confidence, components=comps, camera=camera, pose_residual_iod=residual,
-            identity=identity, expression=expression, expression_held=held, expression_energy=energy,
-            expression_calibrated=calibrated, psi=psi, jaw_open_rad=jaw, jaw_source=jaw_source, gaze=gaze, lighting=lighting,
+            pose_6dof=pose_6dof, pose_source=pose_source, identity=identity, expression=expression,
+            expression_held=held, expression_energy=energy, expression_calibrated=calibrated, psi=psi, jaw_open_rad=jaw, jaw_source=jaw_source, gaze=gaze, lighting=lighting,
             lighting_source=lighting_source, lighting_coefficients=lighting_coefficients,
             theta_jaw=None if theta_jaw is None else np.asarray(theta_jaw, np.float32),
             theta_eyes=None if theta_eyes is None else np.asarray(theta_eyes, np.float32))

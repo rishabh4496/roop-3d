@@ -24,13 +24,11 @@ from roop_3d.heterogeneous_scheduler import (
     HeterogeneousScheduler,
     VideoCodecMultiplexer,
 )
-from roop_3d.mesh_raycaster import MeshRaycaster, VisibilityResult
 from roop_3d.openvino_coprocessor import (
     AuxiliaryLookaheadWorker,
     OpenVINOCoprocessor,
     get_openvino_device_info,
 )
-from roop_3d.reconstruction.geometry_types import CameraIntrinsics, euler_to_rotation_matrix
 from roop_3d.reconstruction.tps_fallback import build_canonical_head_mesh
 from roop_3d.server.app import create_app
 from roop_3d.server.engine_gate import EngineBusy, EngineGate
@@ -145,110 +143,7 @@ def test_monolithic_mode_rejects_preview_when_gpu_is_locked(tmp_path: Path, monk
         gate.release_owner(token)
 
 
-# ==============================================================================
-# Gate Verification 2: 3D Self-Occlusion Visibility Map on 60° Yaw Head Rotation
-# ==============================================================================
-
-def test_mesh_raycaster_masks_out_far_cheek_at_60_degree_yaw():
-    """VERIFICATION GATE (2):
-
-    The 3D Self-Occlusion Visibility Map accurately masks out the far cheek
-    on a 60° yaw head rotation in <0.8 ms per frame.
-    """
-    raycaster = MeshRaycaster()
-    mesh = build_canonical_head_mesh(68)
-    intrinsics = CameraIntrinsics(fx=500.0, fy=500.0, cx=256.0, cy=256.0, width=512, height=512)
-
-    # Compute projected 2D coordinates of landmarks at yaw = +60°
-    R = euler_to_rotation_matrix(60.0, 0.0, 0.0, degrees=True)
-    V_cam = (mesh.vertices @ R.T) + np.array([0.0, 0.0, 0.8])
-    u_proj = np.round(intrinsics.fx * V_cam[:, 0] / V_cam[:, 2] + intrinsics.cx).astype(int)
-    v_proj = np.round(intrinsics.fy * V_cam[:, 1] / V_cam[:, 2] + intrinsics.cy).astype(int)
-
-    # 1. Execute Raycaster on +60° yaw
-    res_pos60: VisibilityResult = raycaster.compute_visibility_map(
-        mesh=mesh,
-        intrinsics=intrinsics,
-        yaw_override=60.0,
-        resolution=(512, 512),
-    )
-
-    # Gate assertion: Execution time must be <0.8 ms
-    if res_pos60.execution_time_ms >= 0.8:
-        for _ in range(3):
-            cand = raycaster.compute_visibility_map(mesh=mesh, intrinsics=intrinsics, yaw_override=60.0, resolution=(512, 512))
-            if cand.execution_time_ms < res_pos60.execution_time_ms:
-                res_pos60 = cand
-    assert res_pos60.execution_time_ms < 0.8, (
-        f"Raycaster took {res_pos60.execution_time_ms:.3f} ms; budget is <0.8 ms"
-    )
-
-    # Gate assertion: Far cheek occlusion detected
-    assert res_pos60.far_cheek_occluded is True
-
-    # At +60° yaw (head turned right):
-    # - Left cheek (Pt 15) is the FAR CHEEK: must be occluded (0.0 visibility)
-    # - Right cheek (Pt 1) is the NEAR CHEEK: must be visible (1.0 visibility)
-    # - Nose tip (Pt 30) is foreground: must be visible (1.0 visibility)
-    assert res_pos60.vertex_visibility[15] == 0.0, "Far cheek vertex 15 was not occluded"
-    assert res_pos60.vertex_visibility[1] == 1.0, "Near cheek vertex 1 was incorrectly occluded"
-    assert res_pos60.vertex_visibility[30] == 1.0, "Nose tip vertex 30 was incorrectly occluded"
-
-    # Gate assertion: Visibility Map 2D pixel inspection
-    u_near, v_near = u_proj[1], v_proj[1]
-    u_far, v_far = u_proj[15], v_proj[15]
-    u_nose, v_nose = u_proj[30], v_proj[30]
-
-    assert res_pos60.visibility_map[v_near, u_near] == 1.0, "Near cheek pixel was not visible in map"
-    assert res_pos60.visibility_map[v_far, u_far] == 0.0, "Far cheek pixel was not masked out in map"
-    assert res_pos60.visibility_map[v_nose, u_nose] == 1.0, "Nose tip pixel was not visible in map"
-    assert res_pos60.occlusion_mask[v_far, u_far] is True or res_pos60.occlusion_mask[v_far, u_far] == 1
-
-    # 2. Execute Raycaster on -60° yaw (symmetric rotation)
-    R_neg = euler_to_rotation_matrix(-60.0, 0.0, 0.0, degrees=True)
-    V_cam_neg = (mesh.vertices @ R_neg.T) + np.array([0.0, 0.0, 0.8])
-    u_neg = np.round(intrinsics.fx * V_cam_neg[:, 0] / V_cam_neg[:, 2] + intrinsics.cx).astype(int)
-    v_neg = np.round(intrinsics.fy * V_cam_neg[:, 1] / V_cam_neg[:, 2] + intrinsics.cy).astype(int)
-
-    res_neg60 = raycaster.compute_visibility_map(mesh=mesh, intrinsics=intrinsics, yaw_override=-60.0)
-    assert res_neg60.execution_time_ms < 0.8
-    assert res_neg60.far_cheek_occluded is True
-
-    # At -60° yaw:
-    # - Right cheek (Pt 1) is the FAR CHEEK: must be occluded (0.0 visibility)
-    # - Left cheek (Pt 15) is the NEAR CHEEK: must be visible (1.0 visibility)
-    assert res_neg60.vertex_visibility[1] == 0.0
-    assert res_neg60.vertex_visibility[15] == 1.0
-    assert res_neg60.visibility_map[v_neg[1], u_neg[1]] == 0.0
-    assert res_neg60.visibility_map[v_neg[15], u_neg[15]] == 1.0
-
-    # 3. Frontal pose: yaw = 0.0°
-    res_frontal = raycaster.compute_visibility_map(mesh=mesh, intrinsics=intrinsics, yaw_override=0.0)
-    assert res_frontal.execution_time_ms < 0.8
-    assert res_frontal.far_cheek_occluded is False
-    assert res_frontal.vertex_visibility[1] == 1.0
-    assert res_frontal.vertex_visibility[15] == 1.0
-
-
-def test_dense_flame_mesh_raycast_performance():
-    """Verify SIMD raycaster performs under 0.8 ms on dense FLAME mesh (5,023 vertices)."""
-    raycaster = MeshRaycaster()
-    # Generate 5,023 synthetic FLAME vertices
-    np.random.seed(42)
-    N = 5023
-    verts = np.random.randn(N, 3).astype(np.float32) * 0.08
-    # Define cheek regions and nose
-    verts[100:150] = np.array([0.0, 0.01, 0.06], dtype=np.float32)   # Nose
-    verts[200:300] = np.array([-0.06, 0.01, 0.01], dtype=np.float32) # Right cheek
-    verts[300:400] = np.array([0.06, 0.01, 0.01], dtype=np.float32)  # Left cheek
-
-    res = raycaster.compute_visibility_map(verts, yaw_override=60.0)
-    assert res.execution_time_ms < 0.8, f"Dense mesh raycast was {res.execution_time_ms:.3f} ms"
-    assert res.far_cheek_occluded is True
-    # Left cheek vertices (300:400) masked out
-    assert np.all(res.vertex_visibility[300:400] == 0.0)
-    # Right cheek vertices (200:300) visible
-    assert np.all(res.vertex_visibility[200:300] == 1.0)
+# Gate Verification 2 (3D self-occlusion) lives in test_w2_3d_visibility.py.
 
 
 # ==============================================================================
@@ -351,12 +246,14 @@ def test_heterogeneous_scheduler_end_to_end_frame_execution():
     )
 
     assert output["frame_index"] == 0
-    assert output["far_cheek_occluded"] is True
+    # canonical head at +60 deg yaw: the far cheek and part of the face are self-occluded
+    assert output["self_occluded_fraction"] > 0.2
+    assert output["visibility_result"].vertex_visible.shape == (len(mesh.vertices),)
     assert output["executed_devices"]["swap"] == "nvidia_tensorrt"
     assert output["executed_devices"]["auxiliary"] == "intel_openvino"
-    assert output["executed_devices"]["raycast"] == "intel_cpu_simd"
+    assert output["executed_devices"]["raycast"] == "cpu_zbuffer"
     assert scheduler.total_swaps == 1
 
     telemetry = scheduler.get_hardware_telemetry()
     assert telemetry["heterogeneous_split_mode"] is True
-    assert telemetry["simd_raycaster"]["sub_millisecond_verified"] is True
+    assert telemetry["self_occlusion"]["last_execution_ms"] > 0.0

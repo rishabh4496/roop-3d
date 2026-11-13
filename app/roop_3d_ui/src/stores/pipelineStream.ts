@@ -1,4 +1,5 @@
 import { createAtomicStore, useStoreSelector } from './atomicStore';
+import { ingestTrackingFrame } from './trackingStream';
 import { ResilientSocket, type SocketState } from '../utils/resilientSocket';
 
 /** Status of one model transfer, as `/ws/v1/pipeline/status` reports it (`model_download_progress` frames). */
@@ -107,6 +108,10 @@ export const useStreamResyncs = (): number => useStoreSelector(pipelineStream, s
 
 export function ingestFrame(raw: unknown, now = Date.now()): void {
   if (!raw || typeof raw !== 'object') return;
+  if (ingestTrackingFrame(raw, now)) {
+    pipelineStream.set({ lastFrameAt: now });
+    return;
+  }
   const trt = parseTrtFrame(raw, now);
   if (trt) {
     pipelineStream.set({ lastFrameAt: now, trtBuild: trt.finished ? null : trt.build });

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from fractions import Fraction
+import json
 from pathlib import Path
 import subprocess
 
@@ -136,6 +137,39 @@ def test_a_codec_the_mp4_container_refuses_falls_back_to_aac_and_says_so(tmp_pat
     assert check["audio_streams"] == 1 and check["audio_codec"] == "aac" and result.audio_policy == "transcode"
     opus = make_clip(tmp_path / "opus.mkv", frames=8, audio_codec="libopus")
     assert stream_video(opus, tmp_path / "opus.mp4", lambda f, i: f, prefer_nvenc=False).audio_policy == "copy"
+
+def test_remux_preserves_every_audio_subtitle_stream_metadata_and_chapters(tmp_path):
+    subtitles = tmp_path / "captions.srt"
+    subtitles.write_text("1\n00:00:00,000 --> 00:00:00,500\ncaptions\n", encoding="utf-8")
+    metadata = tmp_path / "metadata.txt"
+    metadata.write_text(";FFMETADATA1\ntitle=Stage 17 preservation fixture\n[CHAPTER]\nTIMEBASE=1/1000\nSTART=0\nEND=400\ntitle=Opening\n",
+                        encoding="utf-8")
+    source = tmp_path / "multi.mkv"
+    command = [FFMPEG, "-y", "-v", "error",
+               "-f", "lavfi", "-i", "testsrc2=size=320x240:rate=25",
+               "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000",
+               "-f", "lavfi", "-i", "sine=frequency=880:sample_rate=48000",
+               "-f", "srt", "-i", str(subtitles), "-f", "ffmetadata", "-i", str(metadata),
+               "-map", "0:v:0", "-map", "1:a:0", "-map", "2:a:0", "-map", "3:s:0",
+               "-map_metadata", "4", "-map_chapters", "4", "-frames:v", "12",
+               "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-c:s", "srt",
+               "-t", "0.48", str(source)]
+    made = subprocess.run(command, capture_output=True, text=True)
+    assert made.returncode == 0, made.stderr
+
+    result = stream_video(source, tmp_path / "out.mp4", lambda frame, index: frame, prefer_nvenc=False)
+    facts = verify_output(result.output)
+    assert facts["audio_streams"] == 2
+    assert facts["subtitle_streams"] == 1
+    assert result.remux.audio == "copy" and result.remux.subtitles == "mov_text"
+
+    ffprobe = str(Path(FFMPEG).with_name("ffprobe.exe")) if str(FFMPEG).lower().endswith(".exe") else "ffprobe"
+    probe = subprocess.run([ffprobe, "-v", "error", "-show_format", "-show_chapters", "-of", "json", str(result.output)],
+                           capture_output=True, text=True)
+    assert probe.returncode == 0, probe.stderr
+    details = json.loads(probe.stdout)
+    assert details["format"]["tags"]["title"] == "Stage 17 preservation fixture"
+    assert details["chapters"] and details["chapters"][0]["tags"]["title"] == "Opening"
 
 
 def test_hdr_sources_are_refused_instead_of_mis_rendered(tmp_path):

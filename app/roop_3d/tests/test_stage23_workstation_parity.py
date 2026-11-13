@@ -11,11 +11,11 @@ import pytest
 
 from roop_3d.core.errors import DomainError
 from roop_3d.engine.edit_plan import FrameEditPlan
-from roop_3d.jobs.schema import JobRequest, MaskKeyframe
+from roop_3d.jobs.schema import JobRequest, JobState, MaskKeyframe
 from roop_3d.media.actors import actor_face_mappings, cluster_actors
 from roop_3d.media.schema import BoundingBox, FaceInspection, FaceTrack, PoseRange
 from roop_3d.queue.batch_matrix import BatchMatrixEngine, plan_segments, segment_stamp
-from roop_3d.queue.lifecycle import LIFECYCLE_ORDER, LifecycleState, lifecycle_of
+from roop_3d.queue.lifecycle import (LIFECYCLE_ORDER, LifecycleState, SpecState, lifecycle_of, spec_slot, spec_state_of)
 from roop_3d.queue_manager import CanonicalJobState, QueueManager
 
 
@@ -207,6 +207,16 @@ def test_lifecycle_has_ten_states_and_every_canonical_state_projects_onto_one():
     assert lifecycle_of("QUEUED", "compiling_trt") is LifecycleState.queued  # stage text never overrides a non-build phase
     with pytest.raises(ValueError):
         lifecycle_of("EXPLODING")
+
+def test_spec_lifecycle_projection_is_total_for_all_public_state_enums():
+    for enum_type in (CanonicalJobState, JobState, LifecycleState):
+        for member in enum_type:
+            projected = spec_state_of(member)
+            assert isinstance(projected, SpecState)
+            assert spec_slot(projected) in {
+                "queued", "validating", "slicing", "tracking", "swapping", "restoring",
+                "merging", "remuxing", "completed", "failed/cancelled",
+            }
 
 
 def test_queue_jobs_expose_lifecycle_state_and_survive_restart(tmp_path: Path):

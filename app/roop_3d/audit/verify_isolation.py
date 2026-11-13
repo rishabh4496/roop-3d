@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
-"""Compatibility entrypoint for the complete, fail-closed Stage 00 audit.
+"""Entry point for the fail-closed isolation audit (see stage00.py / boundary.py).
 
-Default: historical hashes AND every file in the machine-local snapshot,
-including added protected files/directories. Exit 0 means all checks passed;
-exit 1 means drift, missing evidence, or a verification error. --legacy-only
-explicitly checks just the historical manifest. See stage00.py --help.
+Exit 0 means every check passed (sibling imports, sibling write targets, interpreter inside app/roop_3d/.venv, git origin
+roop-3d, no tracked venv/cache/weight artefacts); exit 1 means a violation or a verification error. --report also writes
+roop_3d/audit/stage00_verification.json.
 """
 try:
     from stage00 import main

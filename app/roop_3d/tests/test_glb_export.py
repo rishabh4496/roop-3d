@@ -530,7 +530,8 @@ def api(tmp_path, monkeypatch):
     asset = SimpleNamespace(vertices=base.vertices.astype(np.float32), faces=base.faces, texture=atlas, texel_state=state,
                             vertex_confidence=np.linspace(0, 1, len(base.vertices), dtype=np.float32),
                             vertex_state=np.full(len(base.vertices), 2, np.uint8),
-                            manifest=SimpleNamespace(build_key="k" * 64, reconstruction_level="template_prior", landmark_layout="5pt"),
+                            manifest=SimpleNamespace(build_key="k" * 64, reconstruction_level="template_prior", landmark_layout="5pt",
+                                                     shape={}, expression={}, canonical_head_pose={}, statistics={}, settings={}),
                             mesh=lambda: mesh)
     monkeypatch.setattr(identity_assets, "load_document", lambda request, faceset_id: SimpleNamespace(faceset_id=faceset_id))
     monkeypatch.setattr("roop_3d.server.blender_routes.load_document", identity_assets.load_document)

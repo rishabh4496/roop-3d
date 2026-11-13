@@ -8,6 +8,8 @@ import threading
 import cv2
 import numpy as np
 
+from roop_3d.compositor.mask_flow import FlowEstimator
+from roop_3d.core.errors import DomainError
 from roop_3d.engine.volumetric.preprocess import similarity
 from roop_3d.render_policy import CudaWorkerContext
 
@@ -157,12 +159,12 @@ class MaskSeamWatchdog:
         # mask, while forward flow samples the next mask. Check each direction
         # against its inverse before allowing either temporal observation.
         try:
-            flow = cv2.DISOpticalFlow_create(cv2.DISOPTICAL_FLOW_PRESET_MEDIUM)
+            flow = FlowEstimator()
             current_to_previous = flow.calc(current_guide, prev_guide, None)
             previous_to_current = flow.calc(prev_guide, current_guide, None)
             current_to_next = flow.calc(current_guide, next_guide, None)
             next_to_current = flow.calc(next_guide, current_guide, None)
-        except (AttributeError, cv2.error):
+        except (DomainError, cv2.error):
             return None, None
         side = size[0]
         yy, xx = np.mgrid[:side, :side].astype(np.float32)

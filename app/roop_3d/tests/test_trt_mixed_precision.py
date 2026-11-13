@@ -22,6 +22,7 @@ from roop_3d.execution.trt_mixed_precision import (
     derive_optimization_profiles,
     prepare_mixed_precision_model,
 )
+from roop_3d.core.ort_session import TensorRTInt8Refused, TRT_BUILDER_OPTIMIZATION_LEVEL, trt_int8_options
 
 
 def _dynamic_model(path: Path, *, shape=(None, 3, 16, 16), op="Identity") -> Path:
@@ -294,10 +295,30 @@ def test_tensor_rt_options_and_cache_path_are_explicit(tmp_path, monkeypatch):
     assert opts["trt_engine_cache_enable"] == "True"
     assert Path(opts["trt_engine_cache_path"]) == tmp_path / "models" / ".trt_cache"
     assert opts["trt_timing_cache_enable"] == "True"
-    assert opts["trt_builder_optimization_level"] == "3"
+    assert opts["trt_builder_optimization_level"] == "5"
     assert opts["trt_profile_min_shapes"] == "input:1x3x16x16"
     assert opts["trt_profile_opt_shapes"] == "input:4x3x16x16"
     assert opts["trt_profile_max_shapes"] == "input:8x3x16x16"
+
+def test_trt_optimization_level_is_shared_and_int8_requires_a_calibration_cache(tmp_path):
+    assert TRT_BUILDER_OPTIMIZATION_LEVEL == 5
+    assert trt_int8_options("detector", tmp_path, {}) == {}
+    with pytest.raises(TensorRTInt8Refused) as missing:
+        trt_int8_options("detector", tmp_path, {"ROOP_TRT_INT8": "1"})
+    assert missing.value.code == "INT8_CALIBRATION_MISSING"
+    with pytest.raises(TensorRTInt8Refused) as locked:
+        trt_int8_options("inswapper_128", tmp_path, {"ROOP_TRT_INT8": "1"})
+    assert locked.value.code == "INT8_FP32_LOCKED_MODEL"
+    calibration = tmp_path / "calibration.table"
+    calibration.write_bytes(b"calibration")
+    options = trt_int8_options("detector", tmp_path, {
+        "ROOP_TRT_INT8": "1", "ROOP_TRT_INT8_CALIBRATION_CACHE": str(calibration),
+    })
+    assert options == {
+        "trt_int8_enable": "True",
+        "trt_int8_calibration_table_name": "calibration.table",
+        "trt_int8_use_native_calibration_table": "False",
+    }
 
 
 def test_provider_chain_can_share_the_torch_compute_stream(tmp_path, monkeypatch):

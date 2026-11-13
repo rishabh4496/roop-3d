@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import BottleneckFlamegraph from '../diagnostics/BottleneckFlamegraph';
 import PipelineSaturationPanel from '../diagnostics/PipelineSaturationPanel';
+import TrackingTelemetryPanel from './TrackingTelemetryPanel';
 import { publishHardware, publishProgress, useTelemetry } from '../../stores/telemetryStore';
 
 /**
@@ -311,6 +312,11 @@ export default function PipelinePill({
           {/* Queue depths, CUDA-stream latency, GPU/CPU/PCIe utilisation of the asynchronous pipeline */}
           <div className="hud-card hud-saturation-card" data-testid="hud-saturation">
             <PipelineSaturationPanel enabled={expanded} />
+          </div>
+
+          {/* Live 6DoF head pose and temporal stability (tracking.telemetry frames) */}
+          <div className="hud-card hud-tracking-card" data-testid="hud-tracking">
+            <TrackingTelemetryPanel />
           </div>
 
           {/* Real-Time Bottleneck Indicator */}

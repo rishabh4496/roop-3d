@@ -136,6 +136,7 @@ def test_stage_one_assigns_before_stabilizing_and_survives_cut():
     tracker.target_registry = r
     tracker.released = False
     tracker.max_tracks = 32
+    tracker.threshold, tracker.low_threshold = 0.5, None
     tracker._tracks = {}
     tracker.frame_index = tracker.scene_id = 0
     tracker.stabilize = False

@@ -50,7 +50,8 @@ def api(tmp_path, monkeypatch, registry):
     state[:, : TEX // 8] = 0                                                  # a strip nobody saw
     mesh = Mesh3D(base.vertices, base.faces, uvs=base.uvs)
     asset = SimpleNamespace(vertices=base.vertices.astype(np.float32), faces=base.faces, texture=texture, texel_state=state,
-                            manifest=SimpleNamespace(build_key="k" * 64, reconstruction_level="template_prior", landmark_layout="5pt"),
+                            manifest=SimpleNamespace(build_key="k" * 64, reconstruction_level="template_prior", landmark_layout="5pt",
+                                                     shape={}, expression={}, canonical_head_pose={}, statistics={}, settings={}),
                             mesh=lambda: mesh)
     monkeypatch.setattr(identity_assets, "load_document", lambda request, faceset_id: SimpleNamespace(faceset_id=faceset_id))
     monkeypatch.setattr(identity_assets, "_store", lambda: SimpleNamespace(load=lambda faceset_id, key: asset))
@@ -89,7 +90,7 @@ def test_makehuman_default_topology_is_unchanged_and_labelled(api):
 def test_canonical_response_is_exactly_what_it_was(api):
     with api as client:
         body = client.get(URL).json()
-    assert set(body) == {"method", "coordinate_system", "vertices", "faces", "uvs", "texture", "provenance"}
+    assert set(body) == {"method", "coordinate_system", "vertices", "faces", "uvs", "texture", "provenance", "parametric"}
 
 
 def test_canonical_template_cannot_take_a_topology_or_sliders(api):

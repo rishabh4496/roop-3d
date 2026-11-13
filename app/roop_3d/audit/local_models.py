@@ -144,12 +144,18 @@ def discover(scopes: Mapping[str, Path], expected_hashes: Mapping[str, str] | No
             "family_counts": dict(sorted(Counter(m["family_hint"] for m in models).items()))}
 
 
-def verify_registry(registry: dict[str, Any], scopes: Mapping[str, Path]) -> dict[str, Any]:
+def verify_registry(registry: dict[str, Any], scopes: Mapping[str, Path],
+                    unavailable: Mapping[str, str] | None = None) -> dict[str, Any]:
+    """Re-hash every registered model, read-only. A scope whose directory is absent (e.g. the sibling checkout) is reported under
+    ``unavailable_scopes`` with its reason and its models are NOT counted as checked; it is not a crash and not a pass for them.
+    ``unavailable`` supplies reasons for scopes that could not even be resolved to a path."""
+    unavailable = dict(unavailable or {})
     models = registry.get("models")
     if not isinstance(models, list) or not models:
         raise AuditError("INVALID_REGISTRY", "A nonempty models array is required")
     checked = 0
     violations = []
+    skipped: dict[str, int] = {}
     seen: set[tuple[str, str]] = set()
     for model in models:
         locator = model["locator"]
@@ -157,6 +163,11 @@ def verify_registry(registry: dict[str, Any], scopes: Mapping[str, Path]) -> dic
         if key in seen:
             raise AuditError("INVALID_REGISTRY", f"Duplicate model: {key}")
         seen.add(key)
+        scope_base = scopes.get(key[0])
+        if scope_base is None or not scope_base.exists():
+            unavailable.setdefault(key[0], "scope directory is absent" + (f": {scope_base}" if scope_base is not None else ""))
+            skipped[key[0]] = skipped.get(key[0], 0) + 1
+            continue
         try:
             if model["state"] != EvidenceState.VERIFIED_LOCAL.value:
                 raise AuditError("INVALID_REGISTRY", f"Unverified model: {key}")
@@ -167,13 +178,22 @@ def verify_registry(registry: dict[str, Any], scopes: Mapping[str, Path]) -> dic
             checked += 1
         except (OSError, AuditError, KeyError) as error:
             violations.append({"locator": locator, "detail": str(error)})
-    return {"ok": not violations, "checked": checked, "expected": len(models), "violations": violations}
+    return {"ok": not violations, "checked": checked, "expected": len(models), "violations": violations,
+            "unavailable_scopes": [{"scope": scope, "reason": unavailable[scope], "models": count}
+                                   for scope, count in sorted(skipped.items())]}
 
 
-def default_scopes(repo: Path) -> dict[str, Path]:
+def default_scopes(repo: Path) -> tuple[dict[str, Path], dict[str, str]]:
+    """``(scopes, unavailable)``: the model scope directories and, for any that cannot be resolved (the sibling legacy checkout
+    is configured through ``model_sources.json`` / Pinokio's home and may not exist on this machine), the reason."""
     home = Path.home()
-    return {"repository": legacy_root(repo), "user_cache": home / ".cache", "insightface_cache": home / ".insightface",
-            "torch_cache": home / ".torch"}
+    scopes = {"user_cache": home / ".cache", "insightface_cache": home / ".insightface", "torch_cache": home / ".torch"}
+    unavailable: dict[str, str] = {}
+    try:
+        scopes = {"repository": legacy_root(repo), **scopes}
+    except (OSError, ValueError, KeyError) as error:
+        unavailable["repository"] = f"legacy model source cannot be resolved ({type(error).__name__}: {error})"
+    return scopes, unavailable
 
 
 # --------------------------------------------------------------------------------------------------------------------
@@ -218,21 +238,29 @@ LOCAL_CC0_ASSETS: dict[str, dict[str, Any]] = {
 }
 
 
-def verify_local_cc0_assets(repo: Path) -> dict[str, Any]:
-    """Build missing registered CC0 assets locally and validate their content digests."""
+def verify_local_cc0_assets(repo: Path, *, build_assets: bool = False) -> dict[str, Any]:
+    """Validate registered CC0 assets against their embedded content digest (``.npz`` vs its ``.npz.json`` sidecar).
+
+    Strictly read-only unless ``build_assets`` is set (``--build-assets``): an absent asset is then a violation naming the flag,
+    instead of being silently synthesized."""
     rows: list[dict[str, Any]] = []
     violations: list[dict[str, str]] = []
     for artifact_id, record in LOCAL_CC0_ASSETS.items():
         try:
             # The audit CLI can be run as a file with only audit/ on sys.path;
-            # expose the application package for its local asset builder.
+            # expose the application package for its local asset reader.
             repo_text = str(repo.absolute())
             if repo_text not in sys.path:
                 sys.path.insert(0, repo_text)
-            from roop_3d.reconstruction.anatomical_pack import AnatomicalFullHeadAsset
+            from roop_3d.reconstruction.anatomical_pack import AnatomicalFullHeadAsset, build_anatomical_pack
 
             path = safe_path(repo, record["relative_path"])
-            asset = AnatomicalFullHeadAsset.load(path if path.exists() else None, auto_build=True, verify=True)
+            if not path.exists():
+                if not build_assets:
+                    raise AuditError("CC0_ASSET_MISSING", f"{record['relative_path']} is not present; verification never builds it "
+                                     "(run with --build-assets to synthesize it)")
+                build_anatomical_pack(path)
+            asset = AnatomicalFullHeadAsset.load(path, auto_build=False, verify=True)
             size, digest = sha256_file(path)
             rows.append({
                 "artifact_id": artifact_id,
@@ -1268,6 +1296,8 @@ def main() -> int:
     parser.add_argument("--download", nargs="*", metavar="ID", default=None,
                         help="Download missing manifest entries (all of them when no ID is given) and wait for completion")
     parser.add_argument("--repair", action="store_true", help="Re-hash everything, set corrupt files aside, re-download what is bad")
+    parser.add_argument("--build-assets", action="store_true",
+                        help="with --verify: allow synthesizing a missing registered CC0 asset (verification is read-only without it)")
     parser.add_argument("--accept-license", action="store_true",
                         help="Acknowledge the licences of entries that are not CC0/MIT/Apache/CC-BY (needed to fetch them)")
     arguments = parser.parse_args()
@@ -1276,13 +1306,16 @@ def main() -> int:
     try:
         if arguments.list or arguments.download is not None or arguments.repair:
             return _manager_cli(repo, arguments)
-        scopes = default_scopes(repo)
+        scopes, unavailable = default_scopes(repo)
         if arguments.verify:
             registry = json.loads(safe_path(repo, registry_path).read_text("utf-8"))
-            result = verify_registry(registry, scopes)
+            result = verify_registry(registry, scopes, unavailable)
+            if result["unavailable_scopes"] and arguments.require_installed:
+                result["ok"] = False
+                result["violations"] = [*result["violations"], {"unavailable_scopes": result["unavailable_scopes"]}]
             open_result = verify_open_artifacts(repo.parent)   # checkout root; optional pinned open-licence files
             result["open_artifacts"] = open_result["artifacts"]
-            local_result = verify_local_cc0_assets(repo)
+            local_result = verify_local_cc0_assets(repo, build_assets=arguments.build_assets)
             result["local_assets"] = local_result["assets"]
             if not local_result["ok"]:
                 result["ok"] = False

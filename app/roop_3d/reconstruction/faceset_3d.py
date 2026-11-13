@@ -17,8 +17,9 @@ from roop_3d.reconstruction.multiview_fit import (
 )
 from roop_3d.reconstruction.tps_fallback import get_canonical_3d_landmarks, solve_pose_pnp
 
-YAW_BINS, PITCH_BINS = 12, 8
-TOTAL_BINS = YAW_BINS * PITCH_BINS
+from roop_3d.reconstruction import pose_bins
+from roop_3d.reconstruction.pose_bins import (
+    COVERAGE_PITCH_BINS as PITCH_BINS, COVERAGE_TOTAL_BINS as TOTAL_BINS, COVERAGE_YAW_BINS as YAW_BINS)
 
 
 def _pose(view: FaceView) -> tuple[float, float, float, float]:
@@ -53,9 +54,8 @@ def sphere_position(yaw: float, pitch: float) -> tuple[float, float, float]:
 
 
 def pose_bin(yaw: float, pitch: float) -> int:
-    yi = min(YAW_BINS - 1, max(0, int((min(90.0, max(-90.0, yaw)) + 90.0) / 180.0 * YAW_BINS)))
-    pi = min(PITCH_BINS - 1, max(0, int((min(60.0, max(-60.0, pitch)) + 60.0) / 120.0 * PITCH_BINS)))
-    return pi * YAW_BINS + yi
+    """Legacy 12 x 8 coverage-grid index (defined once in ``pose_bins.coverage_bin``)."""
+    return pose_bins.coverage_bin(yaw, pitch)
 
 
 def observe_poses(document: FaceSetDocument) -> list[dict[str, Any]]:
@@ -65,7 +65,9 @@ def observe_poses(document: FaceSetDocument) -> list[dict[str, Any]]:
         # Coverage is defined for the frontal viewing hemisphere. Clamping maps edge
         # views onto the edge bins while preserving their measured pose in the payload.
         index = pose_bin(yaw, pitch)
-        output.append({"view_index": view.index, "yaw": round(yaw, 3), "pitch": round(pitch, 3),
+        # Synthetic views report the stored legacy pitch (positive = down); the spherical grid is standard-frame (up = +).
+        spherical = pose_bins.classify(yaw, -pitch if view.is_synthetic else pitch).name
+        output.append({"spherical_bin": spherical, "view_index": view.index, "yaw": round(yaw, 3), "pitch": round(pitch, 3),
                        "roll": round(roll, 3), "bin_index": index,
                        "position_xyz": [round(v, 7) for v in sphere_position(yaw, pitch)],
                        "reprojection_error_px": round(reprojection, 3)})
@@ -240,7 +242,13 @@ def reconstruct_faceset(document: FaceSetDocument, *, live_pose: dict[str, float
                             "pose_bin": f"bin_{item['bin_index']}"} for item in observations]
     bins = {f"bin_{index}": sum(item["bin_index"] == index for item in observations)
             for index in range(TOTAL_BINS) if index in populated}
+    spherical_counts: dict[str, int] = {}
+    for item in observations:
+        spherical_counts[item["spherical_bin"]] = spherical_counts.get(item["spherical_bin"], 0) + 1
+    for entry, item in zip(compatibility_views, observations):
+        entry["spherical_bin"] = item["spherical_bin"]
     return {"status": "ready", "faceset_id": document.faceset_id, "views": compatibility_views, "bins": bins,
+            "spherical_bins": spherical_counts, "spherical_bin_total": pose_bins.TOTAL_BINS,
             "observed_views": sum(not v.is_synthetic for v in document.views), "sphere_coverage_count": count,
             "sphere_coverage_total": TOTAL_BINS, "sphere_coverage_pct": round(count / TOTAL_BINS * 100.0, 2),
             "live_pose": ({"yaw": float(live_pose["yaw"]), "pitch": float(live_pose["pitch"]),

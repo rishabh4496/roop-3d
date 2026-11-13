@@ -2,32 +2,7 @@
 from __future__ import annotations
 import numpy as np
 
-class OneEuroFilter:
-    def __init__(self, min_cutoff=0.15, beta=0.04, d_cutoff=1.0):
-        if not np.isfinite([min_cutoff, beta, d_cutoff]).all() or min_cutoff <= 0 or beta < 0 or d_cutoff <= 0:
-            raise ValueError("Invalid One-Euro configuration")
-        self.min_cutoff, self.beta, self.d_cutoff = min_cutoff, beta, d_cutoff
-        self.time = self.raw = self.value = self.derivative = None
-
-    def __call__(self, value, timestamp):
-        value = np.asarray(value, dtype=np.float64)
-        if not np.isfinite(value).all() or not np.isfinite(timestamp):
-            raise ValueError("Filter inputs must be finite")
-        if self.time is None:
-            self.time, self.raw, self.value = timestamp, value.copy(), value.copy()
-            self.derivative = np.zeros_like(value)
-            return value.copy()
-        dt = timestamp - self.time
-        if dt <= 0 or value.shape != self.raw.shape:
-            raise ValueError("Filter needs increasing timestamps and stable shapes")
-        def alpha(cutoff):
-            return 1 / (1 + 1 / (2 * np.pi * cutoff * dt))
-        a = alpha(self.d_cutoff)
-        self.derivative = a * (value - self.raw) / dt + (1-a) * self.derivative
-        a = alpha(self.min_cutoff + self.beta * np.abs(self.derivative))
-        self.value = a * value + (1-a) * self.value
-        self.time, self.raw = timestamp, value.copy()
-        return self.value.copy()
+from roop_3d.temporal import OneEuroFilter
 
 class PoseHysteresis:
     def __init__(self, deadband=2.5):
@@ -55,6 +30,10 @@ class TemporalStabilizer:
     def __init__(self, **config):
         self.config, self.tracks = config, {}
 
+    def _config(self):
+        # Historic keyword ``d_cutoff`` is the canonical filter's ``derivative_cutoff``.
+        return {("derivative_cutoff" if key == "d_cutoff" else key): value for key, value in self.config.items()}
+
     def reset(self):
         self.tracks.clear()
 
@@ -63,8 +42,8 @@ class TemporalStabilizer:
         state=self.tracks.get(key)
         # Discontinuities and seeks must never carry stale trajectory state.
         if state is None or timestamp <= state.time or timestamp-state.time > .5:
-            state=self.tracks[key]=OneEuroFilter(**self.config)
-        return state(value,timestamp)
+            state=self.tracks[key]=OneEuroFilter(**self._config())
+        return state.update(value,timestamp)
 
     def retain(self, active_ids):
         self.tracks={key: value for key,value in self.tracks.items() if key[0] in active_ids}

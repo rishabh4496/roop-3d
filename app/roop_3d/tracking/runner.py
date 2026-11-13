@@ -187,7 +187,9 @@ class HeadTrackingTap:
                 results[track_id] = tracker.process(FrameEvidence(
                     timestamp=float(frame_time), landmarks5=observation.landmarks5, landmarks106=observation.landmarks106,
                     mesh478=mesh if mesh is not None and np.asarray(mesh).shape[0] == 478 else None,
-                    image_bgr=image, scene_cut=bool(scene_cut)))
+                    image_bgr=image, scene_cut=bool(scene_cut),
+                    pose_6dof=getattr(observation, "pose_6dof", None),
+                    pose_source=getattr(observation, "pose_source", None)))
             except Exception:    # the render must never fail because tracking telemetry did
                 log.exception("Head tracking failed for track %s; this frame is skipped", track_id)
         return results

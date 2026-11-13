@@ -411,6 +411,8 @@ class TensorRTMixedPrecisionSessionManager:
         gpu = provider != CPU
         session_options = _session_options(ort, self.intra_op_threads, self.inter_op_threads, gpu=gpu)
         if provider == TRT:
+            from roop_3d.core.ort_session import TRT_BUILDER_OPTIMIZATION_LEVEL, trt_int8_options
+            int8_options = trt_int8_options(model_name, self.cache_path)
             self.cache_path.mkdir(parents=True, exist_ok=True)
             options = {
                 "device_id": str(self.gpu_id),
@@ -419,17 +421,19 @@ class TensorRTMixedPrecisionSessionManager:
                 "trt_engine_cache_path": str(self.cache_path),
                 "trt_timing_cache_enable": "True",
                 "trt_timing_cache_path": str(self.cache_path),
-                "trt_builder_optimization_level": "3",
+                "trt_builder_optimization_level": str(TRT_BUILDER_OPTIMIZATION_LEVEL),
                 "trt_max_workspace_size": str((1024 if self.hardware_profile == "6gb" else 2048) * 1024**2),
                 "trt_auxiliary_streams": "2",
                 "trt_layer_norm_fp32_fallback": "True",
                 "trt_op_types_to_exclude": "NonMaxSuppression,GridSample",
                 "trt_engine_cache_prefix": "roop3d_" + hashlib.sha256(
                     (f"{_digest_file(source_path)}:{model_name}:{profiles!r}:"
+                     f"{TRT_BUILDER_OPTIMIZATION_LEVEL}:{sorted(int8_options.items())}:"
                      f"{sorted(FP32_PINNED_OPS)}:{sorted(FP16_TENSOR_OPS)}:{MIXED_GRAPH_POLICY_VERSION}").encode("utf-8")
                 ).hexdigest()[:24],
                 **profiles.as_options(),
             }
+            options.update(int8_options)
             if self.user_compute_stream is not None:
                 options["user_compute_stream"] = str(self.user_compute_stream)
             providers = [(TRT, options), (CUDA, _cuda_options(

@@ -1,6 +1,7 @@
 import numpy as np
 import pytest
-from roop_3d.temporal_stabilizer import OneEuroFilter, PoseHysteresis
+from roop_3d.temporal import OneEuroFilter
+from roop_3d.temporal_stabilizer import PoseHysteresis
 from roop_3d.core.animation import CurveKey, ParameterCurves, evaluate_curve
 from roop_3d.core.workstation import WorkstationParameters
 
@@ -8,9 +9,9 @@ def test_noise_and_turn():
     rng=np.random.default_rng(8)
     samples=rng.normal(0,.5,(2400,5,2))
     f=OneEuroFilter()
-    out=np.array([f(v,i/120) for i,v in enumerate(samples)])
+    out=np.array([f.update(v,i/120) for i,v in enumerate(samples)])
     assert out[400:].std() < samples[400:].std()*.2
-    turn=np.array([f(np.full((5,2),v),20+(i+1)/120) for i,v in enumerate(np.linspace(0,80,60))])
+    turn=np.array([f.update(np.full((5,2),v),20+(i+1)/120) for i,v in enumerate(np.linspace(0,80,60))])
     assert abs(turn[-1].mean()-80)<5
 
 @pytest.mark.parametrize('sign',[-1,1])

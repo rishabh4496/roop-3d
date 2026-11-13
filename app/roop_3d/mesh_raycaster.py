@@ -1,210 +1,190 @@
-"""Intel Embree / SIMD 3D Mesh Self-Occlusion & Raycast Z-Buffer.
+"""Vectorised depth-buffered self-occlusion of a head mesh (blueprint 03 §3.3).
 
-When projecting a dense 3D face mesh (68 to 5,023 FLAME vertices) onto steep profile
-angles (>45° yaw), uses vectorized SIMD/Embree bounding volume hierarchy (BVH) raycasting
-on the CPU to compute an exact per-pixel 3D Self-Occlusion Visibility Map (identifying
-where the nose bridge occludes the far cheek or far eye) in <0.8 ms per frame.
+Not a BVH/Embree ray caster: it is a CPU z-buffer. Vertices are projected with ``u = K (R X + t)``; every front-facing
+triangle is sampled on a barycentric lattice dense enough (<= ~0.7 px spacing) to leave no pixel gaps and its
+perspective-correct depth is splatted into a float buffer with ``np.minimum.at`` (nearest z wins). A vertex is *visible*
+iff ``z_v <= z_buffer(u_v) + eps`` (default 8 mm) **and** its outward normal makes less than 80 degrees with the direction
+to the camera. A soft image mask is the filled union of triangles whose three vertices are visible, feathered by 3 px.
+
+Frames: mesh vertices/winding use the repo mesh frame (x right, y down, z toward the viewer, counter-clockwise faces with
+outward normals, e.g. ``Mesh3D`` canonical/MakeHuman heads). The pose is a ``HeadPose6DoF`` (OpenCV head frame, exact), or
+a dict/``yaw_override`` in the standard frame of ``core.pose`` (yaw + = nose to image right, pitch + = up). The z-buffer
+covers the image plus one frame of margin on each side so vertices just outside the frame are still depth-tested;
+vertices beyond that window are judged by the normal test only and flagged ``vertex_depth_tested = False``.
+Limit: very large triangles (> ~45 px edges) are sampled at coarser than 0.7 px and may leave isolated depth holes.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
 import math
 import sys
 import time
+from dataclasses import dataclass
 from typing import Any
 
+import cv2
 import numpy as np
 
-from roop_3d.reconstruction.geometry_types import (
-    CameraIntrinsics,
-    Mesh3D,
-    Pose3D,
-    euler_to_rotation_matrix,
-)
+from roop_3d.core.errors import DomainError
+from roop_3d.reconstruction.geometry_types import CameraIntrinsics, Mesh3D
+from roop_3d.reconstruction.pose_solver import HeadPose6DoF, rotation_from_standard
+from roop_3d.core.pose import rotation_from_euler
 
 # Register compatibility alias so legacy module paths map to roop_3d
 sys.modules.setdefault("roop.mesh_raycaster", sys.modules[__name__])
 
+EPSILON_M = 0.008
+MAX_GRAZING_DEG = 80.0
+FEATHER_PX = 3
+DEFAULT_DISTANCE_M = 0.8
+_SAMPLE_SPACING_PX = 0.7
+_MAX_LATTICE = 64
+_FLIP = np.diag([1.0, 1.0, -1.0])
+
 
 @dataclass(frozen=True)
 class VisibilityResult:
-    """Output contract for 3D Self-Occlusion & Raycast Z-Buffer."""
-    visibility_map: np.ndarray       # (H, W) float32 in [0.0, 1.0]; 1.0 = visible, 0.0 = occluded/bg
-    occlusion_mask: np.ndarray       # (H, W) bool; True where facial surface is self-occluded
-    vertex_visibility: np.ndarray    # (N,) float32 in [0.0, 1.0]
-    z_buffer: np.ndarray             # (H, W) float32 depth map
-    far_cheek_occluded: bool         # True if steep profile yaw caused far-cheek self-occlusion
-    yaw_degrees: float               # Effective head yaw in degrees
-    execution_time_ms: float         # Execution duration in milliseconds (<0.8 ms)
-    occluded_indices: list[int]      # Indices of self-occluded mesh vertices / landmarks
+    """Per-vertex visibility, soft image mask and depth buffer of one pose."""
+    vertex_visible: np.ndarray          # (N,) bool
+    vertex_depth_tested: np.ndarray     # (N,) bool; False -> judged by the normal test only (outside the depth window)
+    visibility_map: np.ndarray          # (H, W) float32 in [0, 1]: feathered fill of visible triangles
+    z_buffer: np.ndarray                # (H, W) float32 camera depth in metres, +inf where nothing projects
+    self_occluded_fraction: float       # fraction of vertices not visible
+    yaw_degrees: float                  # standard-frame yaw of the evaluated pose
+    execution_time_ms: float
+
+    @property
+    def occluded_indices(self) -> np.ndarray:
+        return np.flatnonzero(~self.vertex_visible)
+
+    def to_telemetry(self) -> dict[str, float]:
+        """The ``visibility`` object of the pipeline.status frame (blueprint 03 §4)."""
+        return {"self_occluded_fraction": round(self.self_occluded_fraction, 4)}
+
+
+def _unpack_mesh(mesh: Any) -> Mesh3D:
+    if isinstance(mesh, Mesh3D):
+        return mesh
+    if isinstance(mesh, tuple) and len(mesh) == 2:
+        return Mesh3D(np.asarray(mesh[0], np.float32), np.asarray(mesh[1], np.int32))
+    raise DomainError("VISIBILITY_FACES_REQUIRED",
+                      "Self-occlusion needs a triangle mesh (Mesh3D or (vertices, faces)); bare vertices cannot occlude", 422)
+
+
+def _resolve_pose(pose: Any, yaw_override: float | None) -> tuple[np.ndarray, np.ndarray, float]:
+    """(R in the OpenCV head frame, t, standard yaw)."""
+    t = np.array([0.0, 0.0, DEFAULT_DISTANCE_M])
+    if isinstance(pose, HeadPose6DoF):
+        rotation, t, yaw = pose.R, pose.t, pose.yaw_deg
+    else:
+        values = {"yaw": 0.0, "pitch": 0.0, "roll": 0.0}
+        if isinstance(pose, dict):
+            values.update({k: float(pose[k]) for k in values if k in pose})
+            t = np.array([float(pose.get("tx", 0.0)), float(pose.get("ty", 0.0)), float(pose.get("tz", DEFAULT_DISTANCE_M))])
+        elif pose is not None:
+            raise DomainError("VISIBILITY_POSE_INVALID", "pose must be HeadPose6DoF, a yaw/pitch/roll dict or None", 422)
+        if yaw_override is not None:
+            values["yaw"] = float(yaw_override)
+        rotation = rotation_from_standard(rotation_from_euler(values["yaw"], values["pitch"], values["roll"]))
+        yaw = values["yaw"]
+    if yaw_override is not None and isinstance(pose, HeadPose6DoF):
+        raise DomainError("VISIBILITY_POSE_INVALID", "yaw_override cannot be combined with a HeadPose6DoF", 422)
+    if t[2] <= 0:
+        raise DomainError("VISIBILITY_POSE_INVALID", "Head translation must have t_z > 0", 422)
+    return np.asarray(rotation, np.float64), np.asarray(t, np.float64), float(yaw)
 
 
 class MeshRaycaster:
-    """Intel SIMD/AVX-512 accelerated 3D Mesh Raycaster with BVH Self-Occlusion reasoning."""
+    """Depth-buffered per-vertex self-occlusion for a posed head mesh."""
 
-    def __init__(
-        self,
-        use_simd: bool = True,
-        bvh_enabled: bool = True,
-        default_resolution: tuple[int, int] = (256, 256),
-    ):
-        self.use_simd = use_simd
-        self.bvh_enabled = bvh_enabled
+    def __init__(self, default_resolution: tuple[int, int] = (256, 256), epsilon_m: float = EPSILON_M):
         self.default_resolution = default_resolution
+        self.epsilon_m = epsilon_m
 
-    def compute_visibility_map(
-        self,
-        mesh: Mesh3D | tuple[np.ndarray, np.ndarray] | np.ndarray,
-        pose: Pose3D | dict[str, Any] | None = None,
-        intrinsics: CameraIntrinsics | None = None,
-        resolution: tuple[int, int] | None = None,
-        yaw_override: float | None = None,
-    ) -> VisibilityResult:
-        """Compute exact per-pixel and per-vertex 3D Self-Occlusion Visibility Map.
-
-        Identifies where the protruding nose bridge occludes the far cheek or far eye
-        when the head is turned at steep profile angles (|yaw| > 45°).
-        Executes in <0.8 ms per frame via vectorized CPU SIMD operations.
-        """
+    def compute_visibility_map(self, mesh: Mesh3D | tuple[np.ndarray, np.ndarray], pose: Any = None,
+                               intrinsics: CameraIntrinsics | None = None, resolution: tuple[int, int] | None = None,
+                               yaw_override: float | None = None) -> VisibilityResult:
         t0 = time.perf_counter()
-
-        # Unpack mesh
-        if isinstance(mesh, Mesh3D):
-            vertices = mesh.vertices.copy()
-            faces = mesh.faces.copy()
-        elif isinstance(mesh, tuple):
-            vertices = np.asarray(mesh[0], dtype=np.float32)
-            faces = np.asarray(mesh[1], dtype=np.int32)
-        else:
-            vertices = np.asarray(mesh, dtype=np.float32)
-            faces = np.empty((0, 3), dtype=np.int32)
-
-        N_verts = len(vertices)
+        mesh = _unpack_mesh(mesh)
         if resolution is not None:
-            H, W = resolution
+            height, width = resolution
         elif intrinsics is not None:
-            H, W = intrinsics.height, intrinsics.width
+            height, width = intrinsics.height, intrinsics.width
         else:
-            H, W = self.default_resolution
-        intr = intrinsics or CameraIntrinsics(fx=500.0, fy=500.0, cx=W / 2.0, cy=H / 2.0, width=W, height=H)
+            height, width = self.default_resolution
+        intr = intrinsics or CameraIntrinsics(fx=500.0, fy=500.0, cx=width / 2.0, cy=height / 2.0, width=width, height=height)
+        rotation, t, yaw = _resolve_pose(pose, yaw_override)
 
-        # Resolve head rotation & translation
-        yaw = 0.0
-        pitch = 0.0
-        roll = 0.0
-        tz = 0.8  # Default metric distance from camera in meters
+        model = np.asarray(mesh.vertices, np.float64) @ _FLIP
+        cam = model @ rotation.T + t
+        z = cam[:, 2]
+        if (z <= 1e-4).any():
+            raise DomainError("VISIBILITY_BEHIND_CAMERA", "Mesh vertices lie at or behind the camera plane", 422)
+        u = intr.fx * cam[:, 0] / z + intr.cx
+        v = intr.fy * cam[:, 1] / z + intr.cy
+        count = len(z)
 
-        if yaw_override is not None:
-            yaw = float(yaw_override)
-        elif pose is not None:
-            if isinstance(pose, Pose3D):
-                yaw = float(pose.yaw)
-                pitch = float(pose.pitch)
-                roll = float(pose.roll)
-                if len(pose.tvec) == 3:
-                    tz = float(pose.tvec[2])
-            elif isinstance(pose, dict):
-                yaw = float(pose.get("yaw", 0.0))
-                pitch = float(pose.get("pitch", 0.0))
-                roll = float(pose.get("roll", 0.0))
+        # Outward normals as vectors: reflect into the head frame (not re-derived from reflected winding), then rotate.
+        face_normals = mesh.compute_face_normals().astype(np.float64) @ _FLIP @ rotation.T
+        vertex_normals = np.asarray(mesh.normals, np.float64) @ _FLIP @ rotation.T
+        faces = mesh.faces.astype(np.int64)
+        cos_limit = math.cos(math.radians(MAX_GRAZING_DEG))
 
-        # Camera transform
-        R = euler_to_rotation_matrix(yaw, pitch, roll, degrees=True).astype(np.float32)
-        tvec = np.array([0.0, 0.0, tz], dtype=np.float32)
-        V_cam = (vertices @ R.T) + tvec
+        centroid = cam[faces].mean(axis=1)
+        to_camera = -centroid / np.linalg.norm(centroid, axis=1, keepdims=True)
+        front = np.einsum("ij,ij->i", face_normals, to_camera) > 0.0
 
-        # Project vertices to 2D screen coordinates
-        z_vals = np.maximum(V_cam[:, 2], 1e-4)
-        u_screen = np.clip(np.round(intr.fx * V_cam[:, 0] / z_vals + intr.cx).astype(np.int32), 0, W - 1)
-        v_screen = np.clip(np.round(intr.fy * V_cam[:, 1] / z_vals + intr.cy).astype(np.int32), 0, H - 1)
+        # Depth window: the frame plus one frame of margin each side.
+        x_lo, y_lo = -width, -height
+        win_w, win_h = 3 * width, 3 * height
+        zbuf = np.full(win_h * win_w, np.inf, np.float64)
+        self._splat(zbuf, win_w, win_h, x_lo, y_lo, faces[front], u, v, z)
+        zbuf = zbuf.reshape(win_h, win_w)
 
-        # Vectorized SIMD/BVH Raycasting & Self-Occlusion Analysis
-        vertex_visibility = np.ones(N_verts, dtype=np.float32)
-        far_cheek_occluded = False
-        occluded_indices: list[int] = []
+        px = np.rint(u).astype(np.int64) - x_lo
+        py = np.rint(v).astype(np.int64) - y_lo
+        tested = (px >= 0) & (px < win_w) & (py >= 0) & (py < win_h)
+        surface = np.full(count, np.inf)
+        surface[tested] = zbuf[py[tested], px[tested]]
+        depth_ok = np.where(tested, z <= surface + self.epsilon_m, True)
+        vertex_to_camera = -cam / np.linalg.norm(cam, axis=1, keepdims=True)
+        facing_ok = np.einsum("ij,ij->i", vertex_normals, vertex_to_camera) > cos_limit
+        visible = depth_ok & facing_ok
 
-        # Check steep profile yaw threshold (>45°)
-        if abs(yaw) > 45.0:
-            far_cheek_occluded = True
-
-            # Identify landmark / vertex semantic topology:
-            # When yaw > 0 (head turned to subject's left / viewer's right):
-            # Far cheek is subject's left cheek (canonical X > 0).
-            # Near cheek is subject's right cheek (canonical X < 0).
-            # When yaw < 0 (head turned to subject's right / viewer's left):
-            # Far cheek is subject's right cheek (canonical X < 0).
-            # Near cheek is subject's left cheek (canonical X > 0).
-            if N_verts == 68 or N_verts == 76:
-                # 68-point canonical landmark layout
-                if yaw > 0:
-                    far_cheek_pts = [13, 14, 15, 16, 44, 45, 46, 47]  # Left cheek & left eye
-                else:
-                    far_cheek_pts = [0, 1, 2, 3, 36, 37, 38, 41]      # Right cheek & right eye
-            else:
-                # Dense mesh (e.g. FLAME up to 5,023 vertices):
-                # Classify far cheek vertices by canonical X coordinates and depth behind nose
-                if yaw > 0:
-                    far_mask = (vertices[:, 0] > 0.025) & (vertices[:, 2] < 0.04)
-                else:
-                    far_mask = (vertices[:, 0] < -0.025) & (vertices[:, 2] < 0.04)
-                far_cheek_pts = list(np.where(far_mask)[0])
-
-            # Mark far cheek vertices as occluded (0.0 visibility)
-            if len(far_cheek_pts) > 0:
-                far_arr = np.asarray(far_cheek_pts, dtype=np.int32)
-                far_arr = far_arr[far_arr < N_verts]
-                vertex_visibility[far_arr] = 0.0
-                occluded_indices = far_arr.tolist()
-
-        # Build Per-Pixel Visibility Map and Z-Buffer
-        z_buffer = np.full((H, W), np.inf, dtype=np.float32)
-        visibility_map = np.zeros((H, W), dtype=np.float32)
-        occlusion_mask = np.zeros((H, W), dtype=bool)
-
-        # Fast vectorized splatting for visible facial surface
-        vis_mask = vertex_visibility > 0
-        vis_u = u_screen[vis_mask]
-        vis_v = v_screen[vis_mask]
-        vis_z = z_vals[vis_mask]
-
-        # Splat visible footprint (SIMD vectorized)
-        if N_verts < 200:
-            # Sparse landmarks: 5x5 footprint
-            du, dv = np.meshgrid([-2, -1, 0, 1, 2], [-2, -1, 0, 1, 2])
-            all_u = np.clip((vis_u[:, None, None] + du).reshape(-1), 0, W - 1)
-            all_v = np.clip((vis_v[:, None, None] + dv).reshape(-1), 0, H - 1)
-            all_z = np.repeat(vis_z, 25)
-            visibility_map[all_v, all_u] = 1.0
-            z_buffer[all_v, all_u] = np.minimum(z_buffer[all_v, all_u], all_z)
-        else:
-            # Dense mesh (e.g. FLAME up to 5,023 vertices): vectorized assignment
-            visibility_map[vis_v, vis_u] = 1.0
-            z_buffer[vis_v, vis_u] = vis_z
-
-        # If far cheek is occluded, strictly mask out the far cheek screen footprint
-        if far_cheek_occluded and occluded_indices:
-            occ_arr = np.array(occluded_indices, dtype=np.int32)
-            occ_u = u_screen[occ_arr]
-            occ_v = v_screen[occ_arr]
-            if N_verts < 200:
-                du, dv = np.meshgrid([-3, -2, -1, 0, 1, 2, 3], [-3, -2, -1, 0, 1, 2, 3])
-                occ_all_u = np.clip((occ_u[:, None, None] + du).reshape(-1), 0, W - 1)
-                occ_all_v = np.clip((occ_v[:, None, None] + dv).reshape(-1), 0, H - 1)
-                visibility_map[occ_all_v, occ_all_u] = 0.0
-                occlusion_mask[occ_all_v, occ_all_u] = True
-            else:
-                visibility_map[occ_v, occ_u] = 0.0
-                occlusion_mask[occ_v, occ_u] = True
-
-        execution_time_ms = (time.perf_counter() - t0) * 1000.0
-
+        mask = np.zeros((height, width), np.uint8)
+        tri_visible = front & visible[faces].all(axis=1)
+        if tri_visible.any():
+            polys = np.rint(np.stack([u[faces[tri_visible]], v[faces[tri_visible]]], axis=-1)).astype(np.int32)
+            cv2.fillPoly(mask, list(polys), 255)
+        soft = mask.astype(np.float32) / 255.0
+        if FEATHER_PX > 0:
+            soft = cv2.GaussianBlur(soft, (0, 0), FEATHER_PX / 2.0)
+        frame_z = zbuf[-y_lo:-y_lo + height, -x_lo:-x_lo + width].astype(np.float32)
         return VisibilityResult(
-            visibility_map=visibility_map,
-            occlusion_mask=occlusion_mask,
-            vertex_visibility=vertex_visibility,
-            z_buffer=z_buffer,
-            far_cheek_occluded=far_cheek_occluded,
-            yaw_degrees=yaw,
-            execution_time_ms=execution_time_ms,
-            occluded_indices=occluded_indices,
-        )
+            vertex_visible=visible, vertex_depth_tested=tested, visibility_map=np.clip(soft, 0.0, 1.0), z_buffer=frame_z,
+            self_occluded_fraction=float(1.0 - visible.mean()), yaw_degrees=yaw,
+            execution_time_ms=(time.perf_counter() - t0) * 1000.0)
+
+    @staticmethod
+    def _splat(zbuf: np.ndarray, win_w: int, win_h: int, x_lo: int, y_lo: int, faces: np.ndarray,
+               u: np.ndarray, v: np.ndarray, z: np.ndarray) -> None:
+        """Perspective-correct nearest-z splat of barycentric samples of ``faces`` into the flat buffer."""
+        if len(faces) == 0:
+            return
+        fu, fv, fz = u[faces], v[faces], z[faces]
+        edge = np.maximum.reduce([np.hypot(fu[:, 0] - fu[:, 1], fv[:, 0] - fv[:, 1]),
+                                  np.hypot(fu[:, 1] - fu[:, 2], fv[:, 1] - fv[:, 2]),
+                                  np.hypot(fu[:, 2] - fu[:, 0], fv[:, 2] - fv[:, 0])])
+        need = np.clip(np.ceil(edge / _SAMPLE_SPACING_PX), 1, _MAX_LATTICE)
+        level = np.minimum(2 ** np.ceil(np.log2(need)), _MAX_LATTICE).astype(np.int64)
+        for n in np.unique(level):
+            sel = level == n
+            i, j = np.meshgrid(np.arange(n + 1), np.arange(n + 1), indexing="ij")
+            keep = i + j <= n
+            bary = np.stack([(n - i - j)[keep], i[keep], j[keep]], axis=1) / float(n)   # (S, 3)
+            inv = np.einsum("sk,fk->fs", bary, 1.0 / fz[sel])
+            su = np.einsum("sk,fk->fs", bary, fu[sel])
+            sv = np.einsum("sk,fk->fs", bary, fv[sel])
+            ix = np.rint(su).astype(np.int64) - x_lo
+            iy = np.rint(sv).astype(np.int64) - y_lo
+            ok = (ix >= 0) & (ix < win_w) & (iy >= 0) & (iy < win_h)
+            np.minimum.at(zbuf, (iy[ok] * win_w + ix[ok]), 1.0 / inv[ok])

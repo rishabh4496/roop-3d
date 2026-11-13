@@ -21,7 +21,7 @@ from roop_3d.models.owned_files import cache_directory, owned_path, model_source
 from roop_3d.core.storage import exclusive
 from roop_3d.audit.project_paths import application_root
 from roop_3d.engine.resources import guarded
-from roop_3d.core.ort_session import (GpuIoBinding, _fp32_safe_model_path,
+from roop_3d.core.ort_session import (GpuIoBinding, TRT_BUILDER_OPTIMIZATION_LEVEL, trt_int8_options, _fp32_safe_model_path,
                                       _profiles, _static_input_contract, _static_model_path,
                                       _static_graph_inputs, _trt_excluded_ops,
                                       _is_cuda_graph_partition_error, cuda_graphs_enabled)
@@ -196,6 +196,7 @@ class TensorRTSessionBuilder:
             validate_profile(quantized, profile)
             path, model, precision = candidate, quantized, "FP8"
         cache = cache_directory()
+        int8 = trt_int8_options(model_name(path), cache)   # explicit opt-in only; raises INT8_* refusals
         if precision == "FP16":
             path, safe_model = _fp32_safe_model_path(path, cache, model_name(path))
             if safe_model is not None:
@@ -226,20 +227,20 @@ class TensorRTSessionBuilder:
         static_inputs = _static_graph_inputs(model)
         identity = {"model": sha256_file(path)[1], "precision": precision, "profiles": shape_sets,
                     "ort": ort.__version__, "trt": trt_version, "workspace_mib": self.workspace_mib,
-                    "builder_optimization_level": 5, "auxiliary_streams": 2,
+                    "builder_optimization_level": TRT_BUILDER_OPTIMIZATION_LEVEL, "auxiliary_streams": 2, "int8": int8,
                     "force_sequential_engine_build": False, "cuda_graph": static_inputs,
                     "excluded_ops": excluded_ops}
         if fp8_evidence:
             identity.update(reference_model=reference_digest, fp8=fp8_evidence)
         prefix = "roop3d_" + hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()[:32]
         provider_options = {
-            "device_id": 0, "trt_fp16_enable": precision == "FP16", "trt_int8_enable": False,
+            "device_id": 0, "trt_fp16_enable": precision == "FP16", "trt_int8_enable": bool(int8),
             "trt_max_workspace_size": self.workspace_mib * 1048576,
             "trt_engine_cache_enable": True, "trt_engine_cache_path": str(cache),
             "trt_engine_cache_prefix": prefix,
             "trt_timing_cache_enable": True, "trt_timing_cache_path": str(cache),
             "trt_force_timing_cache": False,
-            "trt_builder_optimization_level": 5,
+            "trt_builder_optimization_level": TRT_BUILDER_OPTIMIZATION_LEVEL,
             "trt_force_sequential_engine_build": False,
             "trt_auxiliary_streams": 2,
             "trt_cuda_graph_enable": static_inputs and cuda_graphs_enabled(),
@@ -247,6 +248,7 @@ class TensorRTSessionBuilder:
             "trt_op_types_to_exclude": excluded_ops,
             "trt_detailed_build_log": False,
         }
+        provider_options.update({key: value for key, value in int8.items() if key != "trt_int8_enable"})
         for key, shape_set in shape_sets.items():
             provider_options[f"trt_profile_{key}_shapes"] = ",".join(
                 f"{name}:" + "x".join(map(str, shape)) for name, shape in shape_set.items() if shape)

@@ -20,6 +20,7 @@ from dataclasses import dataclass
 import cv2
 import numpy as np
 
+from roop_3d.compositor.mask_flow import FlowEstimator
 from roop_3d.core.errors import DomainError
 
 
@@ -49,7 +50,7 @@ class OcclusionTracker:
         self.flow_side, self.cut_reliability, self.cut_correlation, self.max_tracks = (
             flow_side, cut_reliability, cut_correlation, max_tracks)
         self._tracks: OrderedDict[int, _Track] = OrderedDict()
-        self._flow = cv2.DISOpticalFlow_create(cv2.DISOPTICAL_FLOW_PRESET_MEDIUM)
+        self._flow = FlowEstimator()
 
     # -- lifecycle --------------------------------------------------------------------------------------
     @property

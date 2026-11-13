@@ -183,12 +183,15 @@ def protected_directories(root: Path) -> set[str]:
 
 def verify(root: Path, manifest: dict[str, Any], *, detect_additions: bool = True,
            progress: Callable[[int, int], None] | None = None) -> dict[str, Any]:
+    """Legacy source-lock verification, deliberately NOT enforced in the unified checkout (``enforced: False``): it hashes
+    nothing and reports no violations. It is not evidence of isolation; ``boundary.run_checks`` is."""
     entries = manifest.get("files", [])
     expected_count = len(entries) if isinstance(entries, list) else 0
     if progress is not None and expected_count:
         progress(expected_count, expected_count)
     return {
         "ok": True,
+        "enforced": False,
         "checked": expected_count,
         "expected": expected_count,
         "violations": [],

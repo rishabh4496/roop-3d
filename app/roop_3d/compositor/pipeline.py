@@ -61,6 +61,9 @@ from roop_3d.compositor.restoration import GpenRestorer, blend_restored_roi
 from roop_3d.compositor.temporal import TemporalSmoother
 from roop_3d.compositor.detail_temporal import TemporalDetailStabilizer
 from roop_3d.temporal import TemporalMaskEMA
+from roop_3d.compositor.mask_flow import FlowMaskStabilizer
+from roop_3d.pipeline.subpixel import warp_affine
+from roop_3d.tracking.scene_cut import SceneCutDetector
 from roop_3d.core.errors import DomainError
 from roop_3d.engine.runtime import RuntimeConfig, image_bgr
 from roop_3d.hires_handoff import destination_face_side, fit_hires_to_frame, scale_matrix_input
@@ -88,6 +91,8 @@ class RobustOptions:
     # Opt-in directional strand matte (hair strands / bangs over the face), computed at FRAME resolution inside fuse_robust from
     # the parser's hair probability. Off by default: it adds a 12-orientation Gabor bank over the face region per face per frame.
     strand_matte: bool = False
+    # Flow-warped history for the face matte (compositor/mask_flow.py, c_max 0.6, reset on cut/flash) instead of the plain EMA.
+    mask_flow: bool = True
     strand: StrandMatteOptions = field(default_factory=StrandMatteOptions)
 
     def __post_init__(self) -> None:
@@ -129,6 +134,7 @@ class CompositeOptions:
     semantic_confidence_threshold: float = 0.55
     feather_px: float = 5.0
     pyramid_levels: int = 4
+    subpixel_interpolation: str = "lanczos4"
     swap_weight: float = 1.0
     erosion_px: float = 0.0
     # Moves only the forehead / hairline band of the matte (see compositor/hairline.py), in 512-class crop pixels.
@@ -201,6 +207,8 @@ class CompositeOptions:
             raise ValueError("Invalid UltraMax small-face policy")
         if not 0 <= self.semantic_confidence_threshold <= 1 or self.feather_px < 0 or self.pyramid_levels < 1:
             raise ValueError("Invalid mask or pyramid configuration")
+        if self.subpixel_interpolation not in {"lanczos4", "cubic", "linear"}:
+            raise ValueError("subpixel_interpolation must be 'lanczos4', 'cubic', or 'linear'")
         if self.occlusion_mode not in OCCLUSION_MODES:
             raise ValueError(f"occlusion_mode must be one of {OCCLUSION_MODES}")
         from roop_3d.color.transfer import BLEND_TRANSFERS
@@ -250,8 +258,15 @@ class FrameCompositor:
 
     def __init__(self, catalog=None, config: RuntimeConfig = RuntimeConfig(), *, parser: FaceParser | None = None,
                  restorer: GpenRestorer | None = None, temporal: TemporalSmoother | None = None,
-                 analyzer=None):
+                 analyzer=None, scene_cut_detector: SceneCutDetector | None = None):
+        """``scene_cut_detector`` (opt-in) lets the compositor detect shot changes and exposure flashes itself from the
+        frames it is given, in addition to the ``scene_cut`` flag callers pass (the volumetric session passes the face
+        tracker's, which uses the same detector). A cut resets every temporal state; a flash resets the colour/detail/matte
+        filters but keeps tracks and occluder history."""
         self.catalog = catalog
+        self.scene_cut_detector = scene_cut_detector
+        self.last_cut_event = None
+        self.mask_flow = FlowMaskStabilizer()
         from roop_3d.compositor.stream_restoration import MaskSeamWatchdog
         self.watchdog = MaskSeamWatchdog()
         self.config = config
@@ -303,8 +318,7 @@ class FrameCompositor:
     @staticmethod
     def _crop_to_frame(frame: np.ndarray, inverse: np.ndarray, shape: tuple[int, int]) -> np.ndarray:
         frame_to_crop = cv2.invertAffineTransform(np.asarray(inverse, dtype=np.float32))
-        return cv2.warpAffine(frame, frame_to_crop, (shape[1], shape[0]), flags=cv2.INTER_LINEAR,
-                              borderMode=cv2.BORDER_REFLECT_101)
+        return warp_affine(frame, frame_to_crop, (shape[1], shape[0]), interpolation="cubic", border="reflect101")
 
     def prefetch_parser(self, frame: np.ndarray, replacements, options: "CompositeOptions") -> int:
         """Run the face parser on the crops :meth:`compose` will ask about, so it can start on the next frame at once.
@@ -698,14 +712,21 @@ class FrameCompositor:
         active_tracks = set(landmarks_by_track) | {item.track_id for item in replacements}
         self.expression_reports = {key: value for key, value in self.expression_reports.items() if key in active_tracks}
         self.last_relighting = {key:value for key,value in self.last_relighting.items() if key in active_tracks}
-        self.temporal.begin_frame(frame_index, active_track_ids=active_tracks, scene_cut=scene_cut)
+        flash = False
+        if self.scene_cut_detector is not None:
+            self.last_cut_event = event = self.scene_cut_detector.observe(frame, frame_index=frame_index)
+            scene_cut, flash = scene_cut or event.kind == "cut", event.kind == "flash"
+        flush = scene_cut or flash
+        self.temporal.begin_frame(frame_index, active_track_ids=active_tracks, scene_cut=flush)
         self.mask_ema.retain(active_tracks)
         self.detail_temporal.retain(active_tracks)
-        if scene_cut:
+        self.mask_flow.retain(active_tracks)
+        if flush:
             self.mask_ema.clear()
             self.detail_temporal.clear()
             self.watchdog.clear()
-        if scene_cut: self.histogram_stabilizer.reset()
+            self.mask_flow.reset()
+            self.histogram_stabilizer.reset()
         self.histogram_stabilizer.retain(active_tracks)
         self.last_reports = {}
         if options.occlusion_mode == "robust":
@@ -867,7 +888,8 @@ class FrameCompositor:
                 fuse_image, fuse_alpha, fuse_inverse = fit_hires_to_frame(harmonized, fuse_alpha, fuse_inverse)
             output = fuse_crop(output, fuse_image, fuse_inverse, fuse_alpha,
                                mode=options.mode, levels=options.pyramid_levels,
-                               linear_light=options.linear_light, transfer=options.blend_transfer)
+                               linear_light=options.linear_light, transfer=options.blend_transfer,
+                               interpolation=options.subpixel_interpolation)
             diagnostics = self.angle_diagnostics
             if diagnostics is not None and diagnostics.full and frame_index is not None:
                 from roop_3d.engine.volumetric.angle_diagnostics import frame_metrics
@@ -931,7 +953,14 @@ class FrameCompositor:
         state = self.occlusion_tracker.update(replacement.track_id, front, work_crop, frame_index=frame_index,
                                               scene_cut=scene_cut, release=min(options.robust.occlusion_release, 0.99))
         front = state.occluder
-        stable_face = self.mask_ema.update(replacement.track_id, analysis.face_alpha, frame=frame_index, kind="geometric")
+        if options.robust.mask_flow:
+            # Flow-aligned history instead of the position-blind EMA; the occluder above already went through the
+            # flow-based OcclusionTracker (same FlowEstimator), so only the face matte needs this.
+            stable_face = self.mask_flow.update(replacement.track_id, analysis.face_alpha,
+                                                cv2.cvtColor(work_crop, cv2.COLOR_BGR2GRAY),
+                                                frame_index=frame_index, scene_cut=scene_cut).alpha
+        else:
+            stable_face = self.mask_ema.update(replacement.track_id, analysis.face_alpha, frame=frame_index, kind="geometric")
         stable_include = self.mask_ema.update(replacement.track_id, manual_include, frame=frame_index, kind="manual_include")
         stable_face = np.maximum(stable_face, stable_include)
         if front is not None:
@@ -1246,7 +1275,8 @@ class FrameCompositor:
         if not changed.any():
             return frame
         alpha = np.maximum(changed, cv2.GaussianBlur(changed, (0, 0), 1.0)) * options.swap_weight
-        return fuse_crop(frame, edited, context.work_inverse, alpha, mode=BlendMode.FEATHER)
+        return fuse_crop(frame, edited, context.work_inverse, alpha, mode=BlendMode.FEATHER,
+                         interpolation=options.subpixel_interpolation)
 
     def capability(self) -> dict:
         parser = self.parser.capability() if hasattr(self.parser, "capability") else {
@@ -1292,5 +1322,6 @@ class FrameCompositor:
         self.temporal.clear()
         self.detail_temporal.release()
         self.mask_ema.clear()
+        self.mask_flow.reset()
         self.histogram_stabilizer.reset()
         self.watchdog.clear()

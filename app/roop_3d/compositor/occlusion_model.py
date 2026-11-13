@@ -12,6 +12,9 @@ process has actually executed the graph.
 """
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import cv2
 import numpy as np
 
@@ -19,10 +22,28 @@ from roop_3d.core.errors import DomainError
 
 NET_SIZE = 256
 SUPPORTED_NETS = ("xseg_3.onnx", "xseg.onnx", "face_occluder.onnx")
+DEFAULT_VISIBLE_NET = "xseg_3.onnx"
+MODEL_MANIFEST = Path(__file__).resolve().parents[1] / "models" / "model_manifest.json"
+
+
+def manifest_model_id(model_name: str, manifest_path: Path = MODEL_MANIFEST) -> str:
+    """Model id the manifest assigns to ``model_name`` (first record of that name), or an explicit named error.
+
+    The default network used to be referenced by file name only; a name the manifest does not know can neither be
+    hash-verified nor licensed, so it fails here with ``VISIBLE_FACE_MODEL_NOT_IN_MANIFEST`` instead of deep in the loader.
+    """
+    try:
+        records = json.loads(Path(manifest_path).read_text(encoding="utf-8")).get("models", [])
+    except (OSError, ValueError) as error:
+        raise DomainError("MODEL_MANIFEST_UNREADABLE", f"Model manifest cannot be read: {error}", 503) from error
+    for record in records:
+        if record.get("name") == model_name and record.get("model_id"):
+            return str(record["model_id"])
+    raise DomainError("VISIBLE_FACE_MODEL_NOT_IN_MANIFEST", f"{model_name} has no entry in the model manifest", 404)
 
 
 class VisibleFaceNet:
-    def __init__(self, catalog=None, config=None, *, model_name: str = "xseg_3.onnx", channel_order: str = "bgr"):
+    def __init__(self, catalog=None, config=None, *, model_name: str = DEFAULT_VISIBLE_NET, channel_order: str = "bgr"):
         from roop_3d.engine.runtime import RuntimeConfig
         from roop_3d.models.catalog import ModelCatalog
 
@@ -34,12 +55,14 @@ class VisibleFaceNet:
         self.config = config or RuntimeConfig()
         self.model_name, self.channel_order = model_name, channel_order
         self.model = None
+        self.manifest_id: str | None = None
         self.inference_verified = False
         self.last_error: str | None = None
 
     def _load(self):
         if self.model is None:
             from roop_3d.engine.runtime import OrtModel
+            self.manifest_id = manifest_model_id(self.model_name)
             self.model = OrtModel(self.catalog, self.model_name, self.config)
         return self.model
 

@@ -245,9 +245,10 @@ def test_track_video_visits_frames_reports_cuts_and_finishes_the_publisher(actor
 
 
 class FakeFace:
-    def __init__(self, track_id, five, lm106, box=(0, 0, 100, 100), mesh=None):
+    def __init__(self, track_id, five, lm106, box=(0, 0, 100, 100), mesh=None, pose_6dof=None, pose_source=None):
         self.track_id, self.box, self.kps5, self.kps106 = track_id, np.array(box, float), five, lm106
-        self.observation = type("Obs", (), dict(landmarks5=five, landmarks106=lm106, landmarks478=mesh))()
+        self.observation = type("Obs", (), dict(landmarks5=five, landmarks106=lm106, landmarks478=mesh,
+                                                pose_6dof=pose_6dof, pose_source=pose_source))()
 
 
 def test_pipeline_tap_tracks_each_face_publishes_one_track_and_isolates_failures(actor, caplog):
@@ -273,6 +274,24 @@ def test_pipeline_tap_tracks_each_face_publishes_one_track_and_isolates_failures
     cut = HeadTrackingTap()
     cut.observe(None, faces[:1], 0.0, False)
     assert cut.observe(None, faces[:1], DT, True)[7].shot_cut
+
+def test_pipeline_tap_carries_face_pose_into_tracking_wire_event(actor):
+    published = []
+    observation, _ = TW.frame(actor, t=0.0, noise_px=0.2, seed=1)
+    pose = {"tx_m": 0.12, "ty_m": -0.04, "tz_m": 0.73, "reproj_rms_px": 1.25,
+            "source": "pnp_dense", "spherical_bin": "yaw+30/pitch-15"}
+    face = FakeFace(11, observation["landmarks5"], observation["landmarks106"],
+                    pose_6dof=pose, pose_source="pnp_dense")
+    tap = HeadTrackingTap(publisher_factory=lambda track_id: TrackingTelemetryPublisher(
+        published.append, track_id=track_id, max_hz=1000))
+    result = tap.observe(None, [face], 0.0, False)[11]
+    event = TrackingTelemetryEvent.model_validate(telemetry_payload(
+        result, job_id="pose-job", track_id=11, state="tracking", shot_cuts=0, adapted=False))
+    assert event.translation_m == pytest.approx((0.12, -0.04, 0.73))
+    assert event.reproj_rms_px == pytest.approx(1.25)
+    assert event.pose_source == "pnp_dense" and event.spherical_bin == "yaw+30/pitch-15"
+    assert published[0]["translation_m"] == pytest.approx((0.12, -0.04, 0.73))
+    tap.release()
 
 
 def test_extractor_picks_the_largest_face_and_crops_exactly(actor):
@@ -316,6 +335,13 @@ def test_payload_is_a_valid_event_with_nulls_for_what_was_not_measured(actor):
     event = TrackingTelemetryEvent.model_validate(payload)
     assert payload["type"] == EVENT_TYPE == "tracking.telemetry" and event.job_id == "job-7" and event.track_id == 2
     assert event.yaw_deg == pytest.approx(frames[-1].camera.yaw_deg, abs=0.006) and event.adapted
+    assert event.quat_wxyz is not None and len(event.quat_wxyz) == 4 and event.quat_wxyz[0] >= 0
+    assert sum(component * component for component in event.quat_wxyz) == pytest.approx(1.0, abs=1e-5)
+    assert event.schema_version == payload["schema_version"] == 2 and event.scene_flash is None
+    assert event.translation_px == pytest.approx((frames[-1].camera.tx, frames[-1].camera.ty), abs=0.0005)
+    assert event.pose_scale_px_per_m == pytest.approx(frames[-1].camera.scale)
+    assert event.translation_m is None and event.reproj_rms_px is None and event.pose_source is None
+    assert event.spherical_bin is None and event.jitter_px is None and event.stability_score is None
     assert event.gaze_convergence_deg is None and event.gaze_source is None and event.lighting_key is None, "never a placeholder"
     assert 0.0 <= event.expression_energy <= 1.0 and event.identity_state in {"collecting", "provisional", "locked"}
     json.dumps(payload)                                                              # plain JSON: no numpy leaked out

@@ -1,20 +1,16 @@
 """Real filesystem tests for unified architecture."""
 from __future__ import annotations
 
-import copy
-import importlib.util
 import json
-import os
 from pathlib import Path
 import sys
-import subprocess
 import tempfile
 import unittest
 
 AUDIT = Path(__file__).absolute().parents[1] / "audit"
 sys.path.insert(0, str(AUDIT))
+from boundary import scan_sources
 from isolation import AuditError, inventory, safe_path, verify, write_json
-
 
 class IsolationTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -50,19 +46,19 @@ class IsolationTests(unittest.TestCase):
         data = json.loads((self.root / "roop_3d/audit/result.json").read_text("utf-8"))
         self.assertTrue(verify(self.root, data)["ok"])
 
-    def prepare_cli(self) -> Path:
-        audit = self.root / "roop_3d/audit"
-        audit.mkdir(parents=True)
-        for name in ("isolation.py", "runtime_policy.py", "project_paths.py", "stage00.py", "verify_isolation.py"):
-            (audit / name).write_bytes((AUDIT / name).read_bytes())
-        write_json(self.root, "roop_3d/audit/protected_paths.json", self.baseline)
-        write_json(self.root, "roop_3d/audit/model_sources.json", {"root": str(self.root), "read_only": True})
-        return audit / "verify_isolation.py"
-
-    def test_cli_runs_and_passes(self) -> None:
-        script = self.prepare_cli()
-        result = subprocess.run([sys.executable, "-B", str(script)], cwd=self.root, capture_output=True, text=True)
-        self.assertEqual(result.returncode, 0)
+    def test_real_boundary_gate_fails_on_injected_sibling_import_and_write(self) -> None:
+        app_dir = self.root / "app"
+        with tempfile.TemporaryDirectory() as scratch:
+            app_dir = Path(scratch) / "app"
+            app_dir.mkdir()
+            (app_dir / "bad.py").write_text(
+                "from roop_ultimate.core import model\n"
+                "from pathlib import Path\n"
+                "Path('../roop-ultimate/output').write_text('forbidden')\n",
+                encoding="utf-8")
+            result = scan_sources(app_dir, siblings=("roop-ultimate",))
+            self.assertTrue(result["imports"], "sibling source imports must fail the static gate")
+            self.assertTrue(result["writes"], "writes targeting the sibling checkout must fail the static gate")
 
 
 if __name__ == "__main__":

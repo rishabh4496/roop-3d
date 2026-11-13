@@ -25,10 +25,10 @@ import numpy as np
 from roop_3d.compositor.face_regions import FaceRegions, build_regions, restoration_protection
 from roop_3d.compositor.masks import FaceParser, build_face_mask, landmark_hull_mask
 from roop_3d.compositor.occlusion import combine_occluders
-from roop_3d.compositor.occlusion_model import VisibleFaceNet
+from roop_3d.compositor.occlusion_model import DEFAULT_VISIBLE_NET, VisibleFaceNet
 from roop_3d.core.errors import DomainError
 
-DEFAULT_NETS = ("xseg_3.onnx", "face_occluder.onnx")
+DEFAULT_NETS = (DEFAULT_VISIBLE_NET, "face_occluder.onnx")
 
 
 @dataclass(frozen=True)

@@ -14,6 +14,8 @@ from dataclasses import dataclass
 import cv2
 import numpy as np
 
+from roop_3d.compositor.mask_flow import FlowEstimator
+
 
 @dataclass
 class _DetailState:
@@ -50,7 +52,7 @@ class TemporalDetailStabilizer:
         self.cut_correlation, self.min_flow_confidence = float(cut_correlation), float(min_flow_confidence)
         self._tracks: OrderedDict[int, _DetailState] = OrderedDict()
         self._last_flows: OrderedDict[int, object] = OrderedDict()
-        self._flow = cv2.DISOpticalFlow_create(cv2.DISOPTICAL_FLOW_PRESET_MEDIUM)
+        self._flow = FlowEstimator()
         self._gpu_flow = None
         self._use_cuda_flow = use_cuda_flow
         self._gpu_flow_checked = not bool(use_cuda_flow)

@@ -285,7 +285,16 @@ class SphericalHarmonicsLighting:
 
 
 class NeuralRelighter3D:
-    """Combines 3D surface normals, SH scene illumination, and skin specular shading."""
+    """Analytic relighter: order-2 spherical harmonics (SH-9) diffuse shading plus a Blinn-Phong skin highlight.
+
+    The name is historical. There is **no neural network** and no learned weights here: the 9x3 SH illumination
+    coefficients are fitted by regularised least squares to the observed luminance (``SphericalHarmonicsLighting``), the
+    swapped face's shading is rescaled by the target/source SH luminance ratio, hard cast shadows are kept via a luminance
+    ratio, and a Blinn-Phong highlight is added along the extracted key light. Surface normals come from
+    ``SurfaceNormalEstimator`` (geometric image-gradient estimate unless the caller passes mesh normals). The fitted
+    coefficients are returned in the ``relight`` metadata (``sh_coeffs`` = target, ``source_sh_coeffs`` = swapped face;
+    both 9x3 BGR, rows ordered as ``SphericalHarmonicsLighting`` basis).
+    """
 
     def __init__(self, normal_estimator: SurfaceNormalEstimator | None = None,
                  sh_lighting: SphericalHarmonicsLighting | None = None):
@@ -443,6 +452,9 @@ class NeuralRelighter3D:
             "key_light_direction": [float(v) for v in key_light_dir],
             "color_temperature_k": float(cct),
             "sh_coeffs": target_sh.tolist(),
+            "source_sh_coeffs": source_sh.tolist(),
+            "model": "sh9_diffuse+blinn_phong",
+            "neural_network": False,
             "relight_strength": float(relight_strength),
             "specular_sheen": float(specular_sheen),
             "shadow_preservation": float(shadow_preservation),

@@ -612,6 +612,60 @@ def asset_statistics(atlas: Any, vertex_state: np.ndarray) -> dict[str, Any]:
     }
 
 
+# --------------------------------------------------------------------------- disentangled parameters
+def _param(value: Any, reason: str | None, **extra: Any) -> dict[str, Any]:
+    return {"value": value, "reason": reason if value is None else None, **extra}
+
+
+def parametric_block(asset: IdentityAsset) -> dict[str, Any]:
+    """Disentangled identity-shape / expression / camera-pose / albedo description of a built asset.
+
+    Only quantities the builder actually fitted are reported. Anything it does not have is ``value: null`` with a
+    ``reason`` — never zeros: there is no FLAME/learned expression basis here and the bundle adjustment is weak-perspective,
+    so ``expression_beta`` and the metric translation ``t`` are honestly unavailable."""
+    m = asset.manifest
+    alpha = m.shape.get("makehuman_shape_coefficients")
+    names = m.shape.get("makehuman_shape_names")
+    shape = _param(None if alpha is None else [float(x) for x in alpha],
+                   "No parametric identity basis was fitted (landmark-displacement deformation only; "
+                   "MakeHuman basis coefficients exist for template=makehuman with a landmark fit)",
+                   parameterization="makehuman_shape_basis" if alpha is not None else m.shape.get("parameterization"),
+                   names=list(names) if alpha is not None and names is not None else None,
+                   landmark_displacement_shape=m.shape.get("shape"),
+                   posterior_sigma_m_mean=m.shape.get("posterior_sigma_m_mean"))
+    beta = m.expression.get("flame_expression_coefficients")
+    expression = _param(None if beta is None else [float(x) for x in beta],
+                        "No parametric expression basis (FLAME) is fitted; image-space measurements are given instead",
+                        measurement_fields=list(m.expression.get("fields", [])),
+                        measurements_per_view=m.expression.get("per_view", {}))
+    reference = m.canonical_head_pose.get("reference_view_refined_pose")
+    if reference is None:
+        pose = {"R": None, "t": None, "reason": "No refined reference-view pose recorded"}
+    else:
+        from roop_3d.core.pose import rotation_from_euler
+        yaw, pitch, roll = (float(x) for x in reference)
+        pose = {"R": np.round(rotation_from_euler(yaw, pitch, roll), 6).tolist(), "t": None,
+                "euler_deg": {"yaw": yaw, "pitch": pitch, "roll": roll},
+                "frame": "head-to-camera rotation Rz(roll)Rx(pitch)Ry(yaw) of the reference view (core.pose standard frame)",
+                "reference_view": m.canonical_head_pose.get("reference_view"),
+                "reason": "t is null: the landmark fit is weak-perspective, no metric camera translation is estimated"}
+    state = np.asarray(asset.texel_state)
+    observed = state == int(ConfidenceState.OBSERVED)
+    count = int(observed.sum())
+    if count:
+        mean_rgb = [round(float(c), 3) for c in asset.texture[..., :3][observed].mean(axis=0)[::-1]]
+        albedo_reason = None
+    else:
+        mean_rgb, albedo_reason = None, "No texel of the atlas was observed by any view"
+    albedo = {"size": [int(asset.texture.shape[1]), int(asset.texture.shape[0])],
+              "mean_rgb": mean_rgb, "mean_rgb_reason": albedo_reason,
+              "observed_texel_fraction": round(count / max(state.size, 1), 6),
+              "observed_texel_fraction_of_face_footprint": m.statistics.get("texel_observed_ratio"),
+              "source": "asset atlas (observation-only); mean over OBSERVED texels, RGB 0-255"}
+    return {"identity_shape_alpha": shape, "expression_beta": expression, "camera_pose": pose, "albedo_uv": albedo,
+            "template": m.settings.get("template"), "reconstruction_level": m.reconstruction_level}
+
+
 # --------------------------------------------------------------------------- GLB / inspection
 def to_gltf_frame(mesh: Mesh3D) -> Mesh3D:
     """Project mesh frame (y down, z to viewer, left-handed) -> glTF (y up, right-handed). The y mirror flips

@@ -16,6 +16,7 @@ _EXPORTS = {
     "ShotIdentityLock": "identity_lock", "MeshSHLightingEstimator": "lighting",
     "TrackFilterBank": "filters", "SmoothedChannel": "filters", "FilterSpec": "filters",
     "TrackingTelemetryPublisher": "telemetry", "telemetry_payload": "telemetry",
+    "SceneCutDetector": "scene_cut", "CutEvent": "scene_cut", "temporal_telemetry": "temporal_telemetry",
     "calibrate_video": "runner", "track_video": "runner", "HeadTrackingTap": "runner",
 }
 __all__ = sorted(_EXPORTS)

@@ -14,13 +14,23 @@ import numpy as np
 
 
 class OneEuroFilter:
-    """Array-valued One-Euro filter with velocity-adaptive cutoff."""
+    """The single One-Euro implementation: array-valued, velocity-adaptive cutoff, ``alpha = 1/(1 + tau/dt)``.
 
-    def __init__(self, min_cutoff: float = 1.0, beta: float = .035, derivative_cutoff: float = 1.0):
+    ``timestamp`` is in the caller's time unit (seconds for the tracker; a frame counter for the compositor, whose
+    cutoffs are then per frame). A non-increasing timestamp, a shape change, or a gap above ``max_gap`` restarts the
+    trajectory at the measurement; ``max_gap=None`` disables the gap rule. ``cutoff`` is the effective cutoff of the
+    last update (``min_cutoff + beta |dx/dt|``, mean over the array), the value reported as ``one_euro_cutoff_hz``.
+    """
+
+    def __init__(self, min_cutoff: float = 1.0, beta: float = .035, derivative_cutoff: float = 1.0,
+                 max_gap: float | None = .5, dtype=np.float64):
         if (not np.isfinite([min_cutoff, beta, derivative_cutoff]).all()
-                or min_cutoff <= 0 or beta < 0 or derivative_cutoff <= 0):
+                or min_cutoff <= 0 or beta < 0 or derivative_cutoff <= 0 or (max_gap is not None and not max_gap > 0)):
             raise ValueError("Invalid One-Euro filter configuration")
         self.min_cutoff, self.beta, self.derivative_cutoff = float(min_cutoff), float(beta), float(derivative_cutoff)
+        self.max_gap = None if max_gap is None else float(max_gap)
+        self.dtype = np.dtype(dtype)     # state precision (the compositor keeps float32 to bound its cache)
+        self.cutoff: float = float(min_cutoff)
         self.time: float | None = None
         self.raw: np.ndarray | None = None
         self.value: np.ndarray | None = None
@@ -28,6 +38,7 @@ class OneEuroFilter:
 
     def reset(self) -> None:
         self.time = self.raw = self.value = self.derivative = None
+        self.cutoff = self.min_cutoff
 
     @staticmethod
     def _alpha(cutoff: np.ndarray | float, dt: float):
@@ -35,20 +46,24 @@ class OneEuroFilter:
         return 1.0 / (1.0 + tau / dt)
 
     def update(self, value, timestamp: float) -> np.ndarray:
-        current = np.asarray(value, dtype=np.float64)
+        current = np.asarray(value, dtype=self.dtype)
         if current.size == 0 or not np.isfinite(current).all() or not np.isfinite(timestamp):
             raise ValueError("Filter inputs must be finite and non-empty")
-        if self.time is None or current.shape != self.raw.shape or timestamp <= self.time or timestamp - self.time > .5:
+        if (self.time is None or current.shape != self.raw.shape or timestamp <= self.time
+                or (self.max_gap is not None and timestamp - self.time > self.max_gap)):
             self.time, self.raw, self.value = float(timestamp), current.copy(), current.copy()
             self.derivative = np.zeros_like(current)
+            self.cutoff = self.min_cutoff
             return current.copy()
         dt = float(timestamp - self.time)
         a_d = self._alpha(self.derivative_cutoff, dt)
         derivative = a_d * (current - self.raw) / dt + (1 - a_d) * self.derivative
-        a = self._alpha(self.min_cutoff + self.beta * np.abs(derivative), dt)
+        cutoff = self.min_cutoff + self.beta * np.abs(derivative)
+        self.cutoff = float(np.mean(cutoff))
+        a = self._alpha(cutoff, dt)
         filtered = a * current + (1 - a) * self.value
         self.time, self.raw = float(timestamp), current.copy()
-        self.value, self.derivative = filtered, derivative
+        self.value, self.derivative = filtered.astype(self.dtype), derivative.astype(self.dtype)
         return filtered.copy()
 
 

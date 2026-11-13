@@ -27,6 +27,57 @@ def _string_provider_options(options: Mapping[str, object]) -> dict[str, str]:
     return {key: str(value) for key, value in options.items()}
 
 
+# One TensorRT builder optimisation level for every TRT session roop-3d builds (``core.ort_session`` lazy sessions and
+# ``trt_session_builder`` strict sessions). It was 3 here and 5 in the builder, which also split the engine cache identity.
+# 5 is chosen because the strict builder is the path that is validated end to end (explicit min/opt/max profiles, executed
+# canary inference, identity-hashed cache) and its engines are what the restorers/swappers actually ship; the build cost of
+# level 5 is paid once and amortised by the engine + timing caches. Runtime speed is unaffected by the level, only first-build
+# time and kernel selection quality. [INFERENCE] no on-device A/B of 3 vs 5 exists in this repo; revisit with measurements.
+TRT_BUILDER_OPTIMIZATION_LEVEL = 5
+
+# FP32 locks (never FP16, therefore never INT8): the swapper, GPEN and the motion extractor.
+FP32_LOCKED_MODEL_TOKENS = ("inswapper", "motion_extractor", "gpen")
+
+INT8_ENV_FLAG = "ROOP_TRT_INT8"
+INT8_CACHE_ENV = "ROOP_TRT_INT8_CALIBRATION_CACHE"
+
+
+class TensorRTInt8Refused(RuntimeError):
+    """INT8 was explicitly requested but cannot be honoured. ``code`` is the named refusal reason."""
+
+    def __init__(self, code: str, detail: str):
+        self.code, self.detail = code, detail
+        super().__init__(f"{code}: {detail}")
+
+
+def trt_int8_options(model_name: str, engine_cache_dir: Path | str,
+                     environ: Mapping[str, str] | None = None) -> dict[str, str]:
+    """ORT TensorRT provider options for INT8, or ``{}`` when INT8 was not opted into (the default; FP16 stays the default).
+
+    Opt-in is ``ROOP_TRT_INT8=1`` and it REQUIRES ``ROOP_TRT_INT8_CALIBRATION_CACHE`` to name an existing file inside the engine
+    cache directory (ORT resolves the table name relative to ``trt_engine_cache_path``). Nothing is calibrated here: a missing
+    table raises ``INT8_CALIBRATION_MISSING`` rather than silently building an uncalibrated or FP16 engine. FP32-locked models
+    (swapper, GPEN, motion extractor) are refused with ``INT8_FP32_LOCKED_MODEL``. Real INT8 quality/speed on Ada is not validated
+    in this repo (reference repo rejected it); the cache content is the caller's responsibility."""
+    env = os.environ if environ is None else environ
+    if str(env.get(INT8_ENV_FLAG, "")).strip().lower() not in ("1", "true", "yes", "on"):
+        return {}
+    folded = str(model_name).casefold()
+    if any(token in folded for token in FP32_LOCKED_MODEL_TOKENS):
+        raise TensorRTInt8Refused("INT8_FP32_LOCKED_MODEL", f"{model_name} is locked to FP32 and cannot run INT8")
+    raw = str(env.get(INT8_CACHE_ENV, "")).strip()
+    table = Path(raw) if raw else None
+    if table is None or not table.is_file():
+        raise TensorRTInt8Refused("INT8_CALIBRATION_MISSING",
+                                  f"{INT8_ENV_FLAG}=1 requires {INT8_CACHE_ENV} to name an existing calibration cache file"
+                                  + (f" (not found: {table})" if table is not None else ""))
+    if table.resolve().parent != Path(engine_cache_dir).resolve():
+        raise TensorRTInt8Refused("INT8_CALIBRATION_NOT_IN_CACHE",
+                                  f"the calibration cache must live in the engine cache directory {Path(engine_cache_dir).resolve()}")
+    return {"trt_int8_enable": "True", "trt_int8_calibration_table_name": table.name,
+            "trt_int8_use_native_calibration_table": "False"}
+
+
 def _trt_mixed_options(trt_cache_dir: Path, device_id: int = 0) -> dict[str, str]:
     """Required TensorRT FP16 cache options in the string format expected by ORT's C API."""
     return {
@@ -35,7 +86,7 @@ def _trt_mixed_options(trt_cache_dir: Path, device_id: int = 0) -> dict[str, str
         "trt_engine_cache_enable": "True",
         "trt_engine_cache_path": str(trt_cache_dir),
         "trt_timing_cache_enable": "True",
-        "trt_builder_optimization_level": "3",
+        "trt_builder_optimization_level": str(TRT_BUILDER_OPTIMIZATION_LEVEL),
     }
 
 
@@ -527,13 +578,15 @@ class SessionManager:
             return []
         static = _static_graph_inputs(model)
         folded_name = name.casefold()
-        fp16_sensitive = any(token in folded_name for token in ("inswapper", "motion_extractor", "gpen"))
+        fp16_sensitive = any(token in folded_name for token in FP32_LOCKED_MODEL_TOKENS)
         fp16 = force_fp16 or (self.fp16 and not fp16_sensitive)
         excluded_ops = _trt_excluded_ops(model, name)
-        cache_policy = {"fp16": fp16, "optimization_level": 3, "auxiliary_streams": 2,
-                        "cuda_graph": static, "force_sequential": False, "excluded_ops": excluded_ops}
+        int8 = trt_int8_options(name, self.cache_path)
+        cache_policy = {"fp16": fp16, "optimization_level": TRT_BUILDER_OPTIMIZATION_LEVEL, "auxiliary_streams": 2,
+                        "cuda_graph": static, "force_sequential": False, "excluded_ops": excluded_ops, "int8": int8}
         trt_cache_dir = self.cache_path
         mixed_options = _trt_mixed_options(trt_cache_dir, self.gpu_id)
+        mixed_options.update(int8)
         if not fp16:
             mixed_options["trt_fp16_enable"] = "False"
         options = {**mixed_options,

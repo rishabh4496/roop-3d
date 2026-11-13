@@ -21,9 +21,9 @@ Context & Architectural Standards:
    - Detects Intel QuickSync Video (QSV) availability in GET /api/system/hardware.
    - Offloads target video decoding to the Intel iGPU media engine when NVIDIA NVDEC utilization
      or VRAM bandwidth is saturated by 4K multi-face restoration.
-3. Intel Embree / SIMD 3D Mesh Self-Occlusion & Raycast Z-Buffer:
-   - Vectorized SIMD BVH raycasting on CPU computes exact per-pixel 3D Self-Occlusion
-     Visibility Map (<0.8 ms per frame), masking out the far cheek at steep profile angles (>45° yaw).
+3. CPU 3D mesh self-occlusion (vertex-level z-buffer, see ``mesh_raycaster``):
+   - Back-face cull plus nearest-depth test hides the far cheek at steep profile angles (>45° yaw);
+     the measured time is reported in telemetry, not assumed.
 """
 from __future__ import annotations
 
@@ -147,6 +147,7 @@ class HeterogeneousScheduler:
             precision="FP16",
         )
         self.raycaster = MeshRaycaster()
+        self.last_visibility_ms: float | None = None
         self.multiplexer = VideoCodecMultiplexer()
         self.lookahead_worker = self.coprocessor.lookahead_worker
         self._lock = threading.Lock()
@@ -212,17 +213,18 @@ class HeterogeneousScheduler:
         """Execute Stage 3 Face Swapping & Restoration with Auxiliary Offload.
 
         - Lookahead worker processes auxiliary models (BiSeNet + L2CS) for Frame N+2 on OpenVINO.
-        - 3D Mesh Raycaster computes self-occlusion visibility map on CPU (<0.8 ms).
+        - 3D Mesh Raycaster computes self-occlusion visibility map on CPU (measured).
         - NVIDIA TensorRT executes face swapping on Frame N under GPU gate lock.
         """
         # 1. Asynchronously submit lookahead frame N+2 to OpenVINO worker
         if self.split_mode and getattr(self.settings, "auxiliary_offload_enabled", True):
             self.lookahead_worker.submit_lookahead(frame_index + 2, frame_image)
 
-        # 2. 3D Self-Occlusion Raycasting (<0.8 ms)
+        # 2. 3D Self-Occlusion Raycasting (measured)
         vis_result: VisibilityResult | None = None
         if mesh is not None and abs(head_yaw) > 45.0:
             vis_result = self.raycaster.compute_visibility_map(mesh, yaw_override=head_yaw)
+            self.last_visibility_ms = vis_result.execution_time_ms
 
         # 3. NVIDIA TensorRT Main Swap (held under GPU lock)
         t_enter = time.perf_counter()
@@ -244,11 +246,11 @@ class HeterogeneousScheduler:
             "swapped_image": swapped,
             "visibility_result": vis_result,
             "auxiliary_data": aux_data,
-            "far_cheek_occluded": vis_result.far_cheek_occluded if vis_result else False,
+            "self_occluded_fraction": vis_result.self_occluded_fraction if vis_result else None,
             "executed_devices": {
                 "swap": "nvidia_tensorrt",
                 "auxiliary": "intel_openvino" if self.split_mode else "nvidia_gpu",
-                "raycast": "intel_cpu_simd",
+                "raycast": "cpu_zbuffer",
             },
         }
 
@@ -271,9 +273,9 @@ class HeterogeneousScheduler:
                 "qsv_decoders": self.multiplexer.qsv_decoders,
                 "qsv_encoders": self.multiplexer.qsv_encoders,
             },
-            "simd_raycaster": {
-                "sub_millisecond_verified": True,
-                "target_budget_ms": 0.8,
+            "self_occlusion": {
+                "method": "cpu_vertex_zbuffer",
+                "last_execution_ms": self.last_visibility_ms,
             },
             "gate_status": {
                 "gpu_owners": self.gate.owner_count_for_domain("gpu"),

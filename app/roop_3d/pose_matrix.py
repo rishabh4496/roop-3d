@@ -25,7 +25,7 @@ YAW_EDGES = (-25.0, 25.0)
 PITCH_EDGES = (-15.0, 15.0)
 YAW_ANCHORS = (-75.0, 0.0, 75.0)
 PITCH_ANCHORS = (-35.0, 0.0, 35.0)
-YAW_BINS, PITCH_BINS = 12, 8
+from roop_3d.reconstruction.pose_bins import COVERAGE_PITCH_BINS as PITCH_BINS, COVERAGE_YAW_BINS as YAW_BINS, coverage_bin
 _ROLL_DEGREES = np.arange(-180, 181, dtype=np.int16)
 
 
@@ -68,9 +68,7 @@ def _pose_group(yaw: float, pitch: float) -> tuple[int, int]:
 
 
 def _sphere_bin(yaw: float, pitch: float) -> int:
-    yi = min(YAW_BINS - 1, max(0, int((np.clip(yaw, -90.0, 90.0) + 90.0) / 180.0 * YAW_BINS)))
-    pi = min(PITCH_BINS - 1, max(0, int((np.clip(pitch, -60.0, 60.0) + 60.0) / 120.0 * PITCH_BINS)))
-    return pi * YAW_BINS + yi
+    return coverage_bin(float(yaw), float(pitch))
 
 
 def _project_many(vectors: np.ndarray, projection: np.ndarray | None, device: str) -> tuple[np.ndarray, str]:

@@ -23,8 +23,56 @@ EVENT_TYPE = "tracking.telemetry"
 Publish = Callable[[dict], None]
 
 
+def _quaternion_wxyz(rotation):
+    """Convert an observed 3x3 rotation matrix to a finite, canonical unit quaternion."""
+    try:
+        m = rotation
+        trace = float(m[0][0] + m[1][1] + m[2][2])
+        if trace > 0:
+            scale = math.sqrt(trace + 1.0) * 2
+            q = (0.25 * scale, (m[2][1] - m[1][2]) / scale,
+                 (m[0][2] - m[2][0]) / scale, (m[1][0] - m[0][1]) / scale)
+        elif m[0][0] > m[1][1] and m[0][0] > m[2][2]:
+            scale = math.sqrt(1.0 + m[0][0] - m[1][1] - m[2][2]) * 2
+            q = ((m[2][1] - m[1][2]) / scale, 0.25 * scale,
+                 (m[0][1] + m[1][0]) / scale, (m[0][2] + m[2][0]) / scale)
+        elif m[1][1] > m[2][2]:
+            scale = math.sqrt(1.0 + m[1][1] - m[0][0] - m[2][2]) * 2
+            q = ((m[0][2] - m[2][0]) / scale, (m[0][1] + m[1][0]) / scale,
+                 0.25 * scale, (m[1][2] + m[2][1]) / scale)
+        else:
+            scale = math.sqrt(1.0 + m[2][2] - m[0][0] - m[1][1]) * 2
+            q = ((m[1][0] - m[0][1]) / scale, (m[0][2] + m[2][0]) / scale,
+                 (m[1][2] + m[2][1]) / scale, 0.25 * scale)
+        if not all(math.isfinite(float(x)) for x in q):
+            return None
+        norm = math.sqrt(sum(float(x) ** 2 for x in q))
+        if not math.isfinite(norm) or norm < 1e-12:
+            return None
+        normalized = tuple(float(x) / norm for x in q)
+        return tuple(_round(x, 6) for x in normalized) if normalized[0] >= 0 else tuple(
+            _round(-x, 6) for x in normalized)
+    except (IndexError, TypeError, ValueError, OverflowError, ZeroDivisionError):
+        return None
+
+
 def _round(value, digits: int = 4):
     return None if value is None else round(float(value), digits)
+
+def _pose_number(pose: dict | None, key: str) -> float | None:
+    try:
+        value = float(pose[key])
+        return _round(value, 4) if math.isfinite(value) and value >= 0 else None
+    except (KeyError, TypeError, ValueError, OverflowError):
+        return None
+
+
+def _metric_translation(pose: dict | None) -> tuple[float, float, float] | None:
+    try:
+        values = tuple(float(pose[key]) for key in ("tx_m", "ty_m", "tz_m"))
+        return tuple(_round(value, 5) for value in values) if all(math.isfinite(v) for v in values) else None
+    except (KeyError, TypeError, ValueError, OverflowError):
+        return None
 
 
 def telemetry_payload(frame: TrackedHeadFrame, *, job_id: str | None, track_id: int, state: str, shot_cuts: int,
@@ -32,19 +80,28 @@ def telemetry_payload(frame: TrackedHeadFrame, *, job_id: str | None, track_id: 
     """The wire form of one tracked frame. A quantity that was not measured is null, never a placeholder."""
     camera, gaze = frame.camera, frame.gaze
     identity = frame.identity
+    pose = frame.pose_6dof if isinstance(frame.pose_6dof, dict) else None
     return {
-        "type": EVENT_TYPE, "job_id": job_id, "track_id": int(track_id), "state": state,
+        "type": EVENT_TYPE, "schema_version": 2, "job_id": job_id, "track_id": int(track_id), "state": state,
         "frame_index": int(frame.frame_index), "timestamp_s": _round(frame.timestamp, 4) if math.isfinite(frame.timestamp) else None,
         "status": frame.status, "reason": frame.reason, "confidence": _round(frame.confidence),
         "yaw_deg": _round(camera.yaw_deg, 2) if camera else None,
         "pitch_deg": _round(camera.pitch_deg, 2) if camera else None,
         "roll_deg": _round(camera.roll_deg, 2) if camera else None,
+        "quat_wxyz": _quaternion_wxyz(camera.rotation) if camera else None,
+        "translation_px": (_round(camera.tx, 3), _round(camera.ty, 3)) if camera else None,
+        "pose_scale_px_per_m": _round(camera.scale, 4) if camera else None,
+        "translation_m": _metric_translation(pose),
+        "reproj_rms_px": _pose_number(pose, "reproj_rms_px"),
+        "pose_source": frame.pose_source or (pose.get("source") if pose else None),
+        "spherical_bin": pose.get("spherical_bin") if pose and isinstance(pose.get("spherical_bin"), str) else None,
         "jaw_open_deg": _round(math.degrees(frame.jaw_open_rad), 2) if frame.jaw_open_rad is not None else None,
         "gaze_convergence_deg": _round(gaze.vergence_deg, 2) if gaze else None,
         "gaze_convergence_distance_m": _round(gaze.convergence_distance_m, 3) if gaze and gaze.convergence_distance_m else None,
         "gaze_source": gaze.source if gaze else None,
         "expression_energy": _round(frame.expression_energy),
         "shot_index": int(frame.shot_index), "shot_cuts": int(shot_cuts), "shot_cut": bool(frame.shot_cut),
+        "scene_flash": None,
         "cut_reason": frame.cut_reason,
         "identity_state": identity.state if identity else None,
         "identity_kind": identity.kind if identity else None,

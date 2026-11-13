@@ -496,6 +496,7 @@ def test_partial_occlusion_does_not_flatten_or_recolour_the_swapped_face_interio
     colour by the nearby opaque stripes and changed the interior by ~2 grey levels after blending (0.14 now).
     """
     from roop_3d.compositor.robust_fusion import RobustFusionOptions, fuse_robust
+    from roop_3d.pipeline.subpixel import warp_affine
 
     frame = _scene()
     crop = texture(128, seed=21, sigma=0.8)
@@ -508,7 +509,7 @@ def test_partial_occlusion_does_not_flatten_or_recolour_the_swapped_face_interio
     out, report = fuse_robust(frame, crop, inverse, face, front, None, options=options)
     size = (frame.shape[1], frame.shape[0])
     alpha = (cv2.warpAffine(face, inverse, size) * (1 - cv2.warpAffine(front, inverse, size)))[..., None]
-    expected = (1 - alpha) * frame.astype(np.float32) + alpha * cv2.warpAffine(crop, inverse, size).astype(np.float32)
+    expected = (1 - alpha) * frame.astype(np.float32) + alpha * warp_affine(crop, inverse, size, border="constant").astype(np.float32)
     centre = int(20 + 64 * 1.6)
     window = (slice(centre - 30, centre + 30), slice(centre - 30, centre + 30))
     assert 0.1 < report.occluded_fraction < 0.4

@@ -6,6 +6,11 @@ All notable changes to the Roop 3D project are documented in this file.
 
 ## [Unreleased]
 
+### Live dense pose and sub-pixel crop fusion
+- **Pose:** live observations use the verified local 1k3d68 model with metric PnP when available; fallback observations retain the explicit geometric source/reason, and `FaceObservation.pose_6dof` is absent without a fitted pose.
+- **Compositing:** standard crop fusion uses float-matrix Lanczos4 image resampling with linear matte resampling; `CompositeOptions.subpixel_interpolation` can select Lanczos4, cubic, or linear.
+- **Tests:** `test_live_pose_observation.py`, `test_subpixel_compositor.py`.
+
 ### Dense 3D (reenactment_3d): stable, sharp swaps across head angles (ported from the Roop Ultimate analysis)
 - **Diagnostics:** per-job `JobRequest.angle_diagnostics` (`summary` default or `full`) is the sole selector; the manifest records source `job`. Full mode streams per-face/frame JSONL with path, SHA-256 and row count, atomically publishes only non-empty output, and removes artifacts on failure/cancel. No environment override or `start.js` change.
 - **Crop:** the dense swap crop is a similarity registration of the five filtered landmarks to the swapper template (the 2D path's `registration_matrix`); the mesh bounding box no longer frames it, so it stops breathing with yaw and jaw opening, and UltraMax receives the template landmarks of that crop.

@@ -382,7 +382,7 @@ def _prepare_mesh(document, template: str, topology: str | None, sliders: dict[s
 
 def _mesh(document, template: str = "canonical", topology: str | None = None, sliders: dict[str, float] | None = None,
           albedo_prior: bool = False) -> dict[str, Any]:
-    from roop_3d.reconstruction.identity_asset import to_gltf_frame
+    from roop_3d.reconstruction.identity_asset import parametric_block, to_gltf_frame
     view = _prepare_mesh(document, template, topology, sliders or {}, albedo_prior)
     mesh = to_gltf_frame(view.source_mesh)
     ok, png = cv2.imencode(".png", view.texture)
@@ -396,6 +396,7 @@ def _mesh(document, template: str = "canonical", topology: str | None = None, sl
         "uvs": np.round(mesh.uvs.astype(np.float64), 6).tolist() if mesh.uvs is not None else None,
         "texture": "data:image/png;base64," + base64.b64encode(png.tobytes()).decode("ascii"),
         "provenance": view.provenance,
+        "parametric": parametric_block(view.asset),
     }
     if view.topology_block is not None:
         out["topology"] = view.topology_block

@@ -13,6 +13,8 @@ from roop_3d.engine.runtime import RuntimeConfig, image_bgr, tensor, session_fac
 from roop_3d.faceset.recognizer import Recognizer
 from roop_3d.media.detector import Detector, iou
 from roop_3d.models.catalog import ModelCatalog
+from roop_3d.reconstruction.pose_solver import HeadPose6DoF
+from roop_3d.tracking.scene_cut import SceneCutDetector
 
 
 @dataclass(frozen=True)
@@ -28,7 +30,16 @@ class FaceObservation:
     expression_coefficients: np.ndarray | None = None
     # Frame-pixel MediaPipe coordinates; 468 points cannot provide iris gaze.
     landmarks478: np.ndarray | None = None
+    score: float = 1.0
+    # Optional dense PnP result; the legacy Euler tuple remains available without a verified 68-point model.
+    pose6dof: HeadPose6DoF | None = None
+    pose_source: str = "geometric_5pt"
+    pose_fallback_reason: str | None = None
 
+    @property
+    def pose_6dof(self) -> dict | None:
+        """Serializable measured 6-DoF fields; absent when the pose is only a 5-point heuristic."""
+        return None if self.pose6dof is None else self.pose6dof.to_telemetry()
 
 @dataclass(frozen=True)
 class TrackedFace:
@@ -93,15 +104,24 @@ def optimal_assignment(scores: np.ndarray) -> list[tuple[int, int]]:
 class FaceTracker:
     def __init__(self, catalog: ModelCatalog | None = None, *, max_tracks: int = 32, max_missed: int = 15,
                  threshold: float = 0.5, config: RuntimeConfig = RuntimeConfig(), detector: Detector | None = None, stabilize: bool = True,
-                 policy: TrackPolicy | None = None):
+                 policy: TrackPolicy | None = None, low_threshold: float | None = 0.1, low_match_iou: float = 0.4,
+                 scene_cut_detector: SceneCutDetector | None = None):
+        """``threshold`` is the ByteTrack high-score cut (detections at or above it are associated first, with the
+        appearance+overlap cost, and may start tracks). ``low_threshold`` (default 0.1; ``None`` disables the second
+        pass) is the lowest detector score still observed: those detections are matched afterwards to the tracks the
+        first pass left unmatched by IoU against the track's predicted box only (``>= low_match_iou``), keep that track
+        alive through a partial occlusion, and never create a track."""
         if not 1 <= max_tracks <= 32 or not 0 <= max_missed <= 120 or not 0.1 <= threshold <= 0.99:
             raise ValueError("Invalid tracker bounds")
+        if low_threshold is not None and not 0.01 <= low_threshold < threshold or not 0.05 <= low_match_iou <= 0.95:
+            raise ValueError("Invalid low-score association bounds")
         self.catalog = catalog or ModelCatalog()
         factory = session_factory(self.catalog, config)
         self.detector, self.recognizer = detector or Detector(self.catalog, factory, model_id=config.detector_model_id, provider=config.provider, precision=config.precision_policy), Recognizer(self.catalog, factory)
         self._owns_detector = detector is None
         self.dense = DenseLandmarks(self.catalog, config)
         self.max_tracks, self.max_missed, self.threshold = max_tracks, max_missed, threshold
+        self.low_threshold, self.low_match_iou = low_threshold, low_match_iou
         self._tracks: dict[int, tuple[FaceObservation, int, int]] = {}
         from roop_3d.temporal import TrackTemporalStabilizer
         self.stabilizer = TrackTemporalStabilizer()
@@ -109,8 +129,10 @@ class FaceTracker:
         self.stabilize = stabilize
         self.frame_index = 0
         self.next_id = self.scene_id = 0
-        self.previous_thumbnail: np.ndarray | None = None
+        self.cut_detector = scene_cut_detector or SceneCutDetector()
         self.scene_cut = False
+        self.flash = False
+        self.cut_event = None            # last tracking.scene_cut.CutEvent (None before the first frame)
         self.released = False
         # Opt-in identity-lock policy. None keeps the legacy association byte-for-byte.
         self.policy = policy
@@ -124,31 +146,58 @@ class FaceTracker:
 
     def observe(self, image: np.ndarray, *, include203: bool = False) -> list[FaceObservation]:
         image_bgr(image)
-        detections, _ = self.detector.detect(image, self.threshold)
+        floor = self.threshold if self.low_threshold is None else self.low_threshold
+        if hasattr(self.detector, "detect_scored"):
+            scored, _ = self.detector.detect_scored(image, floor)
+            # High-score detections first so the track budget never drops a certain face for a doubtful one.
+            scored = sorted(scored, key=lambda item: -float(item[2]))
+        else:
+            # A detector without scores cannot express low-score detections: every detection is a certain one.
+            scored = [(box, points, 1.0) for box, points in self.detector.detect(image, self.threshold)[0]]
         observations = []
-        for box, points in detections[:self.max_tracks]:
+        for box, points, score in scored[:self.max_tracks]:
             points106 = self.dense.infer106(image, box)
             embedding = self.recognizer.embed(image, points)
             tensor(embedding, (512,))
             if abs(float(np.linalg.norm(embedding)) - 1) > 1e-4:
                 raise DomainError("IDENTITY_EMBEDDING_INVALID", "Recognizer did not produce a unit embedding", 422)
             points203 = self.dense.infer203(image, points106) if include203 else None
+            points68 = self.dense.infer68(image, box) if hasattr(self.dense, "infer68") else None
+            prior_rotation = None
+            prior_scores = sorted(
+                ((float(iou(box, previous.box)), previous.pose6dof.R)
+                 for previous, _, _ in getattr(self, "_tracks", {}).values()
+                 if previous.pose6dof is not None),
+                key=lambda item: item[0], reverse=True)
+            if prior_scores and prior_scores[0][0] >= 0.25 and (
+                    len(prior_scores) == 1 or prior_scores[0][0] - prior_scores[1][0] >= 0.1):
+                prior_rotation = prior_scores[0][1]
+            pose = self.dense.estimate_pose(image, points, landmarks68=points68,
+                                            prev_rotation=prior_rotation) if hasattr(self.dense, "estimate_pose") else None
+            pose_tuple = pose.pose if pose is not None else geometric_pose(points)
             observations.append(FaceObservation(box.astype(np.float32), points.astype(np.float32), points106,
-                                                embedding, geometric_pose(points), points203,
+                                                embedding, pose_tuple, points203, landmarks68=points68,
+                                                pose6dof=pose.pose6dof if pose is not None else None,
+                                                pose_source=pose.source if pose is not None else "geometric_5pt",
+                                                pose_fallback_reason=pose.fallback_reason if pose is not None else None,
                                                 landmarks478=(self.dense.infer478(image, box)
-                                                    if hasattr(self.dense, 'infer478') else None)))
+                                                    if hasattr(self.dense, "infer478") else None),
+                                                score=float(score)))
         return observations
 
     def process(self, image: np.ndarray, *, include203: bool = False) -> tuple[TrackedFace, ...]:
         if self.released:
             raise DomainError("SESSION_RELEASED", "Tracker has been released", 409)
         image_bgr(image)
-        thumb = cv2.resize(image, (32, 32), interpolation=cv2.INTER_AREA)
-        cut = self.previous_thumbnail is not None and self._cut(self.previous_thumbnail, thumb)
-        self.scene_cut = cut
+        event = self.cut_event = self.cut_detector.observe(image, frame_index=self.frame_index)
+        cut = event.kind == "cut"
+        self.scene_cut, self.flash = cut, event.kind == "flash"
         if cut:
             self.mark_scene_cut()
-        self.previous_thumbnail = thumb
+        elif self.flash:
+            # Exposure flash: the same faces are still there, but every smoothed value was measured under other light.
+            self.stabilizer.reset()
+            self._last_raw_box.clear()
         if self.policy is not None:
             self._update_flow_frames(image, cut)
         return self.assign(self.observe(image, include203=include203))
@@ -176,14 +225,6 @@ class FaceTracker:
                              if previous is not None and not cut and previous.shape == small.shape else None)
         self._small_gray = small
 
-    @staticmethod
-    def _cut(previous: np.ndarray, current: np.ndarray) -> bool:
-        difference = np.abs(previous.astype(np.float32) - current.astype(np.float32)).mean() / 255
-        histograms = [cv2.calcHist([cv2.cvtColor(img, cv2.COLOR_BGR2HSV)], [0, 2], None, [16, 16], [0, 180, 0, 256])
-                      for img in (previous, current)]
-        distance = cv2.compareHist(*histograms, cv2.HISTCMP_BHATTACHARYYA)
-        return bool(difference > 0.45 or difference > 0.18 and distance > 0.7)
-
     def assign(self, observations: list[FaceObservation]) -> tuple[TrackedFace, ...]:
         """Association is independently testable on real or analytic observations."""
         if self.released:
@@ -191,9 +232,12 @@ class FaceTracker:
         if len(observations) > self.max_tracks:
             raise DomainError("TRACK_BUDGET", "Observation count exceeds track budget", 422)
         if getattr(self, "target_registry", None) is not None:
-            return self._assign_registry(observations)
+            # The persistent registry associates by identity only; a low-score detection has no trustworthy embedding.
+            return self._assign_registry([face for face in observations if face.score >= self.threshold])
+        high, low = self._split_by_score(observations)
         if self.policy is not None:
-            return self._assign_policy(observations)
+            return self._assign_policy(high, low)
+        observations = high
         ids = sorted(self._tracks)
         scores = np.full((len(observations), len(ids)), -1.0)
         for row, face in enumerate(observations):
@@ -216,12 +260,32 @@ class FaceTracker:
                 self.next_id += 1
             updated[identity] = (face, 0, age)
             output.append(TrackedFace(identity, face, age, self.scene_id))
+        # ByteTrack second pass: low-score detections continue only the tracks the first pass left unmatched.
+        free = [identity for identity in ids if identity not in updated]
+        for row, column in self._match_low(low, [self._tracks[identity][0].box for identity in free]):
+            identity = free[column]
+            previous, _, age = self._tracks[identity]
+            face = replace(low[row], embedding=previous.embedding)      # a doubtful crop's embedding is not trusted
+            updated[identity] = (face, 0, age + 1)
+            output.append(TrackedFace(identity, face, age + 1, self.scene_id))
         for identity in ids:
             previous, missed, age = self._tracks[identity]
             if identity not in updated and missed < self.max_missed and len(updated) < self.max_tracks:
                 updated[identity] = (previous, missed + 1, age)
         self._tracks = updated
         return self._stabilize(output, updated)
+
+    def _split_by_score(self, observations: list[FaceObservation]) -> tuple[list[FaceObservation], list[FaceObservation]]:
+        high = [face for face in observations if face.score >= self.threshold]
+        low = [face for face in observations if face.score < self.threshold] if self.low_threshold is not None else []
+        return high, low
+
+    def _match_low(self, low: list[FaceObservation], track_boxes: list[np.ndarray]) -> list[tuple[int, int]]:
+        """Maximum-IoU assignment of low-score detections to the remaining tracks' predicted boxes (IoU gate only)."""
+        if not low or not track_boxes:
+            return []
+        overlap = np.array([[iou(face.box, box) for box in track_boxes] for face in low])
+        return optimal_assignment(np.where(overlap >= self.low_match_iou, overlap, -1.0))
 
     def _assign_registry(self, observations):
         """Assign persistent IDs BEFORE temporal filters, so crossings cannot mix landmarks."""
@@ -370,7 +434,8 @@ class FaceTracker:
                 accepted[row] = track
         return accepted
 
-    def _assign_policy(self, observations: list[FaceObservation]) -> tuple[TrackedFace, ...]:
+    def _assign_policy(self, observations: list[FaceObservation],
+                       low: list[FaceObservation] = ()) -> tuple[TrackedFace, ...]:
         policy = self.policy
         frame = self._policy_frame = self._policy_frame + 1
         ids = sorted(self._mem)
@@ -468,6 +533,20 @@ class FaceTracker:
             memory.last_frame, memory.scene_id = frame, self.scene_id
             new_mem[identity] = memory
             output.append(TrackedFace(identity, face, memory.age, self.scene_id, state, float(score), allowed, reason))
+        # ByteTrack second pass under the identity lock: IoU is not identity evidence, so a low-score hit keeps the track
+        # (id, box, velocity) alive through the occlusion but is never swappable and leaves the lock state untouched.
+        free = [identity for identity in ids if identity not in new_mem and self._mem[identity].state != tp.LOST]
+        for row, column in self._match_low(list(low), [self._mem[identity].predicted_box for identity in free]):
+            identity, memory = free[column], self._mem[free[column]]
+            face = replace(low[row], embedding=memory.observation.embedding)
+            overlap_with_prediction = float(iou(face.box, memory.predicted_box))
+            memory.velocity = (0.5 * memory.velocity + 0.5 * (face.box - memory.observation.box)).astype(np.float32)
+            memory.observation, memory.missed = face, 0
+            memory.predicted_box = (face.box + memory.velocity).astype(np.float32)
+            memory.last_frame, memory.age = frame, memory.age + 1
+            new_mem[identity] = memory
+            output.append(TrackedFace(identity, face, memory.age, self.scene_id, tp.UNCERTAIN,
+                                      tp.confidence(0.0, overlap_with_prediction, policy), False, "LOW_SCORE_CONTINUITY"))
         for identity in ids:
             if identity in new_mem:
                 continue
@@ -502,8 +581,9 @@ class FaceTracker:
         self.stabilizer.reset()
         self.frame_index = self.next_id = self.scene_id = 0
         self._last_raw_box.clear()
-        self.previous_thumbnail = None
-        self.scene_cut = False
+        self.cut_detector.reset()
+        self.scene_cut = self.flash = False
+        self.cut_event = None
         self.events.clear()
         self.events_dropped = 0
         self._policy_frame = -1
@@ -515,7 +595,7 @@ class FaceTracker:
         self._lost.clear()
         self._small_gray = self._flow_frames = None
         self.stabilizer.reset()
-        self.previous_thumbnail = None
+        self.cut_detector.reset()
         if self._owns_detector:
             self.detector._session = None
         self.recognizer._session = None

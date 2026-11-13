@@ -1,6 +1,7 @@
-"""Backend-owned 10-state persistent job queue with ACID-safe SQLite/JSON storage.
+"""Backend-owned persistent job queue (12 canonical states) with ACID-safe SQLite/JSON storage.
 
-Supported Canonical Job States (the original 10 plus ANALYZING and RETRYING from Stage 9):
+Supported Canonical Job States (the original 10 plus ANALYZING and RETRYING from Stage 9; the product-spec vocabulary is
+projected from these by ``roop_3d.queue.lifecycle.spec_state_of``):
   1. QUEUED
   2. PREFLIGHT
   3. PRESCANNING
@@ -38,7 +39,7 @@ from pydantic import ConfigDict, Field, computed_field
 
 from roop_3d.core.errors import DomainError
 from roop_3d.core.settings import Contract
-from roop_3d.core.storage import atomic_json, owned
+from roop_3d.core.storage import atomic_bytes, atomic_json, owned
 from roop_3d.queue.lifecycle import lifecycle_of
 from roop_3d.engine.pipeline_runner import PipelineCheckpoint, checkpoint_npz_bytes, read_checkpoint_npz
 from roop_3d.segment_dispatcher import SegmentSlice, concat_lossless
@@ -137,7 +138,7 @@ CANONICAL_TRANSITIONS[CanonicalJobState.RETRYING] = frozenset({
 
 
 def normalize_canonical_state(state: Any) -> CanonicalJobState:
-    """Normalize input state to one of the 10 canonical states."""
+    """Normalize input state to one of the 12 canonical states (see :class:`CanonicalJobState`)."""
     if isinstance(state, CanonicalJobState):
         return state
     s = str(state).strip().upper()
@@ -414,7 +415,7 @@ class QueueManager:
         error_message: str | None = None,
         output: dict[str, Any] | None = None,
     ) -> QueueJob:
-        """Enforce canonical transitions between the 10 states."""
+        """Enforce canonical transitions between the 12 canonical states."""
         target_state = normalize_canonical_state(new_state)
 
         with self._lock, self._get_connection() as conn:
@@ -496,9 +497,8 @@ class QueueManager:
 
         if checkpoint:
             checkpoint_rel = f"roop_3d/.runtime/jobs/{job_id}/checkpoint.npz"
-            cp_path = owned(self.root, checkpoint_rel)
-            cp_path.parent.mkdir(parents=True, exist_ok=True)
-            cp_path.write_bytes(checkpoint_npz_bytes(checkpoint))
+            # tmp + fsync + os.replace: a crash mid-write leaves the previous checkpoint intact and readable
+            atomic_bytes(self.root, checkpoint_rel, checkpoint_npz_bytes(checkpoint))
         else:
             default_cp = owned(self.root, f"roop_3d/.runtime/jobs/{job_id}/checkpoint.npz")
             if default_cp.is_file():

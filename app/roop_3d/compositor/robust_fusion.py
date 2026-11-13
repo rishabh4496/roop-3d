@@ -18,6 +18,7 @@ from roop_3d.compositor.matte import decontaminate_edges, refine_occluder
 from roop_3d.compositor.quality import match_sharpness, transfer_fine_texture
 from roop_3d.compositor.strand_matte import StrandMatteOptions, scaled_for_face, strand_evidence
 from roop_3d.core.errors import DomainError
+from roop_3d.pipeline.subpixel import warp_affine
 
 
 @dataclass(frozen=True)
@@ -84,7 +85,7 @@ def fuse_robust(frame: np.ndarray, crop: np.ndarray, inverse: np.ndarray, face_a
     def warp(data, flag=cv2.INTER_LINEAR):
         return cv2.warpAffine(data, shifted, size, flags=flag, borderMode=cv2.BORDER_CONSTANT, borderValue=0)
 
-    source = warp(image)
+    source = warp_affine(image, shifted, size, interpolation="lanczos4", border="constant")
     alpha = np.clip(warp(np.clip(alpha_crop, 0, 1)), 0, 1)
     footprint = warp(np.ones(image.shape[:2], np.float32))
     target_roi = target[y0:y1, x0:x1]

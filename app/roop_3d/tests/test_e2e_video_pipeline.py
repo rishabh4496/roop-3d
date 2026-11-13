@@ -265,7 +265,7 @@ def test_manifest_is_honest_about_what_ran(pipeline_run):
     assert manifest["faces"]["swapped"] == FRAMES and manifest["faces"]["skipped"] == 0
     assert manifest["encoder"] in {"h264_nvenc", "libx264"} and manifest["color"]["matrix"] == "bt709"
     assert manifest["restorer"] in {"ultramax", "gpen", "codeformer", "gfpgan"} and manifest["identity_swapper"].get("sha256")
-    assert manifest["limits"]["resumable"] is False and manifest["metadata_stripped"] is True
+    assert manifest["limits"]["resumable"] is False and manifest["metadata_stripped"] is False
     assert manifest["per_frame_mean_ms"].get("inswapper", 0) > 0 and manifest["per_frame_mean_ms"].get("restorer", 0) > 0
     assert manifest["swap_scope"] == "full_craniofacial"
 

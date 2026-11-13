@@ -5,21 +5,23 @@ from enum import Enum
 
 import cv2
 import numpy as np
-
 from roop_3d.core.errors import DomainError
+
 
 
 class BlendMode(str, Enum):
     FEATHER = "feather"
     MULTI_BAND = "multi_band"
     POISSON = "poisson"
+    # Laplacian-pyramid split that keeps the target's fine detail and Lab-matches the swap's base (compositor/frequency_blend.py)
+    FREQUENCY = "frequency_separated"
 
 
 def warp_crop(crop: np.ndarray, inverse: np.ndarray, frame_shape: tuple[int, ...],
-              mask: np.ndarray | None = None) -> tuple[np.ndarray, np.ndarray]:
-    """Warp crop coordinates into the full frame with a crop-to-frame Minv matrix."""
+              mask: np.ndarray | None = None, *, interpolation: str = "lanczos4") -> tuple[np.ndarray, np.ndarray]:
+    """Warp crop coordinates into the full frame with sub-pixel image resampling and a linear matte."""
     image = np.asarray(crop)
-    matrix = np.asarray(inverse, dtype=np.float32)
+    matrix = np.asarray(inverse, dtype=np.float64)
     height, width = int(frame_shape[0]), int(frame_shape[1])
     if (image.ndim != 3 or image.shape[2] != 3 or image.shape[0] <= 0 or image.shape[1] <= 0
             or matrix.shape != (2, 3) or not np.isfinite(matrix).all()
@@ -31,11 +33,15 @@ def warp_crop(crop: np.ndarray, inverse: np.ndarray, frame_shape: tuple[int, ...
     alpha = np.ones(image.shape[:2], np.float32) if mask is None else np.asarray(mask, dtype=np.float32)
     if alpha.shape != image.shape[:2] or not np.isfinite(alpha).all():
         raise DomainError("COMPOSITOR_MASK_INVALID", "Crop alpha must match the replacement image", 422)
-    warped_image = cv2.warpAffine(image, matrix, (width, height), flags=cv2.INTER_LINEAR,
-                                  borderMode=cv2.BORDER_CONSTANT, borderValue=(0, 0, 0))
-    warped_alpha = cv2.warpAffine(np.clip(alpha, 0, 1), matrix, (width, height), flags=cv2.INTER_LINEAR,
-                                  borderMode=cv2.BORDER_CONSTANT, borderValue=0)
+    from roop_3d.pipeline.subpixel import warp_affine as warp_subpixel_affine
+
+    warped_image = warp_subpixel_affine(image, matrix, (width, height), interpolation=interpolation,
+                                        border="constant", border_value=(0, 0, 0))
+    warped_alpha = cv2.warpAffine(np.clip(alpha, 0, 1), matrix.astype(np.float32), (width, height),
+                                  flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=0)
     return warped_image, np.clip(np.nan_to_num(warped_alpha), 0.0, 1.0).astype(np.float32)
+
+
 
 
 def _bounds(alpha: np.ndarray, margin: int) -> tuple[int, int, int, int] | None:
@@ -76,7 +82,7 @@ def _pyramid_blend(target: np.ndarray, source: np.ndarray, alpha: np.ndarray, le
 
 def fuse_crop(frame: np.ndarray, crop: np.ndarray, inverse: np.ndarray, mask: np.ndarray, *,
               mode: BlendMode | str = BlendMode.FEATHER, levels: int = 4,
-              linear_light: bool = False, transfer: str = "srgb") -> np.ndarray:
+              linear_light: bool = False, transfer: str = "srgb", interpolation: str = "lanczos4") -> np.ndarray:
     """Composite a transformed crop and guarantee byte-identical pixels outside its dilated ROI."""
     target = np.asarray(frame)
     if target.ndim != 3 or target.shape[2] != 3 or target.dtype != np.uint8:
@@ -85,7 +91,7 @@ def fuse_crop(frame: np.ndarray, crop: np.ndarray, inverse: np.ndarray, mask: np
         blend_mode = BlendMode(mode)
     except ValueError:
         raise ValueError("Unknown boundary fusion mode") from None
-    source, alpha = warp_crop(crop, inverse, target.shape, mask)
+    source, alpha = warp_crop(crop, inverse, target.shape, mask, interpolation=interpolation)
     return fuse_warped(target, source, alpha, mode=blend_mode, levels=levels, linear_light=linear_light,
                        transfer=transfer)
 
@@ -104,7 +110,9 @@ def fuse_warped(target: np.ndarray, source: np.ndarray, alpha: np.ndarray, *,
     """
     from roop_3d.compositor.quality import encode_linear, linear_lut, mix_linear_light
     blend_mode = BlendMode(mode)
-    margin = max(2, (2 ** max(1, min(levels, 8))) if blend_mode == BlendMode.MULTI_BAND else 2)
+    if blend_mode == BlendMode.FREQUENCY and linear_light:
+        raise ValueError("Frequency-separated blending works on encoded values and cannot be combined with linear-light blending")
+    margin = max(2, (2 ** max(1, min(levels, 8))) if blend_mode in (BlendMode.MULTI_BAND, BlendMode.FREQUENCY) else 2)
     bounds = _bounds(alpha, margin)
     if bounds is None:
         return target.copy()
@@ -125,6 +133,9 @@ def fuse_warped(target: np.ndarray, source: np.ndarray, alpha: np.ndarray, *,
             mixed = encode_linear(transfer, _pyramid_blend(lut[target_roi], lut[clipped], alpha_roi, levels))
         else:
             mixed = _pyramid_blend(target_roi, source_roi, alpha_roi, levels)
+    elif blend_mode == BlendMode.FREQUENCY:
+        from roop_3d.compositor.frequency_blend import FrequencyBlendOptions, frequency_blend
+        mixed = frequency_blend(target_roi, source_roi, alpha_roi, FrequencyBlendOptions(levels=max(2, min(levels, 8))))
     elif blend_mode == BlendMode.POISSON:
         binary = (alpha_roi > 0.05).astype(np.uint8) * 255
         if int(binary.sum()) == 0 or min(binary.shape) < 2:
