@@ -71,16 +71,39 @@ def test_zero_age_recovery_includes_future_dated_crash_artifacts(tmp_path):
 
 
 def test_cpu_job_completion_does_not_wait_for_gpu_telemetry(tmp_path, monkeypatch):
+    import io
+    import threading
+    from roop_3d.jobs import worker as worker_module
     from roop_3d.reliability import probe
-    calls = []
-    def gpu_query(**kwargs):
-        calls.append(kwargs)
+    from roop_3d.telemetry.pinokio_terminal import PinokioTerminalHUD, ResourceSampler
+    gpu_samples = []
+    cpu_sampled = threading.Event()
+
+    class CpuMeter:
+        def read(self):
+            cpu_sampled.set()
+            return 0.0
+
+    def gpu_query():
+        gpu_samples.append(True)
         return probe.GpuMemory()
-    monkeypatch.setattr(probe, 'gpu_memory', gpu_query)
+
+    class SynchronizedSampler(ResourceSampler):
+        def acquire(self, *, with_gpu=True):
+            super().acquire(with_gpu=with_gpu)
+            assert cpu_sampled.wait(2), "the HUD sampler did not publish its first CPU reading"
+
+    sampler = SynchronizedSampler(gpu=gpu_query, cpu=CpuMeter())
+    hud = PinokioTerminalHUD(io.StringIO(), color=False, in_place=False, sampler=sampler)
+    hud.print_report = lambda *_args, **_kwargs: None
+    monkeypatch.delenv("ROOP3D_HUD", raising=False)
+    monkeypatch.setattr(worker_module, "HUD", hud.arm())
     rig = build_rig(tmp_path, frames=4, tracks=1)
     try:
         result = rig.wait(rig.submit().job_id, timeout=5)
         assert result.state == JobState.succeeded, result.failure
+        assert cpu_sampled.is_set()
     finally:
         rig.worker.stop()
-    assert calls == []
+        hud.disarm()
+    assert gpu_samples == []

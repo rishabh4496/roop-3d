@@ -225,7 +225,7 @@ class _Clock:
 
 def _hud(out):
     sampler = ResourceSampler(gpu=lambda: None)
-    sampler.sample_once = lambda: ResourceReading()  # type: ignore[method-assign]
+    sampler.sample_once = lambda **_kwargs: ResourceReading()  # type: ignore[method-assign]
     return PinokioTerminalHUD(out, color=False, in_place=False, clock=_Clock(), sampler=sampler, width=lambda: 160,
                               min_redraw=0.0, plain_interval=0.0).arm()
 

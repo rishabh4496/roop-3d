@@ -55,7 +55,7 @@ const mockConfig: Config = {
   port: 8030,
 };
 
-describe('SettingsInspector Phase 3 Domain Tabs & Validation', () => {
+describe('SettingsInspector all-visible domains & validation', () => {
   let host: HTMLDivElement, root: Root;
 
   beforeEach(() => {
@@ -70,7 +70,7 @@ describe('SettingsInspector Phase 3 Domain Tabs & Validation', () => {
     host.remove();
   });
 
-  it('renders all domain category tabs and defaults to Compute tab', async () => {
+  it('renders every schema domain and control in the default view', async () => {
     await act(async () => {
       root.render(
         <SettingsInspector
@@ -82,29 +82,19 @@ describe('SettingsInspector Phase 3 Domain Tabs & Validation', () => {
       );
     });
 
-    const tabs = [...host.querySelectorAll<HTMLButtonElement>('.settings-domain-tab')];
-    const labels = tabs.map(t => t.querySelector('span')?.textContent);
-    expect(labels).toContain('Compute');
-    expect(labels).toContain('3D Spatial');
-    expect(labels).toContain('Pipeline');
-    expect(labels).toContain('Finishing');
-    expect(labels).toContain('UX & Diagnostics');
-    expect(labels).toContain('Advanced');
-
-    // Compute tab is active by default
-    const computeTab = tabs.find(t => t.textContent?.includes('Compute'))!;
-    expect(computeTab.classList.contains('active')).toBe(true);
-    expect(computeTab.getAttribute('aria-selected')).toBe('true');
-
-    // Compute panel is visible, others are hidden
-    const computePanel = host.querySelector('#panel-compute')!;
-    expect(computePanel.hasAttribute('hidden')).toBe(false);
-
-    const spatialPanel = host.querySelector('#panel-spatial')!;
-    expect(spatialPanel.hasAttribute('hidden')).toBe(true);
+    expect(host.querySelector('.settings-domain-tabs')).toBeNull();
+    for (const domain of ['compute', 'spatial', 'pipeline', 'finishing', 'ux', 'advanced']) {
+      const panel = host.querySelector(`#panel-${domain}`) as HTMLElement;
+      expect(panel).toBeTruthy();
+      expect(panel.hidden).toBe(false);
+      expect(getComputedStyle(panel).display).not.toBe('none');
+    }
+    for (const name of ['hardware_profile', 'execution_mode', 'temporal_beta', 'face_restoration_policy', 'video_timing_policy', 'diagnostics_level', 'port']) {
+      expect(host.querySelector(`#setting-${name}`)).toBeTruthy();
+    }
   });
 
-  it('switches tabs on click and displays relevant controls', async () => {
+  it('keeps controls from all groups available without selecting a category', async () => {
     await act(async () => {
       root.render(
         <SettingsInspector
@@ -116,20 +106,13 @@ describe('SettingsInspector Phase 3 Domain Tabs & Validation', () => {
       );
     });
 
-    const pipelineTab = [...host.querySelectorAll<HTMLButtonElement>('.settings-domain-tab')].find(
-      t => t.textContent?.includes('Pipeline')
-    )!;
-
-    await act(async () => {
-      pipelineTab.click();
-    });
-
-    expect(pipelineTab.classList.contains('active')).toBe(true);
-    const pipelinePanel = host.querySelector('#panel-pipeline')!;
-    expect(pipelinePanel.hasAttribute('hidden')).toBe(false);
-
-    // Verify face_restoration_policy control is rendered in pipeline panel
-    expect(pipelinePanel.querySelector('label[for="setting-face_restoration_policy"]')).toBeTruthy();
+    expect(host.querySelector('[role="tablist"]')).toBeNull();
+    expect(host.querySelector('#panel-compute select')).toBeTruthy();
+    expect(host.querySelector('#panel-spatial input')).toBeTruthy();
+    expect(host.querySelector('#panel-pipeline select')).toBeTruthy();
+    expect(host.querySelector('#panel-finishing select')).toBeTruthy();
+    expect(host.querySelector('#panel-ux select')).toBeTruthy();
+    expect(host.querySelector('#panel-advanced input')).toBeTruthy();
   });
 
   it('displays active and resolved hardware profile badges in Compute tab', async () => {

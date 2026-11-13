@@ -71,7 +71,6 @@ export function SettingsInspector({
   namespace?: string;
 }) {
   const [draft, setDraft] = useState<Config>({});
-  const [activeTab, setActiveTab] = useState<DomainId>('compute');
 
   renderProbe('SettingsInspector');
 
@@ -115,26 +114,6 @@ export function SettingsInspector({
 
       {!config && <p className="muted">Connecting to the capability catalog…</p>}
 
-      <div className="settings-domain-tabs" role="tablist" aria-label="Settings categories">
-        {visibleTabs.map(tab => {
-          const isSelected = activeTab === tab.id;
-          return (
-            <button
-              key={tab.id}
-              type="button"
-              role="tab"
-              id={`tab-${tab.id}`}
-              aria-selected={isSelected}
-              aria-controls={`panel-${tab.id}`}
-              className={`settings-domain-tab ${isSelected ? 'active' : ''}`}
-              onClick={() => setActiveTab(tab.id)}
-            >
-              <span>{tab.label}</span>
-              <span className="tab-count">{categorized[tab.id].length}</span>
-            </button>
-          );
-        })}
-      </div>
 
       <form
         onSubmit={event => {
@@ -142,20 +121,24 @@ export function SettingsInspector({
           save(draft);
         }}
       >
-        {visibleTabs.map(tab => {
-          const items = categorized[tab.id];
-          const isSelected = activeTab === tab.id;
+        <div className="settings-domain-grid">
+          {visibleTabs.map(tab => {
+            const items = categorized[tab.id];
 
-          return (
-            <div
-              key={tab.id}
-              role="tabpanel"
-              id={`panel-${tab.id}`}
-              aria-labelledby={`tab-${tab.id}`}
-              hidden={!isSelected}
-              style={{ display: isSelected ? 'block' : 'none' }}
-            >
-              <div className="domain-description">{tab.description}</div>
+            return (
+              <section
+                key={tab.id}
+                role="region"
+                id={`panel-${tab.id}`}
+                aria-labelledby={`heading-${tab.id}`}
+                className="settings-domain"
+                data-setting-domain={tab.id}
+              >
+                <header className="settings-domain-heading">
+                  <h4 id={`heading-${tab.id}`}>{tab.label}</h4>
+                  <span className="tab-count">{items.length}</span>
+                </header>
+                <div className="domain-description">{tab.description}</div>
 
               {tab.id === 'compute' && caps?.workstation && (
                 <div className="profile-badge">
@@ -261,18 +244,18 @@ export function SettingsInspector({
                   </div>
                 );
               })}
-
               {tab.id === 'ux' && <RuntimeReportPanel />}
-            </div>
-          );
-        })}
+              </section>
+            );
+          })}
+        </div>
 
         <button className="button full" disabled={!caps || !config || busy}>
           Apply settings
         </button>
       </form>
 
-      <details className="model-list">
+      <details className="model-list" open>
         <summary>
           Recorded model artifacts <span>{caps?.models.length ?? 0}</span>
         </summary>

@@ -2447,15 +2447,18 @@ body {
    Stage 7: Studio workstation layout (target · identity · preview · inspector + bottom timeline).
    Theme tokens only, so every dark / light theme applies unchanged.
    ========================================================================= */
-.studio{display:flex;flex-direction:column;gap:10px;padding:10px 12px 16px;min-width:0}
-.studio-grid{display:grid;gap:10px;min-height:640px;height:calc(100vh - 150px);
-  grid-template-columns:minmax(230px,280px) minmax(0,1fr) minmax(310px,360px);grid-template-rows:minmax(0,1fr) minmax(0,1.1fr) auto;
-  grid-template-areas:"identity center inspector" "target center inspector" "mapping center inspector"}
-@media(max-width:1279px){.studio-grid{height:auto;grid-template-columns:280px minmax(0,1fr);grid-template-rows:auto auto auto auto;grid-template-areas:"identity center" "target center" "mapping center" "inspector inspector"}
-  .studio-left,.studio-identity{max-height:520px}}
-@media(max-width:899px){.studio{padding:8px}.studio-grid{grid-template-columns:minmax(0,1fr);grid-template-areas:"center" "identity" "target" "mapping" "inspector";min-height:0}
-  .studio-left,.studio-identity{max-height:none}}
-.studio-left{grid-area:target}.studio-identity{grid-area:identity}.studio-mapping{grid-area:mapping}.studio-center{grid-area:center}.studio-right{grid-area:inspector}
+.studio{display:flex;flex-direction:column;gap:8px;padding:8px 10px 12px;min-width:0}
+.studio-grid{display:grid;gap:8px;min-height:680px;height:calc(100dvh - 250px);
+  grid-template-columns:minmax(210px,270px) minmax(0,1fr) minmax(310px,370px);grid-template-rows:minmax(360px,1fr) minmax(220px,.42fr);
+  grid-template-areas:"source center inspector" "timeline timeline queue"}
+@media(max-width:1279px){.studio-grid{height:auto;grid-template-columns:minmax(220px,280px) minmax(0,1fr);grid-template-rows:minmax(500px,auto) minmax(360px,auto) minmax(250px,auto);grid-template-areas:"source center" "inspector inspector" "timeline queue"}
+  .studio-left-dock{grid-template-rows:repeat(3,minmax(0,1fr))}}
+@media(max-width:899px){.studio{padding:8px}.studio-grid{grid-template-columns:minmax(0,1fr);grid-template-rows:auto;grid-template-areas:"center" "source" "inspector" "timeline" "queue";min-height:0}
+  .studio-left-dock{grid-template-rows:repeat(3,minmax(180px,auto))}}
+.studio-left-dock{grid-area:source;display:grid;grid-template-rows:repeat(3,minmax(0,1fr));gap:8px;min-width:0;min-height:0;overflow:hidden}
+.studio-left-dock>.studio-panel{min-height:0}
+.studio-center{grid-area:center}
+.studio-right{grid-area:inspector}
 .studio-panel{background:var(--surface);border:1px solid var(--line);border-radius:8px;min-width:0;min-height:0;overflow:auto;display:flex;flex-direction:column;scrollbar-width:thin;scrollbar-color:var(--line) transparent}
 .studio-panel-head,.studio-center-head{position:sticky;top:0;z-index:3;display:flex;align-items:center;justify-content:space-between;gap:8px;padding:10px 12px;background:var(--surface);border-bottom:1px solid var(--line)}
 .studio-panel-head .eyebrow,.studio-center-head .eyebrow{font-size:10px;letter-spacing:1.4px;font-weight:650}
@@ -2576,11 +2579,12 @@ body {
 .inspector-panels .parameter-panel legend{float:left;width:100%;padding:0 0 6px;font-size:10px;letter-spacing:1.2px;font-weight:700;text-transform:uppercase}
 .studio-right .reconstruction-choice{display:flex;flex-direction:column;gap:4px;font-size:10px;color:var(--muted)}
 /* Bottom: lanes, timeline, tray, queue */
-.studio-bottom{display:flex;flex-direction:column;gap:10px;min-width:0}
+.studio-bottom{grid-area:timeline;display:flex;flex-direction:column;gap:8px;min-width:0;min-height:0;overflow:auto}
+.studio-queue{grid-area:queue;min-width:0;min-height:0;overflow:auto;padding:8px;border:1px solid var(--line);border-radius:8px;background:var(--surface)}
+.studio-queue .queue-drawer-panel{margin-top:0}
 .studio-bottom .trim-bar{border:1px solid var(--line);border-radius:8px;background:var(--surface)}
 .studio-timeline-slot{min-width:0}
 .studio-tray{border:1px solid var(--line);border-radius:8px;background:var(--surface)}
-.studio-tray>summary{padding:10px 12px;cursor:pointer;font-size:10px;letter-spacing:1.2px;font-weight:700;text-transform:uppercase}
 .track-lanes{position:relative;display:flex;flex-direction:column;gap:3px;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--surface)}
 .lane{display:grid;grid-template-columns:150px minmax(0,1fr);gap:8px;align-items:center;min-height:22px}
 .lane-label{display:flex;align-items:center;gap:6px;min-width:0;padding:2px 6px;border:0;border-radius:4px;background:none;color:var(--text);font-size:10.5px;font-weight:600;text-align:left;white-space:nowrap;overflow:hidden}
@@ -2626,63 +2630,11 @@ button.lane-label:hover{background:var(--raised)}
 .panel-boundary{display:contents}.panel-error{margin:10px 12px}
 .studio-timeline-slot{overflow-x:auto}@media(max-width:700px){.studio-timeline-slot .trim-actions-group{flex-wrap:wrap}}
 
-/* Phase 3 Settings Inspector Domain Tabs & Glass Badges */
-.settings-domain-tabs {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin: 12px 0 16px;
-  padding: 4px;
-  background: var(--surface-glass);
-  backdrop-filter: var(--glass-blur);
-  -webkit-backdrop-filter: var(--glass-blur);
-  border: var(--glass-border);
-  box-shadow: var(--glass-specular);
-  border-radius: 8px;
-}
-.settings-domain-tab {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 6px 10px;
-  background: transparent;
-  border: 1px solid transparent;
-  border-radius: 5px;
-  font-size: 11px;
-  font-weight: 500;
-  color: var(--muted);
-  cursor: pointer;
-  transition: all 0.15s ease;
-}
-.settings-domain-tab:hover {
-  color: var(--text);
-  background: var(--surface);
-}
-.settings-domain-tab.active {
-  color: var(--text);
-  background: var(--raised);
-  border-color: var(--line);
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
-}
-.settings-domain-tab .tab-count {
-  font-size: 9px;
-  padding: 1px 5px;
-  border-radius: 10px;
-  background: var(--surface);
-  color: var(--muted);
-}
-.settings-domain-tab.active .tab-count {
-  background: var(--soft);
-  color: var(--accent);
-}
-.domain-description {
-  font-size: 11px;
-  color: var(--muted);
-  margin-bottom: 14px;
-  padding-bottom: 8px;
-  border-bottom: 1px dashed var(--line);
-  line-height: 1.4;
-}
+.settings-domain-grid{display:grid;grid-template-columns:minmax(0,1fr);gap:7px}
+.settings-domain{min-width:0;padding:8px;border:1px solid var(--line);border-radius:6px;background:var(--raised)}
+.settings-domain-heading{display:flex;align-items:center;justify-content:space-between;gap:8px;margin:0 0 5px}
+.settings-domain-heading h4{margin:0;font-size:10px;letter-spacing:.7px;text-transform:uppercase}
+.settings-domain .domain-description{font-size:10px;color:var(--muted);margin:0 0 7px;padding:0 0 5px;border-bottom:1px dashed var(--line);line-height:1.35}
 .model-badge {
   font-size: 9px;
   font-weight: 600;

@@ -42,7 +42,7 @@ class Clock:
 
 def hud(stream: io.StringIO | None = None, *, in_place: bool = True, width: int = 140, clock: Clock | None = None, **kwargs):
     sampler = ResourceSampler(gpu=lambda: None)
-    sampler.sample_once = lambda: ResourceReading()  # type: ignore[method-assign]
+    sampler.sample_once = lambda **_kwargs: ResourceReading()  # type: ignore[method-assign]
     return PinokioTerminalHUD(stream or io.StringIO(), color=False, in_place=in_place, clock=clock or Clock(), sampler=sampler,
                               width=lambda: width, min_redraw=0.0, **kwargs).arm()
 

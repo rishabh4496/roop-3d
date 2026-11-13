@@ -31,6 +31,19 @@ it('mounts the integrated application shell with all nine screens and keeps canv
     expect(host.querySelector('[data-screen="faceswap"]')?.textContent).toContain('Canvas draft 1');
   } finally { await act(async () => root.unmount()); host.remove(); }
 });
+it('mounts all six workstation zones visibly in the default studio layout', async () => {
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true }); localStorage.clear(); location.hash = '#/faceswap';
+  const host = document.createElement('div'); document.body.append(host); const root = createRoot(host);
+  try {
+    await act(async () => root.render(<HotkeyProvider><WorkspaceLayoutProvider><App/></WorkspaceLayoutProvider></HotkeyProvider>));
+    const zones = [...host.querySelectorAll<HTMLElement>('[data-studio-zone]')];
+    expect(zones.map(zone => zone.dataset.studioZone)).toEqual(['telemetry', 'source-target', 'preview', 'inspector', 'timeline', 'queue']);
+    for (const zone of zones) {
+      expect(zone.hidden).toBe(false);
+      expect(zone.closest('[hidden],[inert]')).toBeNull();
+    }
+  } finally { await act(async () => root.unmount()); host.remove(); }
+});
 
 it('undoes parameter changes and mask strokes through the integrated Ctrl+Z / Ctrl+Y shortcuts', async () => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true }); localStorage.clear(); useHistoryStore.getState().reset();

@@ -261,11 +261,11 @@ class JobWorker:
         with_gpu = settings.hardware_profile != "cpu" and settings.preferred_provider != "CPUExecutionProvider"
         MONITOR.job_started(job_id, with_gpu=with_gpu)
         try:
-            self._run_job(job_id)
+            self._run_job(job_id, with_gpu=with_gpu)
         finally:
             MONITOR.job_finished(job_id, with_gpu=with_gpu)
 
-    def _run_job(self, job_id: str) -> None:
+    def _run_job(self, job_id: str, *, with_gpu: bool) -> None:
         admission: ScheduledJob | None = None
         runner = None
         hud_job = False
@@ -297,7 +297,8 @@ class JobWorker:
                     self._wake_event.wait(self.poll_interval)
                     self._wake_event.clear()
             hud_job = True
-            _hud(lambda: HUD.job_started(job_id, swap_mode=getattr(record.request.parameters_at(0), "swap_scope", None)))
+            _hud(lambda: HUD.job_started(job_id, swap_mode=getattr(record.request.parameters_at(0), "swap_scope", None),
+                                         with_gpu=with_gpu))
             output = runner.run_prepared(record, admission.lease.admission, prepared=prepared,
                 control=lambda: self._control(job_id),
                 mark_running=lambda: self._mark_running(job_id),

@@ -143,7 +143,7 @@ export default function StudioInspector({ caps, config, onSaveConfig, track, she
             <summary>Angular coverage<small>{coverage ? 'which head angles this FaceSet has' : 'load a FaceSet'}</small></summary>
             <CoverageRadarPanel coverage={coverage} track={track} compact />
           </details>
-          <details className="inspector-subsection" data-testid="morph-section">
+          <details className="inspector-subsection" data-testid="morph-section" open>
             <summary>3D head model &amp; influence<small>backbone · influence mode · jaw reshape</small></summary>
             <HeadModelBackbone />
             <IdentityMorphPanel parameters={parameters} setParameters={setParameters} preview={morphPreview} onPreview={setMorphPreview} />
@@ -184,10 +184,10 @@ export default function StudioInspector({ caps, config, onSaveConfig, track, she
         </section>
       </div>
 
-      <details className="advanced-drawer" data-testid="advanced-diagnostics">
+      <details className="advanced-drawer" data-testid="advanced-diagnostics" open>
         <summary><span>Advanced Diagnostics</span><small className="muted">engine, colour, lighting, tracks, experimental</small></summary>
         <div className="advanced-body">
-          <Section title="Target identity" open={false} badge={track ? <span className="status-chip">{trackLabel(track.track_id)}</span> : undefined}>
+          <Section title="Target identity" badge={track ? <span className="status-chip">{trackLabel(track.track_id)}</span> : undefined}>
             {!track ? <p className="muted">Click a face in the video, a lane in the timeline, or a card in the Target panel.</p> : <>
               <div className="inspector-target">
                 {track.thumbnail_base64 && <img src={`data:${track.thumbnail_mime};base64,${track.thumbnail_base64}`} alt={`${track.track_id} detected face`} />}
@@ -262,7 +262,7 @@ export default function StudioInspector({ caps, config, onSaveConfig, track, she
 
           <div className="inspector-panels" ref={panelsRef} aria-label="Pose, expression, masking and restoration parameters" />
 
-          <Section title="Processing" open={false}>{processing}</Section>
+          <Section title="Processing">{processing}</Section>
         </div>
       </details>
       {footer}

@@ -175,7 +175,7 @@ class _CpuMeter:
 
 
 class ResourceSampler:
-    """Samples CPU and VRAM on its own thread so the render loop never waits for ``nvidia-smi``.
+    """Samples CPU and, for users that need it, VRAM on its own thread so the render loop never waits for ``nvidia-smi``.
 
     ``latest()`` is a lock-protected read of the last reading; ``peak_vram_mib`` is the maximum seen since ``reset_peak``."""
 
@@ -189,22 +189,24 @@ class ResourceSampler:
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._users = 0
+        self._gpu_users = 0
 
     @staticmethod
     def _default_gpu() -> Any:
         from roop_3d.reliability.probe import gpu_memory
         return gpu_memory(max_age=0.5)
 
-    def sample_once(self) -> ResourceReading:
+    def sample_once(self, *, with_gpu: bool = True) -> ResourceReading:
         used = total = scope = None
-        try:
-            gpu = self._gpu()
-            if getattr(gpu, "available", False):
-                per_process = bool(getattr(gpu, "per_process", False)) and gpu.process_mib is not None
-                used, scope = (gpu.process_mib, "process") if per_process else (gpu.used_mib, "device")
-                total = gpu.total_mib
-        except Exception:
-            pass  # a failed probe is an unmeasured value, not a failed job
+        if with_gpu:
+            try:
+                gpu = self._gpu()
+                if getattr(gpu, "available", False):
+                    per_process = bool(getattr(gpu, "per_process", False)) and gpu.process_mib is not None
+                    used, scope = (gpu.process_mib, "process") if per_process else (gpu.used_mib, "device")
+                    total = gpu.total_mib
+            except Exception:
+                pass  # a failed probe is an unmeasured value, not a failed job
         reading = ResourceReading(self._cpu.read(), used, total, scope)
         with self._lock:
             self._reading = reading
@@ -225,28 +227,33 @@ class ResourceSampler:
         with self._lock:
             self._peak = self._reading.vram_used_mib
 
-    def acquire(self) -> None:
-        """Start the sampling thread for the first user; the last ``release`` stops it."""
+    def acquire(self, *, with_gpu: bool = True) -> None:
+        """Start sampling for the first user; GPU telemetry is enabled while any user needs it."""
         with self._lock:
             self._users += 1
+            if with_gpu:
+                self._gpu_users += 1
             if self._thread is not None and self._thread.is_alive():
                 return
             self._stop.clear()
             self._thread = threading.Thread(target=self._run, name="roop3d-hud-sampler", daemon=True)
             self._thread.start()
 
-    def release(self) -> None:
+    def release(self, *, with_gpu: bool = True) -> None:
         with self._lock:
             self._users = max(0, self._users - 1)
+            if with_gpu:
+                self._gpu_users = max(0, self._gpu_users - 1)
             if self._users:
                 return
             self._stop.set()
 
     def _run(self) -> None:
         while not self._stop.is_set():
-            self.sample_once()
+            with self._lock:
+                with_gpu = self._gpu_users > 0
+            self.sample_once(with_gpu=with_gpu)
             self._stop.wait(self.interval)
-
 
 # ------------------------------------------------------------------------------------------------- frame HUD model
 #: HUD column -> the measured pipeline stage that feeds it (``core.stage_timing.STAGES``). ``None`` means the pipeline
@@ -281,6 +288,7 @@ class JobHud:
     last_timings: dict | None = None
     muxing: bool = False
     stage: str = "render"          # the phase whose frames the live line is counting
+    with_gpu: bool = True
 
     def __post_init__(self) -> None:
         self.samples = deque(maxlen=512)
@@ -518,14 +526,15 @@ class PinokioTerminalHUD:
         self.print_report("server boot")
 
     def job_started(self, job_id: str, *, swap_mode: Any = None, total_frames: int | None = None,
-                    budget_mib: float | None = None, report: bool = True) -> None:
+                    budget_mib: float | None = None, with_gpu: bool = True, report: bool = True) -> None:
         if not self.armed:
             return
         budget = budget_mib if budget_mib is not None else self._budget_mib()
         with self._lock:
-            self._jobs[job_id] = JobHud(job_id, swap_mode_label(swap_mode), total_frames, self.clock(), budget)
+            self._jobs[job_id] = JobHud(job_id, swap_mode_label(swap_mode), total_frames, self.clock(), budget,
+                                        with_gpu=with_gpu)
         self.sampler.reset_peak()
-        self.sampler.acquire()
+        self.sampler.acquire(with_gpu=with_gpu)
         self.milestone("JOB", "started", job=job_id[:8], mode=swap_mode_label(swap_mode), frames=total_frames)
         if report:
             self.print_report("job start", job={"job_id": job_id, "swap_mode": str(swap_mode), "total_frames": total_frames})
@@ -583,7 +592,7 @@ class PinokioTerminalHUD:
         self.milestone("JOB", outcome, job=job_id[:8], frames=job.last_frame or None, seconds=f"{elapsed:.1f}",
                        peak_vram_gb=fmt_gb(self.sampler.peak_vram_mib) if self.sampler.peak_vram_mib is not None else None,
                        last_fps=None if rolling is None else f"{rolling:.1f}", **fields)
-        self.sampler.release()
+        self.sampler.release(with_gpu=job.with_gpu)
 
     # -- TensorRT heartbeat ---------------------------------------------------------------------------------
     def spawn_trt_sidecar(self, info: Mapping[str, Any]) -> "TrtSidecar | None":

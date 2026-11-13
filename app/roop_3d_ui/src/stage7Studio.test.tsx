@@ -230,7 +230,7 @@ describe('StudioInspector', () => {
     expect(host.textContent).toContain('-10° … 12°');
   });
 
-  it('lays the pipeline out as 3 steps with the experimental controls inside a closed Advanced Diagnostics drawer', async () => {
+  it('lays the pipeline out as visible steps with Advanced Diagnostics and all nested groups open', async () => {
     api.mockResolvedValue({ engines: [] });
     let parameters: WorkstationParameters = { ...DEFAULT_PARAMETERS };
     const setParameters = vi.fn((value: WorkstationParameters) => { parameters = value; });
@@ -238,9 +238,11 @@ describe('StudioInspector', () => {
     await mount(); await flush();
     for (const id of ['step-swap', 'step-mask', 'step-enhance']) expect(host.querySelector('[data-testid="' + id + '"]')).toBeTruthy();
     const drawer = host.querySelector('[data-testid="advanced-diagnostics"]') as HTMLDetailsElement;
-    expect(drawer.open).toBe(false);
+    expect(drawer.open).toBe(true);
     expect(drawer.querySelector('select[aria-label="Swap engine"]')).toBeTruthy();
     expect(host.querySelector('[data-testid="step-swap"] select[aria-label="Swap engine"]')).toBeNull();
+    expect([...drawer.querySelectorAll('.advanced-body > details')].every(item => (item as HTMLDetailsElement).open)).toBe(true);
+    expect((host.querySelector('[data-testid="morph-section"]') as HTMLDetailsElement).open).toBe(true);
     expect(host.querySelector('[data-testid="footer-slot"]')).toBeTruthy();
     // Step 2: XSeg + Smart Occluder is the compositor's robust mode; BiSeNet is the always-on base matte.
     const toggle = host.querySelector('input[aria-label="XSeg mask and smart occluder"]') as HTMLInputElement;

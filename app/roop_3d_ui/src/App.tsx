@@ -666,7 +666,7 @@ export default function App() {
       layoutMode={layoutMode} onLayout={() => setLayoutMode(mode => (mode === 'studio' ? 'classic' : 'studio'))}
       projectsDisabled={!!reason('projects')} projectsReason={reason('projects')} busy={!!busy} canSave={!!inspection}
       onPalette={() => setPaletteOpen(true)} onProjects={() => { setProjectsOpen(true); void refreshProjects(); }} onSave={saveProject} onSaveCopy={() => void run('Saving project copy', async () => { await persistProject(true); })} />
-    <TelemetryHeader parameters={parameters} />
+    <div className="studio-telemetry" data-studio-zone="telemetry" aria-label="Telemetry and command ribbon"><TelemetryHeader parameters={parameters} /></div>
     <RequiredModelsBanner onOpenHub={() => setModelHubOpen(true)} />
     {(route === '#/faceswap' || route === '#/facemgr') && <EngineStatusBar />}
     <RunPill />
@@ -696,33 +696,35 @@ export default function App() {
       <input ref={fileInput} hidden type="file" accept=".mp4,.mov,.mkv,.avi,.webm,.m4v,.ts,.fsz,.png,.jpg,.jpeg,.webp,.bmp" onChange={event => { importAsset(event.target.files?.[0]); event.target.value = ''; }} />
       {layoutMode === 'studio' ? <div className="studio" data-testid="studio-layout">
         <div className="studio-grid">
-          <aside className="studio-panel studio-identity" aria-label="Source identities" data-tour="source">
-            <div className="studio-panel-head"><span className="eyebrow">01 · SOURCE FACE / FACESET</span><span className="muted">{sources.length.toString().padStart(2, '0')}</span></div>
-            <PanelBoundary name="Identity panel"><FacesetLibrary variant="list" importDisabled={!!reason('uploads') || !!busy} sources={sources} selectedSourceId={sourceId} onSelectSource={id => setSourceId(id)} onRefreshSources={refreshSources} onImportFaceset={files => importAssets(files)}
-              canSave={!!currentTrack?.thumbnail_base64} onSaveFace={saveTrackFace} notify={(message, type) => { if (type === 'error') setError(message); else setNotice(message); }} />
-            {selectedFaceset ? <FaceSetDetail faceset={selectedFaceset} sources={sources} selectedTrackLabel={selectedTrack ? trackLabel(selectedTrack) : null}
-              assignedHere={!!selectedTrack && assigned[selectedTrack] === selectedFaceset.faceset_id} onAssign={() => selectedTrack && assignTrack(selectedTrack, selectedFaceset.faceset_id)}
-              identitySourceB={identitySourceB} onIdentitySourceB={setIdentitySourceB} onShowMesh={setIdentityMesh} meshShown={!!identityMesh} />
-              : sources.length > 0 && <p className="muted studio-hint">Select a FaceSet to see its views, pose coverage and 3D identity asset.</p>}</PanelBoundary>
+          <aside className="studio-left-dock" aria-label="Source, target, and face mapping" data-studio-zone="source-target">
+            <section className="studio-panel studio-identity" aria-label="Source identities" data-tour="source">
+              <div className="studio-panel-head"><span className="eyebrow">01 · SOURCE FACE / FACESET</span><span className="muted">{sources.length.toString().padStart(2, '0')}</span></div>
+              <PanelBoundary name="Identity panel"><FacesetLibrary variant="list" importDisabled={!!reason('uploads') || !!busy} sources={sources} selectedSourceId={sourceId} onSelectSource={id => setSourceId(id)} onRefreshSources={refreshSources} onImportFaceset={files => importAssets(files)}
+                canSave={!!currentTrack?.thumbnail_base64} onSaveFace={saveTrackFace} notify={(message, type) => { if (type === 'error') setError(message); else setNotice(message); }} />
+              {selectedFaceset ? <FaceSetDetail faceset={selectedFaceset} sources={sources} selectedTrackLabel={selectedTrack ? trackLabel(selectedTrack) : null}
+                assignedHere={!!selectedTrack && assigned[selectedTrack] === selectedFaceset.faceset_id} onAssign={() => selectedTrack && assignTrack(selectedTrack, selectedFaceset.faceset_id)}
+                identitySourceB={identitySourceB} onIdentitySourceB={setIdentitySourceB} onShowMesh={setIdentityMesh} meshShown={!!identityMesh} />
+                : sources.length > 0 && <p className="muted studio-hint">Select a FaceSet to see its views, pose coverage and 3D identity asset.</p>}</PanelBoundary>
+            </section>
+            <section className="studio-panel studio-left" aria-label="Target media" data-tour="tracks">
+              <div className="studio-panel-head"><span className="eyebrow">02 · TARGET MEDIA</span></div>
+              <PanelBoundary name="Target panel"><TargetPanel target={target} probe={probe} busy={!!busy} uploadReason={reason('uploads')} onImport={() => fileInput.current?.click()}
+                time={time} setTime={setTime} fps={parseFps(probe?.fps_rational, 30)} duration={probe?.duration_seconds ?? 0}
+                inspection={inspection} inspectReason={reason('face_inspection')} onInspect={inspect} sheet={sheet}
+                selectedTrack={selectedTrack} onSelectTrack={trackId => selectTrack(trackId)} sources={sources} assigned={assigned} onAssign={assignTrack}
+                lockBar={inspection && <IdentityLockBar target={target} inspection={inspection} mappings={Object.fromEntries(renderMappings().map(item => [item.track_id, item.faceset_id]))} sources={sources} lock={identityLock} onLock={setIdentityLock} busy={!!busy} onError={setError} />} /></PanelBoundary>
+            </section>
+            <section className="studio-panel studio-mapping" aria-label="Target face mapping">
+              <div className="studio-panel-head"><span className="eyebrow">03 · TARGET FACE MAPPING</span></div>
+              <PanelBoundary name="Face mapping"><ActorPanel inspection={inspection} sources={sources} assigned={assigned} onAssign={assignTrack} /><FaceMapping tracks={inspection?.tracks ?? []} sources={sources} assigned={assigned} selectedTrack={selectedTrack} onSelectTrack={trackId => selectTrack(trackId)} onAssign={assignTrack} /></PanelBoundary>
+            </section>
           </aside>
-          <aside className="studio-panel studio-left" aria-label="Target media" data-tour="tracks">
-            <div className="studio-panel-head"><span className="eyebrow">02 · TARGET MEDIA</span></div>
-            <PanelBoundary name="Target panel"><TargetPanel target={target} probe={probe} busy={!!busy} uploadReason={reason('uploads')} onImport={() => fileInput.current?.click()}
-              time={time} setTime={setTime} fps={parseFps(probe?.fps_rational, 30)} duration={probe?.duration_seconds ?? 0}
-              inspection={inspection} inspectReason={reason('face_inspection')} onInspect={inspect} sheet={sheet}
-              selectedTrack={selectedTrack} onSelectTrack={trackId => selectTrack(trackId)} sources={sources} assigned={assigned} onAssign={assignTrack}
-              lockBar={inspection && <IdentityLockBar target={target} inspection={inspection} mappings={Object.fromEntries(renderMappings().map(item => [item.track_id, item.faceset_id]))} sources={sources} lock={identityLock} onLock={setIdentityLock} busy={!!busy} onError={setError} />} /></PanelBoundary>
-          </aside>
-          <aside className="studio-panel studio-mapping" aria-label="Target face mapping">
-            <div className="studio-panel-head"><span className="eyebrow">03 · TARGET FACE MAPPING</span></div>
-            <PanelBoundary name="Face mapping"><ActorPanel inspection={inspection} sources={sources} assigned={assigned} onAssign={assignTrack} /><FaceMapping tracks={inspection?.tracks ?? []} sources={sources} assigned={assigned} selectedTrack={selectedTrack} onSelectTrack={trackId => selectTrack(trackId)} onAssign={assignTrack} /></PanelBoundary>
-          </aside>
-          <main className="studio-center" aria-label="Preview">
+          <main className="studio-center" aria-label="Preview" data-studio-zone="preview">
             <div className="studio-center-head"><div><span className="eyebrow">03 · PREVIEW</span><strong>{target ? fileName(target) : 'No target loaded'}</strong></div>
               <button className="button accent" disabled={!!reason('queue') || !inspection || !renderMappings().length || !!busy} title={reason('queue') ?? (renderMappings().length ? 'Render mapped face tracks locally' : 'Assign a FaceSet to at least one track first')} onClick={queue}>Queue render <span>↗</span></button></div>
             {viewport}
           </main>
-          <aside className="studio-panel studio-right" aria-label="Inspector">
+          <aside className="studio-panel studio-right" aria-label="Inspector" data-studio-zone="inspector">
             <div className="studio-panel-head"><span className="eyebrow">04 · INSPECTOR</span></div>
             <PanelBoundary name="Inspector"><StudioInspector caps={caps} config={config} onSaveConfig={saveSettings} track={currentTrack} sheet={sheet} sources={sources} assignedId={currentTrack ? assigned[currentTrack.track_id] ?? '' : ''} onAssign={assignTrack}
               parameters={parameters} setParameters={setParameters} coverage={coverage} reconstruction={reconstruction} mesh={identityMesh ?? mesh} onIdentityMesh={setIdentityMesh} panelsRef={setPanelsSlot}
@@ -734,8 +736,7 @@ export default function App() {
                 startBlockedReason={reason('queue') ?? (!target ? 'Load a target video first.' : !inspection ? 'Inspect the target faces first.' : !renderMappings().length ? 'Assign a source FaceSet to at least one target face first.' : busy ? 'Busy' : null)}
                 frameBlockedReason={reason('frame_preview') ?? (!target ? 'Load a target video first.' : !previewRequest ? 'Assign a source FaceSet to a target face first: the preview needs a face mapping.' : null)} />} /></PanelBoundary>
           </aside>
-        </div>
-        <section className="studio-bottom" aria-label="Timeline">
+        <section className="studio-bottom" aria-label="Timeline" data-studio-zone="timeline">
           <PanelBoundary name="Track lanes"><TrackLanes tracks={inspection?.tracks ?? []} sheet={sheet} sceneCuts={sheet?.scene_cut_frames ?? inspection?.scene_cut_frames ?? []} fps={parseFps(probe?.fps_rational, 30)} duration={probe?.duration_seconds ?? 0}
             trimStart={trimStart} trimEnd={trimEnd} job={currentJob && currentJob.request.target_path === target ? currentJob : null} selectedTrack={selectedTrack} assigned={assigned} sources={sources}
             onSelectTrack={trackId => selectTrack(trackId, false)} onSeek={value => setTime(Math.max(0, Math.min(probe?.duration_seconds ?? 0, value)))} onAssign={assignTrack} /></PanelBoundary>
@@ -744,9 +745,10 @@ export default function App() {
           <details className="studio-tray studio-dock" open><summary>Frame navigator <span className="muted">· In/Out, chapters, speed</span></summary>
             <TimelineDock target={target} duration={probe?.duration_seconds ?? 0} fps={parseFps(probe?.fps_rational, 30)} currentTime={time} disabled={!!busy}
               onSeek={value => setTime(Math.max(0, Math.min(probe?.duration_seconds ?? 0, value)))} trimStart={trimStart} trimEnd={trimEnd} onTrimChange={(start, end) => { setTrimStart(start); setTrimEnd(end); }} /></details>
-          <details className="studio-tray"><summary>Face tray <span className="muted">· faces in the current frame</span></summary><div ref={setTraySlot} /></details>
-          {queuePanel}
+          <details className="studio-tray" open><summary>Face tray <span className="muted">· faces in the current frame</span></summary><div ref={setTraySlot} /></details>
         </section>
+        <aside className="studio-queue" aria-label="Queue and logs" data-studio-zone="queue">{queuePanel}</aside>
+       </div>
       </div> : <>      <div className="workstation-body"><aside className="asset-sidebar" data-tour="source"><div className="section-title"><span>ASSET LIBRARY</span><span className="muted">01</span></div><div className="asset-actions"><button className="button full primary-soft" disabled={!!reason('uploads') || !!busy} title={reason('uploads') ?? ''} onClick={() => fileInput.current?.click()}>＋ Import target video</button></div>
       <div className={`target-asset ${target ? 'loaded' : ''}`}><span className="asset-symbol">▤</span><div><strong>{target ? fileName(target) : 'No target loaded'}</strong><small>{probe ? `${probe.width} × ${probe.height} · ${probe.fps_rational ?? '?'} fps` : 'Your files stay on this machine'}</small></div></div>
       <div className="section-title spaced"><span>SOURCE IDENTITIES</span><span>{sources.length.toString().padStart(2, '0')}</span></div>

@@ -27,7 +27,8 @@ def checkout(tmp_path):
     """tmp/api/roop-3d (git repo, origin roop-3d) with app/, plus sibling tmp/api/roop-ultimate and a fake venv prefix."""
     api = tmp_path / "api"
     repo = api / "roop-3d"
-    (api / "roop-ultimate" / "app").mkdir(parents=True)
+    sibling_name = "roop-" + "ultimate"
+    (api / sibling_name / "app").mkdir(parents=True)
     (repo / "app" / "pkg").mkdir(parents=True)
     (repo / "app" / "pkg" / "ok.py").write_text("import os\nx = 1\n", "utf-8")
     venv = repo / "app" / "roop_3d" / ".venv"

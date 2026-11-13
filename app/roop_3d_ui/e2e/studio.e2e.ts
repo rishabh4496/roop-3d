@@ -96,9 +96,12 @@ async function facePoint(page: Page, x1: number) {
   return { canvas, position: { x: ox + (x1 + 80) * scale, y: oy + 240 * scale } };
 }
 
-test('four panels, timeline lanes and a FaceSet dragged onto a target track drive the live preview', async ({ page }) => {
+test('studio source, preview, inspector and timeline panels and FaceSet assignment drive the live preview', async ({ page }) => {
   const { seen, errors } = await boot(page);
-  for (const name of ['Target media', 'Source identities', 'Preview', 'Inspector', 'Timeline']) await expect(page.getByRole(name === 'Timeline' ? 'region' : name === 'Preview' ? 'main' : 'complementary', { name, exact: true })).toBeVisible();
+  for (const name of ['Target media', 'Source identities', 'Preview', 'Inspector', 'Timeline']) {
+    const role = name === 'Preview' ? 'main' : name === 'Inspector' ? 'complementary' : 'region';
+    await expect(page.getByRole(role, { name, exact: true })).toBeVisible();
+  }
   await expect(page.getByLabel('Face track lanes')).toBeVisible();
   await expect(page.locator('.lane-cut')).toHaveCount(1);
   await expect(page.locator('[data-lane-track="track_0001"] .lane-span')).toHaveCount(2);
@@ -158,7 +161,6 @@ test('clicking a face in the video selects its track; right-click offers extract
 
 test('inspector: 3D render mode, relighting and engine reach the preview and the saved project', async ({ page }) => {
   const { seen, errors } = await boot(page);
-  await page.getByTestId('advanced-diagnostics').locator(':scope > summary').click();
   await expect(page.getByLabel('Swap engine')).toHaveValue('reference_onnx');
   await expect(page.getByLabel('Swap engine').locator('option[value="experimental_x"]')).toHaveAttribute('disabled', '');
 
@@ -189,13 +191,12 @@ test('selecting queue jobs from the same video restores the correct project and 
     { job_id: 'c'.repeat(32), state: 'queued', request: { ...project.request, workstation_parameters: { pose_mode: 'mesh_blend', feather_px: 3 } }, progress: { frame: 0, total_frames: 100, fps: 0, stage: 'queued' }, output: null },
   ];
   const { errors } = await boot(page, { jobs });
-  await page.getByTestId('advanced-diagnostics').locator(':scope > summary').click();
   await page.locator('.queue-job-card').filter({ hasText: 'bbbbbbbb' }).locator('.job-info-block').click();
   await expect(page.getByLabel('Project name', { exact: true })).toHaveValue('Second project');
-  await expect(page.getByRole('textbox', { name: 'Mask feather', exact: true })).toHaveValue('12');
+  await expect(page.getByRole('slider', { name: 'Mask feather', exact: true })).toHaveValue('12');
   await page.locator('.queue-job-card').filter({ hasText: 'cccccccc' }).locator('.job-info-block').click();
   await expect(page.getByLabel('Project name', { exact: true })).toHaveValue('Untitled project');
-  await expect(page.getByRole('textbox', { name: 'Mask feather', exact: true })).toHaveValue('3');
+  await expect(page.getByRole('slider', { name: 'Mask feather', exact: true })).toHaveValue('3');
   expect(errors).toEqual([]);
 });
 

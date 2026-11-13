@@ -128,7 +128,6 @@ test('the morph panel writes the engine blend and the masking inset sends the ha
   const inset = page.getByTestId('step-mask').getByRole('slider', { name: 'Forehead hairline inset' });
   await inset.fill('12');
   await expect.poll(() => seen.previews.at(-1)?.hairline_offset_px).toBe(-12);          // the inset is the engine offset with the sign flipped
-  await page.getByTestId('morph-section').locator(':scope > summary').click();
   await page.getByRole('radio', { name: /3D Geometry \+ Jaw Reshape Weight/ }).click();                   // an opened saved project starts in reference-retarget pose mode
   const blend = page.getByLabel('Jawline and cranial volume blend');
   await setSlider(page, blend, 80);
