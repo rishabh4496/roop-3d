@@ -22,8 +22,8 @@ export default function SettingControl({ spec, value, onChange, disabled = false
   const tipId = useId();
   renderProbe('SettingControl');
   const name = label ?? spec.label;
-  const unavailable = disabled || !!spec.inactive;
-  const reason = spec.inactive ?? disabledReason;
+  const unavailable = disabled;
+  const reason = disabledReason;
   const atDefault = Math.abs(value - spec.default) < spec.step / 2;
   return (
     <div className={`setting-control ${unavailable ? 'unavailable' : ''}`} data-setting={spec.id}>

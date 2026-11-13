@@ -13,6 +13,7 @@ import numpy as np
 import pytest
 
 from roop_3d.compositor.face_regions import (REGION_CLASSES, build_regions, restoration_protection, teeth_estimate)
+from roop_3d.compositor.detail_temporal import TemporalDetailStabilizer
 from roop_3d.compositor.matte import border_fade, decontaminate_edges, guided_filter, refine_occluder
 from roop_3d.compositor.occlusion_analysis import OcclusionAnalyzer
 from roop_3d.compositor.occlusion_model import VisibleFaceNet
@@ -197,7 +198,9 @@ def test_sharpness_matching_blurs_to_target_but_never_sharpens_and_ignores_the_w
     assert abs(energy(matched) - energy(blurred_target)) < abs(energy(sharp) - energy(blurred_target)) * 0.5
     same, info2 = match_sharpness(blurred_target, sharp, alpha, foot)          # target sharper: untouched
     np.testing.assert_array_equal(same, blurred_target)
-    assert info2 == {"sigma": 0.0, "motion_length": 0.0}
+    assert {key: info2[key] for key in ("sigma", "motion_length")} == {"sigma": 0.0, "motion_length": 0.0}
+    assert info2["optics_observable"] == 1.0
+    assert info2["target_energy"] > info["target_energy"] > 0.0
     # footprint hole (black border outside the warped crop) must not be dragged into the face
     holed = sharp.copy()
     holed[:, :16] = 0
@@ -388,6 +391,7 @@ def _replacement(track_id, colour, inverse, side=128):
 
 def _compositor(*nets, parser=None):
     compositor = FrameCompositor(parser=parser or _StubParser(), temporal=TemporalSmoother())
+    compositor.detail_temporal = TemporalDetailStabilizer(use_cuda_flow=False)
     compositor._analyzer = _analyser(compositor.parser, *nets)
     return compositor
 
@@ -506,7 +510,7 @@ def test_partial_occlusion_does_not_flatten_or_recolour_the_swapped_face_interio
     for x in range(0, 128, 16):
         front[:, x + 8:x + 16] = 0.45                                   # alternating clear / half-occluded stripes
     options = RobustFusionOptions(match_sharpness=False, texture_strength=0.0, linear_light=False, refine_matte=False)
-    out, report = fuse_robust(frame, crop, inverse, face, front, None, options=options)
+    out, report = fuse_robust(frame, crop, inverse, face, front, None, mode="feather", options=options)
     size = (frame.shape[1], frame.shape[0])
     alpha = (cv2.warpAffine(face, inverse, size) * (1 - cv2.warpAffine(front, inverse, size)))[..., None]
     expected = (1 - alpha) * frame.astype(np.float32) + alpha * warp_affine(crop, inverse, size, border="constant").astype(np.float32)
@@ -655,8 +659,10 @@ def test_compositor_strand_matte_is_opt_in_trust_gated_and_reported():
         def predict(self, image):
             p = super().predict(image)
             h, w = image.shape[:2]
-            p[36:72, w // 6: -w // 6, 1] = 0.0            # work-crop rows 36-71 (frame rows 49-78) are hair instead of skin
-            p[36:72, w // 6: -w // 6, 17] = 1.0
+            # Both the 256px analysis and the 128px swap crop describe the same band.
+            y0, y1 = round(h * 36 / 256), round(h * 72 / 256)
+            p[y0:y1, w // 6: -w // 6, 1] = 0.0
+            p[y0:y1, w // 6: -w // 6, 17] = 1.0
             return p
 
     frame, _, line = _strand_frame()
@@ -709,3 +715,84 @@ def test_fuse_robust_strand_matte_scales_its_filters_to_the_faces_size_in_the_fr
     small, large = scaled_for_face(StrandMatteOptions(), 100.0), scaled_for_face(StrandMatteOptions(), 900.0)
     assert small.gabor_wavelength_px < StrandMatteOptions().gabor_wavelength_px < large.gabor_wavelength_px
     assert large.strand_max_length_px > small.strand_max_length_px and scaled_for_face(StrandMatteOptions(), 1e6).gabor_wavelength_px <= 24.0
+
+
+class _ForegroundParser(_StubParser):
+    def predict(self, image):
+        probabilities = super().predict(image)
+        probabilities[68:92, 68:92, :] = 0
+        probabilities[68:92, 68:92, 6] = 1
+        return probabilities
+
+
+@pytest.mark.parametrize("strength", [0.0, 0.5, 1.0])
+def test_xseg_strength_scales_only_neural_subtraction_not_semantic_or_manual_foreground(strength):
+    analyzer = _analyser(
+        _ForegroundParser(), _StubNet("xseg_3.onnx", _visible((108, 108, 148, 148))),
+        _StubNet("face_occluder.onnx", _visible()))
+    manual = np.zeros((256, 256), np.float32)
+    manual[160:192, 160:192] = 1
+    analysis = analyzer.analyze(texture(256), POINTS, feather_px=0, explicit_front=manual,
+                                xseg_occlusion_strength=strength)
+    assert analysis.parser_trusted and analysis.xseg_occlusion_strength == strength
+    assert analysis.occluder[128, 128] == pytest.approx(strength)
+    assert analysis.occluder[80, 80] == 1, "glasses are independent of the learned foreground slider"
+    assert analysis.occluder[176, 176] == 1, "manual foreground is independent of the learned foreground slider"
+    assert analysis.occluder[60, 128] == 0
+    assert analysis.face_alpha[128, 128] == 1, "strength changes occlusion, not the observed face shape"
+    assert analysis.tier == ("semantic" if strength == 0 else "full")
+    assert analysis.nets_used == ("xseg_3.onnx", "face_occluder.onnx")
+    if strength == 0:
+        assert "XSEG_OCCLUSION_DISABLED" in analysis.reasons
+
+
+def test_zero_xseg_without_semantic_evidence_reports_geometric_and_preserves_manual_foreground():
+    analyzer = _analyser(None, _StubNet("xseg_3.onnx", _visible((108, 108, 148, 148))))
+    manual = np.zeros((256, 256), np.float32)
+    manual[160:192, 160:192] = 1
+    analysis = analyzer.analyze(texture(256), POINTS, explicit_front=manual, xseg_occlusion_strength=0)
+    assert analysis.tier == "geometric" and not analysis.parser_trusted
+    assert "OCCLUSION_UNVERIFIED" in analysis.reasons and "XSEG_OCCLUSION_DISABLED" in analysis.reasons
+    np.testing.assert_array_equal(analysis.occluder, manual)
+
+
+@pytest.mark.parametrize("strength", [-0.01, 1.01, float("nan"), float("inf"), True])
+def test_xseg_strength_rejects_invalid_values_at_both_public_boundaries(strength):
+    with pytest.raises(ValueError, match="xseg_occlusion_strength"):
+        CompositeOptions(xseg_occlusion_strength=strength)
+    analyzer = _analyser(None)
+    with pytest.raises(DomainError) as failure:
+        analyzer.analyze(texture(256), POINTS, xseg_occlusion_strength=strength)
+    assert failure.value.code == "XSEG_OCCLUSION_STRENGTH_INVALID"
+
+
+def test_compositor_xseg_endpoints_change_neural_holes_while_both_foreground_vetoes_survive():
+    frame = _scene()
+    replacement = _replacement(7, (30, 220, 30), np.eye(2, 3), side=256)
+    manual = np.zeros((256, 256), np.float32)
+    manual[160:192, 160:192] = 1
+    rendered = []
+    for strength in (0.0, 1.0):
+        compositor = _compositor(
+            _StubNet("xseg_3.onnx", _visible((108, 108, 148, 148))),
+            _StubNet("face_occluder.onnx", _visible()), parser=_ForegroundParser())
+        options = CompositeOptions(
+            occlusion_mode="robust", xseg_occlusion_strength=strength, feather_px=0, color_strength=0,
+            neck_protection=False, hair_matting=False,
+            robust=RobustOptions(analysis_size=256, refine_matte=False, edge_decontamination=False,
+                                 sharpness_matching=False, local_illumination=0, texture_strength=0,
+                                 linear_light=False, mask_flow=False))
+        try:
+            for index in range(3):
+                output = compositor.compose(frame, (replacement,), {7: POINTS}, frame_index=index,
+                                            occluder_masks={7: manual}, options=options)
+            report = compositor.last_reports[7]
+            assert report["xseg_occlusion_strength"] == strength and report["parser_trusted"]
+            assert report["tier"] == ("semantic" if strength == 0 else "full")
+            np.testing.assert_array_equal(output[72:88, 72:88], frame[72:88, 72:88])
+            np.testing.assert_array_equal(output[164:188, 164:188], frame[164:188, 164:188])
+            rendered.append(output)
+        finally:
+            compositor.release()
+    np.testing.assert_array_equal(rendered[1][112:144, 112:144], frame[112:144, 112:144])
+    assert rendered[0][112:144, 112:144, 1].mean() > frame[112:144, 112:144, 1].mean() + 15

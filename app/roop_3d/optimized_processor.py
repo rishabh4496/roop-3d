@@ -370,6 +370,8 @@ def make_stream_runner(root, catalog, media, settings_provider, *, pipeline_trac
                 if restorer:
                     metadata["restorer_providers"] = sorted({v.model.provider for v in restorer.instances if v.model})
                     metadata["restorer_model_hashes"] = sorted({v.model.record["sha256"] for v in restorer.instances if v.model})
+                    metadata["restoration"] = {**restorer.telemetry_report(), "spec": restorer.spec.name,
+                                               "weights": restorer.spec.model_name}
                 atomic_json(self.root, manifest_path, metadata)
                 from roop_3d.jobs.schema import JobOutput
                 return JobOutput(output_path=relative, manifest_path=manifest_path,

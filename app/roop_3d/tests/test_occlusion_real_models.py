@@ -144,7 +144,11 @@ def test_robust_compositor_protects_hands_on_real_footage_where_standard_paints_
         painted_standard, occluded = _painted_stats(frames, outs["standard"], observed, robust)
         painted_robust, _ = _painted_stats(frames, outs["robust"], observed, robust)
         assert occluded > 500, "the clip must actually contain occluded face pixels for this test to mean anything"
-        assert painted_standard > 0.5 and painted_robust < 0.1
+        # Standard now applies dual semantic foreground vetoes too; requiring it
+        # to paint >50% of a hand would regress that safety improvement. Robust
+        # still has the absolute <10% protection contract and must improve on it.
+        assert painted_robust < 0.1
+        assert painted_robust < painted_standard
         report = robust.last_reports[observed[-1][0].track_id]
         assert report["tier"] in {"full", "neural"} and report["networks"] == ["xseg_3.onnx", "face_occluder.onnx"]
         assert report["fusion"]["occluded_fraction"] > 0.05

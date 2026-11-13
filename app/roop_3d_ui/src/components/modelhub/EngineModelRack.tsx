@@ -1,12 +1,14 @@
 import { useMemo, useState } from 'react';
 import { post } from '../../api';
 import type { Capabilities, Config } from '../../contracts';
-import type { RestorerModel, WorkstationParameters } from '../workstation/pipeline';
-import { modelStatus, useModelCatalog } from '../../stores/modelCatalog';
+import { fidelityRestorer, type RestorerModel, type WorkstationParameters } from '../workstation/pipeline';
+import { RENDER_MODES } from '../workstation/renderModes';
+import { modelStatus, useModelCatalog, type ModelStatus } from '../../stores/modelCatalog';
 import { setRack, useRack } from '../../stores/rackSelection';
 import ModelSelect, { StatusPill, type RackOption } from './ModelSelect';
-import PersonModelPicker from './PersonModelPicker';
 import ActiveModelBadge from './ActiveModelBadge';
+import CompositingControls from '../studio/CompositingControls';
+import { occlusionModePatch } from '../studio/compositing';
 
 type Params = Partial<WorkstationParameters>;
 export type RackProps = {
@@ -15,14 +17,13 @@ export type RackProps = {
   config: Config | null; caps: Capabilities | null;
   /** Persists global engine settings (execution provider / precision). Absent = those two controls are read-only. */
   onSaveConfig?: (value: Config) => void;
-  /** Detected people in the current target, for per-person overrides (workspace only). */
-  people?: { key: string; label: string }[];
   variant?: 'workspace' | 'batch';
 };
 
+/** `live` = the value reaches the render engine. Anything else is shown but cannot be changed: it has no engine stage or setting to drive. */
 const Wiring = ({ live }: { live: boolean }) => (
-  <span className={`rack-wiring ${live ? 'live' : ''}`} title={live ? 'Changes what the render engine runs.' : 'Remembered by the workstation. The render engine has no setting for this yet, so it does not change the output.'}>
-    {live ? 'LIVE' : 'SAVED PREFERENCE'}
+  <span className={`rack-wiring ${live ? 'live' : 'unsupported'}`} title={live ? 'Changes what the render engine runs.' : 'The render engine has no stage or setting for this, so it is listed but cannot be changed.'}>
+    {live ? 'LIVE' : 'NOT SUPPORTED'}
   </span>
 );
 
@@ -33,25 +34,24 @@ const SWAPPERS: RackOption[] = [
   { id: 'ghost_256_unet_1' }, { id: 'ghost_256_unet_2' }, { id: 'ghost_256_unet_3' },
   { id: 'blendswap_256' }, { id: 'uniface_256' },
 ];
+/** Rack ids of the four restorers the engine has adapters for, and the `restorer_model` each one sends. */
 const ENHANCER_ENGINE: Record<string, RestorerModel> = { ultramax: 'ultramax', gpen_bfr_512: 'gpen', codeformer: 'codeformer', gfpgan_v14: 'gfpgan' };
-const ENGINE_ENHANCER: Record<string, string> = { ultramax: 'ultramax', gpen: 'gpen_bfr_512', auto: 'gpen_bfr_512', codeformer: 'codeformer', gfpgan: 'gfpgan_v14' };
-const NO_ADAPTER = 'The render engine has no adapter for this restorer yet (it runs GPEN at 512).';
+const ENGINE_ENHANCER: Record<RestorerModel, string> = { ultramax: 'ultramax', gpen: 'gpen_bfr_512', codeformer: 'codeformer', gfpgan: 'gfpgan_v14' };
+const RESTORER_ADAPTERS = 'GPEN 512, CodeFormer, GFPGAN v1.4 and UltraMax';
+const NO_ADAPTER = `No render adapter: the engine runs ${RESTORER_ADAPTERS} only.`;
 const ENHANCERS: RackOption[] = [
   { id: 'none', modelId: null, label: 'None', note: 'No face restoration: the raw swap is composited.' },
-  { id: 'ultramax' }, { id: 'gpen_bfr_512', label: 'GPEN Realistic', badge: '512px' },
-  { id: 'gpen_bfr_1024', label: 'GPEN Realistic', badge: '1024px', disabledReason: NO_ADAPTER },
+  { id: 'ultramax', label: 'UltraMax', badge: 'CodeFormer fp16',
+    note: 'The registered codeformer.fp16.onnx weights, then Laplacian detail fusion into the swap (not a GPEN / Real-ESRGAN cascade).' },
+  { id: 'gpen_bfr_512', label: 'GPEN Realistic', badge: '512px' },
+  { id: 'gpen_bfr_1024', label: 'GPEN Realistic', badge: '1024px', disabledReason: 'No render adapter: the GPEN restorer loads the 512 px model only.' },
   { id: 'codeformer' }, { id: 'gfpgan_v14' },
   { id: 'restoreformer_pp', disabledReason: NO_ADAPTER },
 ];
-const UPSCALERS: RackOption[] = [{ id: 'none', modelId: null, label: 'None' }, { id: 'realesrgan_x2plus' }, { id: 'realesrgan_x4plus' }, { id: '4x_ultrasharp' }];
+const ENHANCER_ARTIFACT = `Registered artifact without a render adapter: the engine runs ${RESTORER_ADAPTERS} by their pinned file names only.`;
+const NO_UPSCALER = 'The render engine has no frame-upscaler stage: these weights are registry artifacts only.';
+const UPSCALERS: RackOption[] = [{ id: 'none', modelId: null, label: 'None' }, ...['realesrgan_x2plus', 'realesrgan_x4plus', '4x_ultrasharp'].map(id => ({ id, disabledReason: NO_UPSCALER }))];
 const DETECTORS: RackOption[] = [{ id: 'scrfd' }, { id: 'retinaface' }, { id: 'yoloface' }];
-const LANDMARKERS: RackOption[] = [{ id: 'dense_3d', modelId: null, label: 'Dense 3D 468/106 Landmarker', note: 'Built into the 3D stack; no separate weights.' }];
-
-const MODES: { id: NonNullable<WorkstationParameters['render_mode']>; label: string; hint: string; relight?: boolean }[] = [
-  { id: 'reenactment_3d', label: '3D Full-Head Hybrid', hint: 'Source head geometry carries the target expression, then the swapper runs on top.' },
-  { id: 'pose_3d', label: '3D Pose-Guided Relit Swap', hint: 'The swap is projected on the source identity’s own geometry and relit to the scene.', relight: true },
-  { id: 'standard', label: '2D Direct Swap', hint: 'The proven identity swap with no 3D projection.' },
-];
 
 const RUNTIMES = [
   { id: 'auto', label: 'Auto (engine decides)', provider: 'auto', precision: 'auto' },
@@ -68,7 +68,22 @@ function CatalogPill({ modelId }: { modelId: string }) {
   return model ? <StatusPill status={modelStatus(model)} /> : null;
 }
 
-export default function EngineModelRack({ params, onParams, config, caps, onSaveConfig, people = [], variant = 'workspace' }: RackProps) {
+/** Best status among the registered artifacts with this file name, most usable first. */
+const STATUS_RANK: readonly ModelStatus[] = ['ready', 'trt', 'disk', 'download', 'locate', 'blocked'];
+
+/**
+ * Status of a registry artifact by file name. The robust occluder loads `xseg_3.onnx` and `face_occluder.onnx`, which are not catalog ids
+ * (the `xseg` row is the older `xseg.onnx`), so the file name is what says whether the networks it will run are there.
+ */
+function FilePill({ file }: { file: string }) {
+  const { models, loaded } = useModelCatalog();
+  if (!loaded) return null;
+  const statuses = models.filter(item => item.name.toLowerCase() === file.toLowerCase()).map(modelStatus);
+  const best = STATUS_RANK.find(status => statuses.includes(status));
+  return <span className="rack-file"><code>{file}</code>{best ? <StatusPill status={best} /> : <small className="muted">not registered</small>}</span>;
+}
+
+export default function EngineModelRack({ params, onParams, config, caps, onSaveConfig, variant = 'workspace' }: RackProps) {
   const rack = useRack(state => state);
   const { models } = useModelCatalog();
   const [trtMessage, setTrtMessage] = useState('');
@@ -82,7 +97,7 @@ export default function EngineModelRack({ params, onParams, config, caps, onSave
 
   const blend = params.restoration_blend ?? 0;
   const engine = params.restorer_model ?? 'gpen';
-  const enhancerValue = blend > 0 ? ENGINE_ENHANCER[engine] ?? 'gpen_bfr_512' : 'none';
+  const enhancerValue = blend > 0 ? ENGINE_ENHANCER[engine] : 'none';
   /** Every model dropdown also persists to the backend config at once, so previews, renders and the read-back follow it. */
   const persist = (patch: Config) => {
     if (!config || !onSaveConfig) return;
@@ -94,13 +109,10 @@ export default function EngineModelRack({ params, onParams, config, caps, onSave
     const model = ENHANCER_ENGINE[id];
     if (model) { onParams({ restorer_model: model, restoration_blend: blend > 0 ? blend : 0.7 }); persist({ face_restoration_policy: model }); }
   };
-  const usesFidelity = engine === 'codeformer' || engine === 'ultramax';
+  const restorerRuns = blend > 0 && !(params.bypass ?? []).includes('restorer');
+  const fidelityActive = fidelityRestorer(engine) && restorerRuns;
   const mode = params.render_mode ?? 'standard';
-  const pickMode = (id: (typeof MODES)[number]['id']) => {
-    const next: Params = { render_mode: id };
-    if (MODES.find(item => item.id === id)?.relight) next.relight = true;
-    onParams(next);
-  };
+  const robust = params.occlusion_mode === 'robust';
 
   const provider = typeof config?.preferred_provider === 'string' ? config.preferred_provider : 'auto';
   const configuredPrecision = typeof config?.precision_policy === 'string' ? config.precision_policy : 'auto';
@@ -152,44 +164,47 @@ export default function EngineModelRack({ params, onParams, config, caps, onSave
       <section className="rack-section" aria-label="3D pipeline mode">
         <h4>3D pipeline mode <Wiring live /></h4>
         <div className="mode-cards" role="radiogroup" aria-label="3D pipeline mode">
-          {MODES.map(item => (
-            <button key={item.id} type="button" role="radio" aria-checked={mode === item.id} className={`mode-card ${mode === item.id ? 'active' : ''}`} onClick={() => pickMode(item.id)} title={item.hint}>
+          {RENDER_MODES.map(item => (
+            <button key={item.id} type="button" role="radio" aria-checked={mode === item.id} className={`mode-card ${mode === item.id ? 'active' : ''}`} onClick={() => onParams({ render_mode: item.id })} title={item.hint}>
               <b>{item.label}</b>
             </button>
           ))}
         </div>
-        <small className="muted">{MODES.find(item => item.id === mode)?.hint}</small>
+        <small className="muted">{RENDER_MODES.find(item => item.id === mode)?.hint}</small>
       </section>
 
       <section className="rack-section" aria-label="Face enhancer">
         <h4>Face enhancer / restorer <Wiring live /></h4>
-        <ModelSelect label="Enhancer" category="enhancer" value={enhancerValue} onChange={pickEnhancer} options={ENHANCERS} includeRegistered={false} testId="rack-enhancer" />
+        <ModelSelect label="Enhancer" category="enhancer" value={enhancerValue} onChange={pickEnhancer} options={ENHANCERS} registeredDisabledReason={ENHANCER_ARTIFACT} testId="rack-enhancer" />
         <label className="inspector-field">Enhancer blend <output>{Math.round(blend * 100)}%</output>
           <input type="range" aria-label="Enhancer blend" min={0} max={100} step={1} value={Math.round(blend * 100)} onChange={event => onParams({ restoration_blend: Number(event.target.value) / 100 })} /></label>
         <label className="inspector-field">Fidelity <output>{Math.round((params.fidelity_weight ?? 0.5) * 100)}%</output>
-          <input type="range" aria-label="Enhancer fidelity" min={0} max={100} step={1} disabled={!usesFidelity} value={Math.round((params.fidelity_weight ?? 0.5) * 100)} onChange={event => onParams({ fidelity_weight: Number(event.target.value) / 100 })} />
-          {!usesFidelity && <small>Fidelity applies to CodeFormer and UltraMax.</small>}</label>
+          <input type="range" aria-label="Enhancer fidelity" min={0} max={100} step={1} disabled={!fidelityActive} value={Math.round((params.fidelity_weight ?? 0.5) * 100)} onChange={event => onParams({ fidelity_weight: Number(event.target.value) / 100 })} />
+          {!fidelityActive && <small>{fidelityRestorer(engine) ? 'Raise the enhancer blend above 0 to use fidelity.' : 'Fidelity applies to CodeFormer and UltraMax: GPEN and GFPGAN have no fidelity input.'}</small>}</label>
       </section>
 
       <section className="rack-section" aria-label="Frame upscaler">
         <h4>Frame upscaler <Wiring live={false} /></h4>
-        <ModelSelect label="Upscaler" category="upscaler" value={rack.upscaler} onChange={id => setRack({ upscaler: id })} options={UPSCALERS} testId="rack-upscaler" />
+        <ModelSelect label="Upscaler" category="upscaler" value="none" onChange={() => undefined} options={UPSCALERS} registeredDisabledReason={NO_UPSCALER} testId="rack-upscaler" />
       </section>
 
-      <section className="rack-section" aria-label="Face detector and landmarker">
-        <h4>Detector &amp; 3D landmarker <Wiring live /></h4>
+      <section className="rack-section" aria-label="Face detector">
+        <h4>Face detector <Wiring live /></h4>
         <ModelSelect label="Face detector" category="detector" value={typeof config?.detector_model_id === 'string' ? config.detector_model_id : rack.detector} onChange={id => { setRack({ detector: id }); persist({ detector_model_id: id }); }} options={DETECTORS.map(option => !onSaveConfig ? { ...option, disabledReason: 'Change the detector from the Faceswap workspace or Settings.' } : option)} testId="rack-detector" />
-        <ModelSelect label="3D landmarker" category="landmarker" value={rack.landmarker} onChange={id => setRack({ landmarker: id })} options={LANDMARKERS} includeRegistered={false} testId="rack-landmarker" />
+        <small className="muted" data-testid="landmarker-note">3D landmarks are measured by the engine (5-point detector landmarks, 68-point and 106-point models) and are not selectable.</small>
       </section>
 
       <section className="rack-section" aria-label="Mask and occlusion engines">
         <h4>Mask &amp; occlusion engines</h4>
         <div className="rack-checks">
-          <label className="inspector-toggle"><input type="checkbox" aria-label="3D cranial silhouette" checked={rack.cranial} onChange={event => setRack({ cranial: event.target.checked })} /> 3D cranial silhouette <Wiring live={false} /></label>
-          <label className="inspector-toggle"><input type="checkbox" aria-label="XSeg occluder" checked={params.occlusion_mode === 'robust'} onChange={event => onParams({ occlusion_mode: event.target.checked ? 'robust' : 'standard' })} /> XSeg occluder <CatalogPill modelId="xseg" /> <Wiring live /></label>
+          <label className="inspector-toggle"><input type="checkbox" aria-label="XSeg occluder" checked={robust} onChange={event => onParams(occlusionModePatch(params, event.target.checked ? 'robust' : 'standard'))} /> XSeg occluder <Wiring live /></label>
+          <div className="rack-engine-files" data-testid="robust-networks"><small className="muted">Robust occlusion runs</small> <FilePill file="xseg_3.onnx" /> <FilePill file="face_occluder.onnx" /></div>
           <label className="inspector-toggle"><input type="checkbox" aria-label="BiSeNet semantic parser" checked disabled readOnly /> BiSeNet semantic parser (skin, brows, eyes, mouth, hair) <CatalogPill modelId="bisenet" /> <small className="muted">always on: the base face matte</small></label>
           <label className="inspector-toggle"><input type="checkbox" aria-label="Face box feather" checked={(params.feather_px ?? 5) > 0} onChange={event => onParams({ feather_px: event.target.checked ? 5 : 0 })} /> Face box feather <Wiring live /></label>
         </div>
+        {variant === 'batch'
+          ? <CompositingControls params={params} onParams={onParams} />
+          : <small className="muted" data-testid="fusion-pointer">XSeg occlusion strength and seam blending are set in step 2 · Masking &amp; occlusion.</small>}
       </section>
 
       <section className="rack-section" aria-label="Execution provider and precision">
@@ -213,15 +228,6 @@ export default function EngineModelRack({ params, onParams, config, caps, onSave
         </div>
         {trtMessage && <small role="status">{trtMessage}</small>}
       </section>
-
-      {variant === 'workspace' && (
-        <section className="rack-section" aria-label="Per-person models">
-          <h4>Per-person models <Wiring live={false} /></h4>
-          {people.length === 0 ? <small className="muted">Inspect a target to pin different models to each person. You can also right-click a face on the canvas.</small>
-            : people.map(person => <PersonModelPicker key={person.key} personKey={person.key} label={person.label} swapperOptions={swapperOptions} enhancerOptions={ENHANCERS} />)}
-          <small className="muted">The render engine applies one swapper and one enhancer per job; per-person choices are kept with this workspace for when it supports them.</small>
-        </section>
-      )}
     </div>
   );
 }

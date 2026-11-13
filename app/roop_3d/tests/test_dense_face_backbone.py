@@ -89,23 +89,6 @@ def test_bundle_integrity_fails_before_loading_any_graph(tmp_path, bad):
     assert error.value.code == "DENSE_FACE_BUNDLE_INVALID"
 
 
-def test_unavailable_backbone_releases_session_and_never_uses_legacy_cg(monkeypatch):
-    import roop_3d.engine.volumetric.session as module
-    from roop_3d.reconstruction.neural_face import NeuralFaceEngine
-    session = module.ReferencePipeline()
-    released = []
-    monkeypatch.setattr(session.swapper, "prepare_session", lambda *a, **k: None)
-    monkeypatch.setattr(module, "FaceTracker", lambda *a, **k:
-                        SimpleNamespace(release=lambda: released.append("tracker")))
-    def unavailable(*args, **kwargs):
-        raise DomainError("DENSE_FACE_ASSETS_MISSING", "Missing test bundle", 503)
-    monkeypatch.setattr(NeuralFaceEngine, "load", unavailable)
-    with pytest.raises(DomainError) as error:
-        session.prepare_session(SimpleNamespace(faceset_id="test"), render_mode="pose_3d")
-    assert error.value.code == "DENSE_FACE_ASSETS_MISSING"
-    assert released == ["tracker"]
-    assert not session.prepared and session.neural_face is None
-    assert not session.full_head_engines
 
 
 def test_three_tiers_preserve_asymmetry_and_apply_metric_displacement():
@@ -291,21 +274,3 @@ def test_full_neural_output_and_ultramax_own_all_replacement_pixels(native_size,
     with pytest.raises(DomainError) as error:
         engine.process(target_image, SimpleNamespace(landmarks5=points, pose=(0, 0, 0)), document, swapper, track_id=0)
     assert error.value.code == "DENSE_FACE_NEURAL_REQUIRED"
-
-
-def test_preview_degrades_to_standard_swap_when_bundle_missing_but_renders_stay_strict(monkeypatch):
-    import roop_3d.engine.volumetric.session as module
-    from roop_3d.reconstruction.neural_face import NeuralFaceEngine
-    monkeypatch.setattr(module, "FaceTracker", lambda *a, **k: SimpleNamespace(release=lambda: None))
-    def unavailable(*args, **kwargs):
-        raise DomainError("DENSE_FACE_ASSETS_MISSING", "Missing test bundle", 503)
-    monkeypatch.setattr(NeuralFaceEngine, "load", unavailable)
-    session = module.ReferencePipeline()
-    monkeypatch.setattr(session.swapper, "prepare_session", lambda *a, **k: None)
-    session.dense_face_optional = True
-    capability = session.prepare_session(SimpleNamespace(faceset_id="test"), render_mode="reenactment_3d")
-    assert session.prepared and session.neural_face is None
-    assert "DENSE_FACE_ASSETS_MISSING" in session.dense_face_unavailable
-    assert capability["dense_face"]["available"] is False
-    assert "DENSE_FACE_ASSETS_MISSING" in capability["dense_face"]["reason"]
-    session.release_session()

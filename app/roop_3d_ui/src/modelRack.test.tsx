@@ -5,10 +5,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import ModelSelect from './components/modelhub/ModelSelect';
 import EngineModelRack, { SWAPPERS } from './components/modelhub/EngineModelRack';
 import ModelManager from './components/modelhub/ModelManager';
-import PersonModelPicker from './components/modelhub/PersonModelPicker';
-import { ENHANCERS } from './components/modelhub/EngineModelRack';
 import { modelCatalog, modelStatus, type CatalogModel } from './stores/modelCatalog';
-import { rackStore, setPersonModels } from './stores/rackSelection';
+import { rackStore } from './stores/rackSelection';
 import type { Capabilities, Config } from './contracts';
 
 const api = vi.fn(), post = vi.fn();
@@ -177,16 +175,19 @@ describe('Engine & Model Rack', () => {
   } } } as unknown as Capabilities;
   const mountRack = async (params = {}) => {
     const onParams = vi.fn(), onSaveConfig = vi.fn();
-    await render(<EngineModelRack params={params} onParams={onParams} config={config} caps={caps} onSaveConfig={onSaveConfig} people={[{ key: 'track_0001', label: 'Person 1' }]} />);
+    await render(<EngineModelRack params={params} onParams={onParams} config={config} caps={caps} onSaveConfig={onSaveConfig} />);
     return { onParams, onSaveConfig };
   };
 
-  it('shows all seven groups', async () => {
+  it('shows the seven groups the engine consumes, with no per-person or landmarker pretence', async () => {
     await mountRack();
-    for (const name of ['Face swapper model', '3D pipeline mode', 'Face enhancer', 'Frame upscaler', 'Face detector and landmarker', 'Mask and occlusion engines', 'Execution provider and precision', 'Per-person models']) {
+    for (const name of ['Face swapper model', '3D pipeline mode', 'Face enhancer', 'Frame upscaler', 'Face detector', 'Mask and occlusion engines', 'Execution provider and precision']) {
       expect(host.querySelector(`section[aria-label="${name}"]`), name).toBeTruthy();
     }
-    expect(host.textContent).toContain('Dense 3D 468/106 Landmarker');
+    expect(host.querySelector('section[aria-label="Per-person models"]')).toBeNull();
+    expect(host.querySelector('[data-testid="landmarker-note"]')!.textContent).toContain('not selectable');
+    expect(host.querySelector('[data-testid="fusion-pointer"]')!.textContent).toContain('step 2');   // workspace: strength and blending live in the Masking step
+    expect(host.querySelector('[data-testid="robust-networks"]')!.textContent).toContain('xseg_3.onnx');
   });
 
   it('sends the chosen swapper with jobs, and blocks one the engine reports unavailable', async () => {
@@ -209,8 +210,8 @@ describe('Engine & Model Rack', () => {
     await click(host.querySelector('[data-testid="rack-enhancer"] [role="combobox"]'));
     expect(option('GPEN Realistic • 1024px').getAttribute('aria-disabled')).toBe('true');   // no adapter: shown, not selectable
     await click(host.querySelector('[data-testid="rack-enhancer"] [role="combobox"]'));
-    await click(host.querySelector('[role="radio"][title*="relit"]'));
-    expect(onParams).toHaveBeenLastCalledWith({ render_mode: 'pose_3d', relight: true });
+    await click([...host.querySelectorAll('[role="radio"]')].find(item => item.textContent === '3D Facial Warp'));
+    expect(onParams).toHaveBeenLastCalledWith({ render_mode: 'pose_3d' });
     await click(host.querySelector('input[aria-label="XSeg occluder"]'));
     expect(onParams).toHaveBeenLastCalledWith({ occlusion_mode: 'robust' });
     await click(host.querySelector('input[aria-label="Face box feather"]'));
@@ -237,15 +238,53 @@ describe('Engine & Model Rack', () => {
     expect(host.textContent).toContain('No verified TensorRT build adapter');
   });
 
-  it('remembers per-person models and the saved-preference choices across a reload', async () => {
-    await render(<PersonModelPicker personKey="track_0001" label="Person 1" swapperOptions={SWAPPERS} enhancerOptions={ENHANCERS} />);
-    await click(host.querySelector('[role="combobox"]'));
-    await click(option('HyperSwap 1C'));
-    expect(rackStore.get().perPerson.track_0001).toEqual({ swapper: 'hyperswap_1c_256' });
-    setPersonModels('track_0001', { swapper: '' });
-    expect(rackStore.get().perPerson).toEqual({});                       // clearing the last override removes the person
-    setPersonModels('track_0002', { swapper: 'realswap_512', enhancer: 'gpen_bfr_512' });
-    expect(JSON.parse(window.localStorage.getItem('roop3d-model-rack')!).perPerson.track_0002).toEqual({ swapper: 'realswap_512', enhancer: 'gpen_bfr_512' });
+  it('lists UltraMax as its own CodeFormer fp16 row and disables restorers without an adapter, with the reason', async () => {
+    fixture = [...fixture, model('ultramax', { category: 'enhancer', installed: true, state: 'VERIFIED_LOCAL', native_resolution: 1024 }),
+      model('restoreformer_pp', { category: 'enhancer' }), model('dmdnet_artifact', { category: 'enhancer', name: 'DMDNet.pth' })];
+    await mountRack();
+    await click(host.querySelector('[data-testid="rack-enhancer"] [role="combobox"]'));
+    const ultramax = option('UltraMax');
+    expect(ultramax.getAttribute('aria-disabled')).toBe('false');
+    expect(ultramax.textContent).toContain('CodeFormer fp16');
+    expect(ultramax.textContent).not.toContain('1024');                   // the catalog's 1024 px is not the graph's resolution
+    expect(ultramax.textContent).toContain('Ready');
+    expect(option('RestoreFormer++').getAttribute('aria-disabled')).toBe('true');
+    expect(option('RestoreFormer++').textContent).toContain('No render adapter');
+    expect(option('DMDNet.pth').getAttribute('aria-disabled')).toBe('true');
+    expect(option('DMDNet.pth').textContent).toContain('pinned file names');
+  });
+
+  it('lists the upscalers as unsupported: nothing can be chosen and the reason is the missing engine stage', async () => {
+    fixture = [...fixture, model('realesrgan_x2plus', { category: 'upscaler', download_url: 'https://example.invalid/x2' })];
+    await mountRack();
+    expect(host.querySelector('section[aria-label="Frame upscaler"]')!.textContent).toContain('NOT SUPPORTED');
+    await click(host.querySelector('[data-testid="rack-upscaler"] [role="combobox"]'));
+    const x2 = option('Real-ESRGAN x2plus');
+    expect(x2.getAttribute('aria-disabled')).toBe('true');
+    expect(x2.textContent).toContain('no frame-upscaler stage');
+    await click(x2);
+    expect(rackStore.get()).not.toHaveProperty('upscaler');
+  });
+
+  it('enables fidelity only for CodeFormer / UltraMax with the restorer running', async () => {
+    const fidelity = () => host.querySelector('input[aria-label="Enhancer fidelity"]') as HTMLInputElement;
+    await mountRack({ restoration_blend: 0.6, restorer_model: 'gpen' });
+    expect(fidelity().disabled).toBe(true);
+    await mountRack({ restoration_blend: 0.6, restorer_model: 'ultramax' });
+    expect(fidelity().disabled).toBe(false);
+    await mountRack({ restoration_blend: 0, restorer_model: 'ultramax' });
+    expect(fidelity().disabled).toBe(true);
+  });
+
+  it('puts occlusion strength and seam blending in the Batch rack, with Frequency-separated blocked under Robust occlusion', async () => {
+    const onParams = vi.fn();
+    await render(<EngineModelRack variant="batch" params={{ occlusion_mode: 'robust' }} onParams={onParams} config={config} caps={caps} />);
+    expect(host.querySelector('[data-testid="compositing-controls"]')).toBeTruthy();
+    expect((host.querySelector('input[aria-label="XSeg occlusion strength"]') as HTMLInputElement).disabled).toBe(false);
+    const frequency = [...host.querySelectorAll<HTMLOptionElement>('select[aria-label="Seam blending"] option')].find(item => item.value === 'frequency_separated')!;
+    expect(frequency.disabled).toBe(true);
+    await click(host.querySelector('input[aria-label="XSeg occluder"]'));
+    expect(onParams).toHaveBeenLastCalledWith({ occlusion_mode: 'standard' });
   });
 });
 

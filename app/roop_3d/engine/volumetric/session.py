@@ -184,6 +184,7 @@ class ReferencePipeline:
         # Stage 4 render modes: "standard" (existing identity swap), "pose_3d", "reenactment_3d"
         self.render_mode = "standard"
         self.default_source: FaceSetDocument | None = None
+        self.identity_store = None
         self.rigs: dict[str, IdentityRig] = {}
         self.rig_status: dict[str, dict] = {}
         self.reenactors: dict[int, ReenactmentEngine] = {}
@@ -237,14 +238,20 @@ class ReferencePipeline:
                 self.selected_ids = frozenset(track_ids) if track_ids is not None else None
                 self.sources_by_track = mapped_sources
                 self.default_source, self.render_mode = source, render_mode
+                self.identity_store = identity_store
                 self.reenactment_settings = reenactment_settings or ReenactmentSettings()
                 self.dense_face_unavailable = None
                 if render_mode != "standard":
-                    self._prepare_identity_rigs(source, mapped_sources, identity_store)
+                    self._prepare_identity_rigs(source, mapped_sources, identity_store, prepare_dense=False)
                 if render_mode != "standard" and self.dense_face_unavailable:
                     self.portrait.fallback_reason = self.dense_face_unavailable
                 elif render_mode != "standard":
-                    self.portrait.fallback_reason = "Three-tier reconstruction supplies target expressions; dense warp uses neural swapper and UltraMax"
+                    self.portrait.fallback_reason = (
+                        "Identity-asset reenactment uses measured target landmarks and the source rig; "
+                        "the dense neural face model is not required"
+                        if render_mode == "reenactment_3d" else
+                        "Pose projection uses the source identity asset when available; otherwise the canonical proxy is "
+                        "used with an explicit fallback reason")
                 elif retarget != "off":
                     self.portrait.prepare_session(required=retarget == "required")
                 else:
@@ -255,24 +262,93 @@ class ReferencePipeline:
                 self.release_session()
                 raise
 
-    def _prepare_identity_rigs(self, source: FaceSetDocument, mapped: Mapping[int, FaceSetDocument], store=None) -> None:
-        """Prepare face-only 3D correspondence; no MakeHuman render path."""
-        from roop_3d.reconstruction.neural_face import NeuralFaceEngine, WARM_ENGINE
-        from roop_3d.core.ort_session import pool_scope_active
-        if self.neural_face is None:
+    def _prepare_identity_rigs(self, source: FaceSetDocument, mapped: Mapping[int, FaceSetDocument], store=None,
+                               *, prepare_dense: bool = True) -> None:
+        """Load an explicitly built asset, or build through an explicitly supplied store, for live 3D use."""
+        documents = {d.faceset_id: d for d in (source, *mapped.values())}.values()
+        dense_capabilities: dict[str, dict] = {}
+        if prepare_dense:
+            from roop_3d.reconstruction.neural_face import NeuralFaceEngine, WARM_ENGINE
+            from roop_3d.core.ort_session import pool_scope_active
+            if self.neural_face is None:
+                try:
+                    self._warm_key = (id(self.catalog), self.config.provider, self.config.hardware_profile,
+                                      self.config.precision_policy, self.config.cpu_threads) if pool_scope_active() else None
+                    warm = WARM_ENGINE.take(self._warm_key) if self._warm_key is not None else None
+                    self.neural_face = warm if warm is not None else NeuralFaceEngine.load(self.catalog, self.config)
+                except DomainError as error:
+                    if not self.dense_face_optional or error.code != "DENSE_FACE_ASSETS_MISSING":
+                        raise
+                    self.dense_face_unavailable = f"{error.code}: standard 2D identity swap used instead. {error.message}"
+                    return
+            for document in documents:
+                self.neural_face.prepare(document)
+                dense_capabilities[document.faceset_id] = self.neural_face.capability()
+
+        from roop_3d.reconstruction.identity_asset import (
+            IdentityAssetSettings, IdentityAssetStore, compute_build_key,
+        )
+        settings = IdentityAssetSettings()
+        cache_only = store is None
+        store_error = None
+        if cache_only:
             try:
-                self._warm_key = (id(self.catalog), self.config.provider, self.config.hardware_profile,
-                                  self.config.precision_policy, self.config.cpu_threads) if pool_scope_active() else None
-                warm = WARM_ENGINE.take(self._warm_key) if self._warm_key is not None else None
-                self.neural_face = warm if warm is not None else NeuralFaceEngine.load(self.catalog, self.config)
-            except DomainError as error:
-                if not self.dense_face_optional or error.code != "DENSE_FACE_ASSETS_MISSING":
-                    raise
-                self.dense_face_unavailable = f"{error.code}: standard 2D identity swap used instead. {error.message}"
-                return
-        for document in {d.faceset_id: d for d in (source, *mapped.values())}.values():
-            self.neural_face.prepare(document)
-            self.rig_status[document.faceset_id] = self.neural_face.capability()
+                store = IdentityAssetStore()
+            except Exception as error:
+                store_error = error
+
+        for document in documents:
+            faceset_id = document.faceset_id
+            dense = dense_capabilities.get(faceset_id, {})
+            try:
+                if store_error is not None:
+                    raise DomainError("IDENTITY_ASSET_STORE_UNAVAILABLE", str(store_error), 503) from store_error
+                build_key = compute_build_key(document, settings)
+                if cache_only:
+                    asset = store.load(faceset_id, build_key)
+                    reused = True
+                    if asset is None:
+                        raise DomainError(
+                            "IDENTITY_ASSET_NOT_BUILT",
+                            "No matching identity asset is cached; build it explicitly before rendering",
+                            409,
+                        )
+                else:
+                    asset, reused = store.get_or_build(document, settings)
+                manifest = asset.manifest
+                if (manifest.build_key != build_key or manifest.faceset_id != faceset_id
+                        or manifest.faceset_source_sha256 != document.source_sha256):
+                    raise DomainError(
+                        "IDENTITY_ASSET_MISMATCH",
+                        "The stored identity asset does not match the selected FaceSet and settings",
+                        409,
+                    )
+                rig = IdentityRig(asset)
+                self.rigs[faceset_id] = rig
+                self.rig_status[faceset_id] = {
+                    **dense,
+                    "available": True,
+                    "identity_asset_available": True,
+                    "reason": None,
+                    "identity_asset": {
+                        "build_key": build_key,
+                        "reused": bool(reused),
+                        "template": manifest.settings.get("template", "canonical"),
+                        "depth_triangulated": bool(manifest.claims.get("depth_triangulated", False)),
+                        "observed_yaw_range_deg": list(rig.yaw_range),
+                        "observed_pitch_range_deg": list(rig.pitch_range),
+                        "missing_information": list(manifest.missing_information),
+                    },
+                }
+            except Exception as error:
+                self.rigs.pop(faceset_id, None)
+                self.rig_status[faceset_id] = {
+                    **dense,
+                    "available": False,
+                    "identity_asset_available": False,
+                    "reason": f"{getattr(error, 'code', type(error).__name__)}: {error}",
+                    "identity_asset": {"available": False},
+                }
 
     def _document_for(self, track_id: int) -> FaceSetDocument | None:
         return self.sources_by_track.get(track_id, self.default_source)
@@ -633,6 +709,11 @@ class ReferencePipeline:
             mode = self.render_mode if render_mode is None else render_mode
             if mode not in RENDER_MODES:
                 raise ValueError(f"render_mode must be one of {RENDER_MODES}")
+            if mode in ("pose_3d", "reenactment_3d") and self.default_source is not None:
+                if any(document.faceset_id not in self.rig_status
+                       for document in (self.default_source, *self.sources_by_track.values())):
+                    self._prepare_identity_rigs(
+                        self.default_source, self.sources_by_track, self.identity_store, prepare_dense=False)
             if mode != "standard" and self.dense_face_unavailable:
                 mode = "standard"
             if mode == "pose_3d" and pose_blend is None:
@@ -690,7 +771,8 @@ class ReferencePipeline:
                 at = time.perf_counter()
                 yaw_limit, pitch_limit = auto_3d_limits()
                 extreme = abs(face.pose[0]) > yaw_limit or abs(face.pose[1]) > pitch_limit
-                face_mode = "pose_3d" if mode == "standard" and extreme else mode
+                face_mode = ("standard" if mode in ("pose_3d", "reenactment_3d") else
+                             "pose_3d" if mode == "standard" and extreme else mode)
                 dense_fallback = self.dense_face_unavailable if face_mode != "standard" else None
                 if face_mode != "standard" and not dense_fallback and self._roll_exceeded(tracked.track_id, face.pose[2]):
                     # The dense mesh fit breaks down on a strongly rolled head (a close-up lying on a pillow produced a duplicated
@@ -945,7 +1027,9 @@ class ReferencePipeline:
                 "identity_swapper": self.swapper.model.capability() if self.swapper.model else None,
                 "portrait": self.portrait.capability(), "profile": self.config.hardware_profile,
                 "selected_track_ids": sorted(self.selected_ids) if self.selected_ids is not None else None,
-                "pose_method": "three_tier_morphable_model" if self.neural_face is not None else "five_point_geometric_estimate", "dense_landmarks": (68, 106, 203),
+                "pose_method": ("three_tier_morphable_model" if self.neural_face is not None else
+                                "identity_asset_anchored_five_point" if self.rigs else
+                                "five_point_geometric_estimate"), "dense_landmarks": (68, 106, 203),
                 "full_head": {"active": False, "renderer": "disabled_legacy_cg"},
                 "hybrid_mesh_renderer": {str(track_id): engine.renderer_status()
                                          for track_id, engine in self.reenactors.items()},
@@ -953,15 +1037,20 @@ class ReferencePipeline:
                     "available": False, "active": False,
                     "reason": self.dense_face_unavailable or "Dense face bundle has not been loaded",
                     "raw_mesh_compositing": False},
-                "pose_projection": {"state": "AVAILABLE" if self.neural_face is not None or self.pose_projector is not None else "NOT_LOADED",
-                                    "geometry": "SEMANTIC_ANATOMICAL_FACE" if self.neural_face is not None else "ESTIMATED_CANONICAL_PROXY_68",
-                                    "camera": "FITTED_EXPORT_PINHOLE" if self.neural_face is not None else "ESTIMATED_CROP_PINHOLE",
-                                    "active": self.neural_face is not None or self.pose_projector is not None,
-                                    "jaw_adaptation": "OPT_IN_CANONICAL_PROXY_JAWLINE_FROM_106_CONTOUR"},
+                "pose_projection": {
+                    "state": "AVAILABLE" if self.neural_face is not None or self.pose_projector is not None or self.rigs else "NOT_LOADED",
+                    "geometry": ("SEMANTIC_ANATOMICAL_FACE" if self.neural_face is not None else
+                                 "SOURCE_IDENTITY_ASSET" if self.rigs else "ESTIMATED_CANONICAL_PROXY_68"),
+                    "camera": "FITTED_EXPORT_PINHOLE" if self.neural_face is not None else "ESTIMATED_CROP_PINHOLE",
+                    "active": self.neural_face is not None or self.pose_projector is not None or bool(self.rigs),
+                    "jaw_adaptation": "OPT_IN_CANONICAL_PROXY_JAWLINE_FROM_106_CONTOUR"},
                 "full_frame_compositor": self.compositor.capability(),
                 "lip_sync": self.lip_sync.capability(),
                 "render_modes": {"available": list(RENDER_MODES), "default": self.render_mode,
-                                 "fallback": "3D modes require a compatible dense facial model bundle, neural swapper and UltraMax; 6 GB uses perspective UV warping and 12 GB reports hardware-raster failures before falling back",
+                                 "fallback": "pose_3d uses the selected identity asset or an explicitly reported canonical-proxy fallback; "
+                                             "reenactment_3d uses the selected identity asset and measured target landmarks, "
+                                             "falling back to the proven swap with a reason when unavailable or not engaged "
+                                             "(6 GB perspective UV; 12 GB hybrid with explicit UV fallback on raster failure)",
                                  "identity_assets": dict(self.rig_status),
                                  "active_reenactors": len(self.reenactors)}}
 
@@ -1031,7 +1120,7 @@ class ReferencePipeline:
             self.last_latency = None
             self.frames_processed = 0
             self.pose_projector = None
-            self.render_mode, self.default_source = "standard", None
+            self.render_mode, self.default_source, self.identity_store = "standard", None, None
             self.rigs.clear()
             self.rig_status.clear()
             for engine in self.reenactors.values():

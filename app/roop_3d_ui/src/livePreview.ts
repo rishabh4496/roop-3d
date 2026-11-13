@@ -2,7 +2,8 @@ import { useEffect, useRef, useState } from 'react';
 import { PreviewBusyError, postLivePreview, type LivePreviewMeta } from './api';
 import { PreviewURL } from './state';
 import type { JobRequest } from './contracts';
-import type { WorkstationParameters } from './components/workstation/pipeline';
+import { wireParameters, type WorkstationParameters } from './components/workstation/pipeline';
+import { DEFAULT_BLEND_MODE, PYRAMID_LEVELS_DEFAULT, XSEG_STRENGTH_DEFAULT } from './components/studio/compositing';
 import { RUNTIME_SETTINGS_CHANGED } from './runtimeSettings';
 import { maskAtFrame } from './utils/maskRanges';
 import { PreviewFrameCache } from './previewFrameCache';
@@ -25,6 +26,8 @@ export function buildLivePayload({ request, time, fps, parameters, maskBase64, r
 }): LivePayload | null {
   if (!request || !request.face_mappings.length) return null;
   const restoring = restorerAvailable && (parameters.restoration_blend > 0 || request.parameter_curves?.tracks.restorer_opacity?.some(key=>key.value>0)) && !parameters.bypass.includes('restorer');
+  // Controls the current selection cannot act on (fidelity for GPEN, the XSeg vote outside Robust occlusion, bands for Feather) are not sent.
+  const wire = wireParameters(parameters);
   return {
     engine_id: request.engine_id ?? 'reference_onnx',
     swapper_model_id: request.swapper_model_id ?? undefined,
@@ -47,7 +50,7 @@ export function buildLivePayload({ request, time, fps, parameters, maskBase64, r
     restorer: restoring ? parameters.restorer_model ?? 'gpen' : 'off',
     identity_blend: request.identity_blend ?? undefined,
     identity_blend_t: parameters.identity_blend_t,
-    fidelity_weight: parameters.fidelity_weight,
+    fidelity_weight: restoring ? wire.fidelity_weight : undefined,
     restoration_blend: restoring ? parameters.restoration_blend : undefined,
     color_strength: parameters.color_strength,
     color_method: parameters.color_method ?? 'lab',
@@ -71,6 +74,10 @@ export function buildLivePayload({ request, time, fps, parameters, maskBase64, r
     // Stage 7: preview what Start would render. Omitted at their defaults so earlier preview cache keys are unchanged.
     render_mode: parameters.render_mode && parameters.render_mode !== 'standard' ? parameters.render_mode : undefined,
     occlusion_mode: parameters.occlusion_mode && parameters.occlusion_mode !== 'standard' ? parameters.occlusion_mode : undefined,
+    // Compositor fusion: omitted at the engine defaults, so earlier preview cache keys are unchanged.
+    xseg_occlusion_strength: wire.xseg_occlusion_strength === XSEG_STRENGTH_DEFAULT ? undefined : wire.xseg_occlusion_strength,
+    blend_mode: wire.blend_mode === DEFAULT_BLEND_MODE ? undefined : wire.blend_mode,
+    pyramid_levels: wire.pyramid_levels === PYRAMID_LEVELS_DEFAULT ? undefined : wire.pyramid_levels,
     ...(parameters.relight ? {
       relight: true, relight_strength: parameters.relight_strength, specular_sheen: parameters.specular_sheen, shadow_preservation: parameters.shadow_preservation,
       lighting_mode: parameters.lighting_mode, manual_light_yaw: parameters.manual_light_yaw, manual_light_pitch: parameters.manual_light_pitch,

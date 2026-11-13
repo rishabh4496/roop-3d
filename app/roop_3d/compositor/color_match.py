@@ -50,25 +50,26 @@ def _ycbcr(image: np.ndarray) -> np.ndarray:
     return cv2.cvtColor(rgb, cv2.COLOR_BGR2YCrCb).astype(np.float32)
 
 
+def _skin_samples(reference: np.ndarray, weight: np.ndarray, forbidden_mask: np.ndarray | None) -> np.ndarray:
+    """Select only supplied skin/nose support; sparse samples never relax exclusions."""
+    selected = weight > 0.15
+    if forbidden_mask is not None:
+        forbidden = np.asarray(forbidden_mask, np.float32)
+        if forbidden.shape != weight.shape or not np.isfinite(forbidden).all():
+            raise DomainError("COLOR_MATCH_INPUT_INVALID", "Forbidden mask must match the skin statistics mask", 422)
+        selected &= forbidden < 0.15
+    reference_u8 = reference if reference.dtype == np.uint8 else np.clip(reference, 0, 255).astype(np.uint8)
+    selected &= cv2.cvtColor(reference_u8, cv2.COLOR_BGR2GRAY) > 0.08 * 255.0
+    if np.count_nonzero(selected) < 2:
+        raise DomainError("COLOR_MATCH_MASK_EMPTY", "At least two unoccluded skin/nose samples are needed for color matching", 422)
+    return selected
+
+
 def estimate_lab_stats(source: np.ndarray, reference: np.ndarray, mask: np.ndarray,
                        forbidden_mask: np.ndarray | None = None) -> ColorStats:
     """Estimate LAB statistics exclusively over unoccluded skin pixels, excluding dark hair and neck shadows."""
     a, b, weight = _validate_pair(source, reference, mask)
-    selected = weight > 0.15
-    if forbidden_mask is not None:
-        fmask = np.clip(np.asarray(forbidden_mask, dtype=np.float32), 0.0, 1.0)
-        if fmask.shape == selected.shape:
-            selected &= (fmask < 0.15)
-    # Exclude dark hair and neck shadows (luma <= 0.08) from skin color statistics
-    b_u8 = b if b.dtype == np.uint8 else np.clip(b, 0, 255).astype(np.uint8)
-    luma = cv2.cvtColor(b_u8, cv2.COLOR_BGR2GRAY).astype(np.float32) / 255.0
-    shadow_free = selected & (luma > 0.08)
-    if np.count_nonzero(shadow_free) >= 8:
-        selected = shadow_free
-    elif np.count_nonzero(selected) < 8:
-        selected = weight > 0
-    if np.count_nonzero(selected) < 2:
-        raise DomainError("COLOR_MATCH_MASK_EMPTY", "At least two masked pixels are needed for color matching", 422)
+    selected = _skin_samples(b, weight, forbidden_mask)
     source_lab, target_lab = _lab(a), _lab(b)
     source_mean = source_lab[selected].mean(axis=0)
     source_std = np.maximum(source_lab[selected].std(axis=0), 1.0)
@@ -94,7 +95,7 @@ def apply_lab_stats(image: np.ndarray, stats: ColorStats, mask: np.ndarray, *, s
     matched = (lab - src_mean) * (tgt_std / src_std) + tgt_mean
     result_lab = lab.copy()
     active = alpha > 0
-    result_lab[active] = lab[active] + (matched[active] - lab[active]) * strength
+    result_lab[active] = lab[active] + (matched[active] - lab[active]) * (strength * np.clip(alpha[active], 0, 1))[:, None]
     output = cv2.cvtColor(np.clip(result_lab, 0, 255).astype(np.uint8), cv2.COLOR_LAB2BGR)
     output[~active] = source[~active]
     return output
@@ -108,20 +109,7 @@ def estimate_ycbcr_stats(source: np.ndarray, reference: np.ndarray, mask: np.nda
                          forbidden_mask: np.ndarray | None = None) -> ColorStats:
     """Estimate YCbCr statistics exclusively over unoccluded skin pixels, excluding dark hair and neck shadows."""
     a, b, weight = _validate_pair(source, reference, mask)
-    selected = weight > 0.15
-    if forbidden_mask is not None:
-        fmask = np.clip(np.asarray(forbidden_mask, dtype=np.float32), 0.0, 1.0)
-        if fmask.shape == selected.shape:
-            selected &= (fmask < 0.15)
-    b_u8 = b if b.dtype == np.uint8 else np.clip(b, 0, 255).astype(np.uint8)
-    luma = cv2.cvtColor(b_u8, cv2.COLOR_BGR2GRAY).astype(np.float32) / 255.0
-    shadow_free = selected & (luma > 0.08)
-    if np.count_nonzero(shadow_free) >= 8:
-        selected = shadow_free
-    elif np.count_nonzero(selected) < 8:
-        selected = weight > 0
-    if np.count_nonzero(selected) < 2:
-        raise DomainError("COLOR_MATCH_MASK_EMPTY", "At least two masked pixels are needed for color matching", 422)
+    selected = _skin_samples(b, weight, forbidden_mask)
     source_ycc, target_ycc = _ycbcr(a), _ycbcr(b)
     source_mean = source_ycc[selected].mean(axis=0)
     source_std = np.maximum(source_ycc[selected].std(axis=0), 1.0)
@@ -147,7 +135,7 @@ def apply_ycbcr_stats(image: np.ndarray, stats: ColorStats, mask: np.ndarray, *,
     matched = (ycc - src_mean) * (tgt_std / src_std) + tgt_mean
     result_ycc = ycc.copy()
     active = alpha > 0
-    result_ycc[active] = ycc[active] + (matched[active] - ycc[active]) * strength
+    result_ycc[active] = ycc[active] + (matched[active] - ycc[active]) * (strength * np.clip(alpha[active], 0, 1))[:, None]
     output = cv2.cvtColor(np.clip(result_ycc, 0, 255).astype(np.uint8), cv2.COLOR_YCrCb2BGR)
     output[~active] = source[~active]
     return output
@@ -172,8 +160,11 @@ def masked_histogram_match(source: np.ndarray, reference: np.ndarray, mask: np.n
         cdfs=np.cumsum(histograms,axis=-1)
         cdfs /= np.maximum(cdfs[...,-1:],1e-12)
         for channel in range(3):
-            lut=np.interp(cdfs[0,channel],cdfs[1,channel],np.arange(256))
-            mapped[...,channel][active]=lut[source_lab[...,channel][active].astype(np.uint8)]
+            # CDF plateaus are empty bins, not target colours. Inverting the
+            # full 256-bin CDF maps a constant sample's quantile 1 to bin 255.
+            occupied = np.flatnonzero(histograms[1, channel] > 0)
+            lut = np.interp(cdfs[0, channel], cdfs[1, channel, occupied], occupied)
+            mapped[..., channel][active] = lut[source_lab[..., channel][active].astype(np.uint8)]
         output=cv2.cvtColor(np.clip(mapped,0,255).astype(np.uint8),cv2.COLOR_LAB2BGR)
         output[~active]=a[~active]
         return output
@@ -329,32 +320,15 @@ def sliced_wasserstein_color_transfer_oklab(
 ) -> np.ndarray:
     """Sliced Wasserstein Optimal Transport color matcher in OKLab space.
 
-    Computed exclusively over unoccluded BiSeNet Class 1 (Skin) pixels, excluding dark
-    hair and neck shadows. Separates diffuse skin reflectance from specular skin highlights
-    before color matching and re-adds the specular highlights at the end.
+    Computed exclusively over the supplied unoccluded skin/nose mask, excluding
+    dark shadows. Diffuse skin is matched separately from source specular highlights,
+    which are restored afterward. Sparse samples never broaden the sampling mask.
     """
     a, b, weight = _validate_pair(source, reference, mask)
     if strength <= 0.0:
         return a.copy()
 
-    # Extract unoccluded skin mask
-    selected = weight > 0.15
-    if forbidden_mask is not None:
-        fmask = np.clip(np.asarray(forbidden_mask, dtype=np.float32), 0.0, 1.0)
-        if fmask.shape == selected.shape:
-            selected &= (fmask < 0.15)
-
-    # Exclude dark hair and neck shadows (luma <= 0.08)
-    b_u8 = b if b.dtype == np.uint8 else np.clip(b, 0, 255).astype(np.uint8)
-    luma = cv2.cvtColor(b_u8, cv2.COLOR_BGR2GRAY).astype(np.float32) / 255.0
-    shadow_free = selected & (luma > 0.08)
-    if np.count_nonzero(shadow_free) >= 8:
-        selected = shadow_free
-    elif np.count_nonzero(selected) < 8:
-        selected = weight > 0
-
-    if np.count_nonzero(selected) < 2:
-        return a.copy()
+    selected = _skin_samples(b, weight, forbidden_mask)
 
     # 1. Specular / diffuse separation
     if preserve_specular:
@@ -404,20 +378,20 @@ def sliced_wasserstein_color_transfer_oklab(
         # Scale ratio with safe fallback for uniform or near-uniform patches
         ratio_std = new_std / orig_std if np.all(orig_std > 1e-3) else np.ones(3, np.float32)
 
-        # Apply to entire active face region
-        active = weight > 0
+        active = selected
         matched_oklab = src_oklab.copy()
         transported = (src_oklab[active] - orig_mean) * ratio_std + new_mean
-        matched_oklab[active] = src_oklab[active] + (transported - src_oklab[active]) * strength
+        matched_oklab[active] = src_oklab[active] + (transported - src_oklab[active]) * (strength * weight[active])[:, None]
     else:
         # Fallback to mean/std if sample size too small
         orig_mean = src_oklab[selected].mean(axis=0)
         orig_std = np.maximum(src_oklab[selected].std(axis=0), 1e-4)
         tgt_mean = ref_oklab[selected].mean(axis=0)
         tgt_std = np.maximum(ref_oklab[selected].std(axis=0), 1e-4)
-        active = weight > 0
+        active = selected
         matched_oklab = src_oklab.copy()
-        matched_oklab[active] = (src_oklab[active] - orig_mean) * (tgt_std / orig_std) + tgt_mean
+        transported = (src_oklab[active] - orig_mean) * (tgt_std / orig_std) + tgt_mean
+        matched_oklab[active] = src_oklab[active] + (transported - src_oklab[active]) * (strength * weight[active])[:, None]
 
     # Convert back to sRGB/BGR
     matched_diffuse = oklab_to_srgb(matched_oklab)

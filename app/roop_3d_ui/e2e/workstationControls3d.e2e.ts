@@ -249,9 +249,9 @@ test('the new panels reach the live preview only once touched, and the preferenc
   await setSlider(page, controls.getByRole('slider', { name: 'Expression offset smile' }), 0.5, 0.01);
   await expect.poll(() => seen.previews.at(-1)?.face_expression_overrides?.track_0001?.mouth_smile).toBeCloseTo(0.5);
   await controls.getByTestId('adaptation-section').locator(':scope > summary').click();
-  await expect(controls.getByText('saved preference only').filter({ visible: true })).toHaveCount(2);   // both unwired toggles say so
-  await controls.getByRole('checkbox', { name: /Speech-lip lock/ }).check();
-  await controls.getByRole('checkbox', { name: /3-second scene adaptation/ }).check();
+  await expect(controls.getByText('not supported').filter({ visible: true })).toHaveCount(2);   // both unwired toggles say so and are disabled
+  await expect(controls.getByRole('checkbox', { name: /Speech-lip lock/ })).toBeDisabled();
+  await expect(controls.getByRole('checkbox', { name: /3-second scene adaptation/ })).toBeDisabled();
   await page.waitForTimeout(300);
   expect(JSON.stringify(seen.previews.at(-1))).not.toMatch(/lip_lock|speech|scene_adapt|spark|spectre/i);
   await controls.getByRole('slider', { name: 'Temporal Kalman smoothing' }).fill('85');

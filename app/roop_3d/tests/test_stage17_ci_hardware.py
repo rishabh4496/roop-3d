@@ -1,7 +1,7 @@
 """Stage 17 Automated Tests: CI/CD Pipeline, Hardware Compatibility & Release System.
 
 Verifies:
-1. 15-Gate CI/CD runner structure, gate interfaces, and execution contracts.
+1. Current workflow gates, isolated CLI invocation and failure propagation without running nested checks.
 2. Hardware profile specifications (RTX 4070 12GB resident, RTX 3060 6GB clamped, CPU fallback).
 3. Dependency audit matrix integrity across all 14 required dependencies.
 4. Cryptographic HMAC signature and manifest integrity of release artifacts.
@@ -16,9 +16,12 @@ import hashlib
 import hmac
 import json
 from pathlib import Path
+import shlex
+import subprocess
 import sys
 
 import pytest
+import yaml
 
 # Ensure repo root and app directory are in sys.path
 TEST_DIR = Path(__file__).resolve().parent
@@ -34,32 +37,57 @@ from tools.release_packager import SECRET_KEY, sha256_file
 from roop_3d.models.registry import ModelRegistry
 
 
-def test_15_ci_gates_registered_and_contract() -> None:
-    """Verifies all 15 required CI gates exist with correct numbering and interfaces."""
-    assert len(GATES) == 15, f"Expected exactly 15 CI gates, found {len(GATES)}"
+def test_ci_workflow_runs_current_python_gates_and_the_offline_quality_suite() -> None:
+    workflow = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text("utf-8"))
+    jobs = workflow["jobs"]
+    python = jobs["python-tests"]
+    assert len(GATES) == 15
+    assert python["strategy"]["matrix"]["gate"] == [1, 2, 7, 9, 10, 11, 14]
+    assert python.get("continue-on-error", False) is False
+    commands = [(step, shlex.split(step["run"])) for step in python["steps"]
+                if "run" in step and "tools/ci_runner.py" in step["run"]]
+    assert len(commands) == 1
+    step, command = commands[0]
+    assert command[1:3] == ["-B", "tools/ci_runner.py"]
+    assert command[command.index("--gate") + 1] == "${{ matrix.gate }}"
+    assert command[command.index("--hardware-profile") + 1] == "cpu"
+    assert not step.get("continue-on-error", False)
 
-    expected_gate_names = [
-        "Python unit tests",
-        "Python integration tests",
-        "Frontend unit tests",
-        "TypeScript type checking",
-        "Linting",
-        "Production build",
-        "API tests",
-        "Playwright browser tests",
-        "FaceSet archive validation",
-        "Model registry validation",
-        "Video timing tests",
-        "Golden video inference",
-        "Model hash verification",
-        "Security tests",
-        "Legacy isolation audit",
-    ]
+    quality = jobs["offline-quality"]
+    test_steps = [(step, shlex.split(step["run"])) for step in quality["steps"]
+                  if "run" in step and "-m pytest" in step["run"]]
+    assert len(test_steps) == 1
+    step, command = test_steps[0]
+    assert step["working-directory"] == "app"
+    assert command[1:4] == ["-B", "-m", "pytest"]
+    assert command[command.index("-c") + 1] == "roop_3d/pyproject.toml"
+    assert "--confcutdir=roop_3d" in command
+    assert {
+        "roop_3d/tests/test_identity_asset_session.py",
+        "roop_3d/tests/test_visual_quality_regressions.py",
+        "roop_3d/tests/test_occlusion_compositor.py",
+        "roop_3d/tests/test_ultramax_quality_contract.py",
+        "roop_3d/tests/test_stage17_ci_hardware.py",
+    } <= set(command)
+    assert not quality.get("continue-on-error", False) and not step.get("continue-on-error", False)
+    assert {"lint-and-typecheck", "python-tests", "offline-quality"} <= set(jobs["release-verification"]["needs"])
 
-    for idx, (gate_func, expected_name) in enumerate(zip(GATES, expected_gate_names), 1):
-        doc = gate_func.__doc__ or ""
-        assert f"Gate {idx}:" in doc or f"Gate {idx:02d}:" in doc, f"Gate {idx} docstring missing numbering"
-        assert expected_name.lower() in doc.lower(), f"Gate {idx} does not mention '{expected_name}'"
+
+def test_frontend_workflow_executes_the_real_package_gate_commands() -> None:
+    workflow = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text("utf-8"))
+    steps = workflow["jobs"]["lint-and-typecheck"]["steps"]
+    commands = {tuple(shlex.split(step["run"])): step for step in steps if "run" in step}
+    scripts = json.loads((ROOT / "app/roop_3d_ui/package.json").read_text("utf-8"))["scripts"]
+    for command, script in ((("npm", "run", "typecheck"), "typecheck"),
+                            (("npm", "run", "lint"), "lint"),
+                            (("npm", "test"), "test"),
+                            (("npm", "run", "build"), "build")):
+        step = commands[command]
+        assert step["working-directory"] == "app/roop_3d_ui"
+        assert not step.get("continue-on-error", False)
+        assert scripts[script].strip()
+    assert shlex.split(scripts["typecheck"]) == ["tsc", "--noEmit"]
+    assert shlex.split(scripts["lint"])[0] == "eslint"
 
 
 def test_hardware_profiles_specification() -> None:
@@ -215,12 +243,67 @@ def test_checksums_sha256_manifest() -> None:
         assert rel_path in content, f"File '{rel_path}' missing from checksums.sha256"
 
 
-def test_project_admin_ci_gate_invocation() -> None:
-    """Verifies project_admin run_ci_gate runs correctly with gate filtering."""
-    import shutil
-    if shutil.which("npm") is None:
-        pytest.skip("gate 4 runs `npm run typecheck`; npm is not on PATH in this shell (it is inside Pinokio's managed environment)")
+@pytest.mark.parametrize("exit_code", [0, 2])
+def test_project_admin_ci_gate_invocation_is_isolated_and_propagates_failure(monkeypatch, capsys, exit_code) -> None:
+    """Exercise the actual gate selector/admin wrapper, substituting only process execution."""
     from tools.project_admin import run_ci_gate
+    calls = []
 
-    # Gate 4: TypeScript type checking (fast gate ~1s)
-    run_ci_gate(gate=4, hardware_profile="12gb")
+    def execute(args, **kwargs):
+        calls.append((args, kwargs))
+        return subprocess.CompletedProcess(args, exit_code, stdout="typecheck observation",
+                                           stderr="type error" if exit_code else "")
+
+    monkeypatch.setattr(subprocess, "run", execute)
+    if exit_code:
+        with pytest.raises(RuntimeError, match="CI gate check failed"):
+            run_ci_gate(gate=4, hardware_profile="12gb")
+    else:
+        run_ci_gate(gate=4, hardware_profile="12gb")
+    assert len(calls) == 1
+    args, options = calls[0]
+    assert args == ["npm.cmd" if sys.platform == "win32" else "npm", "run", "typecheck"]
+    assert Path(options["cwd"]) == APP_DIR / "roop_3d_ui"
+    assert options["env"]["PYTHONPATH"] == str(APP_DIR)
+    output = capsys.readouterr().out
+    report = json.loads(output[output.index("{"):])
+    assert report["status"] == ("FAIL" if exit_code else "PASS")
+    assert report["total_gates"] == 1 and report["failed_count"] == bool(exit_code)
+    assert report["hardware_profile"]["profile"] == "12gb"
+    gate, = report["gates"]
+    assert gate["gate"] == 4 and gate["exit_code"] == exit_code
+    assert "typecheck observation" in gate["output"]
+    assert gate["passed"] is (exit_code == 0)
+
+
+def test_pytest_gate_uses_standalone_config_and_creates_a_local_temporary_parent(monkeypatch, tmp_path) -> None:
+    from tools import ci_runner
+    app = tmp_path / "app"
+    python = app / "roop_3d/.venv/Scripts/python.exe"
+    monkeypatch.setattr(ci_runner, "APP_DIR", app)
+    monkeypatch.setattr(ci_runner, "PYTHON_VENV", python)
+    calls = []
+
+    def execute(args, **kwargs):
+        calls.append((args, kwargs))
+        return subprocess.CompletedProcess(args, 3, stdout="synthetic pytest failure", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", execute)
+    selected = ["roop_3d/tests/test_visual_quality_regressions.py"]
+    code, output = ci_runner.run_pytest(selected)
+    assert code == 3 and output == "synthetic pytest failure"
+    args, options = calls[0]
+    assert args == [str(python), "-B", "-m", "pytest", "-c", "roop_3d/pyproject.toml",
+                    "--confcutdir=roop_3d", "-q", *selected]
+    assert Path(options["cwd"]) == app and options["env"]["PYTHONPATH"] == str(app)
+    assert (app / "roop_3d/.runtime").is_dir()
+
+
+def test_ci_runner_cli_exits_nonzero_when_the_selected_gate_fails(monkeypatch, capsys) -> None:
+    from tools import ci_runner
+    monkeypatch.setattr(sys, "argv", ["ci_runner.py", "--gate", "4", "--hardware-profile", "cpu"])
+    monkeypatch.setattr(subprocess, "run", lambda args, **kwargs:
+                        subprocess.CompletedProcess(args, 2, stdout="", stderr="typecheck failed"))
+    assert ci_runner.main() == 1
+    output = capsys.readouterr().out
+    assert "Status: FAIL" in output and "Gates Passed: 0 / 1" in output

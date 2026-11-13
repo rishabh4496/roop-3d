@@ -3,7 +3,8 @@
 What the model can and cannot separate (verified on real frames, see ``docs/OCCLUSION_STAGE5.md``):
 
 * separated: skin, brows, eyes, nose, mouth interior, lips, ears, hair, neck, clothing, glasses, hat;
-* NOT separated: **teeth** (they are inside the mouth-interior class) and **foreground objects**
+* NOT separated: **teeth** and **tongue** (both are inside the mouth-interior class; no tongue class or
+  model exists) and **foreground objects**
   (hands, microphones, props are not parser classes at all; they come from the visible-face
   networks in ``occlusion_model``).
 

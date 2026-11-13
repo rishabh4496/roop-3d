@@ -2310,6 +2310,7 @@ body {
   z-index: 3;
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
   max-width: calc(100% - 26px);
   padding: 4px 9px;
@@ -2325,6 +2326,7 @@ body {
 .live-swap-status.error { color: var(--danger); pointer-events: auto; }
 .live-swap-status.ready { color: var(--accent); }
 .live-swap-status .live-swap-unsupported { color: #dfb977; pointer-events: auto; }
+.live-swap-status .live-swap-restoration { color: #adbfc0; pointer-events: auto; overflow-wrap: anywhere; }
 .live-swap-retry { pointer-events: auto; background: none; border: 0; padding: 0; color: inherit; text-decoration: underline; font-size: 10px; }
 
 /* "Use as source" (POST /api/faces/extract_from_frame) */

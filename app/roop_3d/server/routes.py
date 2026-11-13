@@ -75,7 +75,10 @@ def capabilities(request: Request) -> Capabilities:
     mixed_precision = bool(precision_status.get("available") or trt or cuda_fp16)
     try:
         from roop_3d.compositor.stream_restoration import load_ultramax_spec
-        ultramax = load_ultramax_spec(state.root).model_name in available
+        weights = load_ultramax_spec(state.root).model_name
+        # The rack maps the registered codeformer.fp16 artifact onto id=ultramax, so ask the catalog instead of
+        # expecting the weight's file name among the row ids/names.
+        ultramax = weights in available or state.models.weight_available('ultramax', weights)
     except (ValueError, OSError, TypeError, KeyError):
         ultramax = False
     options = {

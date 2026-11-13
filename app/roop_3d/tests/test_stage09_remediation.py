@@ -196,17 +196,17 @@ def test_batch_matrix_strategy_per_file_matrix_cartesian_and_templates():
 
     assert len(manifests) == 12
     # Verify naming template expansion
-    assert manifests[0].output_filename == "target_alpha_src_alice_CodeFormer_20261101_120000.mp4"
-    assert manifests[1].output_filename == "target_alpha_src_bob_CodeFormer_20261101_120000.mp4"
-    assert manifests[2].output_filename == "target_alpha_src_charlie_CodeFormer_20261101_120000.mp4"
-    assert manifests[3].output_filename == "target_beta_src_alice_CodeFormer_20261101_120000.mp4"
+    assert manifests[0].output_filename == "target_alpha_src_alice_codeformer_20261101_120000.mp4"
+    assert manifests[1].output_filename == "target_alpha_src_bob_codeformer_20261101_120000.mp4"
+    assert manifests[2].output_filename == "target_alpha_src_charlie_codeformer_20261101_120000.mp4"
+    assert manifests[3].output_filename == "target_beta_src_alice_codeformer_20261101_120000.mp4"
 
     # Filtered Cartesian matrix (selection grid with active cells)
     active_cells = ["0:0", "1:2", "3:1"]
     filtered = BatchMatrixEngine.generate_per_file_matrix(
         sources=sources,
         targets=targets,
-        restorer="GPEN512",
+        restorer="gpen",
         active_cells=active_cells,
         timestamp="20261101_120000",
     )
@@ -231,7 +231,7 @@ def test_batch_matrix_strategy_recipe_matrix():
             "id": "codeformer_high",
             "name": "CodeFormer High",
             "restorer": "codeformer",
-            "parameters": {"restoration_blend": 0.75, "codeformer_fidelity": 0.90},
+            "parameters": {"restoration_blend": 0.75, "fidelity_weight": 0.90},
         },
         {
             "id": "ultramax_deep",
@@ -264,7 +264,7 @@ def test_batch_matrix_strategy_recipe_matrix():
     assert manifests[0].workstation_parameters["restoration_blend"] == 0.45
 
     assert manifests[1].output_filename == "trimmed_scene_faceset_hero_codeformer_high_20261101_120000.mp4"
-    assert manifests[1].workstation_parameters["codeformer_fidelity"] == 0.90
+    assert manifests[1].workstation_parameters["fidelity_weight"] == 0.90
 
     assert manifests[2].output_filename == "trimmed_scene_faceset_hero_ultramax_deep_20261101_120000.mp4"
 
@@ -273,6 +273,54 @@ def test_batch_matrix_strategy_recipe_matrix():
 
     assert manifests[4].output_filename == "trimmed_scene_faceset_hero_tps_frontal_2_20261101_120000.mp4"
     assert manifests[4].workstation_parameters["pose_frontalization"] == 0.7
+
+
+@pytest.mark.parametrize("as_config", [False, True], ids=["dictionary", "recipe_config"])
+def test_batch_matrix_recipe_rejects_unknown_parameter_fields(as_config):
+    recipe = {
+        "id": "invalid_custom",
+        "name": "Invalid custom recipe",
+        "restorer": "codeformer",
+        "parameters": {"codeformer_fidelity": 0.90},
+    }
+    with pytest.raises(ValueError, match=r"Recipe 'invalid_custom'.*job schema rejects") as exc_info:
+        BatchMatrixEngine.generate_recipe_matrix(
+            source="faceset_hero",
+            target="roop_3d/.runtime/media/trimmed_scene.mp4",
+            recipes=[RecipeConfig(**recipe) if as_config else recipe],
+            timestamp="20261101_120000",
+        )
+    assert "codeformer_fidelity" in str(exc_info.value)
+
+
+def test_batch_matrix_per_file_rejects_legacy_restorer_value():
+    with pytest.raises(ValueError, match="restorer_model"):
+        BatchMatrixEngine.generate_per_file_matrix(
+            sources=["alice"],
+            targets=["target_alpha.mp4"],
+            restorer="GPEN512",
+            timestamp="20261101_120000",
+        )
+
+
+@pytest.mark.parametrize("restorer", ["gpen", "codeformer", "gfpgan", "ultramax"])
+def test_batch_matrix_per_file_restorer_reaches_job_parameters(restorer):
+    manifests = BatchMatrixEngine.expand_batch({
+        "strategy": "per_file_matrix",
+        "sources": ["alice", "bob"],
+        "targets": ["target_alpha.mp4", "target_beta.mp4"],
+        "restorer": restorer,
+        "workstation_parameters": {"restoration_blend": 0.65},
+        "timestamp": "20261101_120000",
+    })
+
+    assert len(manifests) == 4
+    for manifest in manifests:
+        assert manifest.workstation_parameters["restorer_model"] == restorer
+        assert manifest.to_job_payload()["workstation_parameters"] == {
+            "restorer_model": restorer,
+            "restoration_blend": 0.65,
+        }
 
 
 def test_batch_matrix_expand_batch_unified_entrypoint():

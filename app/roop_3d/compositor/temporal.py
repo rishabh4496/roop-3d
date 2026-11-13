@@ -36,7 +36,7 @@ class _TrackState:
 class TemporalResult:
     inverse: np.ndarray
     alpha: np.ndarray
-    color_stats: ColorStats
+    color_stats: ColorStats | None
 
 
 class TemporalSmoother:
@@ -89,7 +89,7 @@ class TemporalSmoother:
             value = cv2.resize(value, size, interpolation=cv2.INTER_AREA)
         return np.clip(value, 0.0, 1.0), original
 
-    def update(self, track_id: int, inverse: np.ndarray, alpha: np.ndarray, color_stats: ColorStats,
+    def update(self, track_id: int, inverse: np.ndarray, alpha: np.ndarray, color_stats: ColorStats | None,
                *, frame_index: int | None = None, scene_cut: bool = False) -> TemporalResult:
         if type(track_id) is not int or track_id < 0:
             raise ValueError("track_id must be a nonnegative integer")
@@ -97,8 +97,10 @@ class TemporalSmoother:
         if matrix.shape != (2, 3) or not np.isfinite(matrix).all():
             raise DomainError("TEMPORAL_AFFINE_INVALID", "Crop inverse must be a finite 2x3 matrix", 422)
         bounded, original_shape = self._bounded_alpha(alpha)
-        color = np.asarray(color_stats.vector(), dtype=np.float32)
-        if not np.isfinite(color).all():
+        # Missing semantic skin is not a new colour observation. Keep the last
+        # real estimate, but continue filtering geometry and alpha normally.
+        color = None if color_stats is None else np.asarray(color_stats.vector(), dtype=np.float32)
+        if color is not None and not np.isfinite(color).all():
             raise DomainError("TEMPORAL_VALUE_INVALID", "Temporal filter input must be finite", 422)
         if scene_cut:
             self.clear()
@@ -123,7 +125,7 @@ class TemporalSmoother:
         self._tracks.move_to_end(track_id)
         smoothed_matrix = state.affine.update(matrix, state.clock)
         smoothed_alpha = state.alpha.update(bounded, state.clock)
-        smoothed_color = state.color.update(color, state.clock)
+        smoothed_color = state.color.update(color, state.clock) if color is not None else state.color.value
         while len(self._tracks) > self.max_tracks or self.cache_bytes > self.max_cache_bytes:
             evicted_id, _ = self._tracks.popitem(last=False)
             if evicted_id == track_id:
@@ -131,4 +133,4 @@ class TemporalSmoother:
         if smoothed_alpha.shape != original_shape:
             smoothed_alpha = cv2.resize(smoothed_alpha.astype(np.float32), (original_shape[1], original_shape[0]), interpolation=cv2.INTER_LINEAR)
         return TemporalResult(smoothed_matrix.astype(np.float32), np.clip(smoothed_alpha, 0, 1).astype(np.float32),
-                              ColorStats.from_vector(smoothed_color.astype(np.float32)))
+                              None if smoothed_color is None else ColorStats.from_vector(smoothed_color.astype(np.float32)))

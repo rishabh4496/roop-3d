@@ -8,10 +8,8 @@ import LightProbeSphere from './components/three/LightProbeSphere';
 import FlameMeshViewer from './components/three/FlameMeshViewer';
 import SpatialInspector from './components/studio/SpatialInspector';
 
-export { default as PoseGeometryViewer } from './components/three/PoseGeometryViewer';
-export { default as LightProbeSphere } from './components/three/LightProbeSphere';
-export { default as FlameMeshViewer } from './components/three/FlameMeshViewer';
-export { default as SpatialInspector } from './components/studio/SpatialInspector';
+// Consumers load this whole module lazily (`lazy(() => import('./ThreeViewport'))`), so these are plain components.
+export { PoseGeometryViewer, LightProbeSphere, FlameMeshViewer, SpatialInspector };
 
 export function ThreeViewport({
   coverage,

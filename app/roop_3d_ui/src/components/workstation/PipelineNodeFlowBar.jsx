@@ -15,9 +15,10 @@ import { useHotkeys } from '../controls/Hotkeys';
  *   onSelect: (id: string) => void; onSolo: (id: string) => void; onBypass: (id: string) => void;
  *   busy?: boolean; available?: boolean;
  *   latency?: Record<string, number> | null; frame?: number | null; loading?: boolean;
+ *   restorerLabel?: string;
  * }} props
  */
-export default function PipelineNodeFlowBar({ selected, solo, bypass = [], onSelect, onSolo, onBypass, busy = false, available = true, latency = null, frame = null, loading = false }) {
+export default function PipelineNodeFlowBar({ selected, solo, bypass = [], onSelect, onSolo, onBypass, busy = false, available = true, latency = null, frame = null, loading = false, restorerLabel = '' }) {
   const { keys } = useHotkeys();
   const stage = useRef(null);
   const nodeRefs = useMemo(() => PIPELINE_NODES.map(() => ({ current: null })), []);
@@ -28,7 +29,9 @@ export default function PipelineNodeFlowBar({ selected, solo, bypass = [], onSel
   return <div className="pipeline-flow" data-tour="pipeline-bar" role="region" aria-label="Visual execution pipeline" aria-busy={loading || undefined}>
     <div className="pipeline-flow-stage" ref={stage}>
     <div className="pipeline-flow-track">
-    {PIPELINE_NODES.map((node, index) => {
+    {PIPELINE_NODES.map((base, index) => {
+      // The restorer stage names the enhancer that really runs ("GPEN Realistic", "UltraMax", "Restorer off"), not a fixed brand.
+      const node = base.id === 'restorer' && restorerLabel ? { ...base, label: restorerLabel, short: restorerLabel } : base;
       const ms = timings[index], isFinal = node.id === 'final';
       const disabled = !available || !!node.unavailable || busy;
       const alts = PIPELINE_ALT_NODES.filter(alt => alt.parent === node.id);

@@ -1,0 +1,34 @@
+# OMP project routing and task settings
+modelRoles:
+  default: openai-codex/gpt-6-luna:xhigh
+  plan: openai-codex/gpt-6-luna:xhigh
+  slow: openai-codex/gpt-6-luna:xhigh
+  architect: anthropic/claude-sonnet-5-5:high
+  task: anthropic/claude-sonnet-5-5:high
+  designer: anthropic/claude-sonnet-5-5:medium
+  advisor: openai-codex/gpt-6.1-sol:high
+
+task:
+  batch: true
+  speculativeLaunch: true
+  enableEffort: true
+  maxRecursionDepth: 2
+  maxConcurrency: 8
+  isolation:
+    enabled: true
+    merge: patch
+    apply: true
+  agentModelOverrides:
+    a01-3d-geo-core: openai-codex/gpt-6-luna:xhigh
+    a02-semantic-exp: anthropic/claude-sonnet-5-5:high
+    a03-blend-detail: openai-codex/gpt-6.1-sol:high
+    a04-ultramax-eng: anthropic/claude-sonnet-5-5:high
+    a05-workstation-ui: anthropic/claude-sonnet-5-5:medium
+    a06-qa-verifier: openai-codex/gpt-6.1-sol:medium
+
+async:
+  enabled: true
+  maxJobs: 32
+
+display:
+  subagentLivePreview: true

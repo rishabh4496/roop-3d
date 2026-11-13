@@ -19,6 +19,8 @@ import HairNeckProtection from './HairNeckProtection';
 import HeadModelBackbone from './HeadModelBackbone';
 import SwapScopeSelector from './SwapScopeSelector';
 import WorkstationControls3D from './WorkstationControls3D';
+import CompositingControls from './CompositingControls';
+import { occlusionModePatch } from './compositing';
 import { faceEditOf, jawDegToMouthOpen, mouthOpenToJawDeg, shLightOf, withFaceEdit, withManualLight, type ViewportTools } from '../three/viewportTools';
 
 const PoseGeometryViewer = lazy(() => import('../../ThreeViewport').then(module => ({ default: module.PoseGeometryViewer })));
@@ -155,10 +157,11 @@ export default function StudioInspector({ caps, config, onSaveConfig, track, she
         <section className="workflow-step" aria-labelledby="step-mask" data-testid="step-mask">
           <h3 id="step-mask"><span className="step-no">2</span>Masking &amp; occlusion</h3>
           <label className="inspector-toggle"><input type="checkbox" checked disabled readOnly />Face parser (BiSeNet) <small className="muted">always on: the base face matte</small></label>
-          <label className="inspector-toggle"><input type="checkbox" aria-label="XSeg mask and smart occluder" checked={robust} onChange={event => set({ occlusion_mode: event.target.checked ? 'robust' : 'standard' })} />
+          <label className="inspector-toggle"><input type="checkbox" aria-label="XSeg mask and smart occluder" checked={robust} onChange={event => set(occlusionModePatch(parameters, event.target.checked ? 'robust' : 'standard'))} />
             XSeg mask + Smart Occluder <small className="muted">keeps hands, glasses, hair and microphones in front of the face</small></label>
           <label className="inspector-field">Mask feather / blur <output>{(parameters.feather_px ?? 0).toFixed(0)} px</output>
             <input type="range" aria-label="Mask feather" min={0} max={32} step={1} value={parameters.feather_px ?? 0} onChange={event => set({ feather_px: Number(event.target.value) })} /></label>
+          <CompositingControls params={parameters} onParams={set} />
           <HairNeckProtection parameters={parameters} setParameters={setParameters} enhancer={enhancer} />
         </section>
 
@@ -179,8 +182,7 @@ export default function StudioInspector({ caps, config, onSaveConfig, track, she
 
         <section className="workflow-step" aria-labelledby="step-rack" data-testid="step-rack">
           <h3 id="step-rack"><span className="step-no">4</span>Engine &amp; Model Rack</h3>
-          <EngineModelRack params={parameters} onParams={set} config={config ?? null} caps={caps} onSaveConfig={onSaveConfig}
-            people={(sheet?.tracks ?? []).map(item => ({ key: item.track_id, label: trackLabel(item.track_id) }))} />
+          <EngineModelRack params={parameters} onParams={set} config={config ?? null} caps={caps} onSaveConfig={onSaveConfig} />
         </section>
       </div>
 

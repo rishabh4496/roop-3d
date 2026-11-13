@@ -4,6 +4,7 @@ from __future__ import annotations
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 import threading
+import time
 
 import cv2
 import numpy as np
@@ -94,6 +95,54 @@ def restore_in_crop_space(restore, image: np.ndarray, points: np.ndarray, spec: 
     weight = mask * float(blend)
     result = np.clip(warped.astype(np.float32) * weight[:, :, None] + base * (1 - weight[:, :, None]), 0, 255)
     return result.round().astype(np.uint8), mask
+
+
+class RestorationTelemetry:
+    """Observed restoration outcomes, recorded by the code that actually ran (or explicitly skipped) the enhancer.
+
+    ``applied`` counts calls whose inference completed and returned a valid image; ``bypassed`` counts only skips the
+    user explicitly selected (with the reason); ``failed`` counts inference errors, which the caller still re-raises.
+    A face that was never offered to the restorer (e.g. ``restoration_blend == 0``) is outside this ledger.
+    """
+
+    def __init__(self, model_name: str):
+        self.model_name = model_name
+        self._lock = threading.Lock()
+        self.applied = self.bypassed = self.failed = 0
+        self._latency_ms = self._inference_ms = 0.0
+        self._inference_samples = 0
+        self.bypass_reasons: dict[str, int] = {}
+        self.last: dict | None = None
+
+    def record_applied(self, latency_ms: float, inference_ms: float | None = None, **detail) -> None:
+        with self._lock:
+            self.applied += 1
+            self._latency_ms += latency_ms
+            if inference_ms is not None:
+                self._inference_ms += inference_ms
+                self._inference_samples += 1
+            self.last = {"status": "applied", "latency_ms": round(latency_ms, 3),
+                         "inference_ms": None if inference_ms is None else round(inference_ms, 3), **detail}
+
+    def record_bypassed(self, reason: str, **detail) -> None:
+        with self._lock:
+            self.bypassed += 1
+            self.bypass_reasons[reason] = self.bypass_reasons.get(reason, 0) + 1
+            self.last = {"status": "bypassed", "reason": reason, **detail}
+
+    def record_failed(self, error: BaseException) -> None:
+        with self._lock:
+            self.failed += 1
+            self.last = {"status": "failed", "error": type(error).__name__}
+
+    def snapshot(self) -> dict:
+        with self._lock:
+            return {"model": self.model_name, "applied": self.applied, "bypassed": self.bypassed,
+                    "failed": self.failed, "bypass_reasons": dict(self.bypass_reasons),
+                    "mean_latency_ms": round(self._latency_ms / self.applied, 3) if self.applied else None,
+                    "mean_inference_ms": (round(self._inference_ms / self._inference_samples, 3)
+                                          if self._inference_samples else None),
+                    "last": dict(self.last) if self.last else None}
 
 
 class MaskSeamWatchdog:
@@ -456,6 +505,8 @@ class DecoupledRestorer:
         self.slots, self.local = threading.BoundedSemaphore(pool_size), threading.local()
         self.instances, self.lock = [], threading.Lock()
         self.watchdog = MaskSeamWatchdog()
+        self.telemetry = RestorationTelemetry(spec.model_name)
+        self.device_dispatched = 0
         self.closed = False
 
     def hires_scale(self, crop_side: int) -> float:
@@ -523,6 +574,8 @@ class DecoupledRestorer:
                 # Opt-in only. Judged on the destination face box in the target frame, never on the working crop.
                 native = min(max(0, face.box[2] - face.box[0]), max(0, face.box[3] - face.box[1]))
                 if native <= self.threshold:
+                    self.telemetry.record_bypassed("small_face_bypass", native_face_px=round(float(native), 1),
+                                                   threshold_px=self.threshold)
                     return image
             in_size = image.shape[-1]
             crop = crop_matrix(face.landmarks5, in_size)
@@ -549,6 +602,8 @@ class DecoupledRestorer:
                                         (self.spec.size, self.spec.size)), to_aligned, (out_size, out_size))
             base = image if out_size == in_size else F.interpolate(image, size=(out_size, out_size), mode='bicubic',
                                                                     align_corners=False).clamp(0, 1)
+            with self.lock:
+                self.device_dispatched += 1
             return base + (restored - base) * (support * self.enhancer_blend)
         return restore
 
@@ -565,6 +620,8 @@ class DecoupledRestorer:
             out = int(round(image.shape[0] * self.hires_scale(image.shape[0])))
             future.set_result(image.copy() if out == image.shape[0]
                               else cv2.resize(image, (out, out), interpolation=cv2.INTER_CUBIC))
+            self.telemetry.record_bypassed("small_face_bypass", native_face_px=round(float(native), 1),
+                                           threshold_px=self.threshold)
             return future  # No model construction, alignment or queue contention.
         if self.closed:
             raise RuntimeError("Restorer pool is closed")
@@ -586,10 +643,24 @@ class DecoupledRestorer:
                 self.instances.append(self.local.model)
         with self.local.context.activate():
             self.local.model.fidelity_weight = self.fidelity_weight  # dynamic slider, read per call
-            result, mask = restore_in_crop_space(self.local.model.restore, image, points, self.spec,
-                                                 blend=self.enhancer_blend)
+            began = time.perf_counter()
+            try:
+                result, mask = restore_in_crop_space(self.local.model.restore, image, points, self.spec,
+                                                     blend=self.enhancer_blend)
+            except BaseException as error:
+                self.telemetry.record_failed(error)
+                raise
+            self.telemetry.record_applied((time.perf_counter() - began) * 1000)
             self.watchdog.observe(face_id, mask, kind="restoration")
             return result
+
+    def telemetry_report(self) -> dict:
+        """Observed restoration outcomes. Host-path latency is measured around the finished inference; the CUDA
+        adapter only enqueues work on an asynchronous stream, so it reports dispatches and no latency."""
+        with self.lock:
+            dispatched = self.device_dispatched
+        return {**self.telemetry.snapshot(), "device_dispatched": dispatched,
+                "device_latency": "not measured (asynchronous CUDA stream)" if dispatched else None}
 
     def close(self):
         self.closed = True

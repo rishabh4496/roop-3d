@@ -60,6 +60,22 @@ describe('pre-flight linter modal', () => {
     expect(proceed.disabled).toBe(true);
   });
 
+  it('lists failures and warnings before passes so the scrolling list explains the overall status', async () => {
+    vi.mocked(post).mockResolvedValueOnce({
+      status: 'WARN', ready_to_queue: true,
+      checks: [
+        { id: 'a', name: 'Pass A', status: 'PASS', message: 'ok', details: [] },
+        { id: 'b', name: 'Pass B', status: 'PASS', message: 'ok', details: [] },
+        { id: 'c', name: 'Warn C', status: 'WARN', message: 'careful', details: [] },
+        { id: 'd', name: 'Pass D', status: 'PASS', message: 'ok', details: [] },
+        { id: 'e', name: 'Fail E', status: 'FAIL', message: 'broken', details: [] },
+      ],
+    });
+    await mount();
+    const order = [...host.querySelectorAll('.linter-check-card strong')].map(node => node.textContent);
+    expect(order).toEqual(['Fail E', 'Warn C', 'Pass A', 'Pass B', 'Pass D']);
+  });
+
   it('applies the one-click UltraMax fix through the parameter callback, then re-lints', async () => {
     const onApplyParameter = vi.fn();
     await mount({ onApplyParameter });

@@ -162,6 +162,12 @@ def _gpu_finish(source: np.ndarray, target: np.ndarray, alpha: np.ndarray, skin:
     source_energy = _masked_energy(torch, src_luma, weight)
     report["frequency_energy_ratio"] = target_energy / max(source_energy, 1e-8)
     working = src
+    report["optics_state"] = "MEASURED" if match_optics else "DISABLED"
+    if match_optics and target_energy <= 1e-10:
+        # A constant patch contains no evidence for blur. Its zero spectrum is
+        # not a command to remove all detail restored by UltraMax/GPEN.
+        match_optics = False
+        report.update(optics_state="UNAVAILABLE", optics_reason="TARGET_OPTICS_UNOBSERVABLE")
 
     # Local directional PSF: each pixel samples along its own dense flow vector, preserving rotational flow.
     if match_optics and shutter > 0 and source_energy > target_energy * 1.02:
@@ -289,6 +295,10 @@ def finish_target_sensor(source: np.ndarray, target: np.ndarray, alpha: np.ndarr
     skin = alpha if skin is None else _resize(skin.astype(np.float32), source.shape[:2])
     image, texture_gain = transfer_fine_texture(image, target, alpha, skin, footprint,
                                                 strength=grain_strength / 100.0)
-    return image, {"backend": "cpu_fallback", "motion_length_px": sharpness.get("motion_length", 0.0),
-                   "defocus_sigma_px": sharpness.get("sigma", 0.0), "grain_luma_std": 0.0,
-                   "grain_chroma_std": 0.0, "texture_gain": texture_gain}
+    report = {"backend": "cpu_fallback", "motion_length_px": sharpness.get("motion_length", 0.0),
+              "defocus_sigma_px": sharpness.get("sigma", 0.0), "grain_luma_std": 0.0,
+              "grain_chroma_std": 0.0, "texture_gain": texture_gain,
+              "optics_state": "MEASURED" if match_optics else "DISABLED"}
+    if sharpness.get("optics_observable") == 0.0:
+        report.update(optics_state="UNAVAILABLE", optics_reason="TARGET_OPTICS_UNOBSERVABLE")
+    return image, report

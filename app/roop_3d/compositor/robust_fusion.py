@@ -2,9 +2,9 @@
 
 The occluder matte is estimated on a small face crop; its edges are only as sharp as that crop. This
 step warps the matte to the frame, snaps it to the real edges of the full-resolution target with a
-guided filter, decontaminates the swapped colour at the feathered boundary, matches defocus/motion
-blur and re-uses the target's own fine texture, and only then blends. It reuses ``fuse_warped``
-(the same blend implementation as the standard path), so feather/multi-band/Poisson all still work.
+guided filter, decontaminates the swapped colour at the geometric boundary, matches defocus/motion
+blur and re-uses the target's own fine texture. Geometric seams use ``fuse_warped``; the foreground
+matte is applied afterward at full resolution so a pyramid cannot spread a strand across nearby skin.
 """
 from __future__ import annotations
 
@@ -56,7 +56,7 @@ def _roi(matrix: np.ndarray, crop_shape: tuple[int, int], frame_shape: tuple[int
 
 def fuse_robust(frame: np.ndarray, crop: np.ndarray, inverse: np.ndarray, face_alpha: np.ndarray,
                 occluder: np.ndarray | None, skin: np.ndarray | None, *, frame_motion: tuple[float, float] = (0.0, 0.0),
-                mode: BlendMode | str = BlendMode.FEATHER, levels: int = 4,
+                mode: BlendMode | str = BlendMode.MULTI_BAND, levels: int = 4,
                 options: RobustFusionOptions = RobustFusionOptions(), hair: np.ndarray | None = None,
                 strand: StrandMatteOptions | None = None) -> tuple[np.ndarray, FusionReport]:
     """``hair`` (crop-space hair probability) + ``strand`` options switch on the directional strand matte, computed here on
@@ -98,7 +98,11 @@ def fuse_robust(frame: np.ndarray, crop: np.ndarray, inverse: np.ndarray, face_a
         front = np.clip(warp(np.clip(np.asarray(occluder, np.float32), 0, 1)), 0, 1)
         if options.refine_matte:
             radius = max(2, int(round(max(size) * options.refine_radius_fraction)))
+            hard_front = front >= 1.0
             front = refine_occluder(front, target_roi, radius=radius, contrast=options.matte_contrast)
+            # A refinement may sharpen uncertain edges, but must never reopen
+            # a pixel explicitly excluded by the supplied foreground matte.
+            front[hard_front] = 1.0
     if strand is not None and hair is not None:
         hair_roi = np.clip(warp(np.clip(np.asarray(hair, np.float32), 0, 1)), 0, 1)
         if hair_roi.max() > 0.5:
@@ -125,8 +129,13 @@ def fuse_robust(frame: np.ndarray, crop: np.ndarray, inverse: np.ndarray, face_a
     if options.texture_strength > 0 and skin is not None and np.asarray(skin).any():
         skin_roi = np.clip(warp(np.clip(np.asarray(skin, np.float32), 0, 1)), 0, 1)
         source, gain = transfer_fine_texture(source, target_roi, alpha, skin_roi, footprint, strength=options.texture_strength)
-    fused = fuse_warped(target_roi, source, alpha, mode=mode, levels=levels, linear_light=options.linear_light,
+    fused = fuse_warped(target_roi, source, face_edge_alpha, mode=mode, levels=levels, linear_light=options.linear_light,
                         transfer=options.transfer)
+    if front is not None and front.any():
+        # Occlusion is visibility, not a colour seam: preserve its pixel-scale
+        # alpha in every frequency band, in the selected light domain.
+        fused = fuse_warped(target_roi, fused, 1.0 - front, mode=BlendMode.FEATHER,
+                            linear_light=options.linear_light, transfer=options.transfer)
     output = target.copy()
     output[y0:y1, x0:x1] = fused
     return output, FusionReport(box, report_sharp, gain, occluded_fraction, strand_fraction)

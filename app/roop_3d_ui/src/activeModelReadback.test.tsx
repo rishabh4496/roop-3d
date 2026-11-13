@@ -47,7 +47,7 @@ const option = (text: string) => [...host.querySelectorAll<HTMLElement>('[role="
 
 const config: Config = { preferred_provider: 'auto', precision_policy: 'auto', swapper_model_id: 'inswapper_128', detector_model_id: 'scrfd', face_restoration_policy: 'gpen' };
 const caps = { workstation: { controls: { swapper_model_id: {}, preferred_provider: { auto: null }, precision_policy: { auto: null } } } } as unknown as Capabilities;
-const mount = async (params = { restoration_blend: 0.7, restorer_model: 'gpen' as const }) => {
+const mount = async (params: { restoration_blend: number; restorer_model: 'gpen' | 'codeformer' | 'ultramax' } = { restoration_blend: 0.7, restorer_model: 'gpen' }) => {
   const onParams = vi.fn(), onSaveConfig = vi.fn();
   await act(async () => root.render(<EngineModelRack params={params} onParams={onParams} config={config} caps={caps} onSaveConfig={onSaveConfig} />));
   await flush();
@@ -78,6 +78,22 @@ describe('active model read-back', () => {
     await mount({ restoration_blend: 0, restorer_model: 'gpen' });
     expect(host.querySelector('[data-testid="active-model-enhancer"]')!.textContent).toContain('Nothing loaded');
   });
+
+  it('compares enhancers by their loaded weight file, since the read-back names them by registry hash id', async () => {
+    active.active.enhancer = loaded('enhancer', '48d4ecd4d27ed5eca7e93e70', 'codeformer.fp16.onnx');
+    await mount({ restoration_blend: 0.7, restorer_model: 'ultramax' });
+    const row = () => host.querySelector('[data-testid="active-model-enhancer"]')!;
+    expect(row().textContent).toContain('codeformer.fp16.onnx');
+    expect(row().textContent).not.toContain('loads on the next preview or render');          // UltraMax's own weights are the ones loaded
+    await mount({ restoration_blend: 0.7, restorer_model: 'codeformer' });
+    expect(row().textContent).toContain('Selected CodeFormer (CodeFormerv0.1.onnx): loads on the next preview or render');
+  });
+
+  it('names the weights an UltraMax selection will load when nothing is loaded yet', async () => {
+    active.active.enhancer = null;
+    await mount({ restoration_blend: 0.7, restorer_model: 'ultramax' });
+    expect(host.querySelector('[data-testid="active-model-enhancer"]')!.textContent).toContain('Selected UltraMax (codeformer.fp16.onnx); nothing loaded yet');
+  });
 });
 
 describe('every model dropdown persists to the backend config', () => {
@@ -92,7 +108,7 @@ describe('every model dropdown persists to the backend config', () => {
     expect(onSaveConfig).toHaveBeenLastCalledWith({ ...config, detector_model_id: 'retinaface' });
 
     await click(host.querySelector('[data-testid="rack-enhancer"] [role="combobox"]'));
-    await click(option('CodeFormer'));
+    await click([...host.querySelectorAll<HTMLElement>('[role="option"]')].find(item => item.querySelector('.rack-option-name')?.textContent === 'CodeFormer'));
     expect(onParams).toHaveBeenLastCalledWith({ restorer_model: 'codeformer', restoration_blend: 0.7 });
     expect(onSaveConfig).toHaveBeenLastCalledWith({ ...config, face_restoration_policy: 'codeformer' });
   });

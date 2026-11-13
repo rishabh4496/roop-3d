@@ -29,9 +29,20 @@ export class PreviewBusyError extends Error {
 }
 
 export type LiveFace = { track_id: number; box: number[]; landmarks5: number[][] | null; yaw: number; pitch: number; roll: number };
+/**
+ * Observed outcomes of the preview's restorer (`RestorationTelemetry.snapshot()`): `applied` counts completed inferences, `bypassed` only skips the user
+ * asked for (with the reason), `failed` inference errors. Present only for restorers that keep such a ledger (UltraMax); a face that was never
+ * offered to the restorer is not counted.
+ */
+export type RestorationReport = {
+  model: string; applied: number; bypassed: number; failed: number; bypass_reasons: Record<string, number>;
+  mean_latency_ms: number | null; mean_inference_ms: number | null;
+  last: ({ status: 'applied' | 'bypassed' | 'failed' } & Record<string, unknown>) | null;
+};
 export type LivePreviewMeta = {
   media_id: string; frame_index: number; swap_config_hash: string; solo_node: string; width: number; height: number;
   faces: LiveFace[]; applied: string[]; unsupported: string[]; notes: string[]; latency: Record<string, number>;
+  restoration?: RestorationReport | null;
 };
 export type LivePreviewResult = { blob: Blob; meta: LivePreviewMeta | null; cached: boolean; cancelled?: boolean };
 

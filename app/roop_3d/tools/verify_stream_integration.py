@@ -395,20 +395,17 @@ def verify_enhancer_detail():
     [-1, 1] range, 512 px, five-point alignment, UltraMax Laplacian fusion, GPEN luma handling). No production-weights
     claim is made here; ``--real-models`` runs the same measurement with the installed weights.
     """
-    from types import SimpleNamespace
     from roop_3d.compositor.restoration import GpenRestorer, UltraMaxPipelineRestorer
-    from roop_3d.compositor.stream_restoration import codeformer_spec
 
     def detail_fixture(seed: int, sigma: float):
         noise = cv2.GaussianBlur(np.random.default_rng(seed).normal(0, 1, (512, 512, 3)).astype(np.float32), (0, 0), sigma)
         return noise / max(float(noise.std()), 1e-6)
 
     ultramax_detail, gpen_detail = detail_fixture(101, 0.9), detail_fixture(202, 1.3)
-    ultramax = object.__new__(UltraMaxPipelineRestorer)
-    ultramax.spec, ultramax.fidelity_weight, ultramax.inference_verified = codeformer_spec(), 0.7, False
-    ultramax.small_face_mode, ultramax.min_native_pixels = "off", 320
-    ultramax.runner = SimpleNamespace(fidelity_weight=0.7, restore=lambda aligned: np.clip(
-        aligned.astype(np.float32) + 38.0 * ultramax_detail, 0, 255).astype(np.uint8))
+    # Use the real lazy constructor: spec, timing and outcome telemetry are part of the adapter contract.
+    ultramax = UltraMaxPipelineRestorer(None, None)
+    ultramax.runner.restore = lambda aligned: np.clip(
+        aligned.astype(np.float32) + 38.0 * ultramax_detail, 0, 255).astype(np.uint8)
 
     gpen = object.__new__(GpenRestorer)
     gpen.model_name, gpen.normalization, gpen.inference_verified = "gpen_bfr_512.onnx", "minus_one_one", False
@@ -423,7 +420,7 @@ def verify_enhancer_detail():
 
     crop = _smooth_swap_crop()
     baseline = _lap_var(_compose_enhanced(None, crop, blend=0.0))
-    landmarks = (codeformer_spec().template / 4.0).astype(np.float32)
+    landmarks = (ultramax.spec.template / 4.0).astype(np.float32)
     report = {}
     outputs = {}
     for name, engine in (("ultramax", ultramax), ("gpen_realistic", gpen)):

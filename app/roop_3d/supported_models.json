@@ -15,7 +15,7 @@
     {"id":"ghost_256_unet_3","name":"Ghost 256 UNet 3","category":"swapper","native_resolution":256,"aliases":["ghost_256_unet_3","ghost_3_256"],"architecture":"ghost","identity_mode":"source_crop_or_arcface","input_range":"minus1_1","output_range":"minus1_1","supports_3d_hybrid":true},
     {"id":"blendswap_256","name":"BlendSwap 256","category":"swapper","native_resolution":256,"aliases":["blendswap_256"],"architecture":"blendswap","identity_mode":"source_crop_or_arcface","input_range":"minus1_1","output_range":"minus1_1","supports_3d_hybrid":true},
     {"id":"uniface_256","name":"Uniface 256","category":"swapper","native_resolution":256,"aliases":["uniface_256"],"architecture":"uniface","identity_mode":"source_crop_or_arcface","input_range":"minus1_1","output_range":"minus1_1","supports_3d_hybrid":true},
-    {"id":"ultramax","name":"UltraMax","category":"enhancer","native_resolution":1024,"aliases":["ultramax","ultramax_bfr","ultramax_bfr_1024"],"supports_3d_hybrid":true},
+    {"id":"ultramax","name":"UltraMax","category":"enhancer","native_resolution":512,"aliases":["ultramax","ultramax_bfr","ultramax_bfr_1024","codeformer.fp16"],"supports_3d_hybrid":true},
     {"id":"gpen_bfr_512","name":"GPEN-BFR-512","category":"enhancer","native_resolution":512,"aliases":["gpen_bfr_512","gpen-bfr-512"],"supports_3d_hybrid":true},
     {"id":"gpen_bfr_1024","name":"GPEN-BFR-1024","category":"enhancer","native_resolution":1024,"aliases":["gpen_bfr_1024","gpen-bfr-1024"],"supports_3d_hybrid":true},
     {"id":"codeformer","name":"CodeFormer","category":"enhancer","native_resolution":512,"aliases":["codeformer","codeformerv0.1"],"supports_3d_hybrid":true},

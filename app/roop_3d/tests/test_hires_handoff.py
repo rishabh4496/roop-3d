@@ -212,8 +212,7 @@ def test_no_defaults_bypass_ultramax():
 
 def test_ultramax_runs_on_a_tiny_face_by_default_and_skips_only_when_asked(monkeypatch):
     from roop_3d.compositor.restoration import CodeFormerRestorer
-    monkeypatch.setattr(CodeFormerRestorer, "__init__",
-                        lambda self, catalog, config: setattr(self, "fidelity_weight", 0.5) or setattr(self, "inference_verified", False))
+    # The real lazy constructor accepts the optional spec and initializes timing/telemetry state without loading a model.
     calls = []
     monkeypatch.setattr(CodeFormerRestorer, "restore_hires",
                         lambda self, image, landmarks5=None, **_: calls.append(1) or cv2.resize(image, (512, 512)))

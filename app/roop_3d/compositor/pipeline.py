@@ -3,11 +3,17 @@
 Two mask/fusion strategies share every other stage (restoration, mouth, colour, relighting, temporal
 state, boundary fusion):
 
-* ``occlusion_mode="standard"`` (default): the original Stage 09 behaviour, unchanged.
+* ``occlusion_mode="standard"`` (default): semantic/landmark masks and crop-space foreground vetoes.
 * ``occlusion_mode="robust"``: Stage 5 unified face + occlusion analysis (``occlusion_analysis``),
   flow-aware temporal matte (``occlusion_tracker``), depth-ordered multi-face compositing and
   frame-space matte refinement / quality fusion (``robust_fusion``). Every dependency that is absent
   is reported through ``capability()`` / ``last_reports``; nothing is simulated.
+
+Both paths default to four-band Laplacian fusion with an inward signed-distance
+feather on the observed anatomical mask. Color/lighting samples and target DoG
+microtexture are confined to trusted skin + nose (BiSeNet classes 1 and 10).
+Missing skin is reported, never replaced by face-wide statistics. Source pigment
+projection is not supplied here: it requires an actual textured 3D source renderer.
 """
 from __future__ import annotations
 
@@ -21,7 +27,7 @@ from collections.abc import Callable, Sequence
 import cv2
 import numpy as np
 
-from roop_3d.compositor.boundary_fusion import BlendMode, fuse_crop
+from roop_3d.compositor.boundary_fusion import BlendMode, feather_anatomical_mask, fuse_crop
 from roop_3d.compositor.color_match import ColorStats, apply_lab_stats, estimate_lab_stats, masked_histogram_match
 from roop_3d.compositor.hairline import offset_hairline, refine_hairline_matte
 from roop_3d.compositor.lighting import relight_spherical_harmonics
@@ -109,7 +115,7 @@ class RobustOptions:
 class CompositeOptions:
     expression_restore_factor: float = 0.0
     face_expression_overrides: Mapping = field(default_factory=dict)
-    mode: BlendMode = BlendMode.FEATHER
+    mode: BlendMode = BlendMode.MULTI_BAND
     restoration_blend: float = 0.0
     # Internal pressure governor cap; zero keeps the restorer's native output resolution.
     roi_resolution_limit: int = 0
@@ -132,6 +138,7 @@ class CompositeOptions:
     # Ambient (SH band-0) fill of the manual virtual key light; the auto light is estimated from the target instead.
     ambient_fill: float = 0.3
     semantic_confidence_threshold: float = 0.55
+    xseg_occlusion_strength: float = 1.0     # robust-only learned foreground vote; semantic/manual vetoes are independent
     feather_px: float = 5.0
     pyramid_levels: int = 4
     subpixel_interpolation: str = "lanczos4"
@@ -207,6 +214,11 @@ class CompositeOptions:
             raise ValueError("Invalid UltraMax small-face policy")
         if not 0 <= self.semantic_confidence_threshold <= 1 or self.feather_px < 0 or self.pyramid_levels < 1:
             raise ValueError("Invalid mask or pyramid configuration")
+        if (isinstance(self.xseg_occlusion_strength, (bool, np.bool_))
+                or not isinstance(self.xseg_occlusion_strength, (int, float, np.integer, np.floating))
+                or not np.isfinite(self.xseg_occlusion_strength)
+                or not 0 <= self.xseg_occlusion_strength <= 1):
+            raise ValueError("xseg_occlusion_strength must be a finite number within 0..1")
         if self.subpixel_interpolation not in {"lanczos4", "cubic", "linear"}:
             raise ValueError("subpixel_interpolation must be 'lanczos4', 'cubic', or 'linear'")
         if self.occlusion_mode not in OCCLUSION_MODES:
@@ -397,12 +409,10 @@ class FrameCompositor:
 
     @staticmethod
     def _color_process(swapped: np.ndarray, target: np.ndarray, alpha: np.ndarray, method: str,
-                       strength: float, smooth_histogram=None, stats_mask: np.ndarray | None = None
+                       strength: float, smooth_histogram=None, *, stats_mask: np.ndarray
                        ) -> tuple[np.ndarray, ColorStats]:
-        """LAB mean/std (or histogram) transfer. ``stats_mask`` (the parser's skin class inside the face) decides which
-        pixels the statistics come from, so eyes, brows, lips and hair do not skew the skin tone; ``alpha`` is where the
-        correction is written (mean/std) and the fallback when no skin class is available."""
-        basis = alpha if stats_mask is None else stats_mask
+        """Use only verified skin/nose for both statistics and the correction footprint."""
+        basis = np.minimum(np.asarray(alpha, np.float32), np.asarray(stats_mask, np.float32))
         if method in {"oklab", "oklab_wasserstein"}:
             from roop_3d.compositor.color_match import sliced_wasserstein_color_transfer_oklab
             matched = sliced_wasserstein_color_transfer_oklab(
@@ -413,18 +423,18 @@ class FrameCompositor:
         if method == "ycbcr":
             from roop_3d.compositor.color_match import apply_ycbcr_stats, estimate_ycbcr_stats
             stats = estimate_ycbcr_stats(swapped, target, basis)
-            return apply_ycbcr_stats(swapped, stats, alpha, strength=strength), stats
+            return apply_ycbcr_stats(swapped, stats, basis, strength=strength), stats
         stats = estimate_lab_stats(swapped, target, basis)
         if method == "histogram":
             matched = masked_histogram_match(swapped, target, basis, smooth_histogram=smooth_histogram)
             if strength < 1:
-                active = alpha > 0
+                active = basis > 0
                 partial = swapped.copy()
                 partial[active] = (swapped.astype(np.float32)[active] * (1 - strength)
                                    + matched.astype(np.float32)[active] * strength).round().astype(np.uint8)
                 matched = partial
             return matched, stats
-        return apply_lab_stats(swapped, stats, alpha, strength=strength), stats
+        return apply_lab_stats(swapped, stats, basis, strength=strength), stats
 
     @staticmethod
     def _manual_mask(value, shape: tuple[int, int]) -> tuple[np.ndarray, np.ndarray]:
@@ -556,44 +566,51 @@ class FrameCompositor:
             restorer_seconds += time.perf_counter() - restore_began
         size = enhanced.shape[0]
 
-        # Re-inject 25% of target skin's high-frequency pore/specular residual (Target_HighPass_Skin)
-        # into UltraMax's 1024px output over unoccluded Class 1 (Skin) pixels
-        is_ultramax = (
-            getattr(replacement, 'method', '') == "dense_3d_correspondence_neural_ultramax"
-            or hasattr(self.restorer, 'restore_hires')
-            or type(self.restorer).__name__.startswith("UltraMax")
-        )
-        if is_ultramax and options.skin_texture_retention > 0 and current_skin is not None and np.any(current_skin > 0.05):
-            enhanced = inject_target_skin_micro_texture(
-                enhanced, current_target, current_skin, current_alpha, injection_rate=options.skin_texture_retention
-            )
 
         if observer is not None:
             observer('restorer', enhanced, current_inverse, current_alpha)
 
-        stats_mask = None
-        if current_skin is not None and current_skin is not current_alpha:
-            candidate = np.minimum(np.asarray(current_alpha, np.float32), np.asarray(current_skin, np.float32))
-            # Never sample dark hair or neck shadows when computing skin color statistics
-            target_luma = (current_target.astype(np.float32) @ np.array([0.114, 0.587, 0.299], np.float32)) / 255.0
-            candidate[target_luma < 0.08] = 0.0
-            if np.count_nonzero(candidate > 0.15) >= 32:      # unoccluded skin class
-                stats_mask = candidate
-        harmonized, color_stats = self._color_process(
-            enhanced, current_target, current_alpha, options.color_method,
-            0. if options.relight and getattr(replacement,'photometry',None) is not None else options.color_strength,
-            lambda histogram: self.histogram_stabilizer.filter(
-                replacement.track_id, "histogram", histogram,
-                getattr(self, "timestamp_seconds", (frame_index if frame_index is not None else self.frames_composited) / 30.0)),
-            stats_mask=stats_mask)
+        if current_skin is None:
+            current_skin = np.zeros(current_alpha.shape, np.float32)
+        else:
+            current_skin = np.asarray(current_skin, np.float32)
+            current_skin = np.where(current_skin >= 0.5, np.clip(current_skin, 0, 1), 0).astype(np.float32)
+        stats_mask = np.minimum(np.asarray(current_alpha, np.float32), current_skin)
+        stats_mask[cv2.cvtColor(current_target, cv2.COLOR_BGR2GRAY) <= 0.08 * 255.0] = 0.0
+        samples = int(np.count_nonzero(stats_mask > 0.15))
+        strength = (0.0 if options.relight and getattr(replacement, 'photometry', None) is not None
+                    else options.color_strength)
+        color_report = {"method": options.color_method, "classes": [1, 10], "samples": samples,
+                        "strength": strength}
+        if samples >= 2:
+            harmonized, color_stats = self._color_process(
+                enhanced, current_target, current_alpha, options.color_method, strength,
+                lambda histogram: self.histogram_stabilizer.filter(
+                    replacement.track_id, "histogram", histogram,
+                    getattr(self, "timestamp_seconds", (frame_index if frame_index is not None else self.frames_composited) / 30.0)),
+                stats_mask=stats_mask)
+            color_report["state"] = "APPLIED" if strength > 0 else "DISABLED"
+        else:
+            harmonized, color_stats = enhanced, None
+            color_report.update(state="UNAVAILABLE", reason="SKIN_NOSE_STATISTICS_UNAVAILABLE")
+        self.last_reports.setdefault(replacement.track_id, {})["color_matching"] = color_report
         photo = getattr(replacement, 'photometry', None)
-        if (str(getattr(replacement, "method", "")).startswith("dense_3d") and options.dense_shading > 0
+        if (str(getattr(replacement, "method", "")).startswith("dense_3d")
                 and not (options.relight and photo is not None)):
-            from roop_3d.compositor.quality import shading_gain_match
-            harmonized = shading_gain_match(harmonized, current_target, current_alpha, strength=options.dense_shading)
+            shading_samples = int(np.count_nonzero(stats_mask > 0.5))
+            shading_report = {"classes": [1, 10], "samples": shading_samples, "strength": options.dense_shading}
+            if options.dense_shading == 0:
+                shading_report["state"] = "DISABLED"
+            elif shading_samples < 64:
+                shading_report.update(state="UNAVAILABLE", reason="SKIN_NOSE_STATISTICS_UNAVAILABLE")
+            else:
+                from roop_3d.compositor.quality import shading_gain_match
+                harmonized = shading_gain_match(harmonized, current_target, stats_mask, strength=options.dense_shading)
+                shading_report["state"] = "APPLIED"
+            self.last_reports.setdefault(replacement.track_id, {})["dense_shading"] = shading_report
         if local_illumination > 0 and not (options.relight and photo is not None):
             from roop_3d.compositor.quality import local_illumination_match
-            harmonized = local_illumination_match(harmonized, current_target, current_alpha, strength=local_illumination)
+            harmonized = local_illumination_match(harmonized, current_target, stats_mask, strength=local_illumination)
         if options.relight and photo is not None:
             # Enhanced pixels remain at their native resolution through the
             # GPU normal-ratio shader and Stage 4's single inverse warp.
@@ -640,6 +657,22 @@ class FrameCompositor:
         detail = getattr(replacement, 'face_detail', None)
         if detail is not None:
             harmonized = detail.condition(harmonized, current_target)
+        is_ultramax = (
+            getattr(replacement, 'method', '') == "dense_3d_correspondence_neural_ultramax"
+            or hasattr(self.restorer, 'restore_hires')
+            or type(self.restorer).__name__.startswith("UltraMax")
+        )
+        if is_ultramax and options.skin_texture_retention > 0:
+            texture_mask = current_skin * current_alpha
+            if np.any(texture_mask > 0):
+                harmonized = inject_target_skin_micro_texture(
+                    harmonized, current_target, current_skin, current_alpha,
+                    injection_rate=options.skin_texture_retention)
+            self.last_reports.setdefault(replacement.track_id, {})["skin_microtexture"] = {
+                "source": "target_frame", "method": "skin_normalized_dog",
+                "strength": options.skin_texture_retention,
+                "state": "APPLIED" if np.any(texture_mask > 0) else "UNAVAILABLE",
+                "reason": None if np.any(texture_mask > 0) else "TRUSTED_SKIN_NOSE_MASK_UNAVAILABLE"}
         if options.relight and photo is not None and options.photometric_identity_floor:
             from roop_3d.faceset.recognizer import Recognizer
             from roop_3d.compositor.photometric_identity import constrain_identity
@@ -741,7 +774,6 @@ class FrameCompositor:
                 raise DomainError("COMPOSITOR_CROP_INVALID", "Replacement crop must be uint8 BGR", 422)
             target_crop = self._crop_to_frame(frame, replacement.inverse, crop.shape[:2])
             points = self._landmarks_to_crop(landmarks_by_track.get(replacement.track_id), replacement.inverse)
-            hull = landmark_hull_mask(crop.shape, points, feather_px=options.feather_px)
 
             probabilities = None
             try:
@@ -752,7 +784,7 @@ class FrameCompositor:
             face_mask = build_face_mask(crop.shape, points, probabilities=probabilities,
                                         confidence_threshold=options.semantic_confidence_threshold,
                                         feather_px=options.feather_px,
-                                        occluder_class_ids=options.forbidden_classes())
+                                        occluder_class_ids=options.forbidden_classes(), skin_class_ids=(1, 10))
             if getattr(replacement, "full_head", False):
                 # Mesh coverage defines source anatomy. Target parsing can veto
                 # foreground occlusions but cannot shrink it to the target hull.
@@ -817,9 +849,8 @@ class FrameCompositor:
                 # Submental Chin-to-Neck Gradient Cutoff (gonion-to-menton curve with an inward SDF falloff), then the
                 # edge-preserving Fast Guided Filter for hairline and bangs; each is behind its toggle.
                 active_mask = protect_matte(active_mask, target_crop, points, matte_options)
-                alpha = active_mask * options.swap_weight
-            else:
-                alpha = alpha * options.swap_weight
+                alpha = active_mask
+            alpha = feather_anatomical_mask(alpha, options.feather_px) * options.swap_weight
             if front is not None:
                 alpha *= (1.0 - front)
             recovery_context = mask_temporal_context.get(replacement.track_id)
@@ -844,6 +875,11 @@ class FrameCompositor:
             if mask_report["anomaly"]:
                 log.warning("Temporal mask anomaly track=%s frame=%s diagnostics=%s", replacement.track_id,
                             frame_index, mask_report)
+            # Recovery and temporal filters may interpolate a previously visible
+            # pixel; current semantic/manual foreground always wins immediately.
+            if front is not None:
+                alpha = np.minimum(alpha, 1.0 - front)
+            alpha = np.minimum(alpha, 1.0 - dual_forbidden)
             if observer is not None:
                 observer('swapper', crop, replacement.inverse, alpha)
                 observer('matte', (alpha * 255).round().astype(np.uint8), replacement.inverse, alpha)
@@ -851,7 +887,7 @@ class FrameCompositor:
                 self.last_reports[replacement.track_id] = {"mask_watchdog": mask_report}
                 continue
 
-            skin = face_mask.skin if getattr(face_mask, "source", "").startswith("bisenet") else alpha
+            skin = face_mask.skin if face_mask.source.startswith("bisenet") else np.zeros_like(alpha)
             frame_motion = self._face_motion(replacement, frame_index, scene_cut)
             harmonized, color_stats, spent = self._enhance(
                 replacement, crop, target_crop, alpha, probabilities=probabilities, skin=skin, options=options,
@@ -863,11 +899,11 @@ class FrameCompositor:
                 frame_index=frame_index, scene_cut=scene_cut)
             harmonized, sensor_report = self._finish_sensor(replacement, harmonized, target_crop, alpha, skin,
                                                             frame_motion, options, frame_index)
-            self.last_reports[replacement.track_id] = {
+            self.last_reports.setdefault(replacement.track_id, {}).update({
                 "temporal_detail": detail_report,
                 "target_sensor": sensor_report,
                 "mask_watchdog": mask_report,
-            }
+            })
             temporal = self.temporal.update(replacement.track_id, replacement.inverse, alpha / max(options.swap_weight, 1e-8), color_stats,
                                             frame_index=frame_index, scene_cut=False)
             if observer is not None:
@@ -877,6 +913,9 @@ class FrameCompositor:
             effective_alpha = temporal.alpha * (options.swap_weight * getattr(replacement, "presence", 1.0))
             if coverage is not None:
                 effective_alpha = np.minimum(effective_alpha, coverage * getattr(replacement, "presence", 1.0))
+            if front is not None:
+                effective_alpha *= 1.0 - front
+            effective_alpha *= 1.0 - dual_forbidden
             if observer is not None:
                 observer('vfx', crop, temporal.inverse, effective_alpha)
             fuse_image, fuse_alpha, fuse_inverse = harmonized, effective_alpha, temporal.inverse
@@ -938,6 +977,7 @@ class FrameCompositor:
                                          confidence_threshold=options.semantic_confidence_threshold,
                                          explicit_front=explicit, border_trust=options.robust.network_border_trust,
                                          track_id=replacement.track_id,
+                                         xseg_occlusion_strength=options.xseg_occlusion_strength,
                                          **({"mesh_support": cv2.resize(replacement.coverage, (work, work))}
                                             if getattr(replacement, "full_head", False) else {}))
         if getattr(replacement, "full_head", False) and options.swap_scope != "inner_face":
@@ -979,6 +1019,7 @@ class FrameCompositor:
         report = {"tier": analysis.tier, "confidence": analysis.confidence, "reasons": list(analysis.reasons),
                   "networks": list(analysis.nets_used), "parser_trusted": analysis.parser_trusted,
                   "visible_fraction": analysis.visible_fraction, "outside_frame_fraction": outside,
+                  "xseg_occlusion_strength": options.xseg_occlusion_strength,
                   "temporal": {"held": state.held, "reset": state.reset_reason, "history_influence": state.history_influence,
                                "content_motion_px": list(state.motion), "face_motion_px": list(velocity)},
                   "analysis_ms": analysis.timing_ms}
@@ -1061,12 +1102,14 @@ class FrameCompositor:
                 face_alpha = cv2.erode(face_alpha, kernel) if options.erosion_px > 0 else cv2.dilate(face_alpha, kernel)
             if options.hairline_offset_px:
                 face_alpha = offset_hairline(face_alpha, options.hairline_offset_px, scale)
+            face_alpha = feather_anatomical_mask(face_alpha, options.feather_px * scale)
             coverage = getattr(replacement, 'coverage', None)
             if coverage is not None:
                 coverage = np.asarray(coverage, np.float32)
                 if coverage.shape != crop.shape[:2] or not np.isfinite(coverage).all() or np.any((coverage < 0) | (coverage > 1)):
                     raise DomainError('PROJECTION_COVERAGE_INVALID', 'Projected coverage must be finite crop-space values in 0..1', 422)
-                coverage = cv2.resize(coverage, (work, work), interpolation=cv2.INTER_LINEAR)
+                coverage = feather_anatomical_mask(
+                    cv2.resize(coverage, (work, work), interpolation=cv2.INTER_LINEAR), options.feather_px * scale)
             if getattr(replacement, "full_head", False):
                 output = self._remove_old_silhouette(output, context, front, options, original=frame, frame_index=frame_index)
 
@@ -1107,6 +1150,9 @@ class FrameCompositor:
             if mask_report["anomaly"]:
                 log.warning("Temporal mask anomaly track=%s frame=%s diagnostics=%s", replacement.track_id,
                             frame_index, mask_report)
+            if front is not None:
+                visible_alpha = np.minimum(visible_alpha, 1.0 - front)
+            visible_alpha = np.minimum(visible_alpha, (1.0 - robust_forbidden) * options.swap_weight)
             alpha_native = cv2.resize(visible_alpha, (side, side), interpolation=cv2.INTER_AREA) if work != side else visible_alpha
             if observer is not None:
                 observer('occluder', cv2.resize(front, (side, side), interpolation=cv2.INTER_AREA) if front is not None else np.zeros((side, side), np.float32),
@@ -1125,14 +1171,18 @@ class FrameCompositor:
             protect = None
             if robust.restoration_guard and analysis.protect is not None:
                 protect = cv2.resize(analysis.protect, (side, side), interpolation=cv2.INTER_AREA) if work != side else analysis.protect
-            skin_native = cv2.resize(analysis.skin, (side, side), interpolation=cv2.INTER_AREA) if work != side else analysis.skin
+            skin_work = np.asarray(analysis.skin, np.float32).copy() if analysis.parser_trusted else np.zeros((work, work), np.float32)
+            if analysis.parser_trusted and analysis.regions is not None:
+                skin_work = np.clip(skin_work + analysis.regions.get("nose"), 0, 1)
+            skin_work[skin_work < 0.5] = 0.0
+            skin_native = cv2.resize(skin_work, (side, side), interpolation=cv2.INTER_AREA) if work != side else skin_work
             mouth = None
             if analysis.regions is not None:
                 mouth_work = np.clip(analysis.regions.get("mouth_interior") + analysis.regions.get("lips"), 0, 1)
                 mouth = cv2.GaussianBlur(cv2.resize(mouth_work, (side, side), interpolation=cv2.INTER_AREA), (7, 7), 2.0)
             harmonized, color_stats, spent = self._enhance(
                 replacement, crop, context.target_crop, alpha_native, probabilities=None,
-                skin=skin_native if analysis.parser_trusted else alpha_native, options=options, observer=observer,
+                skin=skin_native, options=options, observer=observer,
                 lip_result=lip_sync_results.get(replacement.track_id), frame_index=frame_index, protect=protect,
                 mouth_mask=mouth, local_illumination=robust.local_illumination, frame=frame)
             restorer_seconds += spent
@@ -1168,9 +1218,10 @@ class FrameCompositor:
             smoothed_face = temporal.alpha * options.swap_weight
             if coverage is not None:
                 smoothed_face = np.minimum(smoothed_face, coverage)
+            smoothed_face *= 1.0 - robust_forbidden
             if observer is not None:
                 observer('vfx', crop, temporal.inverse, cv2.resize(smoothed_face, (side, side), interpolation=cv2.INTER_AREA) if work != side else smoothed_face)
-            skin_for_fusion = analysis.skin if analysis.parser_trusted else None
+            skin_for_fusion = skin_work if analysis.parser_trusted else None
             if enhanced_side != side:
                 # Fuse at the enhancer's resolution (capped at ~1.25x the face's footprint in the frame so the warp does
                 # not alias): the masks follow the image, and M_hr re-bases the crop->frame matrix by S.
@@ -1293,7 +1344,12 @@ class FrameCompositor:
                   "temporal_diagnostics": dict(self.last_reports),
                   "frames_composited": self.frames_composited,
                   "photometric_identity": dict(self.last_relighting),
-                  "occlusion_modes": {"default": "standard", "available": list(OCCLUSION_MODES)}}
+                  "occlusion_modes": {"default": "standard", "available": list(OCCLUSION_MODES)},
+                  "blending": {"default": BlendMode.MULTI_BAND.value, "pyramid_levels": 4,
+                               "anatomical_feather": "inward_signed_distance"},
+                  "skin_color": {"classes": [1, 10], "missing_skin": "UNAVAILABLE_NO_FACE_WIDE_FALLBACK"},
+                  "skin_microtexture": {"source": "target_frame", "method": "skin_normalized_dog",
+                                        "source_pigment_projection": "NOT_PROVIDED_REQUIRES_TEXTURED_3D_SOURCE"}}
         if self._analyzer is not None:
             result["robust_occlusion"] = self._analyzer.capability()
         return result

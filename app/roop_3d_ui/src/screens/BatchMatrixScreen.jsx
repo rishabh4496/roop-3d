@@ -8,54 +8,56 @@ import NumericInput from '../components/controls/NumericInput';
 import { SKIP_KEY, describeLint, lintBatch } from '../components/diagnostics/batchLint';
 import { DragItems } from '../components/ui-layouts/DragItems';
 
+// Every recipe parameter is a real `WorkstationParameters` field: the job schema rejects unknown names, and the restorer is named explicitly
+// so a recipe never depends on the saved global policy.
 export const BUILTIN_RECIPES = [
   {
     id: 'photoreal_natural',
     name: 'Natural Photoreal',
-    description: 'GPEN 512 enhancement (blend 0.35), retarget pose, balanced sharpness and edge blend.',
-    parameters: { pose_mode: 'retarget', restoration_blend: 0.35, eye_open_ratio: 1.0, mouth_open_ratio: 1.0, edge_feather_px: 2, erosion_px: 2, swap_weight: 1.0 }
+    description: 'GPEN 512 enhancement (blend 0.35), retarget pose, 2 px mask feather.',
+    parameters: { pose_mode: 'retarget', restorer_model: 'gpen', restoration_blend: 0.35, feather_px: 2, erosion_px: 2, swap_weight: 1.0 }
   },
   {
     id: 'high_fidelity',
     name: 'High-Fidelity Ultra',
-    description: 'Strong GPEN restoration (0.80), retarget pose, high-resolution edge blending.',
-    parameters: { pose_mode: 'retarget', restoration_blend: 0.80, eye_open_ratio: 1.0, mouth_open_ratio: 1.0, edge_feather_px: 3, erosion_px: 3, swap_weight: 1.0 }
+    description: 'Strong GPEN restoration (0.80), retarget pose, 3 px mask feather and erosion.',
+    parameters: { pose_mode: 'retarget', restorer_model: 'gpen', restoration_blend: 0.80, feather_px: 3, erosion_px: 3, swap_weight: 1.0 }
   },
   {
     id: 'mesh_geometry_3d',
     name: '3D Mesh Blend & Geometry',
-    description: 'Full 3D mesh blend pose mode, expressive LivePortrait landmarks, geometric warping.',
-    parameters: { pose_mode: 'mesh_blend', restoration_blend: 0.40, eye_open_ratio: 1.05, mouth_open_ratio: 1.05, edge_feather_px: 4, erosion_px: 2, swap_weight: 0.9 }
+    description: 'Mesh blend pose mode (canonical 3D head proxy projection), GPEN restoration 0.40, swap weight 0.90.',
+    parameters: { pose_mode: 'mesh_blend', restorer_model: 'gpen', restoration_blend: 0.40, feather_px: 4, erosion_px: 2, swap_weight: 0.9 }
   },
   {
     id: 'cinematic_soft',
     name: 'Cinematic Soft Swap',
-    description: 'Subtle restoration (0.20), wide 5px edge feathering, soft skin tone preservation.',
-    parameters: { pose_mode: 'retarget', restoration_blend: 0.20, eye_open_ratio: 1.0, mouth_open_ratio: 1.0, edge_feather_px: 5, erosion_px: 1, swap_weight: 0.85 }
+    description: 'Subtle restoration (0.20), wide 5 px mask feather, partial swap weight 0.85.',
+    parameters: { pose_mode: 'retarget', restorer_model: 'gpen', restoration_blend: 0.20, feather_px: 5, erosion_px: 1, swap_weight: 0.85 }
   },
   {
     id: 'action_smoothing',
     name: 'Action / Motion Smoothing',
-    description: 'Fast retarget, strict occlusion threshold, motion blur adaptation.',
-    parameters: { pose_mode: 'retarget', restoration_blend: 0.30, eye_open_ratio: 1.0, mouth_open_ratio: 1.0, edge_feather_px: 3, erosion_px: 2, swap_weight: 0.95 }
+    description: 'Retarget pose, GPEN restoration 0.30, swap weight 0.95.',
+    parameters: { pose_mode: 'retarget', restorer_model: 'gpen', restoration_blend: 0.30, feather_px: 3, erosion_px: 2, swap_weight: 0.95 }
   },
   {
     id: 'codeformer_fidelity',
     name: 'CodeFormer Fidelity Sweep',
-    description: 'CodeFormer scalar fidelity feed (w=0.85) mapped to CodeFormer training template.',
-    parameters: { pose_mode: 'retarget', restoration_blend: 0.70, codeformer_fidelity: 0.85, edge_feather_px: 3, erosion_px: 2, swap_weight: 1.0 }
+    description: 'CodeFormer at blend 0.70 with its fidelity input (w) set to 0.85.',
+    parameters: { pose_mode: 'retarget', restorer_model: 'codeformer', restoration_blend: 0.70, fidelity_weight: 0.85, feather_px: 3, erosion_px: 2, swap_weight: 1.0 }
   },
   {
     id: 'ultramax_restoration',
     name: 'UltraMax Deep Dynamic',
-    description: 'UltraMax registered model with dynamic preprocessing contract.',
-    parameters: { pose_mode: 'retarget', restoration_blend: 0.65, edge_feather_px: 2, erosion_px: 2, swap_weight: 1.0 }
+    description: 'UltraMax (the registered codeformer.fp16 weights plus Laplacian detail fusion) at blend 0.65.',
+    parameters: { pose_mode: 'retarget', restorer_model: 'ultramax', restoration_blend: 0.65, feather_px: 2, erosion_px: 2, swap_weight: 1.0 }
   },
   {
     id: 'frontalization_tps_sweep',
     name: 'TPS Frontalization Sweep',
-    description: 'Canonical Stage 0 frontalization (0.75) and TPS expression transfer (0.80).',
-    parameters: { pose_mode: 'retarget', pose_frontalization: 0.75, tps_expression_weight: 0.80, restoration_blend: 0.40, swap_weight: 1.0 }
+    description: 'Pre-swap frontalization (0.75) and TPS expression transfer (0.80), GPEN restoration 0.40.',
+    parameters: { pose_mode: 'retarget', restorer_model: 'gpen', pose_frontalization: 0.75, tps_expression_weight: 0.80, restoration_blend: 0.40, swap_weight: 1.0 }
   }
 ];
 
@@ -458,10 +460,9 @@ export default function BatchMatrixScreen({
       description: `Custom preset: GPEN ${newRecipeRestoration}, ${newRecipePoseMode} pose.`,
       parameters: {
         pose_mode: newRecipePoseMode,
+        restorer_model: 'gpen',
         restoration_blend: Number(newRecipeRestoration) || 0.35,
-        eye_open_ratio: 1.0,
-        mouth_open_ratio: 1.0,
-        edge_feather_px: 2,
+        feather_px: 2,
         erosion_px: 2,
         swap_weight: 1.0,
       }

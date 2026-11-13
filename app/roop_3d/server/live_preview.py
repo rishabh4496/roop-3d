@@ -42,7 +42,8 @@ from roop_3d.audit.isolation import safe_path
 from roop_3d.core.animation import FaceSegment, ParameterCurves
 from roop_3d.core.errors import DomainError
 from roop_3d.core.settings import Contract
-from roop_3d.core.workstation import PROTECTION_FIELDS, SCOPE_FIELDS, WorkstationParameters
+from roop_3d.core.workstation import (BlendModeName, FREQUENCY_BLEND_CONFLICT, FUSION_FIELDS, PROTECTION_FIELDS, PYRAMID_LEVELS,
+                                      SCOPE_FIELDS, WorkstationParameters)
 from roop_3d.core.face_editor import FaceExpressionOverrides
 from roop_3d.faceset.identity_blend import IdentityBlendSpec
 from roop_3d.jobs.schema import JobRequest
@@ -141,6 +142,11 @@ class LivePreviewPayload(Contract):
     ambient_fill: float | None = Field(default=None, ge=0, le=1)
     occlusion_threshold: float | None = Field(default=None, ge=0, le=1)
     hairline_offset_px: float | None = Field(default=None, ge=-32, le=32)
+    # Compositor fusion; None = the compositor default (four-band multi_band, XSeg vote at full strength). The vote only acts in
+    # occlusion_mode='robust' and the band count only in multi_band / frequency_separated; otherwise they are listed in `unsupported`.
+    xseg_occlusion_strength: float | None = Field(default=None, ge=0, le=1)
+    blend_mode: BlendModeName | None = None
+    pyramid_levels: int | None = Field(default=None, ge=PYRAMID_LEVELS[0], le=PYRAMID_LEVELS[1])
     # Hair / neck / ear protection and skin micro-texture; None = the compositor default.
     neck_protection: bool | None = None
     hair_matting: bool | None = None
@@ -172,6 +178,8 @@ class LivePreviewPayload(Contract):
                 raise ValueError("cluster_index requires all_faces")
         if any(not re.fullmatch(_FACESET, item) for item in self.source_face_ids):
             raise ValueError("source_face_ids must be FaceSet identifiers")
+        if self.blend_mode == "frequency_separated" and self.occlusion_mode == "robust":
+            raise ValueError(FREQUENCY_BLEND_CONFLICT)
         self.resolved_sources()  # raises on inconsistent blend declarations
         return self
 
@@ -202,12 +210,16 @@ class LivePreviewPayload(Contract):
         items = []
         if "fidelity_weight" in self.model_fields_set and self.restorer not in ("codeformer", "ultramax"):
             items.append("fidelity_weight")  # only the CodeFormer-based engines expose a fidelity input
+        if self.xseg_occlusion_strength is not None and self.occlusion_mode != "robust":
+            items.append("xseg_occlusion_strength")  # the visible-face networks only run in the robust occlusion mode
+        if self.pyramid_levels is not None and (self.blend_mode or "multi_band") not in ("multi_band", "frequency_separated"):
+            items.append("pyramid_levels")  # feather and Poisson fusion have no pyramid
         return items
 
     def config_digest(self) -> dict[str, Any]:
         """Everything that changes the pixels, nothing that selects the frame."""
         value = self.model_dump(mode="json", exclude={"frame_index", "timestamp"})
-        for key in ("identity_lock_id", "pose_strength", "ambient_fill", "hairline_offset_px", "occlusion_threshold", *PROTECTION_FIELDS, *SCOPE_FIELDS):
+        for key in ("identity_lock_id", "pose_strength", "ambient_fill", "hairline_offset_px", "occlusion_threshold", *PROTECTION_FIELDS, *SCOPE_FIELDS, *FUSION_FIELDS):
             if value[key] is None:
                 value.pop(key)
         if value.get("mask_base64"):
@@ -572,7 +584,7 @@ class LivePreviewService:
             values['occlusion_threshold'] = payload.occlusion_threshold
         if payload.hairline_offset_px is not None:
             values['hairline_offset_px'] = payload.hairline_offset_px
-        for name in (*PROTECTION_FIELDS, *SCOPE_FIELDS):
+        for name in (*PROTECTION_FIELDS, *SCOPE_FIELDS, *FUSION_FIELDS):
             if getattr(payload, name) is not None:
                 values[name] = getattr(payload, name)
         if payload.render_mode is not None:
@@ -623,7 +635,9 @@ class LivePreviewService:
                 "solo_node": payload.solo_node, "width": int(image.shape[1]), "height": int(image.shape[0]),
                 "decoded_frame_index": raw["frame_index"], "timestamp": raw["timestamp"], "faces": raw.get("faces", []),
                 "applied": self._applied(payload), "unsupported": payload.unsupported(), "notes": raw.get("notes", []),
-                "latency": raw.get("latency", {}), "provider": raw.get("provider"), "profile": str(raw.get("profile"))}
+                "latency": raw.get("latency", {}), "provider": raw.get("provider"), "profile": str(raw.get("profile")),
+                # Observed outcomes of this frame's restorer (UltraMax keeps an applied / bypassed / failed ledger); null for the others.
+                "restoration": raw.get("restoration")}
         # No encoder runs here: this thread holds the render slot. The entry keeps its own copy of the pixels and is
         # encoded (PNG for HTTP, JPEG for the binary stream) by whoever consumes it, after the slot is released.
         return CacheEntry.from_raw(np.ascontiguousarray(image).copy(), meta)
@@ -651,6 +665,8 @@ class LivePreviewService:
             applied.append("relight_strength")
         if payload.occlusion_threshold is not None:
             applied.append("occlusion_threshold")
+        inert = payload.unsupported()
+        applied += [name for name in FUSION_FIELDS if getattr(payload, name) is not None and name not in inert]
         if payload.specular_sheen is not None:
             applied.append("specular_sheen")
         if payload.shadow_preservation is not None:

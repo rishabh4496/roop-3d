@@ -18,6 +18,7 @@ import {
 import { useStudioEnvironments } from './useStudioEnvironments';
 import { GazeGizmo, JawGizmo, LightGizmo } from './ViewportGizmos';
 import { PrecisionRangeSlider } from '../ui-layouts';
+export { generateFibonacciSphere, projectViewsToLattice } from './poseLattice';
 
 /**
  * @typedef {{
@@ -36,75 +37,6 @@ import { PrecisionRangeSlider } from '../ui-layouts';
  * @param {number} radius
  * @returns {SphereNode[]}
  */
-export function generateFibonacciSphere(numPoints = 96, radius = 1.35) {
-  const points = [];
-  const phi = (1 + Math.sqrt(5)) / 2;
-  const goldenAngle = 2 * Math.PI * (1 - 1 / phi);
-
-  for (let i = 0; i < numPoints; i++) {
-    const y = 1 - (i / (numPoints - 1)) * 2;
-    const radiusAtY = Math.sqrt(Math.max(0, 1 - y * y));
-    const theta = goldenAngle * i;
-
-    const x = Math.cos(theta) * radiusAtY;
-    const z = Math.sin(theta) * radiusAtY;
-
-    const normal = new THREE.Vector3(x, y, z).normalize();
-    const pos = normal.clone().multiplyScalar(radius);
-
-    const yawDeg = (Math.atan2(x, z) * 180) / Math.PI;
-    const pitchDeg = (Math.asin(Math.max(-1, Math.min(1, y))) * 180) / Math.PI;
-
-    points.push({
-      index: i,
-      position: [pos.x, pos.y, pos.z],
-      normal,
-      yawDeg,
-      pitchDeg,
-      sampleCount: 0,
-    });
-  }
-  return points;
-}
-
-/**
- * Projects a set of [yaw, pitch] views onto the Fibonacci lattice.
- * @param {SphereNode[]} lattice
- * @param {Array<{ yaw: number; pitch: number; roll?: number }>} views
- * @returns {SphereNode[]}
- */
-export function projectViewsToLattice(lattice, views = []) {
-  const updated = lattice.map(node => ({ ...node, sampleCount: 0 }));
-  if (!views || views.length === 0) return updated;
-
-  for (const view of views) {
-    const yawRad = (view.yaw * Math.PI) / 180;
-    const pitchRad = (view.pitch * Math.PI) / 180;
-
-    const sampleVec = new THREE.Vector3(
-      Math.sin(yawRad) * Math.cos(pitchRad),
-      Math.sin(pitchRad),
-      Math.cos(yawRad) * Math.cos(pitchRad)
-    ).normalize();
-
-    let bestIdx = 0;
-    let bestDot = -Infinity;
-
-    for (let i = 0; i < updated.length; i++) {
-      const dot = sampleVec.dot(updated[i].normal);
-      if (dot > bestDot) {
-        bestDot = dot;
-        bestIdx = i;
-      }
-    }
-
-    if (bestDot > 0.7) {
-      updated[bestIdx].sampleCount += 1;
-    }
-  }
-
-  return updated;
-}
 
 /** Exact 12 yaw x 8 pitch hemisphere grid used by the backend bin contract. */
 export function generatePoseGrid(radius = 1.35) {

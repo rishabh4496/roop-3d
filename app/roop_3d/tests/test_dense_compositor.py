@@ -73,13 +73,21 @@ def test_a_restorer_is_still_required_when_restoration_is_requested():
 
 
 def test_dense_shading_gives_the_flat_synthesised_face_the_targets_lit_side():
-    plain = compose(compositor(CountingRestorer()), replacement(), options=CompositeOptions(
+    from roop_3d.tests.test_occlusion_compositor import _StubParser
+    plain_compositor, shaded_compositor = compositor(CountingRestorer()), compositor(CountingRestorer())
+    # Shading is skin-only: a missing parser must not be treated as an all-skin face.
+    plain_compositor.parser = shaded_compositor.parser = _StubParser()
+    plain = compose(plain_compositor, replacement(), options=CompositeOptions(
         restoration_blend=0.7, color_strength=0, feather_px=2, dense_shading=0.0))
-    shaded = compose(compositor(CountingRestorer()), replacement())
+    shaded = compose(shaded_compositor, replacement())
     target = frame_lit_from_the_right()
     ratio = lambda image: face_luma_sides(image)[0] / face_luma_sides(image)[1]
     assert ratio(plain) > 0.93                                  # flat crop composited as-is
     assert abs(ratio(shaded) - ratio(target)) < abs(ratio(plain) - ratio(target)) * 0.5
+    assert shaded_compositor.last_reports[1]["dense_shading"]["state"] == "APPLIED"
+    unavailable = compositor(CountingRestorer())
+    compose(unavailable, replacement())
+    assert unavailable.last_reports[1]["dense_shading"]["reason"] == "SKIN_NOSE_STATISTICS_UNAVAILABLE"
 
 
 def test_shading_does_not_run_for_other_replacement_methods():

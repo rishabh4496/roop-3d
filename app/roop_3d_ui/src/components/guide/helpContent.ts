@@ -62,7 +62,7 @@ export const FACESET_STEPS = [
   'Make sure the same person is in every photo. A different person in the set blocks the build (“blocked: inconsistent identity”).',
   'Cover the angles: straight ahead, three-quarter left and three-quarter right are required for full 3D coverage. Left and right profile are recommended.',
   'Import the photos in Face Manager (or load a .fsz archive) and read the coverage grid. Add the angles it lists as missing.',
-  'Press “Build 3D identity asset” to see what the 3D render modes will use. Rendering in 3D modes builds it automatically if you skip this.',
+  'Press “Build 3D identity asset” (canonical head) before using the 3D Facial Warp or 3D Expression Transfer modes: they reuse that exact stored asset and never build it themselves. Without a matching asset 3D Facial Warp uses the generic head proxy and 3D Expression Transfer keeps the plain 2D swap.',
 ];
 
 /** Each rule is a threshold the FaceSet quality analysis (reconstruction/faceset_quality.py) really applies. */

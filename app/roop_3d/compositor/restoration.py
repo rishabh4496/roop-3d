@@ -1,6 +1,8 @@
 """Optional ROI restoration, blended only through the face alpha."""
 from __future__ import annotations
 
+import time
+
 import cv2
 import numpy as np
 
@@ -126,19 +128,27 @@ class GpenRestorer:
 
 class CodeFormerRestorer:
     """Lazy, hash-verified CodeFormer with training alignment in replacement-crop space."""
-    def __init__(self, catalog, config):
+    def __init__(self, catalog, config, spec=None):
         from roop_3d.compositor.stream_restoration import OnnxFaceRestorer, codeformer_spec
-        self.spec = codeformer_spec()
+        self.spec = spec if spec is not None else codeformer_spec()
         self.runner = OnnxFaceRestorer(catalog, config, self.spec)
         self.runner.require_dynamic_fidelity = True
         self.fidelity_weight = 0.5
         self.inference_verified = False
+        self.last_inference_ms: float | None = None
+
+    def _infer(self, aligned: np.ndarray) -> np.ndarray:
+        """One model run on a spec-aligned crop; its wall time is observed here, around the real inference call."""
+        began = time.perf_counter()
+        restored = self.runner.restore(aligned)
+        self.last_inference_ms = (time.perf_counter() - began) * 1000
+        return restored
 
     def restore(self, image: np.ndarray, landmarks5: np.ndarray | None = None) -> np.ndarray:
         if landmarks5 is not None:
             return self.restore_aligned(image, landmarks5)
         self.runner.fidelity_weight = self.fidelity_weight
-        restored = self.runner.restore(image)
+        restored = self._infer(image)
         self.inference_verified = True
         return restored
 
@@ -150,7 +160,7 @@ class CodeFormerRestorer:
         matrix = similarity(points, self.spec.template)
         crop = cv2.warpAffine(image, matrix, (self.spec.size, self.spec.size), borderMode=cv2.BORDER_CONSTANT)
         self.runner.fidelity_weight = self.fidelity_weight
-        restored = self.runner.restore(crop)
+        restored = self._infer(crop)
         inverse = cv2.invertAffineTransform(matrix)
         size = (image.shape[1], image.shape[0])
         warped = cv2.warpAffine(restored, inverse, size)
@@ -168,7 +178,7 @@ class CodeFormerRestorer:
         points = np.asarray(landmarks5 if landmarks5 is not None else (), np.float64)
         if points.shape != (5, 2) or not np.isfinite(points).all():
             raise DomainError('RESTORER_LANDMARKS_REQUIRED', 'CodeFormer requires five crop-space landmarks', 422)
-        result, _ = restore_in_crop_space(self.runner.restore, image, points, self.spec)
+        result, _ = restore_in_crop_space(self._infer, image, points, self.spec)
         self.inference_verified = True
         return result
 
@@ -186,28 +196,57 @@ class UltraMaxPipelineRestorer(CodeFormerRestorer):
     """UltraMax high-detail restoration: CodeFormer at 512 px training alignment, then a 3-level Laplacian pyramid
     fusion that keeps the swap crop's colour and low/mid frequencies and takes only the restorer's finest detail.
 
-    It reuses the verified CodeFormer weights and alignment (no separate model is claimed). Native face size controls
-    whether small background faces bypass inference or receive an adaptively reduced detail pass.
+    The weights, alignment template and normalization come from ``load_ultramax_spec`` (the same contract the
+    optimized path, ``/system/capabilities`` and the model rack use), so every route runs the registered
+    ``codeformer.fp16.onnx`` artifact through the UltraMax runner. It is CodeFormer plus Laplacian detail fusion: there
+    is no Real-ESRGAN cascade. Native face size controls whether small background faces bypass inference or receive an
+    adaptively reduced detail pass; only that explicit user setting may return/skip without inference, and every
+    outcome is recorded in ``telemetry``. Inference errors always propagate.
     """
-    def __init__(self, catalog, config):
-        super().__init__(catalog, config)
+    def __init__(self, catalog, config, spec=None):
+        from roop_3d.compositor.stream_restoration import RestorationTelemetry, ultramax_spec
+        if spec is None:
+            resolve = getattr(catalog, "ultramax_spec", None)
+            spec = resolve() if callable(resolve) else ultramax_spec()
+        if spec.name != "ultramax":
+            raise ValueError("UltraMax requires the ultramax restorer contract")
+        super().__init__(catalog, config, spec)
         self.fidelity_weight = 0.7
         # "off" = UltraMax runs on every face. "bypass" / "adaptive" are explicit user settings, judged on the face's
         # destination size in the target frame (never on the size of the swap crop).
         self.small_face_mode = "off"
         self.min_native_pixels = 320
+        self.telemetry = RestorationTelemetry(spec.model_name)
+
+    def _small(self, native_face_size_px) -> bool:
+        return native_face_size_px is not None and native_face_size_px <= self.min_native_pixels
+
+    def _bypassed(self, native_face_size_px) -> None:
+        self.telemetry.record_bypassed("small_face_bypass", native_face_px=round(float(native_face_size_px), 1),
+                                       threshold_px=self.min_native_pixels)
+
+    def _applied(self, began: float, **detail) -> None:
+        self.telemetry.record_applied((time.perf_counter() - began) * 1000, self.last_inference_ms, **detail)
 
     def restore_aligned(self, image, landmarks5, *, native_face_size_px=None):
         from roop_3d.enhancers.ultramax import laplacian_pyramid_fusion
-        small = native_face_size_px is not None and native_face_size_px <= self.min_native_pixels
+        small = self._small(native_face_size_px)
         if small and self.small_face_mode == "bypass":
+            self._bypassed(native_face_size_px)
             return image.copy()
-        restored = super().restore_aligned(image, landmarks5)
-        fused = laplacian_pyramid_fusion(np.ascontiguousarray(image), restored, levels=3)
-        if small and self.small_face_mode == "adaptive":
-            strength = float(np.clip(native_face_size_px / max(self.min_native_pixels, 1), 0, 1))
-            fused = np.clip(image.astype(np.float32) + (fused.astype(np.float32) - image) * strength,
-                            0, 255).round().astype(np.uint8)
+        began = time.perf_counter()
+        try:
+            restored = super().restore_aligned(image, landmarks5)
+            fused = laplacian_pyramid_fusion(np.ascontiguousarray(image), restored, levels=3)
+            strength = 1.0
+            if small and self.small_face_mode == "adaptive":
+                strength = float(np.clip(native_face_size_px / max(self.min_native_pixels, 1), 0, 1))
+                fused = np.clip(image.astype(np.float32) + (fused.astype(np.float32) - image) * strength,
+                                0, 255).round().astype(np.uint8)
+        except Exception as error:
+            self.telemetry.record_failed(error)
+            raise
+        self._applied(began, strength=round(strength, 3))
         return fused
 
     def restore_hires(self, image, landmarks5=None, *, native_face_size_px=None, **_unused):
@@ -215,33 +254,53 @@ class UltraMaxPipelineRestorer(CodeFormerRestorer):
         the (cubic-enlarged) swap so colour and low/mid bands stay the swap's and the finest bands are the restorer's.
         Returns ``None`` only when the user explicitly opted into skipping this (small) face."""
         from roop_3d.enhancers.ultramax import laplacian_pyramid_fusion
-        small = native_face_size_px is not None and native_face_size_px <= self.min_native_pixels
+        small = self._small(native_face_size_px)
         if small and self.small_face_mode == "bypass":
+            self._bypassed(native_face_size_px)
             return None
-        restored = super().restore_hires(image, landmarks5)
-        base = (image if image.shape[:2] == restored.shape[:2]
-                else cv2.resize(image, (restored.shape[1], restored.shape[0]), interpolation=cv2.INTER_CUBIC))
-        # S = restorer / swap resolution; the log2(S) finest bands lie above the swap's own Nyquist limit.
-        detail = max(1, int(round(np.log2(max(restored.shape[0] / image.shape[0], 1.0)))))
-        fused = laplacian_pyramid_fusion(np.ascontiguousarray(base), restored, levels=max(3, detail + 1),
-                                         detail_levels=detail)
-        if small and self.small_face_mode == "adaptive":
-            strength = float(np.clip(native_face_size_px / max(self.min_native_pixels, 1), 0, 1))
-            fused = np.clip(base.astype(np.float32) + (fused.astype(np.float32) - base) * strength,
-                            0, 255).round().astype(np.uint8)
+        began = time.perf_counter()
+        try:
+            restored = super().restore_hires(image, landmarks5)
+            base = (image if image.shape[:2] == restored.shape[:2]
+                    else cv2.resize(image, (restored.shape[1], restored.shape[0]), interpolation=cv2.INTER_CUBIC))
+            # S = restorer / swap resolution; the log2(S) finest bands lie above the swap's own Nyquist limit.
+            detail = max(1, int(round(np.log2(max(restored.shape[0] / image.shape[0], 1.0)))))
+            fused = laplacian_pyramid_fusion(np.ascontiguousarray(base), restored, levels=max(3, detail + 1),
+                                             detail_levels=detail)
+            strength = 1.0
+            if small and self.small_face_mode == "adaptive":
+                strength = float(np.clip(native_face_size_px / max(self.min_native_pixels, 1), 0, 1))
+                fused = np.clip(base.astype(np.float32) + (fused.astype(np.float32) - base) * strength,
+                                0, 255).round().astype(np.uint8)
+        except Exception as error:
+            self.telemetry.record_failed(error)
+            raise
+        self._applied(began, strength=round(strength, 3))
         return fused
 
     def restore(self, image: np.ndarray, landmarks5: np.ndarray | None = None) -> np.ndarray:
         from roop_3d.enhancers.ultramax import laplacian_pyramid_fusion
         if landmarks5 is not None:
             return self.restore_aligned(image, landmarks5)
-        restored = super().restore(image)
-        if restored.shape != image.shape:
-            restored = cv2.resize(restored, (image.shape[1], image.shape[0]), interpolation=cv2.INTER_AREA)
-        return laplacian_pyramid_fusion(np.ascontiguousarray(image), restored, levels=3)
+        began = time.perf_counter()
+        try:
+            restored = super().restore(image)
+            if restored.shape != image.shape:
+                restored = cv2.resize(restored, (image.shape[1], image.shape[0]), interpolation=cv2.INTER_AREA)
+            fused = laplacian_pyramid_fusion(np.ascontiguousarray(image), restored, levels=3)
+        except Exception as error:
+            self.telemetry.record_failed(error)
+            raise
+        self._applied(began, strength=1.0)
+        return fused
 
     def capability(self):
-        return {**super().capability(), 'architecture': 'ultramax'}
+        model = getattr(self.runner, "model", None)
+        record = getattr(model, "record", None)
+        observed = {"model_sha256": record.get("sha256"), "provider": getattr(model, "provider", None)} \
+            if isinstance(record, dict) else {}
+        return {**super().capability(), 'architecture': 'ultramax', 'model': self.spec.model_name,
+                **observed, 'telemetry': self.telemetry.snapshot()}
 
 
 class GfpganRestorer:

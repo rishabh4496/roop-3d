@@ -35,7 +35,7 @@ export const isAssetStatus = (value: unknown): boolean => {
     && Array.isArray(item.coverage.requests) && (item.state === 'not_built' || (!!item.asset && Number.isFinite(item.asset.vertex_count)));
 };
 
-/** Legacy identity assets for offline inspection/export; live swaps use the dense facial backbone. */
+/** The canonical head is the asset 3D Facial Warp / 3D Expression Transfer reuse; the MakeHuman head is for inspection and export only. */
 export type HeadTemplate = 'canonical' | 'makehuman';
 const TEMPLATE_KEY = 'roop3d-head-template';
 export const readTemplate = (): HeadTemplate => { try { return localStorage.getItem(TEMPLATE_KEY) === 'makehuman' ? 'makehuman' : 'canonical'; } catch { return 'canonical'; } };
@@ -195,7 +195,7 @@ export default function FaceSetDetail({ faceset, selectedTrackLabel, assignedHer
 
       <div className="fs-subhead"><span>3D IDENTITY ASSET</span>{asset && <span className="status-chip ok">BUILT</span>}{status.value?.state === 'not_built' && <span className="status-chip">NOT BUILT</span>}</div>
       <div className="head-template" role="radiogroup" aria-label="Head model">
-        {([['canonical', 'Canonical head', 'Legacy facial proxy for offline inspection and export'], ['makehuman', 'MakeHuman CC0 head', 'Legacy CC0 head and neck for offline inspection and export']] as const).map(([value, label, hint]) => (
+        {([['canonical', 'Canonical head', 'The template 3D Facial Warp and 3D Expression Transfer reuse'], ['makehuman', 'MakeHuman CC0 head', 'CC0 head and neck for inspection and export; the render modes use the canonical head only']] as const).map(([value, label, hint]) => (
           <button key={value} type="button" role="radio" aria-checked={template === value} className={`head-template-btn ${template === value ? 'active' : ''}`} title={hint}
             onClick={() => { if (template === value) return; writeTemplate(value); setTemplateState(value); if (meshShown) onShowMesh(null); setBuild({ busy: false, started: 0, error: '' }); }}>{label}</button>
         ))}
@@ -213,7 +213,7 @@ export default function FaceSetDetail({ faceset, selectedTrackLabel, assignedHer
               <div><dt>Mesh</dt><dd>{asset.vertex_count.toLocaleString()} v · {asset.face_count.toLocaleString()} f</dd></div>
               <div><dt>Views used</dt><dd>{asset.sources_used}/{asset.sources_total}</dd></div>
             </dl>
-          ) : <p className="muted">Not built yet. This legacy asset is for offline inspection and export. Live 3D swaps use the fitted facial model.</p>}
+          ) : <p className="muted">Not built yet. {template === 'canonical' ? '3D Facial Warp and 3D Expression Transfer reuse this exact asset and never build it themselves: build it here before rendering in those modes.' : 'The MakeHuman head is for offline inspection and export; the render modes use the canonical head.'}</p>}
           {readinessHelp && <p className="muted asset-meaning">{readinessHelp.meaning} <em>{readinessHelp.next}</em></p>}
           {status.value.coverage.requests.length > 0 && <details className="asset-requests" open={readiness !== 'full_coverage'}><summary>{status.value.coverage.requests.length} suggested additional angle{status.value.coverage.requests.length === 1 ? '' : 's'}</summary><ul>{status.value.coverage.requests.map(item => { const request = parseRequest(item); return <li key={item}>{request.level !== 'info' && <span className={`status-chip request-${request.level}`}>{request.level}</span>} {request.text}</li>; })}</ul></details>}
           {asset && asset.missing_information.length > 0 && <details className="asset-requests"><summary>What this asset does not contain</summary><ul>{asset.missing_information.map(item => <li key={item}>{item}</li>)}{asset.limitations.map(item => <li key={item}>{item}</li>)}</ul></details>}

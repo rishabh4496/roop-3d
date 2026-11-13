@@ -100,7 +100,9 @@ export default function PreFlightLinterModal({
   useDialogA11y(dialogRef, onClose, isOpen);
   if (!isOpen) return null;
 
-  const checks = linterData?.checks || [];
+  // Failures and warnings first: the list scrolls, and the overall status must be explained by what is visible.
+  const SEVERITY = { FAIL: 0, WARN: 1 };
+  const checks = [...(linterData?.checks || [])].sort((a, b) => (SEVERITY[a.status] ?? 2) - (SEVERITY[b.status] ?? 2));
   const hasFailures = checks.some(c => c.status === 'FAIL');
   const hasWarnings = checks.some(c => c.status === 'WARN');
 

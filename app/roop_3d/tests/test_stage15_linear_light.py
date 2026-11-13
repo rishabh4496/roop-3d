@@ -118,9 +118,10 @@ def test_fuse_crop_passes_the_transfer_through():
     crop = flat(255, (16, 16))
     inverse = np.array([[1, 0, 24.5], [0, 1, 24.5]], np.float32)  # half-pixel shift: border pixels get partial coverage
     mask, frame = np.ones((16, 16), np.float32), flat(0, (64, 64))
-    gamma = fuse_crop(frame, crop, inverse, mask)
-    srgb = fuse_crop(frame, crop, inverse, mask, linear_light=True, transfer="srgb")
-    bt1886 = fuse_crop(frame, crop, inverse, mask, linear_light=True, transfer="bt1886")
+    # Pointwise transfer ordering is a feather contract, not a Laplacian-band invariant.
+    gamma = fuse_crop(frame, crop, inverse, mask, mode=BlendMode.FEATHER)
+    srgb = fuse_crop(frame, crop, inverse, mask, mode=BlendMode.FEATHER, linear_light=True, transfer="srgb")
+    bt1886 = fuse_crop(frame, crop, inverse, mask, mode=BlendMode.FEATHER, linear_light=True, transfer="bt1886")
     border = (gamma != srgb).any(axis=2)
     assert border.sum() >= 20
     g, s, b = (x[border].astype(int) for x in (gamma, srgb, bt1886))

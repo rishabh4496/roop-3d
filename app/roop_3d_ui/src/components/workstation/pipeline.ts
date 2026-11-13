@@ -1,11 +1,36 @@
 export type RestorerModel = 'gpen' | 'codeformer' | 'ultramax' | 'gfpgan';
-/** Weight file each enhancer needs. UltraMax is CodeFormer weights + Laplacian detail fusion, so it shares CodeFormer's file. */
+/** Seam fusion of the swapped face (engine default `multi_band`: a four-band Laplacian pyramid). */
+export type BlendMode = 'feather' | 'multi_band' | 'poisson' | 'frequency_separated';
+/** Weight file each enhancer loads. UltraMax is the registered CodeFormer fp16 artifact plus Laplacian detail fusion (not a GPEN / Real-ESRGAN cascade). */
 export const restorerWeights = (model: RestorerModel | undefined): string => (model === 'ultramax' ? 'codeformer.fp16.onnx' : model === 'codeformer' ? 'CodeFormerv0.1.onnx' : model === 'gfpgan' ? 'GFPGANv1.4.onnx' : 'gpen_bfr_512.onnx');
-/** Catalog names are display labels; readiness is keyed by stable model ID. */
+/** Display names of the four restorers the engine has adapters for (an unset model is the UI's GPEN default). */
+export const RESTORER_LABELS: Record<RestorerModel, string> = { gpen: 'GPEN Realistic', codeformer: 'CodeFormer', gfpgan: 'GFPGAN v1.4', ultramax: 'UltraMax' };
+/** Only CodeFormer and UltraMax have a runtime fidelity (`w`) input; the engine rejects `fidelity_weight` for GPEN and GFPGAN. */
+export const fidelityRestorer = (model: RestorerModel | undefined): boolean => model === 'codeformer' || model === 'ultramax';
+/** Pyramid bands only exist in the multi-band and frequency-separated fusions (an unset mode is the multi-band default). */
+export const bandedBlend = (mode: BlendMode | undefined): boolean => !mode || mode === 'multi_band' || mode === 'frequency_separated';
+/** The restorer stage as these parameters run it: the selected enhancer, or off. */
+export const restorerStageLabel = (parameters: Pick<WorkstationParameters, 'restoration_blend' | 'restorer_model' | 'bypass'>): string =>
+  parameters.restoration_blend > 0 && !parameters.bypass.includes('restorer') ? RESTORER_LABELS[parameters.restorer_model ?? 'gpen'] : 'Restorer off';
+/**
+ * Catalog readiness is keyed by the stable model id. UltraMax is its own row (`ultramax`): the catalog resolves it to the registered
+ * `codeformer.fp16` artifact through the hash- and trust-verifying provider, the same check `/system/capabilities` makes.
+ */
 export function restorerAvailable(models: readonly { id?: string; model_id?: string; name: string; state: string; installed?: boolean }[] | undefined, model: RestorerModel | undefined): boolean {
   const id = model === 'gfpgan' ? 'gfpgan_v14' : model === 'gpen' || !model ? 'gpen_bfr_512' : model;
   return !!models?.some(item => item.installed !== false && item.state === 'VERIFIED_LOCAL' &&
-    ((model !== 'ultramax' && (item.id === id || item.model_id === id)) || item.name === restorerWeights(model)));
+    (item.id === id || item.model_id === id || (model !== 'ultramax' && item.name === restorerWeights(model))));
+}
+/**
+ * Does the weight file a stage has loaded belong to this restorer? The `/models/active` read-back names enhancers by registry hash id,
+ * so the file decides. CodeFormer and UltraMax load different artifacts (`CodeFormerv0.1` vs `codeformer.fp16`).
+ */
+export function restorerFileMatches(filename: string, model: RestorerModel | undefined): boolean {
+  const name = filename.toLowerCase();
+  if (model === 'ultramax') return name.startsWith('codeformer.fp16') || name.startsWith('ultramax');
+  if (model === 'codeformer') return name.startsWith('codeformer') && !name.includes('fp16');
+  if (model === 'gfpgan') return name.startsWith('gfpgan');
+  return name.startsWith('gpen');
 }
 export type WorkstationParameters = {
   expression_restore_factor?: number;
@@ -20,6 +45,12 @@ export type WorkstationParameters = {
   tps_expression_weight?: number;
   /** Compositor occlusion strategy. Omitted until the user touches it, so older requests keep the standard path. */
   occlusion_mode?: 'standard' | 'robust';
+  /** Robust occlusion only: scale of the XSeg / face-occluder "not face" vote, 0..1 (engine default 1; BiSeNet and manual masks always act in full). */
+  xseg_occlusion_strength?: number;
+  /** Seam fusion of the swapped face. Omitted until the user picks another (engine default `multi_band`). */
+  blend_mode?: BlendMode;
+  /** Bands of multi-band / frequency-separated fusion, 4..6 (engine default 4). */
+  pyramid_levels?: number;
   /** Stage 4 render mode. Omitted (= 'standard') until the user picks a 3D mode, so older requests keep their identity. */
   render_mode?: 'standard' | 'pose_3d' | 'reenactment_3d';
   /** Stage 6B swap scope: which part of the target's head the source geometry replaces. Omitted (= 'full_craniofacial') until the user picks another. */
@@ -78,6 +109,18 @@ export const DEFAULT_PARAMETERS: WorkstationParameters = {
   manual_light_yaw: 35,
   manual_light_pitch: 25,
 };
+/**
+ * The parameters a request carries. A control the current selection cannot act on stays out of it: the engine rejects a fidelity input for
+ * GPEN / GFPGAN, and the XSeg vote and the pyramid bands do nothing outside Robust occlusion / the banded fusions. The workspace keeps the
+ * value, so switching back finds it again.
+ */
+export function wireParameters<T extends Partial<WorkstationParameters>>(parameters: T): T {
+  const next: Partial<WorkstationParameters> = { ...parameters };
+  if (next.occlusion_mode !== 'robust') delete next.xseg_occlusion_strength;
+  if (!bandedBlend(next.blend_mode)) delete next.pyramid_levels;
+  if (!fidelityRestorer(next.restorer_model)) delete next.fidelity_weight;
+  return next as T;
+}
 
 /** `buffer` is the `solo_node` that `POST /api/preview` returns for this stage. `latencyKeys` are the measured fields of the preview's `latency` object that make up this stage's time. */
 export type PipelineNode = { id: string; label: string; buffer: string; note?: string; optional?: boolean; unavailable?: string; latencyKeys?: string[]; short?: string };
@@ -92,7 +135,7 @@ export const PIPELINE_NODES: PipelineNode[] = [
   { id: 'uv', label: 'Canonical UV Projection', short: 'UV Projection', buffer: 'source', latencyKeys: ['projection_ms'], note: 'The pose-matched canonical source view the identity is projected from (the engine exports this view, not the raw UV atlas)' },
   { id: 'lighting', label: 'SH 3D Relighting & Normals', short: 'SH Relight & Normals', buffer: 'sh_lighting', note: 'Spherical Harmonics scene illumination transfer and shadow mask. Use the Normals chip for the RGB surface-normal map' },
   { id: 'swap', label: 'Base 3D Swap', short: 'Base Swap', buffer: 'swapper', latencyKeys: ['swap_ms'], note: 'The swapped face before masking, restoring or grading' },
-  { id: 'restorer', label: 'UltraMax High-Res', short: 'UltraMax', buffer: 'restorer', optional: true, note: 'The selected enhancer\'s output (GPEN, CodeFormer or UltraMax) at its native resolution' },
+  { id: 'restorer', label: 'UltraMax High-Res', short: 'UltraMax', buffer: 'restorer', optional: true, note: 'The selected enhancer\'s output (GPEN, CodeFormer, GFPGAN or UltraMax) at its native resolution' },
   { id: 'matte', label: 'XSeg + Hair Occlusion Matte', short: 'XSeg + Hair Matte', buffer: 'matte', note: 'Black-and-white blend mask. XSeg and the hair/occluder matte are in it when Occlusion handling is set to Robust' },
   { id: 'final', label: 'Final Composite', short: 'Final Composite', buffer: 'final', latencyKeys: ['total_ms'], note: 'The composite exactly as a render would write it' },
 ];

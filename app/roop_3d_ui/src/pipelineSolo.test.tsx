@@ -63,7 +63,7 @@ it('offers exactly the eight pipeline stages and maps each to its server buffer'
   try {
     await act(async () => root.render(<VideoViewport target="" output="" time={0} setTime={() => {}} duration={0} enabled={false} keys={[]} previewRequest={REQUEST}/>));
     const names = [...host.querySelectorAll('.pipeline-node .node-select')].map(node => node.getAttribute('aria-label'));
-    expect(names).toEqual(['Solo Raw Target', 'Solo 6DoF 3D Mesh & Pose', 'Solo Canonical UV Projection', 'Solo SH 3D Relighting & Normals', 'Solo Base 3D Swap', 'Solo UltraMax High-Res', 'Solo XSeg + Hair Occlusion Matte', 'Solo Final Composite']);
+    expect(names).toEqual(['Solo Raw Target', 'Solo 6DoF 3D Mesh & Pose', 'Solo Canonical UV Projection', 'Solo SH 3D Relighting & Normals', 'Solo Base 3D Swap', 'Solo Restorer off', 'Solo XSeg + Hair Occlusion Matte', 'Solo Final Composite']);   // the restorer card follows the selected enhancer (blend 0 = off)
     expect([...host.querySelectorAll('.pipeline-node .node-index')].map(node => node.textContent)).toEqual(['1', '2', '3', '4', '5', '6', '7', '8']);
     expect(PIPELINE_NODES.map(node => node.buffer)).toEqual(['detector', 'pose', 'source', 'sh_lighting', 'swapper', 'restorer', 'matte', 'final']);
   } finally { await act(async () => root.unmount()); host.remove(); vi.unstubAllGlobals(); }

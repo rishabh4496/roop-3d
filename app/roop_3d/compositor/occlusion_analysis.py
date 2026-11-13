@@ -10,6 +10,9 @@ Evidence from real local footage (``docs/OCCLUSION_STAGE5.md``) drives three des
    ``min`` (a pixel is face only if both agree), so disagreement keeps the original target pixels.
 3. Every result carries a confidence, a tier and human-readable reasons; callers must never be
    told a stronger tier than what ran.
+4. ``xseg_occlusion_strength`` (0..1) scales only the visible-face-network "not face" subtraction (host NumPy maps;
+   no GPU-resident fusion). 0 removes it, 1 is the unscaled behaviour. Semantic and explicit occluders are always
+   unioned at full strength, and a disabled subtraction lowers the reported tier instead of claiming ``full``.
 
 Tiers: ``full`` (parser + networks), ``semantic`` (parser only), ``neural`` (networks define shape),
 ``geometric`` (landmark hull only, occlusion unverified).
@@ -44,6 +47,7 @@ class FaceAnalysis:
     nets_used: tuple[str, ...] = ()
     parser_trusted: bool = False
     visible_fraction: float | None = None  # fraction of the face hull the networks call visible
+    xseg_occlusion_strength: float = 1.0   # strength actually applied to the visible-face-network subtraction
     timing_ms: dict[str, float] = field(default_factory=dict)
 
 
@@ -60,6 +64,19 @@ def _interior_weight(hull: np.ndarray, fraction: float = 0.06, border_trust: flo
     interior = cv2.GaussianBlur(core.astype(np.float32), (2 * radius + 1,) * 2, radius / 2.0)
     inside = np.clip(hull * 2.0, 0.0, 1.0)
     return (inside * (border_trust + (1.0 - border_trust) * interior)).astype(np.float32)
+
+
+def _validated_strength(value: float) -> float:
+    """``xseg_occlusion_strength`` as a float in 0..1 (0 disables network subtraction, 1 is full strength)."""
+    if isinstance(value, bool):
+        raise DomainError("XSEG_OCCLUSION_STRENGTH_INVALID", "xseg_occlusion_strength must be a number within 0..1", 422)
+    try:
+        strength = float(value)
+    except (TypeError, ValueError) as error:
+        raise DomainError("XSEG_OCCLUSION_STRENGTH_INVALID", "xseg_occlusion_strength must be a number within 0..1", 422) from error
+    if not np.isfinite(strength) or not 0.0 <= strength <= 1.0:
+        raise DomainError("XSEG_OCCLUSION_STRENGTH_INVALID", "xseg_occlusion_strength must be a number within 0..1", 422)
+    return strength
 
 
 class OcclusionAnalyzer:
@@ -102,8 +119,9 @@ class OcclusionAnalyzer:
     def analyze(self, crop: np.ndarray, landmarks: np.ndarray | None, *, feather_px: float = 5.0,
                 confidence_threshold: float = 0.55, explicit_front: np.ndarray | None = None,
                 border_trust: float = 0.6, track_id: int | None = None, trust_frames: int = 3,
-                mesh_support: np.ndarray | None = None) -> FaceAnalysis:
+                mesh_support: np.ndarray | None = None, xseg_occlusion_strength: float = 1.0) -> FaceAnalysis:
         began = time.perf_counter()
+        xseg_strength = _validated_strength(xseg_occlusion_strength)
         height, width = crop.shape[:2]
         shape = (height, width)
         hull = landmark_hull_mask(shape, landmarks, feather_px=feather_px)
@@ -176,9 +194,11 @@ class OcclusionAnalyzer:
             face_alpha = semantic.alpha
             skin = regions.get("skin") * support
             protect = restoration_protection(regions, crop)
-            if visible is not None:
-                net_front = (1.0 - visible) * _interior_weight(hull, border_trust=border_trust) * support
+            if visible is not None and xseg_strength > 0.0:
+                net_front = (1.0 - visible) * _interior_weight(hull, border_trust=border_trust) * support * xseg_strength
                 tier = "full"
+            elif visible is not None:
+                net_front, tier = None, "semantic"       # networks ran only as the parser cross-check
             else:
                 net_front, tier = None, "semantic"
                 reasons.append("NETWORKS_UNAVAILABLE")
@@ -191,12 +211,19 @@ class OcclusionAnalyzer:
             face_alpha = cv2.GaussianBlur(grown, (blur, blur), max(feather_px, 0.5))
             front = explicit                                                    # the visible region is already unoccluded
             tier = "neural"
-        elif visible is not None:
+        elif visible is not None and xseg_strength > 0.0:
             regions, skin, protect = None, zeros, None
             face_alpha = hull
             # The networks define both shape and occlusion here, so they act across the whole hull.
-            front = combine_occluders((1.0 - visible) * support, explicit)
+            front = combine_occluders((1.0 - visible) * support * xseg_strength, explicit)
             tier = "neural"
+        elif visible is not None:
+            # Strength 0 with no trusted parser: nothing verifies occlusion, so this is the landmark-hull tier.
+            regions, skin, protect = None, zeros, None
+            face_alpha = hull
+            front = explicit
+            tier = "geometric"
+            reasons.append("OCCLUSION_UNVERIFIED")
         else:
             regions, skin, protect = None, zeros, None
             face_alpha = hull
@@ -231,13 +258,17 @@ class OcclusionAnalyzer:
         confidence = float(np.clip(min(parts), 0.0, 1.0))
         if visible_fraction is not None and visible_fraction < 0.15:
             reasons.append("FACE_MOSTLY_HIDDEN")
+        if xseg_strength < 1.0:
+            reasons.append("XSEG_OCCLUSION_DISABLED" if xseg_strength == 0.0
+                           else f"XSEG_OCCLUSION_STRENGTH_{xseg_strength:.2f}")
         timing["total"] = (time.perf_counter() - began) * 1000
         self.frames_analysed += 1
         return FaceAnalysis(face_alpha=np.clip(face_alpha, 0, 1).astype(np.float32),
                             occluder=None if front is None else np.clip(front, 0, 1).astype(np.float32),
                             skin=np.clip(skin, 0, 1).astype(np.float32), regions=regions, protect=protect,
                             confidence=confidence, tier=tier, reasons=tuple(reasons), nets_used=tuple(names),
-                            parser_trusted=parser_trusted, visible_fraction=visible_fraction, timing_ms=timing)
+                            parser_trusted=parser_trusted, visible_fraction=visible_fraction, timing_ms=timing,
+                            xseg_occlusion_strength=xseg_strength)
 
     def capability(self) -> dict:
         parser = self.parser.capability() if hasattr(self.parser, "capability") else {"weights": "UNKNOWN"}
@@ -248,6 +279,9 @@ class OcclusionAnalyzer:
         return {"parser": parser, "visible_face_networks": [net.capability() for net in self.nets],
                 "unavailable": sorted(self._unavailable), "frames_analysed": self.frames_analysed,
                 "teeth": "HEURISTIC_ONLY (the parser has no teeth class)",
+                "tongue": "UNAVAILABLE (no tongue class or model; mouth interior is one parser class)",
+                "xseg_occlusion_strength": "0..1 per call; scales the visible-face-network (XSeg / face occluder) "
+                                           "subtraction on host NumPy maps; 0 disables it, 1 is full strength",
                 "foreground_objects": "visible-face networks only (no object-class model is installed)"}
 
     def release(self) -> None:

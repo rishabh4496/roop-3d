@@ -443,9 +443,11 @@ def test_donor_history_keeps_recent_frames_and_ignores_seeks_and_replays():
 def _compose(frame, target, source, hair, scope="full_craniofacial", skull_blend=1.0, history=(), background_donors=None):
     """``history`` = earlier frames as (image, target, source, hair) tuples, each with ITS OWN masks, composed first by the same
     compositor so it accumulates its donor history exactly as a video job would."""
+    from roop_3d.compositor.boundary_fusion import BlendMode
     from roop_3d.compositor.occlusion_analysis import FaceAnalysis
     from roop_3d.compositor.face_regions import FaceRegions
     from roop_3d.compositor.pipeline import CompositeOptions, FrameCompositor, RobustOptions
+    from roop_3d.tests.test_occlusion_compositor import _StubParser
     zeros = np.zeros((SIDE, SIDE), np.float32)
 
     current = {}
@@ -461,8 +463,11 @@ def _compose(frame, target, source, hair, scope="full_craniofacial", skull_blend
     def item_for(source_mask, target_mask):
         return SimpleNamespace(track_id=1, image=np.full_like(frame, 210), inverse=np.eye(2, 3), coverage=source_mask,
                                full_head=True, target_silhouette=target_mask, source_silhouette=source_mask)
-    compositor = FrameCompositor(analyzer=Analyzer())
-    options = CompositeOptions(color_strength=0, feather_px=0, swap_scope=scope, skull_blend=skull_blend,
+    # Geometry has explicit analysis above; do not run real neural parsing on a flat fixture.
+    compositor = FrameCompositor(analyzer=Analyzer(), parser=_StubParser(background=True))
+    # This geometry test measures exact source coverage, not multiband seam colour.
+    options = CompositeOptions(mode=BlendMode.FEATHER, color_strength=0, feather_px=0, hair_matting=False,
+                               swap_scope=scope, skull_blend=skull_blend,
                                robust=RobustOptions(analysis_size=SIDE, refine_matte=False, edge_decontamination=False,
                                                     sharpness_matching=False, local_illumination=0, texture_strength=0))
     try:

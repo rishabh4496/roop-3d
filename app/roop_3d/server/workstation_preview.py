@@ -386,11 +386,14 @@ class PreviewService:
                         'profile': admission.profile, 'provider': admission.provider,
                         'notes': ['Single-frame preview, tracking and compositor replayed from frame zero.' if replay else 'Single-frame preview, seeked to playhead keyframe; temporal smoothing resets per variant.',
                                   'Mesh blend: TPS at 0, perspective 3D proxy projection at 1; canonical geometry and camera are estimates.' if parameters.pose_mode == 'mesh_blend' else 'Reference retarget mode: observed dense landmarks; mesh projection is not selected.',
-                                  'Matte uses the reference BiSeNet parser with landmark-hull fallback; no XSeg adapter.']}
-            fallbacks = sorted({item.fallback_reason for item in result.replacements
-                                if item.fallback_reason and item.fallback_reason.startswith('DENSE_FACE_')})
+                                  'Matte uses the reference BiSeNet parser with landmark-hull fallback; robust mode adds an XSeg adapter where its report says it ran.']}
+            fallbacks = sorted({item.fallback_reason for item in result.replacements if item.fallback_reason})
             response['notes'].extend(f'3D mode not applied in this preview: {reason}' for reason in fallbacks)
             response['faces'] = face_readouts(result)
+            def restoration_report() -> dict:
+                # Observed outcomes of this preview's restorer (applied / explicit bypass / failed), when it keeps any.
+                telemetry = getattr(getattr(session.compositor, 'restorer', None), 'telemetry', None)
+                return {'restoration': telemetry.snapshot()} if telemetry is not None else {}
             if value.x and value.y:
                 cells = []
                 for row, y in enumerate(value.y.values):
@@ -412,7 +415,7 @@ class PreviewService:
                             buffers['final'] = Finisher(value.request.export.finishing).apply(buffers['final'], frame_index)
                         cells.append({'row': row, 'column': column, 'coordinates': coordinates,
                                       'parameters': cell.model_dump(), 'image': pack(buffers['final'])})
-                return {**response, 'cells': cells}
+                return {**response, 'cells': cells, **restoration_report()}
             check()
             # Interactive final previews consume no diagnostic buffers. Capturing them projects every
             # compositor stage to full resolution and synthesizes normal/lighting maps unnecessarily.
@@ -422,7 +425,7 @@ class PreviewService:
                 buffers['final'] = Finisher(value.request.export.finishing).apply(buffers['final'], frame_index)
             if final_only:
                 return {**response, 'buffers': {'final': pack(buffers['final'])},
-                        'parameters': parameters.model_dump(), 'latency': result.latency.__dict__}
+                        'parameters': parameters.model_dump(), 'latency': result.latency.__dict__, **restoration_report()}
             detection, pose = frame.image.copy(), frame.image.copy()
             for tracked in result.observations:
                 face = tracked.observation
@@ -466,13 +469,13 @@ class PreviewService:
             replacement = result.replacements[0] if result.replacements else None
             source = (session.swapper.sources_by_track.get(replacement.track_id, sources.get(replacement.track_id)) if value.request.face_segments and replacement else sources.get(replacement.track_id) if replacement else None)
             if source is None:
-                return {**response, 'buffers': {key: pack(image) for key, image in buffers.items()}, 'parameters': parameters.model_dump(), 'latency': result.latency.__dict__}
+                return {**response, 'buffers': {key: pack(image) for key, image in buffers.items()}, 'parameters': parameters.model_dump(), 'latency': result.latency.__dict__, **restoration_report()}
             view = next((view for view in source.views if view.index == replacement.reference_index), source.views[0])
             source_image = cv2.imdecode(np.frombuffer(view.image_bytes, np.uint8), cv2.IMREAD_COLOR)
             if source_image is not None:
                 buffers['source'] = source_image
             return {**response, 'buffers': {key: pack(image) for key, image in buffers.items()},
-                    'parameters': parameters.model_dump(), 'latency': result.latency.__dict__}
+                    'parameters': parameters.model_dump(), 'latency': result.latency.__dict__, **restoration_report()}
         finally:
             try:
                 if session is not None:

@@ -42,29 +42,38 @@ def low_pass_correlation(a, b):
     return float(np.corrcoef(la, lb)[0, 1])
 
 
-def test_left_right_lighting_and_low_frequency_shape_follow_the_target():
+def test_left_right_lighting_and_low_frequency_shape_follow_the_target(record_property):
     swap, target = scene()
     out = shading_gain_match(swap, target, ALPHA)
+    correlation = low_pass_correlation(out, target)
+    record_property("low_pass_correlation", correlation)
     assert side_ratio(swap) == pytest.approx(1.0, abs=0.03)
     assert side_ratio(out) == pytest.approx(side_ratio(target), abs=0.04)          # was ~1.0 against ~0.75
-    assert low_pass_correlation(out, target) > low_pass_correlation(swap, target) + 0.2
-    assert low_pass_correlation(out, target) > 0.95
+    assert correlation > low_pass_correlation(swap, target) + 0.2
+    assert correlation > 0.95
 
 
-def test_the_rim_continues_into_the_surrounding_head_luma():
+def test_the_rim_continues_into_the_surrounding_head_luma(record_property):
     swap, target = scene()
     out = shading_gain_match(swap, target, ALPHA)
     rim = cv2.erode(FACE.astype(np.uint8), np.ones((9, 9), np.uint8)).astype(bool) & ~cv2.erode(
         FACE.astype(np.uint8), np.ones((29, 29), np.uint8)).astype(bool)
     before, after, goal = (luma(x)[rim].mean() for x in (swap, out, target))
+    record_property("rim_before", float(before))
+    record_property("rim_after", float(after))
+    record_property("rim_goal", float(goal))
+    record_property("rim_error_ratio", float(abs(after - goal) / abs(before - goal)))
     assert abs(after - goal) < abs(before - goal) * 0.6
 
 
-def test_only_low_frequencies_change_and_the_mean_is_left_to_the_colour_step():
+def test_only_low_frequencies_change_and_the_mean_is_left_to_the_colour_step(record_property):
     swap, target = scene()
     out = shading_gain_match(swap, target, ALPHA)
     inner = ALPHA > 0.9
-    assert luma(out)[inner].mean() == pytest.approx(luma(swap)[inner].mean(), rel=0.03)
+    before, after = (float(luma(x)[inner].mean()) for x in (swap, out))
+    record_property("mean_before", before)
+    record_property("mean_after", after)
+    assert after == pytest.approx(before, rel=0.03)
     high = lambda x: luma(x) - cv2.GaussianBlur(luma(x), (0, 0), 4)
     assert high(out)[inner].std() == pytest.approx(high(swap)[inner].std(), rel=0.2)   # multiplicative, so detail scales with local light
 

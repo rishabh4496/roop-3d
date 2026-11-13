@@ -1,4 +1,9 @@
-"""Finite-safe crop warping and feather, multi-band or Poisson boundary fusion."""
+"""Finite-safe crop fusion: four-band Laplacian blending and inward anatomical SDF feathers.
+
+Anatomy comes from the caller's measured landmarks, semantic face mask or rasterized
+coverage, never from an inferred unseen silhouette. Pyramid reconstruction cannot
+write into a zero-alpha foreground veto or outside the finite blend support.
+"""
 from __future__ import annotations
 
 from enum import Enum
@@ -44,6 +49,31 @@ def warp_crop(crop: np.ndarray, inverse: np.ndarray, frame_shape: tuple[int, ...
 
 
 
+def feather_anatomical_mask(mask: np.ndarray, feather_px: float) -> np.ndarray:
+    """Smoothstep an observed contour's signed distance inward without growing its support.
+
+    Soft probabilities remain an upper bound. Without a confident contour (> 0.5)
+    there is no anatomical edge to reconstruct, so the supplied matte is retained.
+    Zero padding treats a crop edge as an actual limit rather than infinite skin.
+    """
+    value = np.asarray(mask, np.float32)
+    if value.ndim != 2 or not np.isfinite(value).all():
+        raise DomainError("COMPOSITOR_MASK_INVALID", "Anatomical alpha must be a finite 2-D mask", 422)
+    if not np.isfinite(feather_px) or feather_px < 0:
+        raise ValueError("Anatomical feather must be finite and nonnegative")
+    value = np.clip(value, 0.0, 1.0)
+    support = value > 0.5
+    if feather_px == 0 or not support.any():
+        return value
+    padded = np.pad(support.astype(np.uint8), 1, mode="constant")
+    inside = cv2.distanceTransform(padded, cv2.DIST_L2, 5)
+    outside = cv2.distanceTransform(1 - padded, cv2.DIST_L2, 5)
+    signed_distance = (inside - outside)[1:-1, 1:-1]
+    ramp = np.clip(signed_distance / float(feather_px), 0.0, 1.0)
+    ramp *= ramp * (3.0 - 2.0 * ramp)
+    return np.minimum(value, ramp).astype(np.float32)
+
+
 def _bounds(alpha: np.ndarray, margin: int) -> tuple[int, int, int, int] | None:
     ys, xs = np.where(alpha > 1e-5)
     if len(xs) == 0:
@@ -57,13 +87,21 @@ def _pyramid_blend(target: np.ndarray, source: np.ndarray, alpha: np.ndarray, le
     max_levels = max(1, int(np.floor(np.log2(max(2, min(target.shape[:2]))))) - 1)
     count = max(1, min(int(levels), max_levels))
     target_f, source_f = target.astype(np.float32), source.astype(np.float32)
-    gauss_t, gauss_s, gauss_m = [target_f], [source_f], [alpha.astype(np.float32)]
-    for _ in range(count):
+    # Build the source's Gaussian levels from observed samples only. Filling
+    # hidden/warped-out pixels with the target bakes an artificial target-colour
+    # edge into the source Laplacian bands, including their finest detail.
+    source_weight = np.where(alpha > 1e-5, alpha, 0).astype(np.float32)
+    numerator = source_f * source_weight[..., None]
+    gauss_t, gauss_s, gauss_m = [target_f], [source_f], [source_weight]
+    # ``levels`` counts the base Gaussian too: four levels mean three
+    # reductions, not a fifth/coarser band bleeding target light into the face.
+    for _ in range(count - 1):
         if min(gauss_t[-1].shape[:2]) < 4:
             break
         gauss_t.append(cv2.pyrDown(gauss_t[-1]))
-        gauss_s.append(cv2.pyrDown(gauss_s[-1]))
         gauss_m.append(cv2.pyrDown(gauss_m[-1]))
+        numerator = cv2.pyrDown(numerator)
+        gauss_s.append(numerator / np.maximum(gauss_m[-1], 1e-8)[..., None])
     lap_t, lap_s = [], []
     for stack, laps in ((gauss_t, lap_t), (gauss_s, lap_s)):
         for index in range(len(stack) - 1):
@@ -81,7 +119,7 @@ def _pyramid_blend(target: np.ndarray, source: np.ndarray, alpha: np.ndarray, le
 
 
 def fuse_crop(frame: np.ndarray, crop: np.ndarray, inverse: np.ndarray, mask: np.ndarray, *,
-              mode: BlendMode | str = BlendMode.FEATHER, levels: int = 4,
+              mode: BlendMode | str = BlendMode.MULTI_BAND, levels: int = 4,
               linear_light: bool = False, transfer: str = "srgb", interpolation: str = "lanczos4") -> np.ndarray:
     """Composite a transformed crop and guarantee byte-identical pixels outside its dilated ROI."""
     target = np.asarray(frame)
@@ -97,7 +135,7 @@ def fuse_crop(frame: np.ndarray, crop: np.ndarray, inverse: np.ndarray, mask: np
 
 
 def fuse_warped(target: np.ndarray, source: np.ndarray, alpha: np.ndarray, *,
-                mode: BlendMode | str = BlendMode.FEATHER, levels: int = 4, linear_light: bool = False,
+                mode: BlendMode | str = BlendMode.MULTI_BAND, levels: int = 4, linear_light: bool = False,
                 transfer: str = "srgb") -> np.ndarray:
     """Blend an already frame-space ``source``/``alpha`` pair into ``target`` (uint8 BGR).
 
@@ -135,7 +173,10 @@ def fuse_warped(target: np.ndarray, source: np.ndarray, alpha: np.ndarray, *,
             mixed = _pyramid_blend(target_roi, source_roi, alpha_roi, levels)
     elif blend_mode == BlendMode.FREQUENCY:
         from roop_3d.compositor.frequency_blend import FrequencyBlendOptions, frequency_blend
-        mixed = frequency_blend(target_roi, source_roi, alpha_roi, FrequencyBlendOptions(levels=max(2, min(levels, 8))))
+        # The compositor already performs skin/nose-only colour transfer. Do not
+        # run a second, face-wide LAB estimate over eyes, lips or occluders here.
+        mixed = frequency_blend(target_roi, source_roi, alpha_roi,
+                                FrequencyBlendOptions(levels=max(2, min(levels, 8)), color_strength=0.0))
     elif blend_mode == BlendMode.POISSON:
         binary = (alpha_roi > 0.05).astype(np.uint8) * 255
         if int(binary.sum()) == 0 or min(binary.shape) < 2:
@@ -148,11 +189,8 @@ def fuse_warped(target: np.ndarray, source: np.ndarray, alpha: np.ndarray, *,
                 mixed = mix(source_roi)
     else:
         mixed = mix(source_roi)
-    # Pyramid reconstruction and Poisson gradients can spread beyond nonzero alpha.
-    # Clamp their write footprint to the explicitly dilated blend support.
-    radius = max(1, margin)
-    dilate_kernel = np.ones((2 * radius + 1, 2 * radius + 1), np.uint8)
-    allowed = cv2.dilate((alpha > 1e-5).astype(np.uint8), dilate_kernel)[y0:y1, x0:x1] > 0
+    # Preserve explicit/semantic foreground holes even inside the pyramid ROI.
+    allowed = alpha_roi > 1e-5
     mixed[~allowed] = target_roi[~allowed]
     output = target.copy()
     output[y0:y1, x0:x1] = np.clip(np.nan_to_num(mixed, nan=0.0, posinf=255.0, neginf=0.0), 0, 255).round().astype(np.uint8)

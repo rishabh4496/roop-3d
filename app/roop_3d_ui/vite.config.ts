@@ -5,5 +5,5 @@ export default defineConfig({
     // framer-motion ships `"use client"` (a React Server Components hint). This is a client-only SPA, so the directive is a
     // no-op and the bundler's "may not be preserved" notice is noise. Every other warning still surfaces.
     onwarn(warning, warn) { if (warning.code === 'MODULE_LEVEL_DIRECTIVE') return; warn(warning); },
-    output: { manualChunks: (id: string) => (id.includes('/three') || id.includes('@react-three')) ? 'three' : undefined } } },
+    output: { manualChunks: (id: string) => id.includes('/node_modules/three/') ? 'three' : id.includes('/node_modules/@react-three/') ? 'react-three' : id.includes('/node_modules/three-stdlib/') ? 'three-stdlib' : id.includes('/src/components/three/') ? 'three-viewers' : undefined } } },
 });

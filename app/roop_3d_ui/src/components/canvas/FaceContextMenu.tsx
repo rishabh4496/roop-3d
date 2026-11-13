@@ -4,7 +4,7 @@ import type { ExtractFromFrameResult } from '../../api';
 
 export type FaceDestination = ExtractFromFrameResult['destination'];
 /** Stage 12 target actions, shown when the host provides `onTargetAction`. */
-export type TargetAction = 'lock_primary' | 'add_angle' | 'bind_source' | 'exclude' | 'bind_specific' | 'toggle_ultramax' | 'toggle_pose_lock' | 'solo_mask' | 'person_models';
+export type TargetAction = 'lock_primary' | 'add_angle' | 'bind_source' | 'exclude' | 'bind_specific' | 'toggle_ultramax' | 'toggle_pose_lock' | 'solo_mask';
 /** Extra detail for an action: the FaceSet a `bind_specific` action maps this person to. */
 export type TargetActionExtra = { facesetId?: string };
 export type FaceMenuTarget = {
@@ -129,10 +129,6 @@ export default function FaceContextMenu({ target, activeSourceName, busy = false
         <button type="button" role="menuitemcheckbox" aria-checked={maskSolo} disabled={!target.faceKey} onClick={() => act('solo_mask')}
           title="Show only this face's mask and mesh, dim the others, and open the matte view">
           <span aria-hidden="true">◐</span> {maskSolo ? 'Show all face masks' : 'Solo this face mask'}
-        </button>
-        <button type="button" role="menuitem" onClick={() => act('person_models')}
-          title="Pin a different swapper model and enhancer to this person">
-          <span aria-hidden="true">🎛</span> Swapper &amp; enhancer for this person…
         </button>
       </>}
     </div>

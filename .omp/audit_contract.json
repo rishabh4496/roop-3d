@@ -1,0 +1,210 @@
+{
+  "schema_version": 1,
+  "repository": "roop-3d",
+  "audit_status": "source-traced; final verification running",
+  "locality": {
+    "write_scope": "G:\\pinokio\\api\\roop-3d only",
+    "sibling_roop_ultimate": "external/read-only; no edits or model writes permitted"
+  },
+  "execution_graph": [
+    {
+      "path": "reference_jobs",
+      "entrypoints": [
+        "app/roop_3d/server/app.py:create_app",
+        "app/roop_3d/jobs/worker.py:JobWorker",
+        "app/roop_3d/engine/pipeline_runner.py:MasterPipelineRunner.run_prepared",
+        "app/roop_3d/async_pipeline/reference.py:ReferenceStages"
+      ],
+      "stages": ["track", "swap", "composite", "write"],
+      "queue": "JobStore/JobWorker; bounded AsyncPipeline queues; optional PinnedFramePool"
+    },
+    {
+      "path": "preview",
+      "entrypoints": [
+        "app/roop_3d/server/workstation_preview.py:PreviewService._render",
+        "app/roop_3d/engine/volumetric/session.py:ReferencePipeline"
+      ],
+      "notes": "Reference session replay; 6GB preview caps the long edge at 512; preview is not the FFmpeg stream runner."
+    },
+    {
+      "path": "stream_video_jobs",
+      "entrypoints": [
+        "app/roop_3d/pipeline/video_job_runner.py:EndToEndVideoJobRunner.run_prepared",
+        "app/roop_3d/pipeline/session_adapter.py:SessionFrameProcessor.process",
+        "app/roop_3d/pipeline/photorealistic_swap_core.py:Photorealistic3DSwapCore"
+      ],
+      "stages": ["FFmpeg BGR24 decode", "detection/track", "3D-conditioned swap", "mask/composite/restoration", "FFmpeg encode/mux"]
+    },
+    {
+      "path": "batch_matrix",
+      "ui": "app/roop_3d_ui/src/screens/BatchMatrixScreen.jsx:dispatchBatch posts each generated request to /api/v1/jobs",
+      "active_execution": "JobStore/JobWorker",
+      "separate_api": "app/roop_3d/server/queue_routes.py:/batch/submit expands BatchMatrixEngine manifests into QueueManager rows; this is a separate queue API, not the current BatchMatrixScreen dispatch path.",
+      "matrix_contract": "Per-file and recipe matrix generation validate WorkstationParameters; effective restorer is serialized as restorer_model and controls output naming."
+    }
+  ],
+  "identity_asset": {
+    "routes": "app/roop_3d/server/identity_assets.py; /api/v1/facesets/{id}/identity-asset and /mesh",
+    "mesh_signature": "identity_asset_mesh(faceset_id, request, template='canonical', topology=None, jaw_width=0, cheekbone_prominence=0, chin_projection=0, nose_bridge=0, brow_arch=0, face_fullness=0, albedo_prior=False)",
+    "build_signature": "build_identity_asset(document, settings, *, occlusion_masks=None, report=None)",
+    "store_signature": "IdentityAssetStore.get_or_build(document, settings=None, *, occlusion_masks=None) -> (IdentityAsset, reused)",
+    "template": "MakeHumanHeadModel.load(path=None, auto_build=False, verify=True); pinned CC0-1.0 source data; MakeHuman is explicitly selected/built, not the identity-asset default.",
+    "settings": "IdentityAssetSettings.uv_size defaults to 512 (maximum 2048); template defaults canonical; MakeHuman mesh fitting supports multi-view observations.",
+    "uv": "UVSynthesizer(mesh, uv_size=512, visibility_threshold=0.05, max_interpolation_fraction=None, blend_mode='weighted', visibility_backend='cpu', intrinsic_texture_decomposer=None); multi-view visibility/quality-weighted BGR synthesis; Telea inpainting for face-geometry holes; non-face unseen texels stay zero/UNSEEN.",
+    "data_contract": {
+      "vertices": "(V,3) float32",
+      "faces": "(F,3) int32",
+      "uvs": "(V,2) float32",
+      "texture": "(Huv,Wuv,3) uint8 BGR",
+      "texel_state": "(Huv,Wuv) uint8",
+      "view_textures": "(N,256,256,3) uint8 BGR"
+    },
+    "integration_gap": "A01 connected explicit asset sessions: prepare_session may build/reuse a supplied IdentityAssetStore asset or load its exact cached asset, validates build key/FaceSet/source hashes, and creates IdentityRig. Explicit pose_3d uses the identity-asset projector; reenactment_3d uses ReenactmentEngine. Missing/mismatched assets report rig_status and retain an explicit canonical-proxy fallback. The mesh API remains a separate viewer/export route; FullHeadEngine remains disabled."
+  },
+  "interfaces": {
+    "frame": {"shape": "(H,W,3)", "dtype": "uint8", "color": "BGR"},
+    "replacement_crop": {"shape": "(S,S,3)", "dtype": "uint8", "color": "BGR"},
+    "landmark_hull_mask": {"shape": "(H,W)", "dtype": "float32", "range": "0..1"},
+    "bisenet_input": {"shape": "(1,3,512,512)", "dtype": "float32", "color": "RGB", "normalization": "zero_one, minus_one_one, or ImageNet, configured per parser"},
+    "bisenet_output": {"graph_layout": "(1,19,H,W) or (1,H,W,19)", "consumer_layout": "(H,W,19)", "dtype": "float32 probabilities"},
+    "visible_face_input": {"shape": "(1,256,256,3)", "dtype": "float32", "layout": "NHWC", "color": "BGR by default", "normalization": "/255"},
+    "visible_face_output": {"shape": "(H,W)", "dtype": "float32", "meaning": "1 visible face, 0 non-visible"},
+    "ultramax_input": {"graph": "(1,3,512,512) FP16 image + scalar w DOUBLE for the registered codeformer.fp16.onnx record", "layout": "NCHW RGB", "normalization": "[-1,1] by default"},
+    "ultramax_output": {"graph": "(1,3,512,512) FP16 RGB", "adapter_output": "(S,S,3) uint8 BGR; S=max(input crop side, spec.size)"},
+    "neural_face": "NeuralFaceEngine.process(image, face, document, swapper, *, track_id, frame_index=None, timestamp=None, scene_cut=False, pose_confidence=1.0); BGR uint8 image/crop; source/target camera-space geometry and rasterized correspondence fields are float32 NumPy arrays.",
+    "compositor": "FrameCompositor.compose(frame, replacements, landmarks_by_track=None, *, scene_cut=False, frame_index=None, occluder_masks=None, mask_temporal_context=None, lip_sync_results=None, options=CompositeOptions(), observer=None, background_donors=None) -> uint8 BGR frame; defaults now use four-level MULTI_BAND and CompositeOptions.xseg_occlusion_strength=1.0",
+    "occlusion": "OcclusionAnalyzer.analyze(crop, landmarks, *, feather_px=5.0, confidence_threshold=0.55, explicit_front=None, border_trust=0.6, track_id=None, trust_frames=3, mesh_support=None, xseg_occlusion_strength=1.0) -> FaceAnalysis; strength is 0..1 and scales neural visible-face subtraction only",
+    "restorer_registry": "ModelCatalog.ultramax_spec() resolves load_ultramax_spec(pin_root); ModelCatalog.weight_available(model_id, filename) checks the verified provider path used for availability.",
+    "restoration_telemetry": "Observed applied/bypassed/failed outcomes, mean latency/inference time, and last event; asynchronous device dispatch explicitly reports latency as unmeasured.",
+    "workstation_parameters": "WorkstationParameters adds xseg_occlusion_strength (float 0..1, default 1.0), blend_mode (enum, default multi_band), and pyramid_levels (int 4..6, default 4); composite_options() passes them to CompositeOptions.",
+    "live_preview_payload": "LivePreviewPayload carries the same three fields; cache digest/applied list include them; incompatible frequency_separated combinations are rejected and inert fields are reported in meta.unsupported."
+  },
+  "ui_status": {
+    "live_controls": ["xseg_occlusion_strength", "blend_mode", "pyramid_levels", "feather_px", "fidelity_weight"],
+    "diagnostic_overlays": "No new mesh wireframe, semantic+XSeg probability overlay, seam ring, or pre/post UltraMax split. Preview exposes pose/matte/swapper/restorer buffers, but not the missing geometry/probability/ring data.",
+    "limitations": ["no tongue model", "no source pigment detector", "no five-zone LAB", "no FullHeadEngine", "no end-to-end GPU-resident tensor chain"]
+  },
+  "findings": [
+    {
+      "id": 1,
+      "state": "partial",
+      "evidence": ["landmark_hull_mask uses Gaussian feathering; BiSeNet classes and occluder subtraction remain available", "CompositeOptions now defaults to four-level MULTI_BAND; zero-alpha occluder pixels are restored after pyramid reconstruction", "color/detail sampling uses trusted skin class 1 plus nose class 10; insufficient trusted skin is reported rather than replaced by full-face color statistics", "signed-distance anatomical feathering and confidence/energy-gated target DoG microtexture retention are implemented"],
+      "gap": "No spatial five-zone LAB matching or dedicated target/source pigment detector. Source marks can only come from an actual textured 3D source route."
+    },
+    {
+      "id": 2,
+      "state": "partial",
+      "evidence": ["BiSeNet adapter returns 19-class probabilities; FaceRegions maps skin/brows/eyes/glasses/ears/nose/mouth/lips/neck/clothing/hair/hat", "landmark and dense geometry paths use 5/106/68-point observations; 478-point gaze detail is optional in FullHeadEngine"],
+      "gap": "Parser has no tongue or teeth class (teeth remain a heuristic used only for restoration protection). Target oral-cavity preservation is not a general post-swap composite operation. IdentityRig expression deformation is now reachable through explicitly selected identity-asset/reenactment modes, not every standard render."
+    },
+    {
+      "id": 3,
+      "state": "partial",
+      "evidence": ["NeuralFaceEngine uses source/target depth-tested correspondence and rasterized coverage; FullHeadEngine uses solvePnPRansac + LM refinement and GPU depth/UV rasterization", "FrameCompositor warps crops into frame space and preserves pixels outside the dilated blend support", "full-head silhouette replacement has donor-based/multiscale inpainting and reports changed pixels"],
+      "gap": "Dense-asset absence and roll beyond ROOP3D_3D_MAX_ROLL (default 40 degrees) still route to standard 2D. Explicit pose_3d now uses the validated identity-asset projector when available; missing assets use a reported canonical-proxy fallback. FullHeadEngine remains disabled and end-to-end zero-halo behavior is not established."
+    },
+    {
+      "id": 4,
+      "state": "partial",
+      "evidence": ["automatic dense 3D trigger defaults to yaw >30 degrees or pitch >25 degrees; roll >40 degrees falls back to standard 2D", "FaceSet source views and depth-tested correspondence provide multi-view appearance; target high-frequency skin texture can be reinjected and skin detail can be transferred"],
+      "gap": "No explicit target mole/freckle detector or source pigment re-anchoring was found. Target texture retention is a high-pass/skin-mask mechanism, not a source mole projection. FullHeadEngine animation and observed-pose coverage are constrained by measured landmarks/views; 80-degree performance is not guaranteed by the session routing."
+    },
+    {
+      "id": 5,
+      "state": "corrected_by_a04_verification_pending",
+      "evidence": ["reference, preview, video, and optimized paths now resolve UltraMax through ModelCatalog.ultramax_spec() -> load_ultramax_spec(pin_root)", "codeformer.fp16 is registered as an UltraMax alias; system capability uses ModelCatalog.weight_available against the verified provider path", "observed applied/bypassed/failed outcomes and latency telemetry are recorded; inference errors still raise"],
+      "gap": "UltraMax remains CodeFormer fp16 plus Laplacian detail fusion, not a GPEN/Real-ESRGAN cascade. Full-chain CUDA zero-copy is absent; zero restoration blend occurs upstream and is not counted by the restorer telemetry."
+    },
+    {
+      "id": 6,
+      "state": "partial",
+      "evidence": ["standard compositor runs BiSeNet and semantic forbidden-class masks", "robust mode uses OcclusionAnalyzer with xseg_3.onnx and face_occluder.onnx; the visible-face maps are combined conservatively with minimum probability and fused with semantic/explicit masks"],
+      "gap": "XSeg/face-occluder and parser inputs/outputs remain host NumPy; no GPU-native fused-mask path. xseg_occlusion_strength now scales neural visible-face subtraction from 0..1; semantic and explicit occluders remain full-strength. Missing networks are reported, not synthesized."
+    },
+    {
+      "id": 7,
+      "state": "multi_view_present_and_connected_for_selected_asset_modes",
+      "evidence": ["UVSynthesizer projects multiple FaceSet observations with visibility/quality weighting; MakeHuman fitting and view textures are supported", "IdentityRig.texture_for_pose selects a view-attended UV albedo"],
+      "gap": "UV size defaults to 512; unseen face texels use bounded Telea inpainting, not symmetric Poisson completion. The selected identity-asset pose/reenactment routes now consume validated stored assets; FullHeadEngine remains disabled."
+    },
+    {
+      "id": 8,
+      "state": "partial_existing_temporal_filters",
+      "evidence": ["NeuralFaceEngine uses CoupledTrackSmoother for landmarks/fits and source-view hysteresis", "FrameCompositor uses One-Euro affine, alpha and ColorStats smoothing; mask EMA/flow, histogram filtering and temporal detail stabilization exist", "FullHeadEngine and ReenactmentEngine have pose/expression/anchor temporal filters"],
+      "gap": "IdentityRig/Reenactment filters are reachable in explicitly selected asset modes, but not every render uses them; no guarantee of filtering every 6DoF/vertex channel. Spatial five-zone LAB statistics remain absent."
+    },
+    {
+      "id": 9,
+      "state": "host_materialization_between_stages",
+      "evidence": ["BiSeNet/visible-face/OrtModel APIs accept NumPy host arrays and return NumPy arrays", "OpenGL rasterizers explicitly read framebuffer bytes into copied NumPy arrays", "UltraMax I/O binding binds CPU inputs; outputs are materialized with OrtValue.numpy(), then converted to BGR uint8", "compositing/frequency/color/mask work uses NumPy/OpenCV"],
+      "gap": "GPU inference/rasterization exists, but no GPU-resident tensor chain from swapper through segmentation, compositing, and restoration; TensorRT/FP16 alone does not provide zero-copy."
+    },
+    {
+      "id": 10,
+      "state": "frontend_and_python_pass",
+      "evidence": [".github/workflows/ci.yml runs Python gates 1,2,7,9,10,11,14 and frontend typecheck/lint/Vitest/build; its matrix passes one integer per --gate invocation, matching tools/ci_runner.py argparse.", "Final npm test: 90/90 files and 903/903 tests passed; tsc --noEmit and ESLint exit 0; production build exited 0 with no bundle-size or ineffective-dynamic-import warning. Node Three.js/localStorage and jsdom canvas/media warnings remain.", "A real-browser walk-through (headed, backend on 127.0.0.1:8030) found and fixed two UI bugs: a React.lazy re-export in ThreeViewport that crashed the Inspector, and pre-flight lint warnings hidden below the first four PASS rows (now sorted FAIL, WARN, PASS). A 2 s clip completed import, inspect, assign, live preview and full render (60 verified frames).", "Final full Python suite (roop_3d/tests, no other load): 2959 passed, 46 skipped, 0 failed, 1 warning, 13 subtests passed in 2736.74s. Earlier runs: 14 failed, then 4 failed; all compositor regressions were fixed without weakening thresholds."],
+      "gap": "Whole-video face inspection is a single blocking request with no progress or cancel and was not fixed. Only a 2 s clip was walked end to end; a 7 minute video was still inspecting after about 9 minutes. Native CV-CUDA/TensorRT zero-copy GPU residency, a tongue model, a source-pigment detector and five-zone LAB transfer remain unimplemented."
+    }
+  ],
+  "ownership": {
+    "a01-3d-geo-core": [
+      "app/roop_3d/engine/volumetric/session.py",
+      "app/roop_3d/reconstruction/identity_asset.py",
+      "app/roop_3d/reconstruction/uv_synthesizer.py",
+      "app/roop_3d/reconstruction/makehuman_build.py",
+      "app/roop_3d/reconstruction/makehuman_head.py",
+      "app/roop_3d/reconstruction/makehuman_template.py",
+      "app/roop_3d/reconstruction/reenactment.py",
+      "app/roop_3d/reconstruction/full_head.py",
+      "app/roop_3d/reconstruction/neural_face.py"
+    ],
+    "a02-semantic-exp": [
+      "app/roop_3d/compositor/masks.py",
+      "app/roop_3d/compositor/face_regions.py",
+      "app/roop_3d/compositor/occlusion_analysis.py",
+      "app/roop_3d/compositor/occlusion_model.py",
+      "app/roop_3d/compositor/occlusion.py"
+    ],
+    "a03-blend-detail": [
+      "app/roop_3d/compositor/pipeline.py",
+      "app/roop_3d/compositor/boundary_fusion.py",
+      "app/roop_3d/compositor/frequency_blend.py",
+      "app/roop_3d/compositor/color_match.py",
+      "app/roop_3d/compositor/quality.py",
+      "app/roop_3d/compositor/robust_fusion.py",
+      "app/roop_3d/compositor/temporal.py",
+      "app/roop_3d/compositor/mask_flow.py",
+      "app/roop_3d/compositor/detail_temporal.py"
+    ],
+    "a04-ultramax-eng": [
+      "app/roop_3d/compositor/restoration.py",
+      "app/roop_3d/compositor/stream_restoration.py",
+      "app/roop_3d/models/catalog.py",
+      "app/roop_3d/supported_models.json",
+      "app/roop_3d/optimized_processor.py",
+      "app/roop_3d/engine/pipeline_runner.py",
+      "app/roop_3d/server/workstation_preview.py",
+      "app/roop_3d/server/routes.py",
+      "app/roop_3d/pipeline/video_job_runner.py",
+      "app/roop_3d/pipeline/session_adapter.py"
+    ],
+    "a05-workstation-ui": [
+      "app/roop_3d_ui/**",
+      "app/roop_3d/core/workstation.py",
+      "app/roop_3d/server/workstation.py",
+      "app/roop_3d/server/live_preview.py",
+      "app/roop_3d/queue/batch_matrix.py"
+    ],
+    "a06-qa-verifier": [
+      "app/roop_3d/tests/**",
+      ".github/workflows/ci.yml"
+    ]
+  },
+  "ownership_rules": [
+    "No agent edits files owned by another agent; no shared-file edits or sibling-repository writes.",
+    "The listed tensor/color/dtype contracts are fixed interfaces unless the owning agent updates this contract and explicitly communicates the migration before implementation.",
+    "Do not invent tongue/teeth classes, GPU-native behavior, model weights, or test results. Where model artifacts do not support a requested capability, report the limitation and preserve fail-closed behavior.",
+    "Keep model license, hash, and local-trust controls; fix incorrect adapter selection without bypassing governance.",
+    "Subagents do not run tests, lint, typecheck, builds, or formatters mid-flight; the integration owner runs the narrow verification once after all changes."
+  ]
+}

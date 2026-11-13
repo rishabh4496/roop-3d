@@ -34,11 +34,22 @@ def arrays():
     return image, result
 
 
+class FixtureSkinNoseParser:
+    """Confident 19-class output so color sweeps have trusted skin+nose samples."""
+
+    def predict(self, image):
+        height, width = image.shape[:2]
+        labels = np.zeros((height, width), np.uint8)
+        labels[height // 8:7 * height // 8, width // 8:7 * width // 8] = 1
+        labels[3 * height // 8:5 * height // 8, 3 * width // 8:5 * width // 8] = 10
+        return np.eye(19, dtype=np.float32)[labels]
+
+
 class FixtureSession:
     instances = []
 
     def __init__(self, catalog, config):
-        self.compositor = FrameCompositor(parser=SimpleNamespace(predict=lambda image: None))
+        self.compositor = FrameCompositor(parser=FixtureSkinNoseParser())
         self.released = False
         self.inferred = 0
         self.__class__.instances.append(self)

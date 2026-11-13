@@ -190,6 +190,23 @@ class ModelCatalog:
             (aliases.index(Path(name).stem.casefold()) for name in record.filenames if Path(name).stem.casefold() in aliases),
             default=len(aliases))))
 
+    def ultramax_spec(self):
+        """The one UltraMax weight/alignment/normalization contract (``load_ultramax_spec`` under the runtime root).
+
+        Reference, preview, video and optimized renders, the capability probe and the model rack all resolve it here."""
+        from roop_3d.compositor.stream_restoration import load_ultramax_spec
+        return load_ultramax_spec(self.pin_root)
+
+    def weight_available(self, model_id: str, filename: str) -> bool:
+        """True when ``filename`` is a registered artifact of the supported entry ``model_id`` that resolves through the
+        hash/trust-verifying provider (the same check that makes a rack row VERIFIED_LOCAL)."""
+        spec = next((item for item in self._supported if item["id"] == model_id), None)
+        if spec is None:
+            return False
+        wanted = Path(filename).name.casefold()
+        return any(wanted in {Path(name).name.casefold() for name in record.filenames}
+                   and self._provider_path(record) is not None for record in self._records_for_spec(spec))
+
     def resolve_local_model(self, model_id: str) -> Path:
         """Resolve a scanned local ONNX weight using the explicit local-use override."""
         if not self.unblock_local_models:

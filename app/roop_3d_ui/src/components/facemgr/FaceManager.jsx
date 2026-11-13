@@ -2,7 +2,7 @@ import { rankClusters, poseGrid } from './faceBank';
 import NumericInput from '../controls/NumericInput';
 import VirtualList from '../common/VirtualList';
 import { renderProbe } from '../../utils/renderProbe';
-import { useState, useEffect, useMemo, useRef } from 'react';
+import { lazy, Suspense, useState, useEffect, useMemo, useRef } from 'react';
 import GuardedCanvas from '../three/GuardedCanvas';
 import { fileName } from '../../utils/safeData';
 import { OrbitControls } from '@react-three/drei';
@@ -11,12 +11,15 @@ import {
   POSE_BUCKET_CONFIG,
   classifyPoseBucket,
 } from './fszBuilder';
-import { generateFibonacciSphere, projectViewsToLattice, FaceSetOrientationSphere } from '../three/PoseGeometryViewer';
+import { generateFibonacciSphere, projectViewsToLattice } from '../three/poseLattice';
 import AngularCoverageRadar from '../three/AngularCoverageRadar';
 import FacesetInspector3D from './FacesetInspector3D';
 import { api, post } from '../../api';
 import FacesetLibrary from './FacesetLibrary';
 import PhotoSynthesisAction from './PhotoSynthesisAction';
+
+const FaceSetOrientationSphere = lazy(() => import('../three/PoseGeometryViewer')
+  .then(module => ({ default: module.FaceSetOrientationSphere })));
 
 /** The 3x3 pose matrix as ARIA rows of three cells, so `role=grid` has the `row` children it requires. */
 const poseRows = cells => Array.from({ length: Math.ceil(cells.length / 3) }, (_, row) => cells.slice(row * 3, row * 3 + 3));
@@ -654,7 +657,9 @@ export default function FaceManager({
               <ambientLight intensity={0.8} />
               <directionalLight position={[4, 5, 5]} intensity={1.5} />
               <directionalLight position={[-4, -2, -3]} intensity={0.6} color="#38bdf8" />
-              <FaceSetOrientationSphere lattice={lattice} />
+              <Suspense fallback={null}>
+                <FaceSetOrientationSphere lattice={lattice} />
+              </Suspense>
               <OrbitControls enablePan={false} minDistance={1.8} maxDistance={6} />
             </GuardedCanvas>
           </div>

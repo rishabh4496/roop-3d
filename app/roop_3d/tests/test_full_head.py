@@ -124,7 +124,7 @@ def test_full_head_compositor_keeps_forehead_and_jaw_and_vetoes_foreground():
     assert result[100, 134].max() == 0, "foreground occluder was overwritten"
 
 
-def test_session_3d_route_never_calls_inner_face_swapper(monkeypatch):
+def test_automatic_dense_session_route_never_calls_inner_face_swapper(monkeypatch):
     from roop_3d.engine.volumetric.session import ReferencePipeline
     from roop_3d.engine.detection.face_tracker import FaceObservation, TrackedFace
     from roop_3d.reconstruction.full_head import HeadPose
@@ -132,20 +132,19 @@ def test_session_3d_route_never_calls_inner_face_swapper(monkeypatch):
     pose = HeadPose(np.eye(3), np.array([0., 0., .9]),
                     np.array([[960., 0, 320], [0, 960., 320], [0, 0, 1]]))
     face = FaceObservation(np.array([200., 200., 440., 440.]), pose.project(rig.anchors5),
-        np.zeros((106, 2)), np.ones(512), (0., 0., 0.),
+        np.zeros((106, 2)), np.ones(512), (35., 0., 0.),
         landmarks68=pose.project(rig.V0[rig.landmark_indices]))
     tracked = TrackedFace(1, face, 1, 0)
     session = ReferencePipeline()
     session.tracker = SimpleNamespace(process=lambda *args, **kwargs: (tracked,),
         active_ids=frozenset({1}), scene_cut=False, timestamp_seconds=0., release=lambda: None)
     session.prepared = True
-    session.render_mode = "pose_3d"
     session.default_source = SimpleNamespace(faceset_id="test")
     session.neural_face = SimpleNamespace(sources={"test": ()}, release=lambda: None, retain_tracks=lambda ids: None, last_diag=None,
         process=lambda *a, **k: SimpleNamespace(image=np.full((512, 512, 3), 210, np.uint8),
             inverse=np.eye(2, 3), coverage=np.ones((512, 512), np.float32), landmarks5=face.landmarks5))
     def inner_crop_forbidden(*args, **kwargs):
-        pytest.fail("3D mode called the inner-face swapper")
+        pytest.fail("Automatic dense route called the inner-face swapper")
     monkeypatch.setattr(session.swapper, "infer_frame", inner_crop_forbidden)
     try:
         result = session.infer_frame(np.zeros((640, 640, 3), np.uint8))

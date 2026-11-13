@@ -23,10 +23,10 @@ export const RENDER_MODES: readonly RenderModeInfo[] = [
     hint: 'Uses the selected neural model for frontal frames. Extreme poses require the fitted facial models for 3D correspondence.',
     preview: 'estimated_2_5d', previewNote: 'preview only' },
   { id: 'pose_3d', label: '3D Facial Warp',
-    hint: "Fits the target's facial anatomy and pose, warps real source photographs, then applies the selected neural swapper and UltraMax. Requires the facial model bundle.",
+    hint: "Projects the swap through the source FaceSet's own 3D identity asset, so it follows the target's head pose; the pixels still come from the selected neural swapper. Build the asset first: without a matching one the generic canonical head proxy is used instead.",
     preview: 'reconstruction', previewNote: 'render geometry' },
   { id: 'reenactment_3d', label: '3D Expression Transfer',
-    hint: "Uses fitted target pose and asymmetric expressions to warp real source photographs before neural synthesis. Requires the facial model bundle.",
+    hint: "Renders the source FaceSet's 3D identity asset (its UV texture) with the target's measured expression and cross-fades it into the swap. Build the asset first: without a matching one the plain 2D swap is kept.",
     preview: 'reconstruction', previewNote: 'render geometry' },
 ] as const;
 

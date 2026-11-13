@@ -46,10 +46,10 @@ export default function HeadModelBackbone() {
         </select>
       </label>
       <small className={selected.available ? 'muted' : 'identity-warn'} data-testid="backbone-reason">
-        {selected.reason || (selected.active ? 'Installed: the 3D render modes use this bundle.' : '')}
+        {selected.reason || (selected.active ? 'Installed: the automatic dense 3D path (extreme head turns in Standard mode) uses this bundle.' : '')}
       </small>
       <small className="muted">
-        {installed ? `Installed backbone: ${installed.label}.` : 'No dense-face backbone is installed, so the 3D render modes are unavailable.'}{' '}
+        {installed ? `Installed backbone: ${installed.label}.` : 'No dense-face backbone is installed, so the automatic dense 3D path for extreme head turns is unavailable. 3D Facial Warp and 3D Expression Transfer use the FaceSet identity asset instead and do not need one.'}{' '}
         The server loads only the installed bundle; this choice is saved in this browser.
       </small>
       {rows.filter(row => !row.available && row.id !== selected.id).length > 0 && (

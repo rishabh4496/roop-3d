@@ -1,6 +1,6 @@
 """Bounded workstation parameters shared by previews and durable render requests."""
 from typing import Literal
-from pydantic import Field, model_serializer
+from pydantic import Field, model_serializer, model_validator
 from roop_3d.core.settings import Contract
 from roop_3d.core.face_editor import FaceExpressionOverrides
 
@@ -8,6 +8,14 @@ from roop_3d.core.face_editor import FaceExpressionOverrides
 PROTECTION_FIELDS = ('neck_protection', 'hair_matting', 'preserve_ears_glasses', 'jaw_feather_px', 'skin_texture_retention')
 #: Stage 6B swap-scope fields: same opt-in rule, absent from a serialisation (and so from fingerprints) until the caller sets them.
 SCOPE_FIELDS = ('swap_scope', 'skull_blend')
+#: Compositor fusion / occlusion fields: same opt-in rule. ``xseg_occlusion_strength`` only acts in ``occlusion_mode='robust'`` (the
+#: visible-face networks run there); ``blend_mode`` / ``pyramid_levels`` are ``CompositeOptions.mode`` / ``.pyramid_levels``.
+FUSION_FIELDS = ('xseg_occlusion_strength', 'blend_mode', 'pyramid_levels')
+BlendModeName = Literal['feather', 'multi_band', 'poisson', 'frequency_separated']
+#: Pyramid bands every renderer honours: the stream core clamps ``CompositeOptions.pyramid_levels`` to 4..6.
+PYRAMID_LEVELS = (4, 6)
+FREQUENCY_BLEND_CONFLICT = ("blend_mode 'frequency_separated' blends on encoded values and cannot be combined with linear-light "
+                            "blending (occlusion_mode 'robust' and linear_light=true both blend in linear light)")
 
 class WorkstationParameters(Contract):
     expression_restore_factor: float = Field(default=0, ge=0, le=1)
@@ -47,6 +55,14 @@ class WorkstationParameters(Contract):
     # Confidence the semantic face parser (BiSeNet) must reach before its mask is trusted over the landmark hull. 0.55 is the
     # compositor's long-standing constant, so leaving this unset changes nothing; it is opt-in on the wire.
     occlusion_threshold: float = Field(default=0.55, ge=0, le=1)
+    # Scale of the learned visible-face (XSeg / face-occluder) "not face" vote that is subtracted from the matte in
+    # occlusion_mode='robust'. 0 switches that subtraction off, 1 is the unscaled behaviour; the BiSeNet parser and manual
+    # occluders always act at full strength. The standard mode runs no visible-face network, so there it has no effect.
+    xseg_occlusion_strength: float = Field(default=1.0, ge=0, le=1)
+    # How the swapped face is fused into the frame. ``multi_band`` (a four-band Laplacian pyramid) is the compositor default;
+    # ``pyramid_levels`` is the band count of ``multi_band`` / ``frequency_separated`` and is ignored by ``feather`` / ``poisson``.
+    blend_mode: BlendModeName = 'multi_band'
+    pyramid_levels: int = Field(default=4, ge=PYRAMID_LEVELS[0], le=PYRAMID_LEVELS[1])
     # Stage 17: 3D Spherical Harmonics relighting, specular skin sheen, and cast shadow preservation.
     relight: bool = False
     relight_strength: float = Field(default=0.8, ge=0, le=1)
@@ -88,10 +104,16 @@ class WorkstationParameters(Contract):
         for field in ('expression_restore_factor', 'face_expression_overrides'):
             if field not in self.model_fields_set:
                 value.pop(field, None)
-        for field in ('color_method', 'restorer_model', 'identity_blend_t', 'fidelity_weight', 'swap_weight', 'erosion_px', 'pose_mode', 'pose_frontalization', 'tps_expression_weight', 'render_mode', 'occlusion_mode', 'strand_matte', 'jaw_adaptation', 'linear_light', 'blend_transfer', 'ultramax_small_face_mode', 'ultramax_min_native_pixels', 'ambient_fill', 'hairline_offset_px', 'occlusion_threshold', 'sensor_shutter_angle', 'grain_match_strength') + PROTECTION_FIELDS + SCOPE_FIELDS:
+        for field in ('color_method', 'restorer_model', 'identity_blend_t', 'fidelity_weight', 'swap_weight', 'erosion_px', 'pose_mode', 'pose_frontalization', 'tps_expression_weight', 'render_mode', 'occlusion_mode', 'strand_matte', 'jaw_adaptation', 'linear_light', 'blend_transfer', 'ultramax_small_face_mode', 'ultramax_min_native_pixels', 'ambient_fill', 'hairline_offset_px', 'occlusion_threshold', 'sensor_shutter_angle', 'grain_match_strength') + PROTECTION_FIELDS + SCOPE_FIELDS + FUSION_FIELDS:
             if field not in self.model_fields_set:
                 value.pop(field, None)
         return value
+
+    @model_validator(mode='after')
+    def fusion_modes_agree(self):
+        if self.blend_mode == 'frequency_separated' and (self.occlusion_mode == 'robust' or self.linear_light):
+            raise ValueError(FREQUENCY_BLEND_CONFLICT)
+        return self
 
     def inference_options(self) -> dict[str, float]:
         # The new curve changes geometric projection, never LivePortrait motion.
@@ -124,6 +146,7 @@ class WorkstationParameters(Contract):
         return self.model_copy(update={'blend_transfer': blend_transfer_for(transfer_code)})
 
     def composite_options(self):
+        from roop_3d.compositor.boundary_fusion import BlendMode
         from roop_3d.compositor.pipeline import CompositeOptions, RobustOptions
         # Unresolved 'auto' falls back to sRGB, the pre-Stage-15 curve; callers with media context resolve it first.
         blend = 'srgb' if self.blend_transfer == 'auto' else self.blend_transfer
@@ -131,6 +154,8 @@ class WorkstationParameters(Contract):
                                 expression_restore_factor=self.expression_restore_factor,
                                 face_expression_overrides=self.face_expression_overrides,
                                 feather_px=self.feather_px,
+                                mode=BlendMode(self.blend_mode), pyramid_levels=self.pyramid_levels,
+                                xseg_occlusion_strength=self.xseg_occlusion_strength,
                                 swap_weight=self.swap_weight, erosion_px=self.erosion_px,
                                 occlusion_mode=self.occlusion_mode,
                                 robust=RobustOptions(strand_matte=self.strand_matte),

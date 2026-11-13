@@ -153,6 +153,7 @@ class _FaceParser:
 
 
 def test_stage09_accepts_synthesized_crop_through_mouth_only_mask():
+    from roop_3d.compositor.boundary_fusion import BlendMode
     frame = np.full((80, 80, 3), 30, np.uint8)
     base = np.full((64, 64, 3), 100, np.uint8)
     synthesized = np.full_like(base, 210)
@@ -166,7 +167,8 @@ def test_stage09_accepts_synthesized_crop_through_mouth_only_mask():
     compositor = FrameCompositor(parser=_FaceParser(), temporal=TemporalSmoother())
     output = compositor.compose(frame, (replacement,), {6: points},
                                 lip_sync_results={6: result},
-                                options=CompositeOptions(color_strength=0, feather_px=0))
+                                # Exact crop/mouth passthrough, independent of multiband seam tone.
+                                options=CompositeOptions(mode=BlendMode.FEATHER, color_strength=0, feather_px=0))
     assert np.all(output[50:58, 36:44] == 210)
     assert np.all(output[20:25, 32:38] == 100)
 

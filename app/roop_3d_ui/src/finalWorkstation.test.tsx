@@ -31,9 +31,9 @@ describe('sweep patch semantics', () => {
     expect(applySweepPatch(DEFAULT_PARAMETERS, { relight_strength: .25 })).toMatchObject({ relight: true, relight_strength: .25 });
   });
 
-  it('keeps ignoring the inactive CodeFormer fidelity and un-bypasses the restorer when its blend is swept', () => {
-    const next = applySweepPatch({ ...DEFAULT_PARAMETERS, bypass: ['restorer'] }, { fidelity_weight: .9, restoration_blend: .6 });
-    expect('fidelity_weight' in next).toBe(false);
+  it('applies a swept CodeFormer fidelity like any setting, and un-bypasses the restorer when its blend is swept', () => {
+    const next = applySweepPatch({ ...DEFAULT_PARAMETERS, restorer_model: 'codeformer', bypass: ['restorer'] }, { fidelity_weight: .9, restoration_blend: .6 });
+    expect(next.fidelity_weight).toBe(.9);
     expect(next.bypass).toEqual([]);
   });
 

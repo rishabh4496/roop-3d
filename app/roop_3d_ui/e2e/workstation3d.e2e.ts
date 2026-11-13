@@ -85,7 +85,7 @@ test('the pipeline node flow bar shows eight stages with measured latencies and 
   const bar = page.getByRole('region', { name: 'Visual execution pipeline' });
   await expect(bar).toBeVisible();                                           // always visible: not inside a collapsed section
   await expect(bar.locator('.pipeline-node')).toHaveCount(8);
-  await expect(bar.locator('.node-name')).toHaveText(['Raw Target', '6DoF Mesh & Pose', 'UV Projection', 'SH Relight & Normals', 'Base Swap', 'UltraMax', 'XSeg + Hair Matte', 'Final Composite']);
+  await expect(bar.locator('.node-name')).toHaveText(['Raw Target', '6DoF Mesh & Pose', 'UV Projection', 'SH Relight & Normals', 'Base Swap', 'Restorer off', 'XSeg + Hair Matte', 'Final Composite']);   // the restorer card names the enhancer that runs
   await expect.poll(() => seen.previews.length).toBeGreaterThan(0);
   await expect(bar.locator('[data-node="input"] .node-ms')).toHaveText('9.4 ms');
   await expect(bar.locator('[data-node="swap"] .node-ms')).toHaveText('28 ms');

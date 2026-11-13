@@ -55,6 +55,17 @@ HDR_TRANSFERS = {"smpte2084", "arib-std-b67"}
 _MATRIX = {"bt709": "bt709", "bt470bg": "bt601", "smpte170m": "bt601", "bt2020nc": "bt2020", "bt2020c": "bt2020"}
 
 
+def _restoration_status(bypassed: bool, name: str, capability: dict) -> dict:
+    """``bypassed`` = the job explicitly switched the restorer off; ``applied`` only when the engine observed a successful
+    inference (UltraMax counts them; other adapters report their own ``inference`` verification)."""
+    if bypassed:
+        return {"status": "bypassed", "reason": "restorer listed in the job's parameter bypass", "architecture": name}
+    telemetry = capability.get("telemetry")
+    applied = telemetry["applied"] > 0 if telemetry else capability.get("inference") == "VERIFIED_THIS_SESSION"
+    return {"status": "applied" if applied else "not_applied", "architecture": name,
+            "model": capability.get("model"), "telemetry": telemetry}
+
+
 # ================================================================================================================ probing
 @dataclass(frozen=True)
 class VideoInfo:
@@ -521,6 +532,7 @@ class EndToEndVideoJobRunner(MasterPipelineRunner):
             "audio_streams_out": result.remux.audio_streams, "subtitle_policy": result.remux.subtitles,
             "subtitle_streams_out": result.remux.subtitle_streams, "metadata_and_chapters": "copied_from_source",
             "restorer": restorer_name, "restorer_capability": restorer_capability,
+            "restoration": _restoration_status(restorer_engine is None, restorer_name, restorer_capability),
             "swap_scope": core.options.swap_scope, "skull_blend": core.options.skull_blend,
             "per_frame_mean_ms": processor.mean_stage_ms(), "decode_ms": round(result.decode_ms, 3), "encode_ms": round(result.encode_ms, 3),
             "faces": {"swapped": processor.faces_swapped, "skipped": processor.faces_skipped, "withheld": processor.faces_withheld},

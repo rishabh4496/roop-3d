@@ -1,17 +1,33 @@
 import { useActiveModelPolling, useActiveModels, type ActiveModel } from '../../stores/activeModels';
+import { RESTORER_LABELS, restorerFileMatches, restorerWeights, type RestorerModel } from '../workstation/pipeline';
 
 type Stage = 'detector' | 'swapper' | 'enhancer';
 const STAGES: { stage: Stage; label: string }[] = [
   { stage: 'detector', label: 'Detector' }, { stage: 'swapper', label: 'Swapper' }, { stage: 'enhancer', label: 'Enhancer' },
 ];
 
-/** Model ids the registry uses for the rack's enhancer ids, so "selected" and "loaded" compare like with like. */
-const POLICY_MODEL: Record<string, string> = { gpen: 'gpen_bfr_512', gfpgan: 'gfpgan_v14', codeformer: 'codeformer', ultramax: 'ultramax' };
+const isRestorer = (value: string | undefined): value is RestorerModel => value !== undefined && Object.hasOwn(RESTORER_LABELS, value);
+
+/** What the user selected, as it reads next to the loaded weight: a restorer by name and file, any other stage by its model id. */
+function selectedText(stage: Stage, selected: string | undefined): string | null {
+  if (!selected || selected === 'off' || selected === 'auto') return null;
+  return stage === 'enhancer' && isRestorer(selected) ? `${RESTORER_LABELS[selected]} (${restorerWeights(selected)})` : selected;
+}
+
+/**
+ * A loaded session of another model means the new choice has not been used yet; it loads on the next preview / render. Detector and swapper
+ * sessions are read back under the stable catalog id. Enhancers are read back under their registry hash id, so the loaded weight file decides
+ * (CodeFormer and UltraMax load different artifacts).
+ */
+function isPending(stage: Stage, active: ActiveModel, selected: string | undefined): boolean {
+  if (!active || !selected || selected === 'off' || selected === 'auto') return false;
+  if (stage === 'enhancer') return isRestorer(selected) && !restorerFileMatches(active.filename, selected);
+  return active.model_id !== selected;
+}
 
 function Row({ label, stage, active, selected }: { label: string; stage: Stage; active: ActiveModel; selected: string | undefined }) {
-  const wanted = stage === 'enhancer' && selected ? POLICY_MODEL[selected] ?? selected : selected;
-  // A loaded session of another model means the new choice has not been used yet; it loads on the next preview / render.
-  const pending = !!active && !!wanted && wanted !== 'off' && wanted !== 'auto' && active.model_id !== wanted && !(stage === 'enhancer' && active.model_id === 'codeformer' && wanted === 'ultramax');
+  const wanted = selectedText(stage, selected);
+  const pending = isPending(stage, active, selected);
   return (
     <li className={`active-model-row ${active ? 'loaded' : 'idle'}`} data-testid={`active-model-${stage}`} data-stage={stage}>
       <span className="active-model-stage">{label}</span>
@@ -22,7 +38,7 @@ function Row({ label, stage, active, selected }: { label: string; stage: Stage; 
           {pending && <span className="active-model-pending" role="status">Selected {wanted}: loads on the next preview or render</span>}
         </>
       ) : (
-        <span className="active-model-none">{selected && selected !== 'off' ? `Selected ${selected}; nothing loaded yet` : 'Nothing loaded'}</span>
+        <span className="active-model-none">{wanted ? `Selected ${wanted}; nothing loaded yet` : 'Nothing loaded'}</span>
       )}
     </li>
   );

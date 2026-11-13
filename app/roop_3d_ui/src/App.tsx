@@ -20,7 +20,6 @@ import { VideoViewport, formatTime } from './VideoViewport';
 import { JOB_START_EVENT } from './livePreview';
 import { useFaceSelectionStore, faceEditState, restoreFaceEdit, buildFaceSegments, hydrateFaceSegments } from './useFaceSelectionStore';
 import useHistoryStore, { executeCommand, replaceCurves } from './stores/useHistoryStore';
-import FaceManager from './components/facemgr/FaceManager';
 import AppRouter, { SCREENS, useHashDrawer, useHashRoute } from './router/AppRouter';
 import { DOCK_TABS, DockTabs, type DockTabId } from './components/studio/DockTabs';
 import Rail from './shell/Rail';
@@ -31,7 +30,7 @@ import ShellDrawers from './shell/ShellDrawers';
 import CommandPalette, { type Command } from './shell/CommandPalette';
 import { useShortcutActions } from './components/controls/Hotkeys';
 import NumericInput from './components/controls/NumericInput';
-import { DEFAULT_PARAMETERS, restorerAvailable, type RestorerModel, type WorkstationParameters } from './components/workstation/pipeline';
+import { DEFAULT_PARAMETERS, restorerAvailable, wireParameters, type RestorerModel, type WorkstationParameters } from './components/workstation/pipeline';
 import RenderFooter from './components/studio/RenderFooter';
 import FaceMapping from './components/studio/FaceMapping';
 import ActorPanel from './components/studio/ActorPanel';
@@ -80,6 +79,7 @@ import { DEFAULT_VIEWPORT, type ViewportPreferences } from './previewPreferences
 import { parseFps } from './components/timeline/TimelineWorkstation';
 const PreFlightLinterModal = PreFlightLinterModalComponent as unknown as ComponentType<any>;
 const PoseCoverageInspector = lazy(() => import('./ThreeViewport').then(module => ({ default: module.PoseCoverageInspector })));
+const FaceManager = lazy(() => import('./components/facemgr/FaceManager'));
 
 export default function App() {
   const modelCatalog = useModelCatalog();
@@ -243,7 +243,7 @@ export default function App() {
     || (project.request.identity_blend?.source_face_ids[1] ?? '') !== identitySourceB
     || JSON.stringify(project.request.face_mappings) !== JSON.stringify(renderMappings())
     || JSON.stringify(project.effective_settings) !== JSON.stringify(config)
-    || JSON.stringify({ ...DEFAULT_PARAMETERS, ...project.request.workstation_parameters, pose_mode: project.request.workstation_parameters?.pose_mode ?? 'retarget' }) !== JSON.stringify(parameters)
+    || JSON.stringify(wireParameters({ ...DEFAULT_PARAMETERS, ...project.request.workstation_parameters, pose_mode: project.request.workstation_parameters?.pose_mode ?? 'retarget' })) !== JSON.stringify(wireParameters(parameters))
     || JSON.stringify(project.request.parameter_curves?.tracks ?? {}) !== JSON.stringify(curves)
     || JSON.stringify(normalizeExport(project.request.export ?? DEFAULT_EXPORT)) !== JSON.stringify(normalizeExport(exportOptions))
     || (project.request.mask_base64 ?? null) !== maskBase64
@@ -499,7 +499,7 @@ export default function App() {
       const lockIssue = lockProblem(identityLock, Object.fromEntries(selected.map(item => [item.track_id, item.faceset_id])));
       if (lockIssue) throw new Error(`${lockIssue} Re-lock or release the identity lock before rendering.`);
     }
-    return { engine_id: selectedEngine, swapper_model_id: swapperModelId, detector_model_id: detectorModelId, identity_lock_id: identityLock?.lock_id, identity_blend: identitySourceB && sourceId ? {method: 'slerp',source_face_ids: [sourceId, identitySourceB],weights:[1,0]} : undefined, target_path: target, inspection_id: inspection.inspection_id, face_mappings: selected, processing: 'local', remote_consent: false, trim_start_seconds: trimStart || null, trim_end_seconds: trimEnd, mask_base64: maskBase64 || undefined, mask_keyframes: maskKeyframes.length ? maskKeyframes : undefined, workstation_parameters: parameters, parameter_curves: { tracks: curves }, face_segments: segments, export: exportOptions };
+    return { engine_id: selectedEngine, swapper_model_id: swapperModelId, detector_model_id: detectorModelId, identity_lock_id: identityLock?.lock_id, identity_blend: identitySourceB && sourceId ? {method: 'slerp',source_face_ids: [sourceId, identitySourceB],weights:[1,0]} : undefined, target_path: target, inspection_id: inspection.inspection_id, face_mappings: selected, processing: 'local', remote_consent: false, trim_start_seconds: trimStart || null, trim_end_seconds: trimEnd, mask_base64: maskBase64 || undefined, mask_keyframes: maskKeyframes.length ? maskKeyframes : undefined, workstation_parameters: wireParameters(parameters), parameter_curves: { tracks: curves }, face_segments: segments, export: exportOptions };
   };
   const executeQueue = () => void run('Queueing local render', async () => {
     const saved = await persistProject(), fingerprint = JSON.stringify({ project: saved.project_id, request: saved.request });
@@ -873,6 +873,7 @@ export default function App() {
     {(error || notice || busy) && <div className={`notification ${error ? 'error' : ''}`} role={error ? 'alert' : 'status'}>{error ? <RecoveryNotice message={error} code={errorInfo?.message === error ? errorInfo.code : null} requestId={errorInfo?.message === error ? errorInfo.requestId : null} onGuide={() => openGuide('queue')} /> : <span>{busy || notice}</span>}{busy === 'Importing asset' && <><progress value={uploadProgress} max={1}/><button onClick={() => uploadAbort.current?.abort()}>Cancel import</button></>}{error && isOfflineError({ code: errorInfo?.message === error ? errorInfo.code : null, message: error }) && <button onClick={() => void connect()}>Reconnect</button>}{!busy && <button aria-label="Dismiss message" onClick={() => { setError(''); setNotice(''); }}>×</button>}</div>}
     <div id="workspace" ref={workspaceRef} tabIndex={-1} className="workspace-root">
     <AppRouter route={route} screen="facemgr">
+      <Suspense fallback={<div className="muted" role="status">Loading Face Manager…</div>}>
       <FaceManager
         sources={sources}
         target={target}
@@ -889,6 +890,7 @@ export default function App() {
         }}
         onBackToWorkstation={() => { window.location.hash = '#/faceswap'; }}
       />
+      </Suspense>
     </AppRouter>
     <AppRouter route={route} screen="faceswap">
       <input
@@ -1093,7 +1095,7 @@ export default function App() {
       targetPath={target}
       inspectionId={inspection?.inspection_id || ''}
       faceMappings={renderMappings()}
-      workstationParameters={parameters}
+      workstationParameters={wireParameters(parameters)}
       swapperModelId={swapperModelId}
       exportPasses={exportOptions.passes}
       maskBase64={maskBase64}

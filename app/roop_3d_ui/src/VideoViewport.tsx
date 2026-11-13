@@ -18,10 +18,8 @@ import PipelineNodeFlowBar from './components/workstation/PipelineNodeFlowBar';
 import ContactSheetModal, { type Patch } from './components/workstation/ContactSheetModal';
 import { applySweepPatch } from './components/workstation/sweepPatch';
 import SettingControl from './components/controls/SettingControl';
-import { PANELS, settingValue, settingsOf, type PanelId } from './components/controls/settingsRegistry';
-import Modal from './components/controls/Modal';
-import PersonModelPicker from './components/modelhub/PersonModelPicker';
-import { SWAPPERS, ENHANCERS } from './components/modelhub/EngineModelRack';
+import { PANELS, inactiveReason, settingValue, settingsOf, type PanelId } from './components/controls/settingsRegistry';
+import { BLEND_MODES, blendModeOf, frequencyBlockedReason, occlusionModePatch } from './components/studio/compositing';
 import FaceContextMenu, { type FaceMenuTarget, type TargetAction, type TargetActionExtra } from './components/canvas/FaceContextMenu';
 import { useTargetLock } from './components/canvas/useTargetLock';
 import { faceColor } from './utils/faceIdentity';
@@ -31,7 +29,7 @@ import { faceFlags, faceKey, togglePoseLock, toggleSoloFace } from './components
 import { facePose } from './components/canvas/poseHud';
 import { calculateLetterbox, mapBoxToPixels } from './utils/letterbox';
 import { leftToRightRank } from './utils/poseCells';
-import { DEFAULT_PARAMETERS, PIPELINE_NODES, nodeBuffer, pipelineNode, type WorkstationParameters } from './components/workstation/pipeline';
+import { DEFAULT_PARAMETERS, PIPELINE_NODES, RESTORER_LABELS, nodeBuffer, pipelineNode, restorerStageLabel, type BlendMode, type WorkstationParameters } from './components/workstation/pipeline';
 import { DockArea, DockPanel, LayoutToolbar } from './components/workstation/WorkspaceLayouts';
 import { FloatingPreviewMedia, pipStore, useFloatingPreview } from './components/workstation/FloatingPreview';
 import { LiveTime } from './components/workstation/LiveTime';
@@ -332,12 +330,9 @@ export function VideoViewport({
   }, [onAssignSource, sources, noticeLater]);
   /** Right-click menu: lock as primary target / add this angle / bind the active source / exclude, for the face with this left-to-right rank. */
   const showMatteRef = useRef<() => void>(() => {});
-  // Per-person model pinning (right-click menu): which person the dialog is editing.
-  const [personDialog, setPersonDialog] = useState<{ key: string; label: string } | null>(null);
   const onTargetAction = useCallback(async (action: TargetAction, menu: FaceMenuTarget, extra?: TargetActionExtra) => {
     const match = frameFaces?.find(item => item.face.face_index === menu.faceRank);
     // Per-face canvas toggles: view state only (pose lock, mask solo) or the one global enhancer (UltraMax).
-    if (action === 'person_models') { setPersonDialog({ key: menu.faceKey ?? `rank:${menu.faceRank}`, label: `Face ${menu.faceRank + 1}` }); return; }
     if (action === 'toggle_pose_lock') { if (menu.faceKey) togglePoseLock(menu.faceKey, menu.pose); return; }
     if (action === 'solo_mask') {
       if (!menu.faceKey) return;
@@ -775,7 +770,7 @@ export function VideoViewport({
     <section className={`viewport-section ${isFullscreen ? 'is-fullscreen' : ''}`}>
       {!studio && <LayoutToolbar onFloat={floating.openWindow}/>}
       <PipelineNodeFlowBar selected={selectedNode} solo={solo} bypass={parameters.bypass} onSelect={setSelectedNode} onSolo={selectSolo} onBypass={bypassNode} busy={false} available={!!previewRequest}
-        latency={live.meta?.latency ?? null} frame={live.meta?.frame_index ?? null} loading={live.status === 'loading'}/>
+        restorerLabel={restorerStageLabel(parameters)} latency={live.meta?.latency ?? null} frame={live.meta?.frame_index ?? null} loading={live.status === 'loading'}/>
       <details className="preview-tools" data-testid="preview-tools">
       <summary><span>Snapshots</span><small>Compare A/B/C/D snapshots</small></summary>
       <SnapshotSlots onCapture={(slot: string) => void captureSlot(slot)} onRestore={restoreWorkspace} busy={captureBusy} captureAvailable={!!previewRequest}/>
@@ -1079,22 +1074,30 @@ export function VideoViewport({
             <legend>{PANELS[panel].title}</legend>
             <p className="muted panel-hint">{PANELS[panel].hint}</p>
             {panel === 'geometry' && <label className="numeric-control">Pose correction method<select aria-label="Pose correction method" value={parameters.pose_mode ?? 'retarget'} onChange={event => setParameters({ ...parameters, pose_mode: event.target.value as 'retarget' | 'mesh_blend' })}><option value="mesh_blend">2.5D / 3D mesh blend (canonical proxy)</option><option value="retarget">Reference LivePortrait retarget</option></select></label>}
-            {panel === 'masking' && <label className="numeric-control">Occlusion handling<select aria-label="Occlusion handling" value={parameters.occlusion_mode ?? 'standard'} onChange={event => setParameters({ ...parameters, occlusion_mode: event.target.value as 'standard' | 'robust' })}><option value="standard">Standard (parser + landmark hull)</option><option value="robust">Robust (hands, hair, glasses, props, face depth order)</option></select></label>}
+            {panel === 'masking' && <label className="numeric-control">Occlusion handling<select aria-label="Occlusion handling" value={parameters.occlusion_mode ?? 'standard'} onChange={event => setParameters({ ...parameters, ...occlusionModePatch(parameters, event.target.value as 'standard' | 'robust') })}><option value="standard">Standard (parser + landmark hull)</option><option value="robust">Robust (hands, hair, glasses, props, face depth order)</option></select></label>}
+            {panel === 'masking' && <label className="numeric-control">Seam blend mode<select aria-label="Seam blend mode" value={blendModeOf(parameters)} onChange={event => setParameters({ ...parameters, blend_mode: event.target.value as BlendMode })}>
+              {BLEND_MODES.map(item => <option key={item.id} value={item.id} disabled={item.id === 'frequency_separated' && !!frequencyBlockedReason(parameters)} title={item.hint}>{item.label}</option>)}
+            </select></label>}
             {panel === 'restorer' && <>
               <label className="numeric-control">Color transfer<select aria-label="Color transfer" value={parameters.color_method ?? 'lab'} onChange={event => setParameters({ ...parameters, color_method: event.target.value as 'lab' | 'reinhard_lab' | 'histogram' })}>
                 <option value="lab">LAB mean/std</option><option value="reinhard_lab">Reinhard LAB</option><option value="histogram">Masked histogram</option>
               </select></label>
               <label className="numeric-control"><input aria-label="3D SH relighting" type="checkbox" checked={parameters.relight ?? false}
                 onChange={event => setParameters({ ...parameters, relight: event.target.checked })}/> 3D SH relighting</label>
-              {parameters.restorer_model === 'ultramax' && <label className="numeric-control">Small-face UltraMax<select aria-label="Small-face UltraMax" value={parameters.ultramax_small_face_mode ?? 'bypass'} onChange={event => setParameters({ ...parameters, ultramax_small_face_mode: event.target.value as 'bypass' | 'adaptive' | 'off' })}>
-                <option value="bypass">Bypass at or below 320 px</option><option value="adaptive">Scale detail by native face size</option><option value="off">Always restore</option>
+              {parameters.restorer_model === 'ultramax' && <label className="numeric-control">Small-face UltraMax<select aria-label="Small-face UltraMax" value={parameters.ultramax_small_face_mode ?? 'off'} onChange={event => setParameters({ ...parameters, ultramax_small_face_mode: event.target.value as 'bypass' | 'adaptive' | 'off' })}>
+                <option value="off">Always restore (engine default)</option>
+                <option value="bypass">Skip faces at or below {parameters.ultramax_min_native_pixels ?? 320} px</option>
+                <option value="adaptive">Scale detail for faces at or below {parameters.ultramax_min_native_pixels ?? 320} px</option>
               </select></label>}
             </>}
-            {settingsOf(panel).map(spec => (
-              <SettingControl key={spec.id} spec={spec} label={spec.id === 'pose_strength' && parameters.pose_mode !== 'mesh_blend' ? 'Reference retarget strength' : undefined}
+            {settingsOf(panel).map(spec => {
+              const blocked = spec.id === 'restoration_blend' && !restorerAvailable;
+              const inert = inactiveReason(spec, effectiveParameters);
+              return <SettingControl key={spec.id} spec={spec} label={spec.id === 'pose_strength' && parameters.pose_mode !== 'mesh_blend' ? 'Reference retarget strength' : undefined}
                 value={settingValue(spec, effectiveParameters)} onChange={value => editParameter(spec.id, value)}
-                disabled={spec.id === 'restoration_blend' && !restorerAvailable} disabledReason="GPEN weights are unavailable, so the restorer cannot run."/>
-            ))}
+                disabled={blocked || !!inert}
+                disabledReason={blocked ? `${RESTORER_LABELS[parameters.restorer_model ?? 'gpen']} weights are unavailable, so the restorer cannot run.` : inert ?? undefined}/>;
+            })}
             <button type="button" className="button small sweep-btn" disabled={!previewRequest} aria-label={`3×3 Sweep for ${PANELS[panel].title}`}
               onClick={() => { setPlaying(false); original.current?.pause(); processed.current?.pause(); setSweepPanel(panel); }}>3×3 Sweep</button>
           </fieldset>
@@ -1108,12 +1111,6 @@ export function VideoViewport({
         ultramaxOn={parameters.restoration_blend > 0 && parameters.restorer_model === 'ultramax'}
         poseLocked={!!faceMenu.faceKey && !!faceState.locks[faceMenu.faceKey]} maskSolo={!!faceMenu.faceKey && faceState.soloKey === faceMenu.faceKey}
         onChoose={(destination, menu) => { setFaceMenu(null); void extraction.run(destination, menu); }}/>}
-      {personDialog && <Modal title={`Models for ${personDialog.label}`} close={() => setPersonDialog(null)}>
-        <h3>Models for {personDialog.label}</h3>
-        <PersonModelPicker personKey={personDialog.key} label={personDialog.label} swapperOptions={SWAPPERS} enhancerOptions={ENHANCERS} />
-        <p className="muted">The render engine applies one swapper and one enhancer per job. These per-person choices are kept with this workspace for when it supports them; the scene-wide choices in the Engine &amp; Model Rack are what renders today.</p>
-        <button type="button" className="button small" onClick={() => setPersonDialog(null)}>Done</button>
-      </Modal>}
       {sweepPanel && <ContactSheetModal panel={sweepPanel} parameters={parameters} frameLabel={`Frame ${currentFrame} · ${time.toFixed(3)} s`}
         payloadFor={(patch: Patch) => {
           return buildLivePayload({ timestampSelection: true, request: previewRequest, time, fps, restorerAvailable, maskBase64, solo: 'final',

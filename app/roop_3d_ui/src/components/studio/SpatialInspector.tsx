@@ -1,12 +1,12 @@
 import React, { useMemo, useState } from 'react';
 import type { Coverage, Reconstruction, ReconstructionStatus, Track } from '../../contracts';
 import type { WorkstationParameters } from '../workstation/pipeline';
-import PoseGeometryViewer from '../three/PoseGeometryViewer';
+import { viewerLighting, viewerMorph } from '../three/viewerRigs';
 import LightProbeSphere from '../three/LightProbeSphere';
 import FlameMeshViewer from '../three/FlameMeshViewer';
 import CoverageRadarPanel from '../three/CoverageRadarPanel';
 import IdentityMorphPanel from '../three/IdentityMorphPanel';
-import { viewerLighting, viewerMorph } from '../three/viewerRigs';
+import PoseGeometryViewer from '../three/PoseGeometryViewer';
 
 export type SpatialTab = 'pose' | 'coverage' | 'morph' | 'lighting' | 'flame';
 const TABS: { id: SpatialTab; label: string }[] = [

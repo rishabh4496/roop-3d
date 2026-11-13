@@ -2,7 +2,7 @@
 import { act, useState } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import WorkstationControls3D, { LIP_LOCK_KEY, SCENE_ADAPT_KEY, SMOOTHING_COMMIT_MS, type TopologyReport } from './components/studio/WorkstationControls3D';
+import WorkstationControls3D, { SMOOTHING_COMMIT_MS, type TopologyReport } from './components/studio/WorkstationControls3D';
 import { DEFAULT_PARAMETERS, type WorkstationParameters } from './components/workstation/pipeline';
 import { buildLivePayload } from './livePreview';
 import type { Config, JobRequest, Reconstruction } from './contracts';
@@ -89,26 +89,23 @@ describe('expression offsets', () => {
   });
 });
 
-describe('preference-only toggles (no engine consumer yet)', () => {
-  it('are remembered locally, labelled as such, and never reach the preview request', async () => {
+describe('controls the render pipeline has no stage for', () => {
+  it('are shown disabled with the reason, remembered nowhere, and never reach the preview request', async () => {
     await mount();
-    const toggles = [...host.querySelectorAll<HTMLInputElement>('input[type=checkbox]')];
-    const lip = toggles.find(t => t.closest('label')?.textContent?.includes('Speech-lip lock'))!;
-    const adapt = toggles.find(t => t.closest('label')?.textContent?.includes('3-second scene adaptation'))!;
-    await act(async () => { lip.click(); adapt.click(); });
-    expect(localStorage.getItem(LIP_LOCK_KEY)).toBe('1');
-    expect(localStorage.getItem(SCENE_ADAPT_KEY)).toBe('1');
-    expect(host.textContent?.match(/saved preference only/g)).toHaveLength(2);
+    const lip = host.querySelector<HTMLElement>('[data-testid="lip-lock-unsupported"]')!;
+    const adapt = host.querySelector<HTMLElement>('[data-testid="scene-adapt-unsupported"]')!;
+    for (const label of [lip, adapt]) {
+      expect(label.querySelector<HTMLInputElement>('input[type=checkbox]')!.disabled).toBe(true);
+      expect(label.textContent).toContain('not supported');
+    }
+    expect(host.textContent).toContain('SPECTRE is not installed');
+    expect(host.textContent).toContain('SPARK is not installed');
+    expect(host.textContent).not.toMatch(/saved preference/i);
+    expect(localStorage.length).toBe(0);
     expect(latest.parameters).toEqual(DEFAULT_PARAMETERS);
     const request = { engine_id: 'x', target_path: 't', inspection_id: 'i', face_mappings: [{ track_id: 'track_0001', faceset_id: 'fs1' }] } as unknown as JobRequest;
     const payload = buildLivePayload({ request, time: 0, fps: 30, parameters: latest.parameters, restorerAvailable: false })!;
     expect(JSON.stringify(payload)).not.toMatch(/lip|spectre|spark|adapt/i);
-  });
-  it('restores the saved state on the next visit', async () => {
-    localStorage.setItem(LIP_LOCK_KEY, '1');
-    await mount();
-    const lip = [...host.querySelectorAll<HTMLInputElement>('input[type=checkbox]')].find(t => t.closest('label')?.textContent?.includes('Speech-lip lock'))!;
-    expect(lip.checked).toBe(true);
   });
 });
 

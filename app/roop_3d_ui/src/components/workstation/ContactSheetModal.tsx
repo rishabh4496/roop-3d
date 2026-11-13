@@ -2,8 +2,8 @@ import { useEffect, useRef, useState } from 'react';
 import Modal from '../controls/Modal';
 import { PreviewBusyError, postLivePreview, type LivePreviewResult } from '../../api';
 import { PreviewURL } from '../../state';
-import { PANELS, SETTINGS, SETTING_BY_ID, settingValue, type PanelId, type SettingId } from '../controls/settingsRegistry';
-import type { WorkstationParameters } from './pipeline';
+import { PANELS, SETTINGS, SETTING_BY_ID, inactiveReason, settingValue, type PanelId, type SettingId } from '../controls/settingsRegistry';
+import { DEFAULT_PARAMETERS, type WorkstationParameters } from './pipeline';
 import type { LivePayload } from '../../livePreview';
 import { ENHANCER_CHOICES, RELIGHT_LEVELS, type EnhancerChoice, type Patch } from './sweepPatch';
 import ZoomableImage from './ZoomableImage';
@@ -17,14 +17,16 @@ type Tile = { row: number; column: number; x: Value; y: Value; url: string | nul
 
 /** One sweepable dimension: a continuous setting (Low / Medium / High) or a categorical / stepped control. */
 type Axis = {
-  id: AxisId; label: string; group: string; inactive?: string; values: [Value, Value, Value];
+  id: AxisId; label: string; group: string; values: [Value, Value, Value];
+  /** Why the engine would ignore this axis for the current parameters (the selected restorer, occlusion mode, blend), or null when it acts. */
+  inactive?: (parameters: WorkstationParameters) => string | null;
   /** Short text for the value, used in accessible names. */
   text: (value: Value, index: number) => string;
   /** What a tile shows under its image for this axis. */
   caption: (value: Value, index: number) => string;
   /** The alternative text fragment for this axis in a tile's image. */
   alt: (index: number) => string;
-  current: (parameters: WorkstationParameters, fidelity?: number) => string;
+  current: (parameters: WorkstationParameters) => string;
   /** Hint under the selector listing the three values. */
   levels: () => string;
 };
@@ -32,9 +34,9 @@ type Axis = {
 const continuous = (id: SettingId): Axis => {
   const spec = SETTING_BY_ID[id];
   return {
-    id, label: spec.label, group: PANELS[spec.panel].title, inactive: spec.inactive, values: spec.sweep,
+    id, label: spec.label, group: PANELS[spec.panel].title, inactive: parameters => inactiveReason(spec, parameters), values: spec.sweep,
     text: value => String(value), caption: (value, index) => `${LEVELS[index]} ${spec.label} ${value}`, alt: index => `${LEVELS[index]} ${spec.label}`,
-    current: (parameters, fidelity) => String(settingValue(spec, parameters, { fidelity_weight: fidelity })),
+    current: parameters => String(settingValue(spec, parameters)),
     levels: () => LEVELS.map((level, i) => `${level} ${spec.sweep[i]}`).join(' · '),
   };
 };
@@ -67,15 +69,15 @@ type Props = {
   onClose: () => void;
   /** Panel the sweep was opened from: its first two settings are pre-selected. */
   panel?: PanelId;
-  fidelity?: number;
   /** Test seam; defaults to POST /api/preview. */
   render?: (payload: LivePayload, signal: AbortSignal) => Promise<LivePreviewResult>;
   maxBusyRetries?: number;
 };
 
-export function defaultAxes(panel?: PanelId): [SettingId, SettingId] {
-  const inPanel = SETTINGS.filter(spec => spec.panel === panel && !spec.inactive).map(spec => spec.id);
-  const rest = SETTINGS.filter(spec => !spec.inactive && !inPanel.includes(spec.id)).map(spec => spec.id);
+export function defaultAxes(panel?: PanelId, parameters: WorkstationParameters = DEFAULT_PARAMETERS): [SettingId, SettingId] {
+  const active = SETTINGS.filter(spec => !inactiveReason(spec, parameters));
+  const inPanel = active.filter(spec => spec.panel === panel).map(spec => spec.id);
+  const rest = active.filter(spec => !inPanel.includes(spec.id)).map(spec => spec.id);
   const pool = [...inPanel, ...rest];
   return [pool[0] ?? 'tps_expression_weight', pool[1] ?? 'pose_strength'];
 }
@@ -85,8 +87,8 @@ export function defaultAxes(panel?: PanelId): [SettingId, SettingId] {
  * current playhead (so each tile is cache-addressable and obeys the 503 busy contract). Each tile can be inspected at native
  * pixel size; clicking a tile applies that tile's two values.
  */
-export default function ContactSheetModal({ payloadFor, parameters, frameLabel, onApply, onClose, panel, fidelity, render = (payload, signal) => postLivePreview(payload, { signal }), maxBusyRetries = 20 }: Props) {
-  const [initialX, initialY] = defaultAxes(panel);
+export default function ContactSheetModal({ payloadFor, parameters, frameLabel, onApply, onClose, panel, render = (payload, signal) => postLivePreview(payload, { signal }), maxBusyRetries = 20 }: Props) {
+  const [initialX, initialY] = defaultAxes(panel, parameters);
   const [xId, setX] = useState<AxisId>(initialX), [yId, setY] = useState<AxisId>(initialY);
   const [tiles, setTiles] = useState<Tile[]>([]), [busy, setBusy] = useState(false), [error, setError] = useState('');
   const [zoomed, setZoomed] = useState<number | null>(null);
@@ -142,8 +144,11 @@ export default function ContactSheetModal({ payloadFor, parameters, frameLabel, 
     return (
       <label className="sweep-axis">{label}
         <select aria-label={`${label} setting`} value={value} onChange={event => change(event.target.value as AxisId)}>
-          {AXES.map(item => <option key={item.id} value={item.id} disabled={!!item.inactive || item.id === other} title={item.inactive}>
-            {item.group} · {item.label}{item.inactive ? ' (inactive)' : ''}</option>)}
+          {AXES.map(item => {
+            const inert = item.inactive?.(parameters) ?? null;
+            return <option key={item.id} value={item.id} disabled={!!inert || item.id === other} title={inert ?? undefined}>
+              {item.group} · {item.label}{inert ? ' (inactive)' : ''}</option>;
+          })}
         </select>
         <small className="muted">{current.levels()}</small>
       </label>
@@ -154,7 +159,7 @@ export default function ContactSheetModal({ payloadFor, parameters, frameLabel, 
 
   return (
     <Modal title="3×3 Sweep" close={onClose}>
-      <p className="muted">{frameLabel} · nine real previews of this frame · click a tile to apply both values. Current: {xAxis.label} {xAxis.current(parameters, fidelity)}, {yAxis.label} {yAxis.current(parameters, fidelity)}.</p>
+      <p className="muted">{frameLabel} · nine real previews of this frame · click a tile to apply both values. Current: {xAxis.label} {xAxis.current(parameters)}, {yAxis.label} {yAxis.current(parameters)}.</p>
       <div className="sweep-axes">{axis('X axis', xId, setX, yId)}{axis('Y axis', yId, setY, xId)}</div>
       <button className="button accent" disabled={busy} onClick={() => void generate()}>{busy ? 'Rendering nine previews…' : 'Generate contact sheet'}</button>
       {busy && <button className="button" onClick={cancel}>Cancel sweep</button>}

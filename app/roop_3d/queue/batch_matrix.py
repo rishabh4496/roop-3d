@@ -31,18 +31,19 @@ class BatchStrategy(str, Enum):
 DEFAULT_OUTPUT_TEMPLATE = "{target}_{source}_{restorer}_{timestamp}.mp4"
 
 
+# Every recipe parameter is a real ``WorkstationParameters`` field (the job schema rejects unknown names) and each recipe names its
+# restorer explicitly through ``restorer_model``, so a recipe never depends on the saved global restorer policy.
 BUILTIN_RECIPES: list[dict[str, Any]] = [
     {
         "id": "photoreal_natural",
         "name": "Natural Photoreal",
-        "description": "GPEN-512 enhancement (blend 0.35), retarget pose, balanced sharpness and edge blend.",
+        "description": "GPEN-512 enhancement (blend 0.35), retarget pose, 2 px mask feather.",
         "restorer": "gpen",
         "parameters": {
             "pose_mode": "retarget",
+            "restorer_model": "gpen",
             "restoration_blend": 0.35,
-            "eye_open_ratio": 1.0,
-            "mouth_open_ratio": 1.0,
-            "edge_feather_px": 2,
+            "feather_px": 2,
             "erosion_px": 2,
             "swap_weight": 1.0,
         },
@@ -50,14 +51,13 @@ BUILTIN_RECIPES: list[dict[str, Any]] = [
     {
         "id": "high_fidelity_ultra",
         "name": "High-Fidelity Ultra",
-        "description": "Strong GPEN restoration (0.80), retarget pose, high-resolution edge blending.",
+        "description": "Strong GPEN restoration (0.80), retarget pose, 3 px mask feather and erosion.",
         "restorer": "gpen",
         "parameters": {
             "pose_mode": "retarget",
+            "restorer_model": "gpen",
             "restoration_blend": 0.80,
-            "eye_open_ratio": 1.0,
-            "mouth_open_ratio": 1.0,
-            "edge_feather_px": 3,
+            "feather_px": 3,
             "erosion_px": 3,
             "swap_weight": 1.0,
         },
@@ -65,13 +65,14 @@ BUILTIN_RECIPES: list[dict[str, Any]] = [
     {
         "id": "codeformer_fidelity",
         "name": "CodeFormer Fidelity Sweep",
-        "description": "CodeFormer scalar fidelity feed (w=0.85) mapped to CodeFormer training template.",
+        "description": "CodeFormer at blend 0.70 with its fidelity input (w) set to 0.85.",
         "restorer": "codeformer",
         "parameters": {
             "pose_mode": "retarget",
+            "restorer_model": "codeformer",
             "restoration_blend": 0.70,
-            "codeformer_fidelity": 0.85,
-            "edge_feather_px": 3,
+            "fidelity_weight": 0.85,
+            "feather_px": 3,
             "erosion_px": 2,
             "swap_weight": 1.0,
         },
@@ -79,12 +80,13 @@ BUILTIN_RECIPES: list[dict[str, Any]] = [
     {
         "id": "ultramax_restoration",
         "name": "UltraMax Deep Dynamic",
-        "description": "UltraMax registered model with dynamic preprocessing contract.",
+        "description": "UltraMax (the registered codeformer.fp16 weights plus Laplacian detail fusion) at blend 0.65.",
         "restorer": "ultramax",
         "parameters": {
             "pose_mode": "retarget",
+            "restorer_model": "ultramax",
             "restoration_blend": 0.65,
-            "edge_feather_px": 2,
+            "feather_px": 2,
             "erosion_px": 2,
             "swap_weight": 1.0,
         },
@@ -92,14 +94,13 @@ BUILTIN_RECIPES: list[dict[str, Any]] = [
     {
         "id": "mesh_geometry_3d",
         "name": "3D Mesh Blend & Geometry",
-        "description": "Full 3D mesh blend pose mode, expressive LivePortrait landmarks, geometric warping.",
+        "description": "Mesh blend pose mode (canonical 3D head proxy projection), GPEN restoration 0.40, swap weight 0.90.",
         "restorer": "gpen",
         "parameters": {
             "pose_mode": "mesh_blend",
+            "restorer_model": "gpen",
             "restoration_blend": 0.40,
-            "eye_open_ratio": 1.05,
-            "mouth_open_ratio": 1.05,
-            "edge_feather_px": 4,
+            "feather_px": 4,
             "erosion_px": 2,
             "swap_weight": 0.90,
         },
@@ -111,6 +112,7 @@ BUILTIN_RECIPES: list[dict[str, Any]] = [
         "restorer": "gpen",
         "parameters": {
             "pose_mode": "retarget",
+            "restorer_model": "gpen",
             "pose_frontalization": 0.25,
             "tps_expression_weight": 0.35,
             "restoration_blend": 0.30,
@@ -124,6 +126,7 @@ BUILTIN_RECIPES: list[dict[str, Any]] = [
         "restorer": "gpen",
         "parameters": {
             "pose_mode": "retarget",
+            "restorer_model": "gpen",
             "pose_frontalization": 0.50,
             "tps_expression_weight": 0.65,
             "restoration_blend": 0.45,
@@ -137,6 +140,7 @@ BUILTIN_RECIPES: list[dict[str, Any]] = [
         "restorer": "gpen",
         "parameters": {
             "pose_mode": "retarget",
+            "restorer_model": "gpen",
             "pose_frontalization": 0.85,
             "tps_expression_weight": 1.0,
             "restoration_blend": 0.50,
@@ -257,6 +261,33 @@ def _resolve_target(item: str | dict[str, Any] | TargetDescriptor, default_inspe
             item.get("trim_end_seconds"),
         )
     raise TypeError(f"Unsupported target descriptor: {type(item)}")
+
+
+_RESTORER_FIELD = "restorer_model"
+
+
+def _effective_parameters(
+    base: dict[str, Any] | None,
+    restorer: str | None,
+    overrides: dict[str, Any] | None,
+    label: str,
+) -> tuple[dict[str, Any], str]:
+    """Merge base parameters, the selected restorer and explicit overrides, validate against ``WorkstationParameters``.
+
+    Precedence (lowest to highest): ``base`` < selected ``restorer`` (unless ``auto``) < ``overrides``. ``auto`` injects nothing,
+    so the base value (or the schema default ``auto``) stays in force. Returns the merged dict and the effective restorer name,
+    which is the single source for output naming.
+    """
+    merged = dict(base or {})
+    selected = (restorer or "auto").strip().lower() or "auto"
+    if selected != "auto":
+        merged[_RESTORER_FIELD] = selected
+    merged.update(overrides or {})
+    try:
+        parsed = WorkstationParameters.model_validate(merged)
+    except ValueError as exc:
+        raise ValueError(f"{label} has parameters the job schema rejects: {exc}") from exc
+    return merged, parsed.restorer_model
 
 
 class BatchMatrixEngine:
@@ -389,6 +420,10 @@ class BatchMatrixEngine:
                 else:
                     cell_filter.add(str(c))
 
+        # The selected restorer is injected into every job's real ``restorer_model`` (``auto`` keeps the job/global policy);
+        # an unsupported name is rejected here instead of failing later at job submission.
+        matrix_params, effective_restorer = _effective_parameters(workstation_parameters, restorer, None, "Per-File Matrix")
+
         for t_idx, t_item in enumerate(targets):
             t_path, insp_id, tracks, trim_s, trim_e = _resolve_target(t_item, default_inspection_id)
             target_key = Path(t_path).stem
@@ -408,7 +443,7 @@ class BatchMatrixEngine:
                     output_template,
                     target=t_path,
                     source=src,
-                    restorer=restorer,
+                    restorer=effective_restorer,
                     timestamp=ts,
                     extra={"t_idx": t_idx, "s_idx": s_idx},
                 )
@@ -420,10 +455,10 @@ class BatchMatrixEngine:
                     inspection_id=insp_id,
                     face_mappings=mappings,
                     output_filename=out_name,
-                    workstation_parameters=workstation_parameters or {},
+                    workstation_parameters=dict(matrix_params),
                     trim_start_seconds=trim_s,
                     trim_end_seconds=trim_e,
-                    metadata={"target_index": t_idx, "source_index": s_idx, "restorer": restorer},
+                    metadata={"target_index": t_idx, "source_index": s_idx, "restorer": effective_restorer},
                 )
                 manifests.append(manifest)
 
@@ -465,14 +500,14 @@ class BatchMatrixEngine:
             else:
                 continue
 
-            merged_params = dict(base_parameters or {})
-            merged_params.update(r_params)
+            # The recipe's restorer is a real job parameter, not just a filename token; explicit ``restorer_model`` in the recipe wins.
+            merged_params, effective_restorer = _effective_parameters(base_parameters, r_restorer, r_params, f"Recipe '{r_id}'")
 
             out_name = format_output_name(
                 output_template,
                 target=t_path,
                 source=source,
-                restorer=r_restorer,
+                restorer=effective_restorer,
                 timestamp=ts,
                 recipe=r_id,
             )

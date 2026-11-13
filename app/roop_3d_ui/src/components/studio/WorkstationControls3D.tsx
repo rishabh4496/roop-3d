@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../../api';
 import type { Config, Reconstruction } from '../../contracts';
 import type { WorkstationParameters } from '../workstation/pipeline';
@@ -10,23 +10,14 @@ import { skullBlendOf, swapScopeOf, withSkullBlend, withSwapScope } from './swap
 /**
  * Stage 8 workstation control panels. Each control says what it really drives:
  *  - Topology engine + semantic sliders  -> `GET /facesets/{id}/identity-asset/mesh?template=makehuman&topology=&<sliders>` (preview of the
- *    identity asset; it does not change the live swap).
+ *    MakeHuman identity asset for inspection and export; the render modes use the canonical asset).
  *  - Source-to-target beta blend         -> `skull_blend` of the adaptive skull swap scope (a real compositor option).
  *  - Skin-tone vs ambient adaptation     -> `color_strength` (the colour-transfer weight), nothing else.
  *  - Expression offsets                  -> `face_expression_overrides` of the selected target face (the engine's expression editor).
  *  - Temporal smoothing                  -> the global `temporal_min_cutoff` runtime setting (One-Euro cutoff of the track stabiliser).
- *  - Speech-lip lock, scene adaptation   -> saved preferences only: the render pipeline has no consumer for them yet, and the UI says so.
+ *  - Speech-lip lock, scene adaptation   -> not supported: the render pipeline has no consumer for them, so they are shown disabled with the
+ *    reason instead of being remembered and ignored.
  */
-
-// ---------------------------------------------------------------------------------------------------- preferences (not engine state)
-export const LIP_LOCK_KEY = 'roop3d-speech-lip-lock';
-export const SCENE_ADAPT_KEY = 'roop3d-scene-adaptation';
-const readFlag = (key: string): boolean => { try { return localStorage.getItem(key) === '1'; } catch { return false; } };
-const writeFlag = (key: string, value: boolean) => { try { localStorage.setItem(key, value ? '1' : '0'); } catch { /* not remembered */ } };
-function useFlag(key: string): [boolean, (value: boolean) => void] {
-  const [value, setValue] = useState(() => readFlag(key));
-  return [value, useCallback((next: boolean) => { writeFlag(key, next); setValue(next); }, [key])];
-}
 
 // ---------------------------------------------------------------------------------------------------- smoothing <-> One-Euro cutoff
 /** Light smoothing = a high cutoff, heavy = a low one; log scale because the filter responds to the cutoff's ratio. */
@@ -154,7 +145,7 @@ function TopologySemantic({ facesetId, parameters, setParameters, onMesh }: {
           {mesh.source === 'glb' ? `Loaded as binary glTF${mesh.bytes ? ` (${(mesh.bytes / 1024).toFixed(0)} KB)` : ''}` : `Loaded as JSON${mesh.fallbackReason ? ` (GLB unavailable: ${mesh.fallbackReason})` : ''}`}
         </small>)}
       <small className="muted" data-testid="semantic-limits">Forehead height and temple width are not offered: the engine has no landmarks above the brows or at the temples, and head width is held fixed.</small>
-      <small className="muted">Previews the MakeHuman identity asset in the 3D viewport (offline inspection and export); the live swap uses the fitted facial model.</small>
+      <small className="muted">Previews the MakeHuman identity asset in the 3D viewport (inspection and export only); 3D Facial Warp and 3D Expression Transfer use the canonical head asset.</small>
     </div>
   );
 }
@@ -176,8 +167,6 @@ export interface WorkstationControls3DProps {
 }
 
 export default function WorkstationControls3D({ parameters, setParameters, trackId, facesetId, onMesh, config, onSaveConfig }: WorkstationControls3DProps) {
-  const [lipLock, setLipLock] = useFlag(LIP_LOCK_KEY);
-  const [sceneAdapt, setSceneAdapt] = useFlag(SCENE_ADAPT_KEY);
   const [topologyOpen, setTopologyOpen] = useState(false);
   const colour = parameters.color_strength;
   const colourBypassed = parameters.bypass.includes('color');
@@ -231,16 +220,16 @@ export default function WorkstationControls3D({ parameters, setParameters, track
             onClick={() => trackId && setParameters(withFaceEdit(parameters, trackId, Object.fromEntries(NED_OFFSETS.map(item => [item.key, 0]))))}>Reset offsets</button>
         </fieldset>
         <small className="muted">Per-face offsets on the engine's expression editor (the same values as “Micro-expression &amp; 3D Face Editor”); the NED network is not installed.</small>
-        <label className="inspector-toggle"><input type="checkbox" checked={lipLock} onChange={event => setLipLock(event.target.checked)} />Speech-lip lock
-          <span className="status-chip" title="The render pipeline has no speech-driven lip stage wired in yet">saved preference only</span></label>
-        <small className="muted">Remembered in this browser for when the audio-driven mouth stage is connected. It is not sent to the engine and does not change a render today (SPECTRE is not installed).</small>
+        <label className="inspector-toggle unsupported-control" data-testid="lip-lock-unsupported" title="The render pipeline has no speech-driven lip stage">
+          <input type="checkbox" checked={false} disabled readOnly />Speech-lip lock <span className="status-chip">not supported</span></label>
+        <small className="muted">The render pipeline has no speech-driven lip stage (SPECTRE is not installed), so this cannot be switched on. Lip sync from an audio file is a separate engine setting: Settings → Pipeline → lip sync mode.</small>
       </details>
 
       <details className="inspector-subsection" data-testid="adaptation-section">
         <summary>Scene adaptation &amp; smoothing<small>3 s adaptation · temporal filter</small></summary>
-        <label className="inspector-toggle"><input type="checkbox" checked={sceneAdapt} onChange={event => setSceneAdapt(event.target.checked)} />3-second scene adaptation
-          <span className="status-chip" title="The head-tracking adaptation pass is not part of the render pipeline yet">saved preference only</span></label>
-        <small className="muted">Remembered for when the tracker's adaptation pass is connected to rendering. It is not sent to the engine today (SPARK is not installed).</small>
+        <label className="inspector-toggle unsupported-control" data-testid="scene-adapt-unsupported" title="The tracker has no adaptation pass">
+          <input type="checkbox" checked={false} disabled readOnly />3-second scene adaptation <span className="status-chip">not supported</span></label>
+        <small className="muted">The tracker has no adaptation pass (SPARK is not installed). The temporal smoothing below is the real control.</small>
         <label className="inspector-field">Temporal smoothing <output aria-live="off">{smoothing < 0.34 ? 'light' : smoothing < 0.67 ? 'medium' : 'heavy'} · cutoff {smoothingToCutoff(smoothing).toFixed(2)}</output>
           <input type="range" aria-label="Temporal Kalman smoothing" min={0} max={100} step={1} value={Math.round(smoothing * 100)} disabled={!config || !onSaveConfig}
             onChange={event => changeSmoothing(Number(event.target.value) / 100)} />

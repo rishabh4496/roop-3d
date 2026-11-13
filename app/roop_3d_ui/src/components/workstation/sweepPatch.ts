@@ -20,7 +20,7 @@ export type Patch = Partial<Record<SettingId, number>> & { enhancer?: EnhancerCh
  * chosen, so what the user clicked is exactly what gets applied.
  */
 export function applySweepPatch(parameters: WorkstationParameters, patch: Patch): WorkstationParameters {
-  const { enhancer, relight_strength, fidelity_weight: _inactive, ...continuous } = patch;
+  const { enhancer, relight_strength, ...continuous } = patch;
   let next: WorkstationParameters = { ...parameters, ...continuous };
   if ('restoration_blend' in continuous) next = { ...next, bypass: next.bypass.filter(item => item !== 'restorer') };
   if (enhancer === 'none') next = { ...next, restoration_blend: 0 };

@@ -4,7 +4,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FaceSet, Job, JobRequest, Track } from './contracts';
 import { RENDER_FRAME_EVENT, buildLivePayload } from './livePreview';
-import { DEFAULT_PARAMETERS, restorerAvailable, restorerWeights } from './components/workstation/pipeline';
+import { DEFAULT_PARAMETERS, restorerAvailable, restorerFileMatches, restorerWeights, wireParameters } from './components/workstation/pipeline';
 import FaceMapping from './components/studio/FaceMapping';
 import RenderFooter from './components/studio/RenderFooter';
 import { publishHardware, resetTelemetry } from './stores/telemetryStore';
@@ -85,10 +85,45 @@ describe('UltraMax in the live payload', () => {
     expect(payload.swapper_model_id).toBe('hyperswap_1c_256');
     expect(payload.restorer).toBe('gfpgan');
   });
-  it('uses catalog IDs for readiness and requires the actual UltraMax fp16 weights', () => {
+  it('uses catalog IDs for readiness: UltraMax is its own row, which the catalog resolves to the registered codeformer.fp16 artifact', () => {
     expect(restorerAvailable([{ id: 'gpen_bfr_512', name: 'GPEN-BFR-512', state: 'VERIFIED_LOCAL', installed: true }], 'gpen')).toBe(true);
     expect(restorerAvailable([{ id: 'codeformer', name: 'CodeFormer', state: 'VERIFIED_LOCAL', installed: true }], 'ultramax')).toBe(false);
-    expect(restorerAvailable([{ name: 'codeformer.fp16.onnx', state: 'VERIFIED_LOCAL', installed: true }], 'ultramax')).toBe(true);
+    expect(restorerAvailable([{ id: 'ultramax', name: 'UltraMax', state: 'VERIFIED_LOCAL', installed: true }], 'ultramax')).toBe(true);
+    expect(restorerAvailable([{ id: 'ultramax', name: 'UltraMax', state: 'CANDIDATE', installed: false }], 'ultramax')).toBe(false);
+    expect(restorerAvailable([{ name: 'codeformer.fp16.onnx', state: 'VERIFIED_LOCAL', installed: true }], 'ultramax')).toBe(false);   // a bare artifact row is not the UltraMax selection
     expect(restorerAvailable([{ id: 'gpen_bfr_512', name: 'GPEN-BFR-512', state: 'VERIFIED_LOCAL', installed: false }], 'gpen')).toBe(false);
+  });
+  it('names the loaded weight file of each restorer, so the read-back can tell CodeFormer from UltraMax', () => {
+    expect(restorerFileMatches('codeformer.fp16.onnx', 'ultramax')).toBe(true);
+    expect(restorerFileMatches('codeformer.fp16.onnx', 'codeformer')).toBe(false);
+    expect(restorerFileMatches('CodeFormerv0.1.onnx', 'codeformer')).toBe(true);
+    expect(restorerFileMatches('CodeFormerv0.1.onnx', 'ultramax')).toBe(false);
+    expect(restorerFileMatches('GPEN-BFR-512.onnx', 'gpen')).toBe(true);
+    expect(restorerFileMatches('GFPGANv1.4.onnx', 'gfpgan')).toBe(true);
+  });
+});
+
+describe('controls the selection cannot act on stay off the wire', () => {
+  const request = { target_path: 't.mp4', inspection_id: 'a'.repeat(32), face_mappings: [{ track_id: 'track_0000', faceset_id: 'alice' }], processing: 'local' as const, remote_consent: false as const, trim_start_seconds: null, trim_end_seconds: null } as JobRequest;
+  it('drops fidelity for GPEN / GFPGAN (the engine rejects it), the XSeg vote outside Robust occlusion and bands for Feather fusion', () => {
+    const wire = wireParameters({ ...DEFAULT_PARAMETERS, restorer_model: 'gpen', fidelity_weight: .8, xseg_occlusion_strength: .4, blend_mode: 'feather', pyramid_levels: 5 });
+    expect(wire).not.toHaveProperty('fidelity_weight');
+    expect(wire).not.toHaveProperty('xseg_occlusion_strength');
+    expect(wire).not.toHaveProperty('pyramid_levels');
+    expect(wire.blend_mode).toBe('feather');
+    const kept = wireParameters({ ...DEFAULT_PARAMETERS, restorer_model: 'ultramax', fidelity_weight: .8, occlusion_mode: 'robust', xseg_occlusion_strength: .4, pyramid_levels: 5 });
+    expect(kept).toMatchObject({ fidelity_weight: .8, xseg_occlusion_strength: .4, pyramid_levels: 5 });
+  });
+  it('sends the fusion controls to the live preview only when they act and differ from the engine defaults', () => {
+    const send = (parameters: Parameters<typeof buildLivePayload>[0]['parameters']) => buildLivePayload({ request, time: 1, fps: 25, parameters, restorerAvailable: true })!;
+    const plain = send({ ...DEFAULT_PARAMETERS, xseg_occlusion_strength: .4, pyramid_levels: 5 });
+    expect(plain).not.toHaveProperty('xseg_occlusion_strength', .4);       // standard occlusion runs no XSeg network
+    expect(plain.xseg_occlusion_strength).toBeUndefined();
+    const robust = send({ ...DEFAULT_PARAMETERS, occlusion_mode: 'robust', xseg_occlusion_strength: .4, blend_mode: 'poisson', pyramid_levels: 5 });
+    expect(robust).toMatchObject({ occlusion_mode: 'robust', xseg_occlusion_strength: .4, blend_mode: 'poisson' });
+    expect(robust.pyramid_levels).toBeUndefined();                         // Poisson fusion has no pyramid
+    expect(send({ ...DEFAULT_PARAMETERS, occlusion_mode: 'robust', xseg_occlusion_strength: 1, blend_mode: 'multi_band', pyramid_levels: 4 })).not.toHaveProperty('blend_mode', 'multi_band');
+    expect(send({ ...DEFAULT_PARAMETERS, restorer_model: 'gpen', restoration_blend: .6, fidelity_weight: .9 }).fidelity_weight).toBeUndefined();
+    expect(send({ ...DEFAULT_PARAMETERS, restorer_model: 'codeformer', restoration_blend: .6, fidelity_weight: .9 }).fidelity_weight).toBe(.9);
   });
 });

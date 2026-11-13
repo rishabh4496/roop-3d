@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, useState } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import SettingControl from './components/controls/SettingControl';
-import { PANELS, SETTINGS, SETTING_BY_ID, recommendedText, settingValue, settingsOf, type SettingId } from './components/controls/settingsRegistry';
+import { PANELS, SETTINGS, SETTING_BY_ID, inactiveReason, recommendedText, settingValue, settingsOf, type SettingId } from './components/controls/settingsRegistry';
 import ContactSheetModal, { LEVELS, defaultAxes, type Patch } from './components/workstation/ContactSheetModal';
 import { DEFAULT_PARAMETERS } from './components/workstation/pipeline';
 import { PreviewBusyError } from './api';
@@ -11,7 +11,7 @@ import { PreviewBusyError } from './api';
 describe('settings registry', () => {
   it('documents every setting with sane bounds, a recommended range inside them, and three distinct sweep values', () => {
     expect(SETTINGS.map(spec => spec.id).sort()).toEqual(['color_strength', 'erosion_px', 'feather_px', 'fidelity_weight', 'pose_frontalization', 'pose_strength',
-      'restoration_blend', 'swap_weight', 'tps_expression_weight']);
+      'pyramid_levels', 'restoration_blend', 'swap_weight', 'tps_expression_weight', 'xseg_occlusion_strength']);
     for (const spec of SETTINGS) {
       expect(spec.min, spec.id).toBeLessThan(spec.max);
       expect(spec.default, spec.id).toBeGreaterThanOrEqual(spec.min);
@@ -37,14 +37,29 @@ describe('settings registry', () => {
   it('groups settings into the 3D Geometry, Masking and Restorer panels', () => {
     expect(Object.values(PANELS).map(panel => panel.title)).toEqual(['3D Geometry', 'Masking', 'Restorer']);
     expect(settingsOf('geometry').map(spec => spec.id)).toEqual(['pose_strength', 'pose_frontalization', 'tps_expression_weight']);
-    expect(settingsOf('masking').map(spec => spec.id)).toEqual(['swap_weight', 'erosion_px', 'feather_px']);
+    expect(settingsOf('masking').map(spec => spec.id)).toEqual(['swap_weight', 'erosion_px', 'feather_px', 'xseg_occlusion_strength', 'pyramid_levels']);
     expect(settingsOf('restorer').map(spec => spec.id)).toEqual(['color_strength', 'restoration_blend', 'fidelity_weight']);
     expect(recommendedText(SETTING_BY_ID.feather_px)).toBe('3–12 px');
     expect(recommendedText(SETTING_BY_ID.tps_expression_weight)).toBe('0.30–0.80');
   });
 
-  it('is honest that CodeFormer fidelity currently has no effect', () => {
-    expect(SETTING_BY_ID.fidelity_weight.inactive).toMatch(/not wired/i);
+  it('agrees with the engine bounds of the compositor fusion controls', () => {
+    expect([SETTING_BY_ID.xseg_occlusion_strength.min, SETTING_BY_ID.xseg_occlusion_strength.max, SETTING_BY_ID.xseg_occlusion_strength.default]).toEqual([0, 1, 1]);
+    expect([SETTING_BY_ID.pyramid_levels.min, SETTING_BY_ID.pyramid_levels.max, SETTING_BY_ID.pyramid_levels.default]).toEqual([4, 6, 4]);
+  });
+
+  it('says a control has no effect from the current selection, not from a fixed claim', () => {
+    const fidelity = SETTING_BY_ID.fidelity_weight, xseg = SETTING_BY_ID.xseg_occlusion_strength, bands = SETTING_BY_ID.pyramid_levels;
+    expect(inactiveReason(fidelity, DEFAULT_PARAMETERS)).toMatch(/GPEN and GFPGAN have none/);
+    expect(inactiveReason(fidelity, { ...DEFAULT_PARAMETERS, restorer_model: 'ultramax', restoration_blend: 0 })).toMatch(/restorer is off/);
+    expect(inactiveReason(fidelity, { ...DEFAULT_PARAMETERS, restorer_model: 'ultramax', restoration_blend: .5, bypass: ['restorer'] })).toMatch(/restorer is off/);
+    expect(inactiveReason(fidelity, { ...DEFAULT_PARAMETERS, restorer_model: 'codeformer', restoration_blend: .5 })).toBeNull();
+    expect(inactiveReason(xseg, DEFAULT_PARAMETERS)).toMatch(/Robust occlusion/);
+    expect(inactiveReason(xseg, { ...DEFAULT_PARAMETERS, occlusion_mode: 'robust' })).toBeNull();
+    expect(inactiveReason(bands, DEFAULT_PARAMETERS)).toBeNull();
+    expect(inactiveReason(bands, { ...DEFAULT_PARAMETERS, blend_mode: 'poisson' })).toMatch(/no pyramid/);
+    expect(inactiveReason(bands, { ...DEFAULT_PARAMETERS, blend_mode: 'frequency_separated' })).toBeNull();
+    expect(inactiveReason(SETTING_BY_ID.feather_px, DEFAULT_PARAMETERS)).toBeNull();
   });
 });
 
@@ -119,11 +134,12 @@ describe('SettingControl', () => {
   });
 
   it('disables an inert control and says why, in the control and in its help', async () => {
-    await act(async () => root.render(<Harness id="fidelity_weight" start={0.5}/>));
+    const reason = inactiveReason(SETTING_BY_ID.fidelity_weight, DEFAULT_PARAMETERS)!;
+    await act(async () => root.render(<Harness id="fidelity_weight" start={0.5} disabled reason={reason}/>));
     expect(host.querySelector<HTMLInputElement>('input[aria-label="CodeFormer fidelity"]')!.disabled).toBe(true);
     expect(host.querySelector<HTMLInputElement>('input[type="range"]')!.disabled).toBe(true);
     expect(host.querySelector<HTMLButtonElement>('.reset-setting')!.disabled).toBe(true);
-    expect(host.querySelector('.tip-warning')!.textContent).toMatch(/changes nothing/);
+    expect(host.querySelector('.tip-warning')!.textContent).toMatch(/GPEN and GFPGAN have none/);
     await act(async () => root.render(<Harness id="restoration_blend" start={0.5} disabled reason="GPEN weights are unavailable"/>));
     expect(host.querySelector('.tip-warning')!.textContent).toBe('GPEN weights are unavailable');
   });
