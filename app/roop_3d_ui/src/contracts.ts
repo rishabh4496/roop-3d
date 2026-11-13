@@ -9,7 +9,9 @@ export interface Capabilities {
   models: { id?: string; model_id: string; name: string; category?: string; native_resolution?: number | null;
     installed?: boolean; selectable?: boolean; vram_loaded?: boolean; trt_cached?: boolean; download_url?: string | null;
     supports_3d_hybrid?: boolean; state: string; license_state: string; inference_state: string; sha256?: string | null;
-    verified?: boolean; governance_approved?: boolean | null; blocked?: boolean; local_trust?: boolean }[];
+    verified?: boolean; governance_approved?: boolean | null; blocked?: boolean; local_trust?: boolean;
+    license_id?: string; commercial_use?: string; license_notice?: string; manual_acceptance_required?: boolean;
+    role?: string; family_hint?: string }[];
   workstation: { features: Record<string, Feature>; controls: Record<string, Record<string, string | null>>;
     tensorrt_mixed_precision?: { available: boolean; active: boolean; configured?: boolean; tensorrt_available: boolean;
       cuda_fp16_available: boolean; active_provider?: string | null; diagnostic?: string | null };

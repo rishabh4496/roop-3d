@@ -264,6 +264,46 @@ def _clear_unverified_legacy_trt_claim(report: dict[str, Any]) -> None:
         report["actual_inference_available"] = False
 
 
+def _resolve_manifest_entry_id(manager: Any, model_id: str) -> str | None:
+    if manager is None or not getattr(manager, "entries", None):
+        return None
+    if model_id in manager.entries:
+        return model_id
+    normalized = model_id.strip().lower()
+    for prefix in ("swapper_", "detector_", "restorer_", "animator_", "parser_", "recognizer_"):
+        candidate = f"{prefix}{normalized}"
+        if candidate in manager.entries:
+            return candidate
+    for entry_id, entry in manager.entries.items():
+        if entry_id.lower() == normalized:
+            return entry_id
+        if getattr(entry, "filename", None) and entry.filename.lower() == normalized:
+            return entry_id
+        if getattr(entry, "filename", None) and Path(entry.filename).stem.lower() == normalized:
+            return entry_id
+        if getattr(entry, "install_path", None) and Path(entry.install_path).name.lower() == normalized:
+            return entry_id
+        if getattr(entry, "install_path", None) and Path(entry.install_path).stem.lower() == normalized:
+            return entry_id
+        if getattr(entry, "registry_ids", None) and model_id in entry.registry_ids:
+            return entry_id
+    aliases = {
+        "scrfd": "detector_det_10g",
+        "det_10g": "detector_det_10g",
+        "scrfd_2.5g": "detector_scrfd_2_5g",
+        "inswapper_128": "swapper_inswapper_128",
+        "inswapper_128_fp16": "swapper_inswapper_128_fp16",
+        "gpen_bfr_512": "restorer_gpen_bfr_512",
+        "codeformer": "restorer_codeformer",
+        "gfpgan_v14": "restorer_gfpgan_v14",
+        "ultramax": "restorer_ultramax",
+    }
+    alias = aliases.get(normalized)
+    if alias and alias in manager.entries:
+        return alias
+    return None
+
+
 @router.post("/models/download")
 def batch_download_models(
     request: Request,
@@ -277,8 +317,16 @@ def batch_download_models(
     req = value or BatchModelDownloadRequest()
     target_ids = list(dict.fromkeys(([req.model_id] if req.model_id else []) + req.models))
     manager = getattr(request.app.state, "universal_models", None)
-    manifest_ids = [i for i in target_ids if manager is not None and i in manager.entries]
-    registry_ids = [i for i in target_ids if i not in manifest_ids]
+    manifest_ids = []
+    registry_ids = []
+    for i in target_ids:
+        resolved = _resolve_manifest_entry_id(manager, i)
+        if resolved is not None:
+            manifest_ids.append(resolved)
+        else:
+            registry_ids.append(i)
+    manifest_ids = list(dict.fromkeys(manifest_ids))
+    registry_ids = list(dict.fromkeys(registry_ids))
     batch = None
     if manager is not None and (manifest_ids or not target_ids):
         batch = start_manifest_download(manager, manifest_ids, accepted_license=req.accepted_license, commercial=req.commercial)
@@ -292,7 +340,14 @@ def batch_download_models(
         results.append({"model_id": model_id, "status": "VERIFIED_LOCAL", "downloaded": result.downloaded,
                         "resumed": result.resumed})
 
-    return {"status": "accepted" if batch and batch["queued"] else "ok", "batch": batch, "results": results}
+    return {
+        "status": "accepted" if batch and batch["queued"] else "ok",
+        "batch": batch,
+        "batch_id": batch["batch_id"] if batch else None,
+        "queued": batch["queued"] if batch else [],
+        "skipped": batch["skipped"] if batch else [],
+        "results": results,
+    }
 
 
 def _legacy_model_verification(root: Path, target_ids: list[str]) -> dict[str, Any]:

@@ -6,6 +6,7 @@ import { usePlayhead } from '../../stores/playheadStore';
 import { facesetDropProps } from '../../utils/facesetDrag';
 import VirtualList from '../common/VirtualList';
 import { TARGET_FACE_TUTORIAL } from '../guide/helpContent';
+import TargetMediaCard from './TargetMediaCard';
 
 export const trackLabel = (trackId: string) => trackId.replace('track_', 'Face ').replace(/ 0+(\d)/, ' $1');
 export function formatClock(seconds: number) {
@@ -70,6 +71,8 @@ function TrackCard({ track, selected, assignedId, sources, sheetTrack, onSelect,
 export interface TargetPanelProps {
   target: string; probe: Probe | null; busy: boolean;
   uploadReason: string | null; onImport: () => void;
+  onReplace?: () => void; onRemove?: () => void; onDropFiles?: (files: File[]) => void;
+  uploadProgress?: number;
   time: number; setTime: (value: number) => void; fps: number; duration: number;
   inspection: Inspection | null; inspectReason: string | null; onInspect: () => void;
   sheet: IdentitySheet | null; selectedTrack: string; onSelectTrack: (trackId: string) => void;
@@ -78,18 +81,22 @@ export interface TargetPanelProps {
 }
 
 export default function TargetPanel(props: TargetPanelProps) {
-  const { target, probe, busy, uploadReason, onImport, time, setTime, fps, duration, inspection, inspectReason, onInspect, sheet, selectedTrack, onSelectTrack, sources, assigned, onAssign, lockBar } = props;
-  const name = target ? fileName(target) : '';
+  const { target, probe, busy, uploadReason, onImport, onReplace, onRemove, onDropFiles, uploadProgress = 0, time, setTime, fps, duration, inspection, inspectReason, onInspect, sheet, selectedTrack, onSelectTrack, sources, assigned, onAssign, lockBar } = props;
+  const isVideo = !target || (probe?.duration_seconds ?? 0) > 0;
   return (
     <div className="studio-target">
       <div className="studio-section">
-        <button className="button full primary-soft" disabled={!!uploadReason || busy} title={uploadReason ?? 'Import a local video; it never leaves this machine'} onClick={onImport}>＋ Import target video</button>
-        <div className={`target-asset ${target ? 'loaded' : ''}`}>
-          <span className="asset-symbol">▤</span>
-          <div><strong title={target}>{name || 'No target loaded'}</strong>
-            <small>{probe ? `${probe.width} × ${probe.height} · ${probe.fps_rational ?? '?'} fps · ${formatClock(probe.duration_seconds ?? 0)}` : 'Your files stay on this machine'}</small></div>
-        </div>
-        <FrameNavigator time={time} setTime={setTime} fps={fps} duration={duration} disabled={!target} />
+        <TargetMediaCard
+          target={target}
+          probe={probe}
+          busy={busy || !!uploadReason}
+          uploadProgress={uploadProgress}
+          onAddTarget={onImport}
+          onReplaceTarget={onReplace ?? onImport}
+          onRemoveTarget={onRemove ?? (() => {})}
+          onDropFiles={onDropFiles ?? (() => {})}
+        />
+        {target && isVideo && <FrameNavigator time={time} setTime={setTime} fps={fps} duration={duration} disabled={!target} />}
       </div>
       <div className="studio-section grow">
         <div className="section-title"><span>DETECTED TARGET FACES</span><span>{inspection ? inspection.tracks.length.toString().padStart(2, '0') : '—'}</span></div>

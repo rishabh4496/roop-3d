@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
 import { IconHelp, IconLibrary, IconSearch, IconMinus, IconMoon, IconPalette, IconPlus, IconSave, IconSun } from './icons';
+import { useTelemetry } from '../stores/telemetryStore';
 
 export interface TopBarProps {
   title: string;
@@ -13,6 +14,33 @@ export interface TopBarProps {
   projectsDisabled: boolean; projectsReason?: string | null; busy: boolean; canSave: boolean;
   onPalette: () => void;
   onProjects: () => void; onSave: () => void; onSaveCopy: () => void;
+  onManageModels?: () => void;
+}
+
+function TopBarTelemetry() {
+  const gpu = useTelemetry(state => state.hardware?.gpus?.[0] ?? null);
+  if (!gpu || !(gpu.total_vram_mib > 0)) {
+    return (
+      <div className="topbar-telemetry-badge" title="Local execution mode active">
+        <span className="telemetry-label">GPU</span>
+        <span className="telemetry-val muted">LOCAL</span>
+      </div>
+    );
+  }
+  const used = Math.max(0, gpu.total_vram_mib - gpu.free_vram_mib);
+  const usedGb = (used / 1024).toFixed(1);
+  const totalGb = (gpu.total_vram_mib / 1024).toFixed(1);
+  const pct = Math.min(100, Math.round((used / gpu.total_vram_mib) * 100));
+  const shortName = gpu.name.replace(/^NVIDIA (GeForce )?/, '');
+  return (
+    <div className="topbar-telemetry-badge" title={`${gpu.name} · ${usedGb} of ${totalGb} GB VRAM in use (${pct}%)`} data-testid="topbar-vram">
+      <span className="telemetry-label" title={gpu.name}>{shortName}</span>
+      <span className="telemetry-val">{usedGb}/{totalGb} GB</span>
+      <div className="topbar-telemetry-bar" aria-hidden="true">
+        <i style={{ width: `${pct}%` }} data-level={pct > 90 ? 'high' : pct > 75 ? 'warn' : 'ok'} />
+      </div>
+    </div>
+  );
 }
 
 /** Slim top bar: where you are, the project, run/hardware status and workspace tools. One row, no stacked strips. */
@@ -22,7 +50,28 @@ export default function TopBar(p: TopBarProps) {
     <header className="app-header topbar">
       <h1 className="topbar-title">{p.title}</h1>
       <div className="project-name"><input aria-label="Project name" maxLength={128} value={p.projectName} onChange={event => p.onProjectName(event.target.value)} /><span className={p.dirty ? 'dirty' : ''}>{p.dirty ? 'UNSAVED' : 'SAVED'}</span></div>
-      <span className={`local-status ${online ? 'online' : ''}`} role="status" aria-label={online ? 'Local service connected' : `Local service ${p.connection}`} title={online ? 'Connected to the local service' : `Local service: ${p.connection}`}><i className={`dot ${online ? 'mint' : 'amber'}`} />{!online && p.connection}</span>
+      <span
+        className={`local-status isolation-badge ${online ? 'online' : 'offline'}`}
+        role="status"
+        aria-label={online ? 'Local service connected and offline isolated' : `Local service: ${p.connection}`}
+        title={online ? 'Local service connected · Airgapped / Offline Isolation Active' : `Local service: ${p.connection}`}
+        data-testid="topbar-isolation-badge"
+      >
+        <i className={`dot ${online ? 'mint' : 'amber'}`} />
+        <span className="isolation-text">{online ? 'LOCAL ISOLATED' : p.connection.toUpperCase()}</span>
+      </span>
+      <TopBarTelemetry />
+      {p.onManageModels && (
+        <button
+          type="button"
+          className="button small topbar-models-btn"
+          onClick={p.onManageModels}
+          title="Manage Models · Download, verify & inspect model weights"
+          data-testid="manage-models-button"
+        >
+          <IconLibrary size={14} /> Manage Models
+        </button>
+      )}
       <span className="topbar-spacer" />
       {p.pill}
       {p.liveStudio}

@@ -58,6 +58,11 @@
 .thm-beam { z-index: 0; }
 
 /* ── Magnetic dock ──────────────────────────────────────────────────────────────── */
+.workstation:has(.studio) .dock,
+.dock.studio-hidden {
+  display: none !important;
+}
+
 .dock {
   position: fixed;
   left: 50%;

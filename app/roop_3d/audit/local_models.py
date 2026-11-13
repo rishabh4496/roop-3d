@@ -670,6 +670,24 @@ class _Batch:
                 "skipped": list(self.skipped)}
 
 
+def _is_governance_reviewed(entry: Any) -> bool:
+    sha = getattr(entry, "sha256", None)
+    size = getattr(entry, "size_bytes", None)
+    if not sha or not size:
+        return False
+    try:
+        review_path = Path(__file__).resolve().parent.parent / "models" / "governance_reviews.json"
+        if review_path.is_file():
+            data = json.loads(review_path.read_text("utf-8"))
+            reviews = data.get("reviews", {})
+            rev = reviews.get(sha)
+            if rev and rev.get("byte_size") == size:
+                return True
+    except Exception:
+        pass
+    return False
+
+
 class UniversalModelDownloadManager:
     """Resumable, mirror-failover, checksum-verified downloads for the whole manifest. See the block comment above."""
 
@@ -1105,7 +1123,7 @@ class UniversalModelDownloadManager:
                     installed.append(entry_id)
                 elif entry_id in self._active:
                     skip("ALREADY_DOWNLOADING", f"batch {self._active[entry_id]} is already fetching this")
-                elif entry.requires_acceptance and not accepted_license:
+                elif entry.requires_acceptance and not (accepted_license or _is_governance_reviewed(entry)):
                     skip("LICENSE_ACCEPTANCE_REQUIRED", f"{entry.license}: {entry.license_note or 'review the licence, then pass accepted_license=true'}")
                 elif commercial and entry.commercial_use != "allow":
                     skip("COMMERCIAL_USE_NOT_PERMITTED", f"commercial use is {entry.commercial_use} for {entry.license}")

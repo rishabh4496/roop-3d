@@ -115,7 +115,7 @@ export async function upload(file: File, capabilities: Capabilities, progress: (
       await api(`/assets/uploads/${session.upload_id}?offset=${offset}`, { method: 'PUT', body: chunk, signal, headers: { 'Content-Type': 'application/octet-stream' } });
       progress(Math.min(1, (offset + chunk.size) / file.size));
     }
-    return await post<{ kind: 'video' | 'faceset' | 'image'; path?: string; faceset_id?: string }>(`/assets/uploads/${session.upload_id}/complete`, {}, { signal });
+    return await post<{ kind: 'video' | 'faceset' | 'image'; path?: string; faceset_id?: string; sha256?: string }>(`/assets/uploads/${session.upload_id}/complete`, {}, { signal });
   } catch (error) {
     await api(`/assets/uploads/${session.upload_id}`, { method: 'DELETE' }).catch(() => undefined);
     throw error;

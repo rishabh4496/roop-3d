@@ -2444,31 +2444,43 @@ body {
 .identity-lock{margin-top:14px;border:1px solid var(--line);border-radius:6px;padding:12px 14px;background:var(--raised);display:flex;flex-direction:column;gap:8px}.identity-lock.locked{border-color:var(--accent);background:var(--soft)}.identity-lock.stale{border-color:var(--danger)}.identity-lock small{color:var(--muted)}.identity-assignments,.identity-reasons{margin:0;padding-left:18px;font-size:11px;line-height:1.6}.identity-reasons{color:var(--danger)}.identity-actions{display:flex;gap:8px;flex-wrap:wrap}
 
 /* =========================================================================
-   Stage 7: Studio workstation layout (target · identity · preview · inspector + bottom timeline).
+   Stage 7 / Phase 2: Locked 100dvh 4-Zone NLE Studio Grid.
+   Zone 1: Top Bar
+   Zone 2: Left Asset Dock (320px, independent vertical scroll)
+   Zone 3: Center Viewport (flex-1 min-w-0 min-h-0 with mode switcher & pinned bottom timeline)
+   Zone 4: Right Inspector (340px, independent vertical scroll & sticky bottom footer)
    Theme tokens only, so every dark / light theme applies unchanged.
    ========================================================================= */
-.studio{display:flex;flex-direction:column;gap:8px;padding:8px 10px 12px;min-width:0}
-.studio-grid{display:grid;gap:8px;min-height:680px;height:calc(100dvh - 250px);
-  grid-template-columns:minmax(210px,270px) minmax(0,1fr) minmax(310px,370px);grid-template-rows:minmax(360px,1fr) minmax(220px,.42fr);
-  grid-template-areas:"source center inspector" "timeline timeline queue"}
-@media(max-width:1279px){.studio-grid{height:auto;grid-template-columns:minmax(220px,280px) minmax(0,1fr);grid-template-rows:minmax(500px,auto) minmax(360px,auto) minmax(250px,auto);grid-template-areas:"source center" "inspector inspector" "timeline queue"}
-  .studio-left-dock{grid-template-rows:repeat(3,minmax(0,1fr))}}
-@media(max-width:899px){.studio{padding:8px}.studio-grid{grid-template-columns:minmax(0,1fr);grid-template-rows:auto;grid-template-areas:"center" "source" "inspector" "timeline" "queue";min-height:0}
-  .studio-left-dock{grid-template-rows:repeat(3,minmax(180px,auto))}}
-.studio-left-dock{grid-area:source;display:grid;grid-template-rows:repeat(3,minmax(0,1fr));gap:8px;min-width:0;min-height:0;overflow:hidden}
-.studio-left-dock>.studio-panel{min-height:0}
-.studio-center{grid-area:center}
-.studio-right{grid-area:inspector}
-.studio-panel{background:var(--surface);border:1px solid var(--line);border-radius:8px;min-width:0;min-height:0;overflow:auto;display:flex;flex-direction:column;scrollbar-width:thin;scrollbar-color:var(--line) transparent}
-.studio-panel-head,.studio-center-head{position:sticky;top:0;z-index:3;display:flex;align-items:center;justify-content:space-between;gap:8px;padding:10px 12px;background:var(--surface);border-bottom:1px solid var(--line)}
+.studio{display:flex;flex-direction:column;flex:1 1 0;min-width:0;min-height:0;height:100%;max-height:100%;padding:6px 10px 8px;gap:8px;overflow:hidden;box-sizing:border-box}
+.studio-grid{display:grid;flex:1 1 0;gap:8px;min-width:0;min-height:0;height:100%;max-height:100%;
+  grid-template-columns:320px minmax(0,1fr) 340px;grid-template-rows:minmax(0,1fr) auto;
+  grid-template-areas:"source center inspector" "source timeline queue";
+  overflow:hidden;box-sizing:border-box}
+@media(max-width:1279px){.studio-grid{grid-template-columns:280px minmax(0,1fr) 320px}}
+@media(max-width:899px){.studio{padding:4px}.studio-grid{grid-template-columns:minmax(0,1fr);grid-template-rows:auto;grid-template-areas:"center" "source" "inspector" "timeline" "queue";overflow-y:auto}}
+.studio-left-dock{grid-area:source;grid-row:1/-1;width:320px;max-width:320px;min-width:320px;height:100%;min-height:0;max-height:100%;display:flex;flex-direction:column;gap:8px;overflow-y:auto;overflow-x:hidden;scrollbar-width:thin;scrollbar-color:var(--line) transparent;box-sizing:border-box}
+@media(max-width:1279px){.studio-left-dock{width:280px;max-width:280px;min-width:280px}}
+@media(max-width:899px){.studio-left-dock{width:100%;max-width:100%;min-width:0;grid-row:auto}}
+.studio-left-dock>.studio-panel{min-height:auto;flex:0 0 auto;overflow:visible}
+.studio-center{grid-area:center;display:flex;flex-direction:column;min-width:0;min-height:0;height:100%;max-height:100%;background:var(--surface);border:1px solid var(--line);border-radius:8px;overflow:hidden;box-sizing:border-box}
+.studio-right{grid-area:inspector;width:340px;max-width:340px;min-width:340px;min-height:0;height:100%;max-height:100%;display:flex;flex-direction:column;background:var(--surface);border:1px solid var(--line);border-radius:8px;overflow:hidden;box-sizing:border-box}
+@media(max-width:1279px){.studio-right{width:320px;max-width:320px;min-width:320px}}
+@media(max-width:899px){.studio-right{width:100%;max-width:100%;min-width:0}}
+.studio-panel{background:var(--surface);border:1px solid var(--line);border-radius:8px;min-width:0;min-height:0;display:flex;flex-direction:column;scrollbar-width:thin;scrollbar-color:var(--line) transparent}
+.studio-panel-head,.studio-center-head{position:sticky;top:0;z-index:3;display:flex;align-items:center;justify-content:space-between;gap:8px;padding:8px 12px;background:var(--surface);border-bottom:1px solid var(--line);flex-shrink:0}
 .studio-panel-head .eyebrow,.studio-center-head .eyebrow{font-size:10px;letter-spacing:1.4px;font-weight:650}
-.studio-center{display:flex;flex-direction:column;min-width:0;min-height:0;background:var(--surface);border:1px solid var(--line);border-radius:8px;overflow:hidden}
+.studio-viewport-title{display:flex;flex-direction:column;gap:1px;min-width:0;max-width:180px}
+.studio-viewport-title strong{font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.viewport-mode-switcher{display:flex;align-items:center;gap:3px;padding:2px 3px;border-radius:6px;background:var(--raised);border:1px solid var(--line)}
+.viewport-mode-switcher .button.small{font-size:11px;min-height:24px;padding:2px 9px;border:0;border-radius:4px;background:transparent;color:var(--muted);font-weight:600;cursor:pointer;transition:all .15s ease}
+.viewport-mode-switcher .button.small.accent{background:var(--accent);color:var(--ink,#fff);box-shadow:0 1px 4px rgba(0,0,0,.25)}
+.studio-viewport-body{flex:1 1 0;min-width:0;min-height:0;height:100%;max-height:100%;position:relative;overflow:hidden;display:flex;flex-direction:column}
 .studio-center-head{position:static}
 .studio-center-head>div{display:flex;flex-direction:column;gap:2px;min-width:0}
 .studio-center-head strong{font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .studio-center .viewport-section{display:flex;flex-direction:column;flex:1 1 auto;min-height:0;overflow:auto;margin:0;border:0}
-.studio-center .viewport{flex:1 1 auto;height:auto;min-height:340px}
-@media(max-width:1279px){.studio-center .viewport{min-height:380px;height:52vw;max-height:620px}}
+.studio-center .viewport{flex:1 1 auto;height:auto;min-height:280px}
+@media(max-width:1279px){.studio-center .viewport{min-height:240px;max-height:520px}}
 .studio-section{display:flex;flex-direction:column;gap:9px;padding:12px}
 .studio-section.grow{flex:1 1 auto;border-top:1px solid var(--line)}
 .studio-hint{font-size:11px;line-height:1.5;margin:0;padding:0 12px 12px}
@@ -2607,7 +2619,7 @@ button.lane-label:hover{background:var(--raised)}
 @media(max-width:899px){.lane{grid-template-columns:96px minmax(0,1fr)}.lane-playhead-host{left:calc(10px + 96px + 8px)}.lane-label small{display:none}}
 .layout-toggle[aria-pressed=true]{border-color:var(--accent);color:var(--accent)}
 /* Stage 7 studio: compact preview chrome so the frame gets the height, and dense inspector parameter panels. */
-@media(min-width:1280px){.studio-grid{height:calc(100vh - 340px);min-height:600px}}
+@media(min-width:1280px){.studio-grid{height:100%;max-height:100%;min-height:0}}
 .studio-center .snapshot-toolbar{padding:6px 10px;gap:6px}
 .studio-center .pipeline-flow{padding:6px 10px;gap:4px}
 .studio-center .pipeline-node{flex:0 0 auto;display:flex;align-items:center;gap:2px;padding:2px 4px 2px 2px}
@@ -2871,3 +2883,116 @@ button.lane-label:hover{background:var(--raised)}
 /* A contact sheet is only useful if all nine tiles are visible together: cap each image so three rows fit the dialog. */
 .sweep-grid .sweep-cell img{max-height:calc((94vh - 330px) / 3);object-fit:contain;background:#05090a;margin:0 auto}
 .sweep-grid .sweep-cell .sweep-pending{min-height:90px}
+
+/* =========================================================================
+   Phase 2: Workstation NLE Studio Grid Enhancements & Overflow Guards
+   ========================================================================= */
+.topbar-telemetry-badge {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  border-radius: 6px;
+  background: var(--raised, rgba(255, 255, 255, 0.06));
+  border: 1px solid var(--line, rgba(255, 255, 255, 0.1));
+  font-size: 11px;
+}
+.topbar-telemetry-badge .telemetry-label {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  color: var(--muted);
+  max-width: 90px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.topbar-telemetry-badge .telemetry-val {
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-weight: 600;
+  font-size: 11px;
+}
+.topbar-telemetry-bar {
+  width: 36px;
+  height: 5px;
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 3px;
+  overflow: hidden;
+}
+.topbar-telemetry-bar > i {
+  display: block;
+  height: 100%;
+  border-radius: 3px;
+  background: var(--accent, #6366f1);
+  transition: width 0.3s ease;
+}
+.isolation-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px;
+  border-radius: 6px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.8px;
+}
+.isolation-badge.online {
+  background: color-mix(in srgb, var(--mint, #10b981) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--mint, #10b981) 35%, transparent);
+  color: var(--mint, #10b981);
+}
+.isolation-badge.offline {
+  background: color-mix(in srgb, var(--amber, #f59e0b) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--amber, #f59e0b) 35%, transparent);
+  color: var(--amber, #f59e0b);
+}
+.topbar-models-btn {
+  font-size: 11px;
+  font-weight: 600;
+  gap: 5px;
+}
+.render-cancel-btn {
+  background: color-mix(in srgb, var(--danger, #ef4444) 18%, transparent) !important;
+  border-color: var(--danger, #ef4444) !important;
+  color: var(--danger, #ef4444) !important;
+  font-weight: 700;
+}
+.render-cancel-btn:hover {
+  background: var(--danger, #ef4444) !important;
+  color: #fff !important;
+}
+.sticky-footer {
+  position: sticky;
+  bottom: 0;
+  z-index: 10;
+  background: var(--surface);
+  border-top: 1px solid var(--line);
+  padding: 8px 12px;
+  box-shadow: 0 -4px 12px rgba(0, 0, 0, 0.25);
+  flex-shrink: 0;
+}
+/* Comprehensive min-w-0 and overflow guards to prevent blowout */
+.studio-grid,
+.studio-left-dock,
+.studio-center,
+.studio-right,
+.studio-bottom,
+.studio-queue,
+.studio-grid * {
+  min-width: 0;
+  box-sizing: border-box;
+}
+.studio-center .studio-center-canvas-area,
+.studio-center .studio-viewport-body {
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  max-height: 100%;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+.target-media-slot {
+  display: contents;
+}

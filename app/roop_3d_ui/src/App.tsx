@@ -40,6 +40,8 @@ import PipelinePill from './components/hud/PipelinePill';
 import RunPill from './components/faceswap/PipelinePill';
 import EngineStatusBar from './components/hud/EngineStatusBar';
 import ToastHost from './components/common/ToastHost';
+import { pushToast } from './stores/toasts';
+import { registerTargetMedia, clearTargetMedia } from './stores/targetMedia';
 import RequiredModelsBanner from './components/modelhub/RequiredModelsBanner';
 import ModelManagerModal from './components/modelhub/ModelManagerModal';
 import { OPEN_MODEL_HUB } from './components/modelhub/openModelHub';
@@ -125,6 +127,7 @@ export default function App() {
   // Stage 7: 'studio' = four-panel workstation (target / identity / preview / inspector + bottom timeline); 'classic'
   // keeps the previous stacked workstation intact. Stored per browser only (a convenience, never project state).
   const [layoutMode, setLayoutMode] = useState<'studio' | 'classic'>(() => { try { return localStorage.getItem('roop3d-workstation-layout') === 'classic' ? 'classic' : 'studio'; } catch { return 'studio'; } });
+  const [centerMode, setCenterMode] = useState<'2d' | '3d'>('2d');
   useEffect(() => { try { localStorage.setItem('roop3d-workstation-layout', layoutMode); } catch { /* per-session only */ } }, [layoutMode]);
   const [panelsSlot, setPanelsSlot] = useState<HTMLDivElement | null>(null), [timelineSlot, setTimelineSlot] = useState<HTMLDivElement | null>(null), [traySlot, setTraySlot] = useState<HTMLDivElement | null>(null);
   const [identityMesh, setIdentityMesh] = useState<Reconstruction | null>(null);
@@ -196,7 +199,7 @@ export default function App() {
   const captureWorkspace = () => ({ parameters, exportOptions, maskBase64, curves, faces: faceEditState(), time, sourceId, identitySourceB, selectedTrack, trimStart, trimEnd });
   const restoreWorkspace = (value: ReturnType<typeof captureWorkspace>) => { const before = captureWorkspace(); const apply = (snapshot: typeof before) => { setParametersRaw(snapshot.parameters); setExportOptions(snapshot.exportOptions ?? DEFAULT_EXPORT); setMaskRaw(snapshot.maskBase64); replaceCurves(snapshot.curves); restoreFaceEdit(snapshot.faces); setTime(snapshot.time); setSourceId(snapshot.sourceId); setIdentitySourceB(snapshot.identitySourceB ?? ''); setSelectedTrack(snapshot.selectedTrack); setTrimStart(snapshot.trimStart); setTrimEnd(snapshot.trimEnd); useHistoryStore.getState().live(); }; executeCommand({ label: 'Restore snapshot settings', undo: () => apply(before), redo: () => apply(value) }); };
   const [previewLatency, setPreviewLatency] = useState<Record<string, number> | null>(null);
-  const fileInput = useRef<HTMLInputElement>(null), sourceInput = useRef<HTMLInputElement>(null), projectInput = useRef<HTMLInputElement>(null);
+  const fileInput = useRef<HTMLInputElement>(null), sourceInput = useRef<HTMLInputElement>(null), targetInput = useRef<HTMLInputElement>(null), projectInput = useRef<HTMLInputElement>(null);
   const uploadAbort = useRef<AbortController | null>(null), queueKey = useRef({ fingerprint: '', key: '' });
   const currentJob = jobs.find(job => job.job_id === selectedJob) ?? null;
   // Stage 17: when a render FINISHES in this session, load /api/v1/jobs/{id}/download beside the original in the Before / After player.
@@ -318,12 +321,127 @@ export default function App() {
     return () => controller.abort();
   }, [sourceId, reconstructAttempt]);
   useEffect(() => { const refresh = () => setReconstructAttempt(v => v + 1); window.addEventListener("faceset-builder-saved", refresh); return () => window.removeEventListener("faceset-builder-saved", refresh); }, []);
-  const loadTarget = async (path: string) => {
-    const [info, frames, reconstructionList] = await Promise.all([post<Probe>('/media/probe', { path }), api<{ timestamps: number[] }>(`/media/keyframes?${new URLSearchParams({ path })}`), api<typeof reconstructions>('/reconstructions')]);
+  const loadTarget = async (path: string, file?: File, objectUrl?: string) => {
+    const isImg = /\.(png|jpe?g|webp|bmp)$/i.test(path);
+    const [info, frames, reconstructionList] = await Promise.all([
+      post<Probe>('/media/probe', { path }),
+      isImg ? Promise.resolve({ timestamps: [0] }) : api<{ timestamps: number[] }>(`/media/keyframes?${new URLSearchParams({ path })}`),
+      api<typeof reconstructions>('/reconstructions'),
+    ]);
     setTarget(path); setProbe(info); setTime(0); setKeys(frames.timestamps); setInspection(null); setIdentityLock(null); setAssigned({}); setSelectedTrack(''); setMesh(null); setTrimStart(0); setTrimEnd(null); setReconstructions(reconstructionList); setSelectedJob(''); setProject(null); setIdentityMesh(null);
     useFaceSelectionStore.getState().reset(); useHistoryStore.getState().reset(); setMaskRaw(null); setMaskKeyframes([]);
+    registerTargetMedia({
+      path,
+      filename: file?.name || fileName(path),
+      mediaType: isImg ? 'image' : 'video',
+      width: info.width,
+      height: info.height,
+      durationSeconds: info.duration_seconds,
+      fps: parseFps(info.fps_rational, 30),
+      objectUrl: objectUrl || null,
+      sha256: null,
+    });
     return info;
   };
+
+  const handleTargetUpload = async (file: File) => {
+    if (!caps) { setNotice('Still connecting to the local service. Try again in a moment.'); return; }
+    void run('Importing target media', async () => {
+      const controller = new AbortController();
+      uploadAbort.current = controller;
+      setUploadProgress(0);
+      try {
+        const objectUrl = URL.createObjectURL(file);
+        const result = await upload(file, caps, progress => setUploadProgress(progress), controller.signal);
+        if (result.path) {
+          const info = await loadTarget(result.path, file, objectUrl);
+          const isVideo = file.type.startsWith('video/') || !file.type.startsWith('image/');
+          registerTargetMedia({
+            path: result.path,
+            filename: file.name,
+            mediaType: isVideo ? 'video' : 'image',
+            width: info.width,
+            height: info.height,
+            durationSeconds: info.duration_seconds,
+            fps: parseFps(info.fps_rational, 30),
+            objectUrl,
+            sha256: (result as any).sha256 ?? null,
+          });
+          pushToast({ kind: 'ok', text: `Target media loaded: ${file.name}` });
+        }
+      } catch (err: any) {
+        if (err.name !== 'AbortError') {
+          setError(err.message || 'Target upload failed');
+          pushToast({ kind: 'error', title: 'Upload Failed', text: err.message || 'Target upload failed' });
+        }
+      } finally {
+        setUploadProgress(0);
+      }
+    });
+  };
+
+  const handleClearTarget = () => {
+    clearTargetMedia();
+    setTarget('');
+    setProbe(null);
+    setTime(0);
+    setKeys([]);
+    setInspection(null);
+    setIdentityLock(null);
+    setAssigned({});
+    setSelectedTrack('');
+    setMesh(null);
+    setIdentityMesh(null);
+    setTrimStart(0);
+    setTrimEnd(null);
+    setReconstructions([]);
+    setSelectedJob('');
+    setProject(null);
+    useFaceSelectionStore.getState().reset();
+    useHistoryStore.getState().reset();
+    setMaskRaw(null);
+    setMaskKeyframes([]);
+    clearSession();
+    void post('/target/media', null).catch(() => {});
+    pushToast({ kind: 'info', text: 'Target media cleared.' });
+  };
+
+  const handleReplaceTarget = () => {
+    targetInput.current?.click();
+  };
+
+  const handleDropFiles = (files: File[]) => {
+    if (!files.length) return;
+    void handleTargetUpload(files[0]);
+  };
+
+  const importSourceAssets = (files: File[]) => {
+    if (!files.length) return;
+    if (files.length > 32) { setError('Import at most 32 images or FaceSets at a time.'); return; }
+    if (!caps) { setNotice('Still connecting to the local service. Try again in a moment.'); return; }
+    void run('Importing source face(s)', async () => {
+      const controller = new AbortController(); uploadAbort.current = controller; setUploadProgress(0);
+      const imagePaths: string[] = [];
+      let facesetId = '';
+      for (const [index, file] of files.entries()) {
+        const result = await upload(file, caps, progress => setUploadProgress((index + progress) / files.length), controller.signal);
+        if (result.kind === 'image' && result.path) imagePaths.push(result.path);
+        else if (result.kind === 'faceset') facesetId = result.faceset_id ?? '';
+      }
+      if (imagePaths.length) {
+        const result = await post<{ faceset_id: string }>('/faceset/reconstruct-3d', { source_image_paths: imagePaths }, { signal: controller.signal });
+        facesetId = result.faceset_id;
+      }
+      if (facesetId) {
+        await refreshSources();
+        setSourceId(facesetId);
+        void post('/source/faces', { face_id: facesetId, path: imagePaths[0] || null }).catch(() => {});
+      }
+      setNotice('Source face(s) imported and registered.');
+      pushToast({ kind: 'ok', text: 'Source face(s) imported and registered.' });
+    });
+  };
+
   const importAssets = (files: File[]) => {
     if (!files.length) return;
     if (files.length > 32) { setError('Import at most 32 images or FaceSets at a time.'); return; }
@@ -334,7 +452,7 @@ export default function App() {
       let facesetId = '';
       for (const [index, file] of files.entries()) {
         const result = await upload(file, caps, progress => setUploadProgress((index + progress) / files.length), controller.signal);
-        if (result.kind === 'video' && result.path) await loadTarget(result.path);
+        if (result.kind === 'video' && result.path) await loadTarget(result.path, file);
         else if (result.kind === 'image' && result.path) imagePaths.push(result.path);
         else if (result.kind === 'faceset') facesetId = result.faceset_id ?? '';
       }
@@ -370,14 +488,42 @@ export default function App() {
     if (queueKey.current.fingerprint !== fingerprint) queueKey.current = { fingerprint, key: crypto.randomUUID() };
     window.dispatchEvent(new Event(JOB_START_EVENT)); // drop in-flight live previews so the render can take the GPU promptly
     const job = await post<Job>(`/projects/${saved.project_id}/jobs`, {}, { headers: { 'Idempotency-Key': queueKey.current.key } });
-    queueKey.current = { fingerprint: '', key: '' }; setSelectedJob(job.job_id); setQueueOpen(true); await refreshJobs(); setNotice('Render added to the local queue.');
+    queueKey.current = { fingerprint: '', key: '' }; setSelectedJob(job.job_id); setQueueOpen(true); await refreshJobs();
+    setNotice('Render added to the local queue.');
+    pushToast({ kind: 'ok', title: 'Render Queued', text: `Job ${job.job_id.slice(0, 8)} queued.` });
   });
   const queue = () => {
     try {
       request();
     } catch (e: any) {
       setNotice(e.message);
+      pushToast({ kind: 'error', title: 'Render Blocked', text: e.message });
       return;
+    }
+    // Verify required models are downloaded
+    const catalog = modelCatalog.models;
+    const selectedSwapper = swapperModelId || 'inswapper_128';
+    const swapperRecord = catalog.find(m => m.id === selectedSwapper || m.model_id === selectedSwapper);
+    if (swapperRecord && !swapperRecord.installed) {
+      pushToast({
+        kind: 'error',
+        title: 'Model Not Installed',
+        text: `The selected swapper model "${swapperRecord.name || selectedSwapper}" is not downloaded. Opening Model Hub to download.`,
+      });
+      setModelHubOpen(true);
+      return;
+    }
+    if (detectorModelId) {
+      const detRecord = catalog.find(m => m.id === detectorModelId || m.model_id === detectorModelId || m.id === `detector_${detectorModelId}`);
+      if (detRecord && !detRecord.installed) {
+        pushToast({
+          kind: 'error',
+          title: 'Detector Not Installed',
+          text: `The selected detector model "${detectorModelId}" is not downloaded. Opening Model Hub to download.`,
+        });
+        setModelHubOpen(true);
+        return;
+      }
     }
     const skip = sessionStorage.getItem('roop3d_skip_linter') === 'true';
     if (skip) {
@@ -386,6 +532,39 @@ export default function App() {
       setLinterOpen(true);
     }
   };
+
+  const notifiedJobFailures = useRef(new Set<string>());
+  const notifiedJobSuccesses = useRef(new Set<string>());
+  useEffect(() => {
+    if (!currentJob) return;
+    if (currentJob.state === 'failed' && currentJob.failure?.message) {
+      const key = `${currentJob.job_id}:${currentJob.failure.message}`;
+      if (!notifiedJobFailures.current.has(key)) {
+        notifiedJobFailures.current.add(key);
+        pushToast({
+          kind: 'error',
+          title: 'Render Failed',
+          text: currentJob.failure.message,
+        });
+      }
+    } else if (currentJob.state === 'succeeded' && currentJob.output?.output_path) {
+      const key = `${currentJob.job_id}:${currentJob.output.output_path}`;
+      if (!notifiedJobSuccesses.current.has(key)) {
+        notifiedJobSuccesses.current.add(key);
+        pushToast({
+          kind: 'ok',
+          title: 'Render Complete',
+          text: `Output ready: ${fileName(currentJob.output.output_path)}`,
+        });
+      }
+    }
+  }, [currentJob]);
+
+  useEffect(() => {
+    if (parameters.render_mode) {
+      void post('/render-mode', { render_mode: parameters.render_mode }).catch(() => {});
+    }
+  }, [parameters.render_mode]);
   const saveSettings = (value: Config) => void run('Applying settings', async () => { const saved = await api<Config>('/config', { method: 'PUT', body: JSON.stringify(value) }); setConfig(saved); window.dispatchEvent(new Event(RUNTIME_SETTINGS_CHANGED)); await connect(); setNotice('Effective settings saved. Existing paused jobs retain their original settings identity.'); });
   const persistProject = async (copy = false) => {
     const checkpoint = includeCheckpoint && currentJob && jobActions(caps, currentJob.state).includes('resume') ? currentJob.job_id : null;
@@ -665,7 +844,8 @@ export default function App() {
       tourFresh={!tourSeen()} onTour={() => setTourOpen(true)} onGuide={() => openGuide()}
       layoutMode={layoutMode} onLayout={() => setLayoutMode(mode => (mode === 'studio' ? 'classic' : 'studio'))}
       projectsDisabled={!!reason('projects')} projectsReason={reason('projects')} busy={!!busy} canSave={!!inspection}
-      onPalette={() => setPaletteOpen(true)} onProjects={() => { setProjectsOpen(true); void refreshProjects(); }} onSave={saveProject} onSaveCopy={() => void run('Saving project copy', async () => { await persistProject(true); })} />
+      onPalette={() => setPaletteOpen(true)} onProjects={() => { setProjectsOpen(true); void refreshProjects(); }} onSave={saveProject} onSaveCopy={() => void run('Saving project copy', async () => { await persistProject(true); })}
+      onManageModels={() => setModelHubOpen(true)} />
     <div className="studio-telemetry" data-studio-zone="telemetry" aria-label="Telemetry and command ribbon"><TelemetryHeader parameters={parameters} /></div>
     <RequiredModelsBanner onOpenHub={() => setModelHubOpen(true)} />
     {(route === '#/faceswap' || route === '#/facemgr') && <EngineStatusBar />}
@@ -693,13 +873,49 @@ export default function App() {
       />
     </AppRouter>
     <AppRouter route={route} screen="faceswap">
-      <input ref={fileInput} hidden type="file" accept=".mp4,.mov,.mkv,.avi,.webm,.m4v,.ts,.fsz,.png,.jpg,.jpeg,.webp,.bmp" onChange={event => { importAsset(event.target.files?.[0]); event.target.value = ''; }} />
+      <input
+        ref={targetInput}
+        hidden
+        type="file"
+        accept="image/*,video/*"
+        data-testid="target-media-input"
+        onChange={event => {
+          const file = event.target.files?.[0];
+          if (file) void handleTargetUpload(file);
+          event.target.value = '';
+        }}
+      />
+      <input
+        ref={sourceInput}
+        hidden
+        multiple
+        type="file"
+        accept="image/*,.fsz"
+        data-testid="source-face-input"
+        onChange={event => {
+          const files = Array.from(event.target.files || []);
+          if (files.length) void importSourceAssets(files);
+          event.target.value = '';
+        }}
+      />
+      <input
+        ref={fileInput}
+        hidden
+        multiple
+        type="file"
+        accept=".mp4,.mov,.mkv,.avi,.webm,.m4v,.ts,.fsz,.png,.jpg,.jpeg,.webp,.bmp"
+        onChange={event => {
+          const files = Array.from(event.target.files || []);
+          if (files.length) void importAssets(files);
+          event.target.value = '';
+        }}
+      />
       {layoutMode === 'studio' ? <div className="studio" data-testid="studio-layout">
         <div className="studio-grid">
           <aside className="studio-left-dock" aria-label="Source, target, and face mapping" data-studio-zone="source-target">
             <section className="studio-panel studio-identity" aria-label="Source identities" data-tour="source">
-              <div className="studio-panel-head"><span className="eyebrow">01 · SOURCE FACE / FACESET</span><span className="muted">{sources.length.toString().padStart(2, '0')}</span></div>
-              <PanelBoundary name="Identity panel"><FacesetLibrary variant="list" importDisabled={!!reason('uploads') || !!busy} sources={sources} selectedSourceId={sourceId} onSelectSource={id => setSourceId(id)} onRefreshSources={refreshSources} onImportFaceset={files => importAssets(files)}
+              <div className="studio-panel-head"><span className="eyebrow">01 · SOURCE FACE / 3D IDENTITY</span><span className="muted">{sources.length.toString().padStart(2, '0')}</span></div>
+              <PanelBoundary name="Identity panel"><FacesetLibrary variant="list" importDisabled={!!reason('uploads') || !!busy} sources={sources} selectedSourceId={sourceId} onSelectSource={id => setSourceId(id)} onRefreshSources={refreshSources} onImportFaceset={files => importSourceAssets(files)}
                 canSave={!!currentTrack?.thumbnail_base64} onSaveFace={saveTrackFace} notify={(message, type) => { if (type === 'error') setError(message); else setNotice(message); }} />
               {selectedFaceset ? <FaceSetDetail faceset={selectedFaceset} sources={sources} selectedTrackLabel={selectedTrack ? trackLabel(selectedTrack) : null}
                 assignedHere={!!selectedTrack && assigned[selectedTrack] === selectedFaceset.faceset_id} onAssign={() => selectedTrack && assignTrack(selectedTrack, selectedFaceset.faceset_id)}
@@ -708,11 +924,19 @@ export default function App() {
             </section>
             <section className="studio-panel studio-left" aria-label="Target media" data-tour="tracks">
               <div className="studio-panel-head"><span className="eyebrow">02 · TARGET MEDIA</span></div>
-              <PanelBoundary name="Target panel"><TargetPanel target={target} probe={probe} busy={!!busy} uploadReason={reason('uploads')} onImport={() => fileInput.current?.click()}
-                time={time} setTime={setTime} fps={parseFps(probe?.fps_rational, 30)} duration={probe?.duration_seconds ?? 0}
-                inspection={inspection} inspectReason={reason('face_inspection')} onInspect={inspect} sheet={sheet}
-                selectedTrack={selectedTrack} onSelectTrack={trackId => selectTrack(trackId)} sources={sources} assigned={assigned} onAssign={assignTrack}
-                lockBar={inspection && <IdentityLockBar target={target} inspection={inspection} mappings={Object.fromEntries(renderMappings().map(item => [item.track_id, item.faceset_id]))} sources={sources} lock={identityLock} onLock={setIdentityLock} busy={!!busy} onError={setError} />} /></PanelBoundary>
+              <PanelBoundary name="Target panel">
+                <div className="target-media-slot" data-slot="target-media-card" />
+                <TargetPanel target={target} probe={probe} busy={!!busy} uploadReason={reason('uploads')}
+                  onImport={() => targetInput.current?.click()}
+                  onReplace={handleReplaceTarget}
+                  onRemove={handleClearTarget}
+                  onDropFiles={handleDropFiles}
+                  uploadProgress={uploadProgress}
+                  time={time} setTime={setTime} fps={parseFps(probe?.fps_rational, 30)} duration={probe?.duration_seconds ?? 0}
+                  inspection={inspection} inspectReason={reason('face_inspection')} onInspect={inspect} sheet={sheet}
+                  selectedTrack={selectedTrack} onSelectTrack={trackId => selectTrack(trackId)} sources={sources} assigned={assigned} onAssign={assignTrack}
+                  lockBar={inspection && <IdentityLockBar target={target} inspection={inspection} mappings={Object.fromEntries(renderMappings().map(item => [item.track_id, item.faceset_id]))} sources={sources} lock={identityLock} onLock={setIdentityLock} busy={!!busy} onError={setError} />} />
+              </PanelBoundary>
             </section>
             <section className="studio-panel studio-mapping" aria-label="Target face mapping">
               <div className="studio-panel-head"><span className="eyebrow">03 · TARGET FACE MAPPING</span></div>
@@ -720,9 +944,47 @@ export default function App() {
             </section>
           </aside>
           <main className="studio-center" aria-label="Preview" data-studio-zone="preview">
-            <div className="studio-center-head"><div><span className="eyebrow">03 · PREVIEW</span><strong>{target ? fileName(target) : 'No target loaded'}</strong></div>
-              <button className="button accent" disabled={!!reason('queue') || !inspection || !renderMappings().length || !!busy} title={reason('queue') ?? (renderMappings().length ? 'Render mapped face tracks locally' : 'Assign a FaceSet to at least one track first')} onClick={queue}>Queue render <span>↗</span></button></div>
-            {viewport}
+            <div className="studio-center-head">
+              <div className="studio-viewport-title">
+                <span className="eyebrow">03 · VIEWPORT</span>
+                <strong>{target ? fileName(target) : 'No target loaded'}</strong>
+              </div>
+              <div className="viewport-mode-switcher" role="radiogroup" aria-label="Center viewport mode">
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={centerMode === '2d'}
+                  className={`button small ${centerMode === '2d' ? 'accent' : ''}`}
+                  onClick={() => setCenterMode('2d')}
+                  title="Target 2D & Video Canvas (Split-Wipe / Compare)"
+                  data-testid="mode-switch-2d"
+                >
+                  Target 2D Canvas
+                </button>
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={centerMode === '3d'}
+                  className={`button small ${centerMode === '3d' ? 'accent' : ''}`}
+                  onClick={() => setCenterMode('3d')}
+                  title="3D Identity Viewport (Mesh & Relighting Gizmos)"
+                  data-testid="mode-switch-3d"
+                >
+                  3D Identity Viewport
+                </button>
+              </div>
+              <button className="button accent" disabled={!!reason('queue') || !inspection || !renderMappings().length || !!busy} title={reason('queue') ?? (renderMappings().length ? 'Render mapped face tracks locally' : 'Assign a FaceSet to at least one track first')} onClick={queue}>Queue render <span>↗</span></button>
+            </div>
+            <div className="studio-viewport-body">
+              <div className="viewport-layer-2d" style={{ display: centerMode === '2d' ? 'flex' : 'none', flex: '1 1 auto', height: '100%', minHeight: 0, minWidth: 0, flexDirection: 'column' }}>
+                {viewport}
+              </div>
+              <div className="viewport-layer-3d" style={{ display: centerMode === '3d' ? 'flex' : 'none', flex: '1 1 auto', height: '100%', minHeight: 0, minWidth: 0, flexDirection: 'column', overflow: 'auto' }}>
+                <Suspense fallback={<div className="skeleton-tile wide" aria-label="Loading 3D Identity Viewport" />}>
+                  <PoseCoverageInspector coverage={coverage} track={currentTrack} mesh={identityMesh ?? mesh} reconstruction={reconstruction} parameters={parameters} setParameters={setParameters} />
+                </Suspense>
+              </div>
+            </div>
           </main>
           <aside className="studio-panel studio-right" aria-label="Inspector" data-studio-zone="inspector">
             <div className="studio-panel-head"><span className="eyebrow">04 · INSPECTOR</span></div>
@@ -733,6 +995,7 @@ export default function App() {
                 onSaved={async id => { await refreshSources(); setSourceId(id); window.dispatchEvent(new Event('faceset-builder-saved')); }} />}
               processing={<SettingsInspector namespace="workstation-setting" caps={caps} config={config} save={saveSettings} busy={!!busy}/>}
               footer={<RenderFooter job={currentJob && currentJob.request.target_path === target ? currentJob : null} onStart={queue}
+                onCancel={() => currentJob && controlJob(currentJob, 'cancel')}
                 startBlockedReason={reason('queue') ?? (!target ? 'Load a target video first.' : !inspection ? 'Inspect the target faces first.' : !renderMappings().length ? 'Assign a source FaceSet to at least one target face first.' : busy ? 'Busy' : null)}
                 frameBlockedReason={reason('frame_preview') ?? (!target ? 'Load a target video first.' : !previewRequest ? 'Assign a source FaceSet to a target face first: the preview needs a face mapping.' : null)} />} /></PanelBoundary>
           </aside>

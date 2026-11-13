@@ -132,7 +132,15 @@ const IDLE_BATCH: BatchState = { phase: 'idle', batchId: '', message: '', skippe
 export const batchStore = createAtomicStore<BatchState>(IDLE_BATCH);
 export const useBatch = (): BatchState => useStoreSelector(batchStore, state => state, (a, b) => a === b);
 
-interface BatchResponse { batch_id?: string; state?: string; entries?: Record<string, { status?: string; error?: string | null }>; skipped?: unknown[]; queued?: unknown[] }
+interface BatchResponse {
+  batch_id?: string;
+  state?: string;
+  entries?: Record<string, { status?: string; error?: string | null }>;
+  skipped?: unknown[];
+  queued?: unknown[];
+  batch?: { batch_id?: string; state?: string; skipped?: unknown[]; queued?: unknown[] } | null;
+  results?: unknown[];
+}
 const parseSkipped = (value: unknown): SkippedModel[] => (Array.isArray(value) ? value : []).flatMap(item => {
   const row = item as Record<string, unknown> | null;
   return row && typeof row.id === 'string' ? [{ id: row.id, reason: str(row.reason), detail: str(row.detail) }] : [];
@@ -170,9 +178,9 @@ export async function startDownload(ids: string[], options: { acceptedLicense?: 
   batchStore.set({ ...IDLE_BATCH, phase: 'starting', ids, message: 'Starting…' });
   try {
     const response = await post<BatchResponse>('/models/download', { models: ids, accepted_license: options.acceptedLicense === true });
-    const batchId = str(response.batch_id);
-    const skipped = parseSkipped(response.skipped);
-    const queued = list(response.queued);
+    const batchId = str(response.batch?.batch_id ?? response.batch_id);
+    const skipped = parseSkipped(response.batch?.skipped ?? response.skipped);
+    const queued = list(response.batch?.queued ?? response.queued);
     if (!batchId || !queued.length) {
       batchStore.set({ phase: 'done', batchId: '', skipped, message: skipped.length ? `${skipped.length} model${skipped.length === 1 ? ' was' : 's were'} not started.` : 'Everything requested is already installed.' });
       await refreshManifest({ force: true });

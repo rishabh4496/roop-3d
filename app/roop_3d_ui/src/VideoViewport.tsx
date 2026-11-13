@@ -688,17 +688,27 @@ export function VideoViewport({
       >
         {activePath ? (
           <>
-            <video
-              ref={isOutput ? (isShowingSourcePeek ? undefined : processed) : original}
-              src={mediaURL(activePath)}
-              preload="metadata"
-              playsInline
-              muted
-              onEnded={() => setPlaying(false)}
-              onError={() => setPlaybackError('Browser playback unavailable; frame previews can still be used.')}
-              onTimeUpdate={!isOutput ? event => { if (playing) setPlayhead(event.currentTarget.currentTime); } : undefined}
-            />
-            {!playing && !showLive && activeResult.source && (
+            {/\.(png|jpe?g|webp|bmp)$/i.test(activePath) ? (
+              <img
+                src={mediaURL(activePath)}
+                alt={`${isOutput ? (isShowingSourcePeek ? 'Source peek' : 'Processed') : 'Source'} target`}
+                className="target-canvas-image"
+                style={{ width: '100%', height: '100%', objectFit: 'contain' }}
+                data-testid="target-image-canvas"
+              />
+            ) : (
+              <video
+                ref={isOutput ? (isShowingSourcePeek ? undefined : processed) : original}
+                src={mediaURL(activePath)}
+                preload="metadata"
+                playsInline
+                muted
+                onEnded={() => setPlaying(false)}
+                onError={() => setPlaybackError('Browser playback unavailable; frame previews can still be used.')}
+                onTimeUpdate={!isOutput ? event => { if (playing) setPlayhead(event.currentTarget.currentTime); } : undefined}
+              />
+            )}
+            {!playing && !showLive && activeResult.source && !/\.(png|jpe?g|webp|bmp)$/i.test(activePath) && (
               <img
                 className="frame-preview"
                 src={activeResult.source}
