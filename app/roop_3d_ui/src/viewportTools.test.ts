@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
-  BUFFER_VIEWS, DEFAULT_SH_LIGHT, JAW_MAX_DEG, buildJawRig, chinAt, eyeAnchors, faceEditOf, gazeToPoint, jawAngleFromPoint, jawDegToMouthOpen,
-  lightAngles, lightVector, mouthOpenToJawDeg, openJaw, pointToGaze, shBasis, shLightCoefficients, shLightOf, shRadiance, withFaceEdit, withManualLight,
+  BUFFER_VIEWS, DEFAULT_SH_LIGHT, JAW_MAX_DEG, buildJawRig, chinAt, eyeAnchors, gazeToPoint, jawAngleFromPoint, jawDegToMouthOpen,
+  lightAngles, lightVector, mouthOpenToJawDeg, openJaw, pointToGaze, shBasis, shLightCoefficients, shLightOf, shRadiance, withManualLight,
 } from './components/three/viewportTools';
 import { DEFAULT_PARAMETERS } from './components/workstation/pipeline';
 import { lightDirection } from './components/three/PoseGeometryViewer';
@@ -143,19 +143,6 @@ describe('eye gaze target', () => {
     expect(fallback.left[0]).toBeLessThan(0);
     expect(fallback.right[0]).toBeGreaterThan(0);
     expect(fallback.left[1]).toBeGreaterThan(0);
-  });
-});
-
-describe('face edits written by the gizmos and panels', () => {
-  it('sets a value on one track without touching the input, and clears empty entries', () => {
-    const start = { ...DEFAULT_PARAMETERS, face_expression_overrides: { track_0001: { mouth_smile: 0.4 } } };
-    const opened = withFaceEdit(start, 'track_0001', { mouth_open: 0.5 });
-    expect(opened.face_expression_overrides).toEqual({ track_0001: { mouth_smile: 0.4, mouth_open: 0.5 } });
-    expect(start.face_expression_overrides).toEqual({ track_0001: { mouth_smile: 0.4 } });
-    const cleared = withFaceEdit(withFaceEdit(opened, 'track_0001', { mouth_smile: 0 }), 'track_0001', { mouth_open: 0 });
-    expect(cleared.face_expression_overrides).toEqual({});
-    expect(faceEditOf(opened, 'track_0001').mouth_open).toBe(0.5);
-    expect(faceEditOf(opened, null)).toEqual({});
   });
 });
 

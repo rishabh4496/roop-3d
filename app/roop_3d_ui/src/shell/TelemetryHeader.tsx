@@ -1,48 +1,39 @@
 import { useRef, type RefObject } from 'react';
 import { AnimatedBeam, ConvergingBeams, MotionNumber } from '../components/ui-layouts';
-import { skullBlendOf, swapScopeOf } from '../components/studio/swapScope';
-import type { WorkstationParameters } from '../components/workstation/pipeline';
 import { usePipelineStatus, usePipelineStatusPolling } from '../stores/pipelineStatus';
 import { useTrtBuild } from '../stores/pipelineStream';
 import { useTelemetry } from '../stores/telemetryStore';
 import { cn } from '../lib/utils';
 
 /**
- * Top glass telemetry strip: GPU, precision state, VRAM, live FPS, the active swap mode, and a compact execution graph.
- * Every number is something the server reported (`/ws/telemetry`, `/api/pipeline/status`); a value that has not been reported shows
- * "n/a" or an em dash. Nothing is estimated and no precision or mode is claimed that the engine did not state.
+ * Top glass telemetry strip: GPU, precision state, VRAM, live FPS, and a compact execution graph.
+ * Every number is server-reported; unreported values show "n/a" or an em dash.
  */
 export type GraphNode = 'identity' | 'target' | 'lbs' | 'relight' | 'output';
 
 export const GRAPH_NODES: readonly { id: GraphNode; label: string; hash: string; hint: string }[] = [
   { id: 'identity', label: '.fsz Identity', hash: '#/identity-forge', hint: 'Source FaceSet: open Identity Forge' },
   { id: 'target', label: 'Target Media', hash: '#/studio', hint: 'Target video: open the Studio' },
-  { id: 'lbs', label: '3D LBS + Jaw/Cage', hash: '#/studio', hint: 'Mesh, pose and jaw/cage warp' },
-  { id: 'relight', label: 'SH Relight + PBR Shade', hash: '#/studio', hint: 'Spherical-harmonics relight and the 3D shader' },
+  { id: 'lbs', label: '3D mesh fit + pose', hash: '#/studio', hint: 'Volumetric head mesh and pose fitting' },
+  { id: 'relight', label: 'SH Relight + PBR Shade', hash: '#/studio', hint: 'Spherical-harmonics relight and 3D shader' },
   { id: 'output', label: 'MP4 Output', hash: '#/queue', hint: 'Rendered output: open the Batch Queue' },
 ];
 
 /**
  * Which graph node a server stage name belongs to. The engine's stage vocabulary is
- * detection / landmark / warp / restoration / blend (+ encode); anything unrecognised lights nothing rather than guessing.
+ * detection / landmark / mesh fit / render / blend (+ encode); anything unrecognised lights nothing rather than guessing.
  */
 export function nodeForStage(stage: string | null | undefined): GraphNode | null {
   const name = String(stage ?? '').toLowerCase();
   if (!name || name === 'idle') return null;
   if (/(identity|source|faceset|embed)/.test(name)) return 'identity';
   if (/(detect|landmark|decode|track|inspect|target)/.test(name)) return 'target';
-  if (/(warp|mesh|pose|lbs|swap|cage|jaw|reconstruct)/.test(name)) return 'lbs';
+  if (/(mesh|pose|lbs|reconstruct|fit)/.test(name)) return 'lbs';
   if (/(relight|light|shad|render|blend|composit|matte)/.test(name)) return 'relight';
   if (/(encode|output|mux|write|export)/.test(name)) return 'output';
   return null;
 }
 
-export function swapModeLabel(parameters: WorkstationParameters): string {
-  const scope = swapScopeOf(parameters);
-  if (scope === 'full_craniofacial') return '100% FULL CRANIOFACIAL LOCK';
-  if (scope === 'adaptive_skull') return `ADAPTIVE SKULL BLEND · ${Math.round(skullBlendOf(parameters) * 100)}% SOURCE`;
-  return 'INNER FACE ONLY';
-}
 
 const mib = (value: number) => value / 1024;
 
@@ -89,7 +80,7 @@ function PipelineMiniMap() {
   );
 }
 
-export default function TelemetryHeader({ parameters }: { parameters: WorkstationParameters }) {
+export default function TelemetryHeader() {
   usePipelineStatusPolling();
   const gpuName = useTelemetry(state => state.hardware?.gpus?.[0]?.name ?? null);
   const fps = useTelemetry(state => (typeof state.progress?.fps === 'number' ? state.progress.fps : null));
@@ -103,7 +94,7 @@ export default function TelemetryHeader({ parameters }: { parameters: Workstatio
       <div className="thm-cell thm-trt" data-testid="thm-trt"><span className="thm-key">TensorRT precision</span><b className={cn('thm-val', !precision && !building && 'muted')}>{trt}</b></div>
       <VramMeter />
       <div className="thm-cell thm-fps" data-testid="thm-fps"><span className="thm-key">FPS</span><b className="thm-val"><MotionNumber value={fps ?? Number.NaN} decimals={1} minChars={4} /></b></div>
-      <span className="thm-badge" data-testid="thm-swap-mode" title="Swap scope of the current render settings">{swapModeLabel(parameters)}</span>
+      <span className="thm-badge" data-testid="thm-pipeline-mode" title="True-3D mesh reconstruction pipeline">PURE 3D HEAD</span>
       <PipelineMiniMap />
     </section>
   );

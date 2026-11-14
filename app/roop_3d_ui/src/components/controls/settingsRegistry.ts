@@ -2,7 +2,7 @@ import type { WorkstationParameters } from '../workstation/pipeline';
 import { pyramidInactiveReason, xsegInactiveReason } from '../studio/compositing';
 
 export type PanelId = 'masking' | 'color';
-export type SettingId = 'swap_weight' | 'erosion_px' | 'feather_px' | 'xseg_occlusion_strength' | 'pyramid_levels' | 'color_strength';
+export type SettingId = 'erosion_px' | 'feather_px' | 'xseg_occlusion_strength' | 'pyramid_levels' | 'color_strength';
 
 export interface SettingSpec {
   id: SettingId;
@@ -27,8 +27,6 @@ export const PANELS: Record<PanelId, { title: string; hint: string }> = {
 };
 
 export const SETTINGS: SettingSpec[] = [
-  { id: 'swap_weight', label: 'Identity weight', panel: 'masking', min: 0, max: 1, step: .01, default: 1, recommended: [.8, 1], sweep: [.3, .65, 1],
-    effect: 'How much of the rendered 3D head replaces the original. 1 is the full head; lower mixes the target\'s own face back in, which hides identity mismatch but looks like a ghost.' },
   { id: 'erosion_px', label: 'Mask erosion', panel: 'masking', min: -32, max: 32, step: 1, default: 0, recommended: [-2, 4], sweep: [-6, 0, 6], unit: 'px',
     effect: 'Shrinks (positive) or grows (negative) the head mask. Positive hides a halo of the old face around the edge; negative covers more skin or hairline.' },
   { id: 'feather_px', label: 'Mask feather', panel: 'masking', min: 0, max: 64, step: .1, default: 5, recommended: [3, 12], sweep: [0, 6, 20], unit: 'px',

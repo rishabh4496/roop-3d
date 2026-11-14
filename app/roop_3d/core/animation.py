@@ -6,11 +6,11 @@ from functools import lru_cache
 from pydantic import Field, model_validator, PrivateAttr
 from roop_3d.core.settings import Contract
 
-CurveName = Literal['swap_weight', 'mask_feather', 'mask_erosion', 'swap_opacity', 'mask_feather_radius', 'identity_blend_t', 'relight_strength', 'occlusion_threshold']
-BOUNDS = {'relight_strength': (0, 1), 'occlusion_threshold': (0, 1), 'identity_blend_t': (0,1), 'swap_weight': (0, 1), 'mask_feather': (0, 64),
-          'mask_erosion': (-32, 32), 'swap_opacity': (0,1), 'mask_feather_radius': (0,64)}
-FIELDS = {'relight_strength': 'relight_strength', 'occlusion_threshold': 'occlusion_threshold', 'identity_blend_t': 'identity_blend_t', 'swap_weight': 'swap_weight',
-          'mask_feather': 'feather_px', 'mask_erosion': 'erosion_px', 'swap_opacity': 'swap_weight', 'mask_feather_radius': 'feather_px'}
+CurveName = Literal['mask_feather', 'mask_erosion', 'mask_feather_radius', 'identity_blend_t', 'relight_strength', 'occlusion_threshold']
+BOUNDS = {'relight_strength': (0, 1), 'occlusion_threshold': (0, 1), 'identity_blend_t': (0, 1), 'mask_feather': (0, 64),
+          'mask_erosion': (-32, 32), 'mask_feather_radius': (0, 64)}
+FIELDS = {'relight_strength': 'relight_strength', 'occlusion_threshold': 'occlusion_threshold', 'identity_blend_t': 'identity_blend_t',
+          'mask_feather': 'feather_px', 'mask_erosion': 'erosion_px', 'mask_feather_radius': 'feather_px'}
 
 
 class CurveKey(Contract):

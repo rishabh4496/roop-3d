@@ -74,10 +74,9 @@ class _Session:
         self.released = False
         self.prepared_source_ids = None
 
-    def prepare_session(self, source, *, track_ids, sources_by_track, retarget):
+    def prepare_session(self, source, *, track_ids, sources_by_track):
         self.prepared_source_ids = set(sources_by_track)
         assert set(track_ids) == self.prepared_source_ids
-        assert retarget == "auto"
 
     def infer_frame(self, image):
         if self.config.provider == "CUDAExecutionProvider" and self.oom_on_cuda:

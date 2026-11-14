@@ -20,8 +20,7 @@ it('maps each stage to the measured latency fields, and reports unmeasured stage
 
 it('resolves the Normals chip to the normal_map buffer without making it a ninth hotkey stage', () => {
   expect(PIPELINE_NODES).toHaveLength(8);
-  expect(PIPELINE_ALT_NODES.map(node => [node.id, node.parent, node.buffer])).toEqual([['expression', 'head', 'expression'], ['normal', 'lighting', 'normal_map']]);
-  expect(nodeBuffer('expression')).toBe('expression');
+  expect(PIPELINE_ALT_NODES.map(node => [node.id, node.parent, node.buffer])).toEqual([['normal', 'lighting', 'normal_map']]);
   expect(nodeBuffer('normal')).toBe('normal_map');
   expect(pipelineNode('normal')?.label).toBe('3D Normal Map');
   expect(nodeBuffer('missing')).toBeNull();

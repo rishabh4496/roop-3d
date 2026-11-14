@@ -96,7 +96,7 @@ describe('3×3 contact sheet with stepped axes and native-pixel zoom', () => {
     await act(async () => zoomButtons[2].click());
     await act(async () => [...document.querySelectorAll('button')].find(b => b.textContent === 'Apply these settings')!.click());
     expect(onApply).toHaveBeenCalledTimes(1);
-    expect(onApply.mock.calls[0][0]).toEqual({ color_strength: .9, swap_weight: .3 });   // row 0 (Low identity weight), column 2 (High colour)
+    expect(onApply.mock.calls[0][0]).toEqual({ color_strength: .9, erosion_px: -6 });   // row 0 (Low erosion), column 2 (High colour)
   });
 });
 

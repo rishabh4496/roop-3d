@@ -16,12 +16,12 @@ from typing import Literal
 import cv2
 import numpy as np
 from fastapi import APIRouter, Request
-from pydantic import Field, model_validator
+from pydantic import Field
 from starlette.concurrency import run_in_threadpool
 
 from roop_3d.core.errors import DomainError
 from roop_3d.core.settings import Contract
-from roop_3d.server.true3d import CameraIntrinsicsSpec, HeadTopologyEngine, ShaderMode, True3DSettings, migrate_legacy, renderer_status, require_renderer
+from roop_3d.server.true3d import CameraIntrinsicsSpec, HeadTopologyEngine, ShaderMode, True3DSettings, renderer_status, require_renderer
 
 router = APIRouter(prefix="/api/v1/studio")
 
@@ -39,13 +39,6 @@ class StudioConfig(Contract):
     head_topology_engine: HeadTopologyEngine | None = None
     shader_mode: ShaderMode | None = None
     camera: CameraIntrinsicsSpec | None = None
-    legacy_dropped: tuple[str, ...] = Field(default=(), max_length=64)
-
-    @model_validator(mode="before")
-    @classmethod
-    def drop_removed_fields(cls, data):
-        clean, dropped = migrate_legacy(data)
-        return {**clean, "legacy_dropped": tuple(dropped)} if dropped else clean
 
     def true3d(self) -> True3DSettings:
         values = {name: getattr(self, name) for name in ("head_topology_engine", "shader_mode", "camera") if getattr(self, name) is not None}

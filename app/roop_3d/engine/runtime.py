@@ -158,14 +158,6 @@ class OrtModel:
         self.local_trust = trusted is not None
         if trusted is not None:
             self.record = {**self.record, "sha256": trusted[0], "size_bytes": trusted[1]}
-        if config.provider in ("CUDAExecutionProvider", "TensorrtExecutionProvider") and name == "liveportrait_warping_spade.onnx":
-            try:
-                from roop_3d.models.stage16 import prepare_generator
-                prepared = (prepare_generator(catalog, batch_one=True) if config.provider == 'TensorrtExecutionProvider'
-                            else prepare_generator(catalog))
-                self.path = prepared[0]
-            except Exception:
-                pass
         if config.provider == "CUDAExecutionProvider" and config.precision_policy == "fp16":
             fp16_cache = catalog.root / "roop_3d/.runtime/cache/cuda_fp16"
             try:
@@ -191,14 +183,7 @@ class OrtModel:
         divisor = {
             "scrfd_2.5g_kps.onnx": 32, "scrfd_10g_bnkps.onnx": 16, "det_10g.onnx": 16,
             "w600k_r50.onnx": 16, "bisenet_resnet_34.onnx": 16, "face_parser.onnx": 16,
-            "liveportrait_warping_spade.onnx": 2,
-            "liveportrait_motion_extractor.onnx": 8, "liveportrait_motion_extractor.batch.onnx": 8,
-            "liveportrait_landmark.onnx": 16, "1k3d68.onnx": 16, "2d106det.onnx": 32, "landmark_203.onnx": 32,
-            "liveportrait_appearance_feature_extractor.onnx": 32,
-            "liveportrait_appearance_feature_extractor.batch.onnx": 32,
-            "liveportrait_stitching.onnx": 32, "liveportrait_stitching.batch.onnx": 32,
-            "liveportrait_stitching_eye.onnx": 32, "liveportrait_stitching_eye.batch.onnx": 32,
-            "liveportrait_stitching_lip.onnx": 32,
+            "1k3d68.onnx": 16, "2d106det.onnx": 32, "landmark_203.onnx": 32,
         }.get(name, 32)
         self._gpu_memory_limit = (config.gpu_budget_bytes // divisor
                                   if config.provider in ("CUDAExecutionProvider", "TensorrtExecutionProvider") else None)

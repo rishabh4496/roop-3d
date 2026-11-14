@@ -370,22 +370,17 @@ def _topology(c: _Context, s: Section) -> None:
 
 
 def _swap_lock(c: _Context, s: Section) -> None:
+    from roop_3d.core.true3d_guard import FRAME_PIPELINE_STAGES
     from roop_3d.core.workstation import WorkstationParameters
-    live = c.job is not None and c.job.get("swap_mode")
     params = WorkstationParameters()
-    scope = str(c.job["swap_mode"]) if live else params.swap_scope
-    s.add("Source of values", "this job" if live else "configured defaults (no job running)")
-    s.add("Swap scope", scope)
-    s.add("Skull blend (source share)", params.skull_blend)
+    s.add("Pipeline mode", "pure 3D full-head reconstruction (no 2D / 2.5D path exists)")
+    for index, stage in enumerate(FRAME_PIPELINE_STAGES, 1):
+        s.add(f"Required stage {index}", stage)
     for label, name in (("Neck protection", "neck_protection"), ("Hair matting", "hair_matting"), ("Preserve ears/glasses", "preserve_ears_glasses"),
                         ("Boundary ribbon matting", "boundary_ribbon_matting"), ("Jaw feather (px)", "jaw_feather_px")):
         s.add(label, getattr(params, name, None))
-    modules = {name: _available(f"roop_3d.rendering.{name}") for name in ("silhouette_replacement", "perimeter_cage", "silhouette_inpaint")}
-    s.add("Silhouette stages", ", ".join(f"{name}={'present' if ok else 'missing'}" for name, ok in modules.items()))
-    locked = scope in {"full_craniofacial", "FULL_CRANIOFACIAL_LOCK"} and params.skull_blend >= 1.0
-    s.add("Full-craniofacial lock", "engaged (100% source skull/jaw/forehead)" if locked else "not engaged")
-    s.status = "OK" if locked and all(modules.values()) else "INFO"
-    s.notes.append("Values are the configured request parameters; this section does not measure swap quality.")
+    s.status = "OK"
+    s.notes.append("Values are the configured request parameters; this section does not measure render quality.")
 
 
 def _camera_sh(c: _Context, s: Section) -> None:

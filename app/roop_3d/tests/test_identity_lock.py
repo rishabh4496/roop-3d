@@ -437,39 +437,36 @@ class StubTracker:
 def gated_session(faces, *, selected=frozenset({0, 1}), guard=None):
     session = ReferencePipeline()
     session.prepared, session.tracker, session.selected_ids = True, StubTracker(faces), selected
-    session.portrait.retain_tracks = lambda ids: None
-    calls = []
-
-    def swap(image, landmarks5, *, track_id, **kwargs):
-        calls.append(track_id)
-        return SimpleNamespace(image=np.zeros((128, 128, 3), np.uint8), alignment=SimpleNamespace(inverse=np.eye(2, 3)),
-                               reference_index=0)
-    session.swapper.infer_frame = swap
     session.identity_guard = guard
-    return session, calls
+    return session
 
 
-def test_session_never_swaps_unselected_uncertain_or_unverified_faces():
-    faces = [tracked(0, basis(0)), tracked(1, basis(1), allowed=False, state=tp.UNCERTAIN, reason=tp.AMBIGUOUS, confidence=0.3),
+def test_session_withholds_uncertain_faces_and_ignores_unselected_ones():
+    faces = [tracked(1, basis(1), allowed=False, state=tp.UNCERTAIN, reason=tp.AMBIGUOUS, confidence=0.3),
              tracked(2, basis(2))]                                           # 2 is detected but not selected
-    session, calls = gated_session(faces)
-    result = session.infer_frame(np.zeros((80, 160, 3), np.uint8))
-    assert calls == [0] and [item.track_id for item in result.replacements] == [0]
+    result = gated_session(faces, selected=frozenset({0, 1})).infer_frame(np.zeros((80, 160, 3), np.uint8))
+    assert result.replacements == ()
     assert result.withheld == (Withheld(1, tp.AMBIGUOUS, tp.UNCERTAIN, 0.3),)
-    assert {item.track_id for item in result.observations} == {0, 1, 2}
+    assert {item.track_id for item in result.observations} == {1, 2}
 
 
-def test_session_applies_the_identity_guard_before_any_inference(world):
+def test_session_applies_the_identity_guard_before_any_render(world):
     guard = guard_for(world, {"track_0000": "alice"})
-    session, calls = gated_session([tracked(0, basis(7))], selected=frozenset({0}), guard=guard)      # wrong person on locked ID
+    session = gated_session([tracked(0, basis(7))], selected=frozenset({0}), guard=guard)      # wrong person on locked ID
     result = session.infer_frame(np.zeros((80, 160, 3), np.uint8))
-    assert calls == [] and result.replacements == () and result.withheld[0].reason == SIGNATURE_MISMATCH
-    good, calls = gated_session([tracked(0, basis(0))], selected=frozenset({0}), guard=guard)
-    assert good.infer_frame(np.zeros((80, 160, 3), np.uint8)).replacements and calls == [0]
+    assert result.replacements == () and result.withheld[0].reason == SIGNATURE_MISMATCH
+
+
+def test_a_verified_face_fails_closed_while_the_3d_renderer_is_not_wired(world):
+    guard = guard_for(world, {"track_0000": "alice"})
+    session = gated_session([tracked(0, basis(0))], selected=frozenset({0}), guard=guard)
+    with pytest.raises(DomainError) as error:
+        session.infer_frame(np.zeros((80, 160, 3), np.uint8))
+    assert error.value.code == "RENDERER_NOT_WIRED" and error.value.status == 503
 
 
 def test_release_session_drops_the_guard(world):
-    session, _ = gated_session([], guard=guard_for(world, {"track_0000": "alice"}))
+    session = gated_session([], guard=guard_for(world, {"track_0000": "alice"}))
     session.release_session()
     assert session.identity_guard is None
 
@@ -498,7 +495,7 @@ class JobSession:
     def __init__(self, config):
         self.config, self.compositor, self.index, self.guard, self.tracking = config, SimpleNamespace(restorer=None), 0, None, None
 
-    def prepare_session(self, source, *, track_ids, sources_by_track, retarget, **tracking):
+    def prepare_session(self, source, *, track_ids, sources_by_track, **tracking):
         self.tracking = tracking
 
     def set_identity_guard(self, guard):

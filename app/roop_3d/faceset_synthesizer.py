@@ -1,4 +1,4 @@
-"""Sequential single-photo mesh/LivePortrait faceset synthesis (no 2D crop restoration; detail belongs to the UV atlas).
+"""Perspective 3D mesh and UV-projection FaceSet synthesis.
 
 Generated evidence is labelled, never promoted to observed source geometry.
 All work is local, uses the engine admission gate and shares GPU profile budgets.
@@ -50,10 +50,8 @@ def start_synthesis(builder, key, rank, selected_ids, name):
             raise DomainError('IDENTITY_MISMATCH', 'Select original photos of one person', 422)
         if any(job['status'] in ('extracting', 'synthesizing') for job in builder.jobs.values()):
             raise DomainError('BUILDER_BUSY', 'Another faceset operation is running', 409)
-        # Preflight resolves model identities without downloading or loading GPU sessions.
-        from roop_3d.engine.volumetric.reference_adapter import CORE_MODELS
-        for filename in (*CORE_MODELS.values(), 'liveportrait_stitching_eye.onnx', '1k3d68.onnx'):
-            record_named(builder.state.models, filename)
+        # Preflight the 3D landmark model without downloading or loading GPU sessions.
+        record_named(builder.state.models, '1k3d68.onnx')
         config = synthesis_config(builder.state)
         views = tuple(pair[0].model_copy(update={'index': i}) for i, pair in enumerate(pairs))
         if len(builder.jobs) >= 4:
@@ -179,15 +177,14 @@ def detect_portrait(tracker, image):
 
 
 def _run(builder, job, originals, name, config):
-    neural = tracker = geometry = rasterizer = None
+    tracker = rasterizer = None
     try:
         gate = getattr(builder.state, 'engine_gate', None)
         with (gate.preview_section() if gate is not None else nullcontext()):
-            from roop_3d.expression_restorer import ExpressionRetargeter
             from roop_3d.engine.detection.face_tracker import FaceTracker
             from roop_3d.reconstruction.full_head import GPUHeadRasterizer, HeadPose, head_roi
+            from roop_3d.reconstruction.geometry_types import euler_to_rotation_matrix
             from roop_3d.reconstruction.multiview_fit import five_from_68
-            from roop_3d.engine.volumetric.reference_adapter import rotation
             fid = 'faceset_' + uuid.uuid4().hex[:16]
             document = builder.state.face_extract._document(fid, name, originals, {})
             with builder.lock:
@@ -202,12 +199,9 @@ def _run(builder, job, originals, name, config):
             else:
                 landmark_ids = np.arange(68)
             texture = cv2.imdecode(np.frombuffer(base64.b64decode(mesh['texture_base64']), np.uint8), cv2.IMREAD_COLOR)
-            neural = ExpressionRetargeter(builder.state.models, config)
             with builder.lock:
                 job['phase'] = 'Preparing local models'
-            neural.prepare()
             tracker = FaceTracker(builder.state.models, config=config, stabilize=False)
-            geometry = neural.geometry
             rasterizer = GPUHeadRasterizer()
             side = 1024 if config.hardware_profile == '12gb' else 512
             camera = np.array([[side, 0, side/2], [0, side, side/2], [0, 0, 1]], np.float64)
@@ -221,19 +215,18 @@ def _run(builder, job, originals, name, config):
             for index, (yaw, pitch) in enumerate(SYNTHESIS_POSES):
                 with builder.lock:
                     job['phase'] = f'Generating view {index+1} of 36'
-                pose = HeadPose(rotation((pitch, yaw, 0)).T, np.array([0., 0., distance]), camera)
+                pose = HeadPose(euler_to_rotation_matrix(yaw, pitch, 0).T, np.array([0., 0., distance]), camera)
                 inverse = head_roi(pose.project(vertices), side=side)
                 buffers = rasterizer.render_buffers(vertices, faces, uvs, texture,
                     np.ones(texture.shape[:2], np.float32), pose, inverse, side=side)
                 original = min(originals, key=lambda view: (view.yaw-yaw)**2+(view.pitch-pitch)**2)
-                source = cv2.imdecode(np.frombuffer(original.image_bytes, np.uint8), cv2.IMREAD_COLOR)
-                generated = cv2.resize(neural.generate_pose(source, yaw=yaw, pitch=pitch), (side, side))
+                generated = buffers.image
                 detected = detect_portrait(tracker, generated)
                 if len(detected) != 1:
                     raise DomainError('SYNTHESIS_FACE_INVALID', f'Angle {yaw}/{pitch} did not contain one detectable face', 422)
                 with builder.lock:
                     job['phase'] = f'Registering view {index+1} of 36'
-                restored = generated      # no 2D restoration: the portrait is used as generated
+                restored = generated
                 face = detected[0]
                 similarity = float(np.asarray(face.embedding) @ reference)
                 embedding = np.asarray(face.embedding, np.float32)
@@ -244,7 +237,9 @@ def _run(builder, job, originals, name, config):
                 extreme = abs(yaw) > 30 or abs(pitch) > 25
                 if not np.isfinite(similarity) or (not extreme and similarity < .45):
                     raise DomainError('SYNTHESIS_IDENTITY_DRIFT', f'Angle {yaw}/{pitch} failed ArcFace identity verification ({similarity:.3f})', 422)
-                dense = geometry.landmarks(restored, face.box)
+                dense = face.landmarks68
+                if dense is None or np.asarray(dense).shape[0] < 68:
+                    raise DomainError('SYNTHESIS_LANDMARKS_INVALID', 'The rendered 3D view did not yield 68 dense landmarks', 422)
                 uv_name = f'uv/{index}.png'
                 mesh_points = cv2.transform(pose.project(vertices[landmark_ids])[None].astype(np.float32), cv2.invertAffineTransform(inverse))[0]
                 scale = side / restored.shape[0]
@@ -272,7 +267,7 @@ def _run(builder, job, originals, name, config):
                 'limitations': ['Hidden surfaces use a single-view mesh/appearance prior; these are generated references, not observations.',
                                 'Pose metadata records mesh camera commands, not independently calibrated neural head-pose measurements.',
                                 'Extreme-view ArcFace scores are recorded and reduce view quality; low scores at self-occluded poses do not verify identity.'],
-                'models': neural.portrait.capability()}
+                'renderer': 'perspective_z_buffered_uv_mesh'}
             entries['synthesis.json'] = json.dumps(provenance).encode('utf-8')
             output = builder.state.face_extract._document(fid, name, tuple(views), {'synthesis': provenance})
             # The mesh is fitted exclusively to original photographs, never to hallucinated views.
@@ -297,8 +292,7 @@ def _run(builder, job, originals, name, config):
         with builder.lock:
             job.update(status='error', error=str(error), error_code=getattr(error, 'code', 'SYNTHESIS_FAILED'))
     finally:
-        for resource in (neural, rasterizer):
-            if resource is not None:
-                resource.release()
+        if rasterizer is not None:
+            rasterizer.release()
         if tracker is not None:
             tracker.release()

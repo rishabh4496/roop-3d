@@ -33,15 +33,15 @@ it('evaluates linear, Bezier and hold curves at exact source frame boundaries', 
   expect(evaluateCurve([{ ...keys[0], easing: 'ease-in-out' }, keys[1]], 25, 5)).toBe(.15625);
   expect(evaluateCurve([{ ...keys[0], easing: 'hold' }, keys[1]], 99, 5)).toBe(0);
   expect(evaluateCurve([{ ...keys[0], easing: 'hold' }, keys[1]], 100, 5)).toBe(1);
-  expect(evaluateParameters({ swap_weight: 1 }, { swap_weight: keys }, 50).swap_weight).toBe(.5);
+  expect(evaluateParameters({ feather_px: 1 }, { mask_feather: keys }, 50).feather_px).toBe(.5);
 });
 
 it('edits and deletes timeline keys through undoable commands', async () => {
-  await act(async () => root.render(<CurveEditorTrack frame={20} totalFrames={100} parameters={{ swap_weight: .6 }}/>));
+  await act(async () => root.render(<CurveEditorTrack frame={20} totalFrames={100} parameters={{ feather_px: .6 }}/>));
   await click([...host.querySelectorAll('button')].find(button => button.textContent === 'Add key at playhead')!);
-  expect(useHistoryStore.getState().curves.swap_weight[0]).toEqual({ frame: 20, value: .6, easing: 'linear' });
+  expect(useHistoryStore.getState().curves.mask_feather[0]).toEqual({ frame: 20, value: .6, easing: 'linear' });
   await click([...host.querySelectorAll('button')].find(button => button.textContent === 'Delete key')!);
-  expect(useHistoryStore.getState().curves.swap_weight).toHaveLength(0);
+  expect(useHistoryStore.getState().curves.mask_feather).toHaveLength(0);
   await act(async () => useHistoryStore.getState().undo()); expect(host.querySelectorAll('circle')).toHaveLength(1);
   await act(async () => useHistoryStore.getState().undo()); expect(host.querySelectorAll('circle')).toHaveLength(0);
 });

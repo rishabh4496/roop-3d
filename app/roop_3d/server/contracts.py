@@ -51,7 +51,6 @@ class ModelSummary(Contract):
     trt_cached: bool = False
     tensorrt_mixed_precision: dict[str, Any] = Field(default_factory=dict)
     download_url: str | None = None
-    supports_3d_hybrid: bool = False
     adapter_supported: bool | None = None
     adapter_unsupported_reason: str | None = None
     local_format: str | None = None

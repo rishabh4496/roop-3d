@@ -105,7 +105,7 @@ class LockEnvironment:
 def settings_fingerprint(settings: Settings) -> str:
     """Only settings that change tracking or identity transfer; ports, paths and UI options do not."""
     relevant = {name: getattr(settings, name) for name in (
-        "temporal_min_cutoff", "temporal_beta", "temporal_d_cutoff", "pose_hysteresis_degrees", "execution_mode")}
+        "temporal_min_cutoff", "temporal_beta", "temporal_d_cutoff", "pose_hysteresis_degrees")}
     return hashlib.sha256(json.dumps(relevant, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 

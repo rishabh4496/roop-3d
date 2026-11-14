@@ -429,13 +429,3 @@ class ComfyUIBridge:
             raise DomainError("COMFY_OUTPUT_UNCORRELATED", "Output is not part of the completed prompt history", 409)
         data, content_type = await self._request("GET", "/view", params=vars(output), image=True)
         return decode_image(data, content_type, self.config)
-
-    async def composite_output(self, handle: PromptHandle, output: OutputRef, *, compositor,
-                               frame: np.ndarray, inverse: np.ndarray, track_id: int, landmarks=None, **options) -> np.ndarray:
-        from roop_3d.engine.volumetric.session import Replacement
-        crop = await self.fetch_output(handle, output)
-        inverse = np.asarray(inverse, np.float32)
-        if inverse.shape != (2, 3) or not np.isfinite(inverse).all() or type(track_id) is not int or track_id < 0:
-            raise DomainError("COMFY_COMPOSITE_INPUT_INVALID", "A valid crop transform and track ID are required", 422)
-        replacement = Replacement(track_id, crop, inverse, 0, "local_comfyui")
-        return compositor.compose(frame, (replacement,), {track_id: landmarks} if landmarks is not None else {}, **options)

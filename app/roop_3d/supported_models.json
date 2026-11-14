@@ -1,13 +1,13 @@
 {
   "schema_version": 1,
   "models": [
-    {"id":"scrfd","name":"SCRFD","category":"detector","native_resolution":640,"aliases":["scrfd","scrfd_2.5g_kps","scrfd_10g_bnkps"],"supports_3d_hybrid":true},
-    {"id":"retinaface","name":"RetinaFace","category":"detector","native_resolution":640,"aliases":["retinaface","retinaface_10g","retinaface_r50"],"supports_3d_hybrid":true},
-    {"id":"yoloface","name":"YOLOFace","category":"detector","native_resolution":640,"aliases":["yoloface","yolo_face","yoloface_8n"],"supports_3d_hybrid":true},
-    {"id":"xseg","name":"XSeg","category":"occluder","native_resolution":256,"aliases":["xseg","xseg_256"],"supports_3d_hybrid":true},
-    {"id":"bisenet","name":"BiSeNet","category":"occluder","native_resolution":512,"aliases":["bisenet","bisenet_resnet_34","face_parser"],"supports_3d_hybrid":true},
-    {"id":"realesrgan_x2plus","name":"RealESRGAN x2plus","category":"upscaler","native_resolution":512,"aliases":["realesrgan_x2plus","realesrgan-x2plus"],"supports_3d_hybrid":true},
-    {"id":"realesrgan_x4plus","name":"RealESRGAN x4plus","category":"upscaler","native_resolution":512,"aliases":["realesrgan_x4plus","realesrgan-x4plus"],"supports_3d_hybrid":true},
-    {"id":"4x_ultrasharp","name":"4x-UltraSharp","category":"upscaler","native_resolution":512,"aliases":["4x-ultrasharp","4x_ultrasharp"],"supports_3d_hybrid":true}
+    {"id":"scrfd","name":"SCRFD","category":"detector","native_resolution":640,"aliases":["scrfd","scrfd_2.5g_kps","scrfd_10g_bnkps"]},
+    {"id":"retinaface","name":"RetinaFace","category":"detector","native_resolution":640,"aliases":["retinaface","retinaface_10g","retinaface_r50"]},
+    {"id":"yoloface","name":"YOLOFace","category":"detector","native_resolution":640,"aliases":["yoloface","yolo_face","yoloface_8n"]},
+    {"id":"xseg","name":"XSeg","category":"occluder","native_resolution":256,"aliases":["xseg","xseg_256"]},
+    {"id":"bisenet","name":"BiSeNet","category":"occluder","native_resolution":512,"aliases":["bisenet","bisenet_resnet_34","face_parser"]},
+    {"id":"realesrgan_x2plus","name":"RealESRGAN x2plus","category":"upscaler","native_resolution":512,"aliases":["realesrgan_x2plus","realesrgan-x2plus"]},
+    {"id":"realesrgan_x4plus","name":"RealESRGAN x4plus","category":"upscaler","native_resolution":512,"aliases":["realesrgan_x4plus","realesrgan-x4plus"]},
+    {"id":"4x_ultrasharp","name":"4x-UltraSharp","category":"upscaler","native_resolution":512,"aliases":["4x-ultrasharp","4x_ultrasharp"]}
   ]
 }

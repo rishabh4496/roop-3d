@@ -56,11 +56,7 @@ def render_dependencies(catalog) -> dict[str, str]:
     These are dependency identities, not a claim that every candidate ran. Actual activation
     still verifies bytes and reports providers through the existing inference adapters.
     """
-    names = {"2d106det.onnx", "1k3d68.onnx",
-             "liveportrait_landmark.onnx", "liveportrait_appearance_feature_extractor.onnx",
-             "liveportrait_motion_extractor.onnx", "liveportrait_warping_spade.onnx",
-             "liveportrait_stitching.onnx", "liveportrait_stitching_eye.onnx",
-             "liveportrait_stitching_lip.onnx", "bisenet_resnet_34.onnx"}
+    names = {"2d106det.onnx", "1k3d68.onnx", "bisenet_resnet_34.onnx"}
     selected = [catalog.detector(), catalog.recognizer()]
     required = {record["model_id"] for record in selected}
     seen = set()
@@ -172,7 +168,6 @@ class ModelCatalog:
             custom_rows.append({"id": model_id, "model_id": model_id, "name": path.stem,
                 "category": "custom", "native_resolution": None, "installed": True, "selectable": True,
                 "vram_loaded": False, "trt_cached": path.suffix.casefold() == ".trt", "download_url": None,
-                "supports_3d_hybrid": False, "filename": path.name,
                 "local_format": path.suffix[1:].casefold(), "state": "CANDIDATE",
                 "family_hint": "custom", "license_state": "UNKNOWN",
                 "provenance_state": "UNKNOWN", "inference_state": "UNKNOWN",
@@ -407,7 +402,6 @@ class ModelCatalog:
                 "category": spec["category"], "native_resolution": spec.get("native_resolution"),
                 "installed": bool(installed), **self._selection(spec["category"], spec["id"]), "vram_loaded": spec["id"] in self._vram_loaded,
                 "trt_cached": trt_cached, "download_url": source.get("upstream_url") if source else None,
-                "supports_3d_hybrid": bool(spec.get("supports_3d_hybrid", False)),
                 "sha256": source.get("sha256") or (observed[0] if observed else None),
                 "size_bytes": source.get("size_bytes") or (observed[1] if observed else (local_path.stat().st_size if local_path else None)),
                 "state": "VERIFIED_LOCAL" if provider_path else ("CANDIDATE" if source.get('state') == 'VERIFIED_LOCAL' else source.get('state', 'CANDIDATE')), "family_hint": source.get("family_hint", spec["category"]),
@@ -438,8 +432,7 @@ class ModelCatalog:
                 **self._trust_flags(provider_path, on_disk), **self._adapter_support(category, source["model_id"]),
                 "id": source["model_id"], "category": category, "native_resolution": None,
                 "installed": installed, **self._selection(category, source["model_id"]), "vram_loaded": source["model_id"] in self._vram_loaded,
-                "trt_cached": False, "download_url": record.upstream_url,
-                "supports_3d_hybrid": False, "local_format": None})
+                "trt_cached": False, "download_url": record.upstream_url, "local_format": None})
         # Unknown files are listed as candidates.
         known_ids = {row["id"] for row in rows}
         for model_id, path in sorted(local.items()):
@@ -450,7 +443,7 @@ class ModelCatalog:
             row_id = f"local_{slug}_{hashlib.sha256(relative.encode()).hexdigest()[:8]}"
             rows.append({"id": row_id, "model_id": row_id, "name": path.stem, "category": "custom",
                 "native_resolution": None, "installed": True, **self._selection("custom", row_id), "vram_loaded": row_id in self._vram_loaded,
-                "trt_cached": path.suffix.casefold() == ".trt", "download_url": None, "supports_3d_hybrid": False,
+                "trt_cached": path.suffix.casefold() == ".trt", "download_url": None,
                 "sha256": None, "size_bytes": path.stat().st_size,
                 "state": "VERIFIED_LOCAL" if path.stat().st_size > MIN_TRUST_BYTES else "CANDIDATE",
                 **self._trust_flags(path, path if path.stat().st_size > MIN_TRUST_BYTES else None),

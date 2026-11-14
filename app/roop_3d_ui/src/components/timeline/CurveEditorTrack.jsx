@@ -6,7 +6,7 @@ import NumericInput from '../controls/NumericInput';
 /** @param {any} props */
 export default function CurveEditorTrack({ frame = 0, totalFrames = 1, parameters = {}, disabled = false, onSeekFrame }) {
   const curves = useHistoryStore(state => state.curves);
-  const [expanded, setExpanded] = useState(true), [parameter, setParameter] = useState('swap_weight'), [selected, setSelected] = useState(null), [easing, setEasing] = useState('linear');
+  const [expanded, setExpanded] = useState(true), [parameter, setParameter] = useState('mask_feather'), [selected, setSelected] = useState(null), [easing, setEasing] = useState('linear');
   const [dragKeys, setDragKeys] = useState(null), drag = useRef(null), svg = useRef(null);
   const definition = CURVE_PARAMETERS[parameter], keys = dragKeys ?? curves[parameter] ?? [];
   const maxFrame = Math.max(1, totalFrames - 1), width = 1000, height = 180, pad = 18;

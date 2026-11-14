@@ -125,7 +125,6 @@ export default function App() {
   // Stage 7: 'studio' = four-panel workstation (target / identity / preview / inspector + bottom timeline); 'classic'
   // keeps the previous stacked workstation intact. Stored per browser only (a convenience, never project state).
   const [layoutMode, setLayoutMode] = useState<'studio' | 'classic'>(() => { try { return localStorage.getItem('roop3d-workstation-layout') === 'classic' ? 'classic' : 'studio'; } catch { return 'studio'; } });
-  const [centerMode, setCenterMode] = useState<'2d' | '3d'>('2d');
   // The bottom dock holds ~1500px of tools (lanes, trim/export, frame strip, faces, curves). Tabs show one at a time so each fits without scrolling.
   const [dockTab, setDockTab] = useState<DockTabId>(() => { try { const stored = localStorage.getItem('roop3d-dock-tab'); return DOCK_TABS.some(tab => tab.id === stored) ? stored as DockTabId : 'timeline'; } catch { return 'timeline'; } });
   const chooseDockTab = useCallback((id: DockTabId) => { setDockTab(id); try { localStorage.setItem('roop3d-dock-tab', id); } catch { /* optional */ } }, []);
@@ -572,7 +571,7 @@ export default function App() {
 
   // The shared UI state mirrors the chosen 3D head settings (topology engine, shader mode, camera).
   useEffect(() => {
-    void post('/state', { render_mode: 'full_3d_head', true3d: { head_topology_engine: parameters.head_topology_engine, shader_mode: parameters.shader_mode, camera: parameters.camera } }).catch(() => {});
+    void post('/state', { true3d: { head_topology_engine: parameters.head_topology_engine, shader_mode: parameters.shader_mode, camera: parameters.camera } }).catch(() => {});
   }, [parameters.head_topology_engine, parameters.shader_mode, parameters.camera]);
   const saveSettings = (value: Config) => void run('Applying settings', async () => { const saved = await api<Config>('/config', { method: 'PUT', body: JSON.stringify(value) }); setConfig(saved); window.dispatchEvent(new Event(RUNTIME_SETTINGS_CHANGED)); await connect(); setNotice('Effective settings saved. Existing paused jobs retain their original settings identity.'); });
   const persistProject = async (copy = false) => {
@@ -853,7 +852,7 @@ export default function App() {
       projectsDisabled={!!reason('projects')} projectsReason={reason('projects')} busy={!!busy} canSave={!!inspection}
       onPalette={() => setPaletteOpen(true)} onProjects={() => { setProjectsOpen(true); void refreshProjects(); }} onSave={saveProject} onSaveCopy={() => void run('Saving project copy', async () => { await persistProject(true); })}
       onManageModels={() => setModelHubOpen(true)} />
-    <div className="studio-telemetry" data-studio-zone="telemetry" aria-label="Telemetry and command ribbon"><TelemetryHeader parameters={parameters} /></div>
+    <div className="studio-telemetry" data-studio-zone="telemetry" aria-label="Telemetry and command ribbon"><TelemetryHeader /></div>
     <RequiredModelsBanner onOpenHub={() => setModelHubOpen(true)} />
     {(route === '#/faceswap' || route === '#/facemgr') && <EngineStatusBar />}
     <RunPill />
@@ -958,40 +957,12 @@ export default function App() {
                 <span className="eyebrow">03 · VIEWPORT</span>
                 <strong>{target ? fileName(target) : 'No target loaded'}</strong>
               </div>
-              <div className="viewport-mode-switcher" role="radiogroup" aria-label="Center viewport mode">
-                <button
-                  type="button"
-                  role="radio"
-                  aria-checked={centerMode === '2d'}
-                  className={`button small ${centerMode === '2d' ? 'accent' : ''}`}
-                  onClick={() => setCenterMode('2d')}
-                  title="Target 2D & Video Canvas (Split-Wipe / Compare)"
-                  data-testid="mode-switch-2d"
-                >
-                  Target 2D Canvas
-                </button>
-                <button
-                  type="button"
-                  role="radio"
-                  aria-checked={centerMode === '3d'}
-                  className={`button small ${centerMode === '3d' ? 'accent' : ''}`}
-                  onClick={() => setCenterMode('3d')}
-                  title="3D Identity Viewport (Mesh & Relighting Gizmos)"
-                  data-testid="mode-switch-3d"
-                >
-                  3D Identity Viewport
-                </button>
-              </div>
+
               <button className="button accent" disabled={!!reason('queue') || !inspection || !renderMappings().length || !!busy} title={reason('queue') ?? (renderMappings().length ? 'Render mapped face tracks locally' : 'Assign a FaceSet to at least one track first')} onClick={queue}>Queue render <span>↗</span></button>
             </div>
             <div className="studio-viewport-body">
-              <div className="viewport-layer-2d" style={{ display: centerMode === '2d' ? 'flex' : 'none', flex: '1 1 auto', height: '100%', minHeight: 0, minWidth: 0, flexDirection: 'column' }}>
+              <div className="viewport-layer-preview" style={{ display: 'flex', flex: '1 1 auto', height: '100%', minHeight: 0, minWidth: 0, flexDirection: 'column' }}>
                 {viewport}
-              </div>
-              <div className="viewport-layer-3d" style={{ display: centerMode === '3d' ? 'flex' : 'none', flex: '1 1 auto', height: '100%', minHeight: 0, minWidth: 0, flexDirection: 'column', overflow: 'auto' }}>
-                <Suspense fallback={<div className="skeleton-tile wide" aria-label="Loading 3D Identity Viewport" />}>
-                  <PoseCoverageInspector coverage={coverage} track={currentTrack} mesh={identityMesh ?? mesh} reconstruction={reconstruction} parameters={parameters} setParameters={setParameters} />
-                </Suspense>
               </div>
             </div>
           </main>

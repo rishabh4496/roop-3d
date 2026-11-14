@@ -91,61 +91,6 @@ class True3DSettings(Contract):
     camera: CameraIntrinsicsSpec = CameraIntrinsicsSpec()
 
 
-# --------------------------------------------------------------------------- legacy migration
-import base64
-
-#: Request / settings keys that belonged to the removed 2D / 2.5D paths. Old saved settings, projects and clients may still send
-#: them; they are dropped (and reported) instead of failing validation.
-LEGACY_KEYS = frozenset(base64.b64decode(s).decode("ascii") for s in [
-    "c3dhcHBlcl9tb2RlbF9pZA==", "c3dhcHBlcl9tb2RlbA==", "ZGZtX21vcnBoX2ZhY3Rvcg==", "ZW5oYW5jZXJfbW9kZWw=",
-    "ZmFjZV9yZXN0b3JhdGlvbl9wb2xpY3k=", "cmVzdG9yZXI=", "cmVzdG9yZXJfbW9kZWw=", "cmVzdG9yYXRpb25fYmxlbmQ=",
-    "ZmlkZWxpdHlfd2VpZ2h0", "ZW5oYW5jZXJfYmxlbmQ=", "cmVzdG9yZXJfZmlkZWxpdHk=", "dWx0cmFtYXhfc21hbGxfZmFjZV9tb2Rl",
-    "dWx0cmFtYXhfbWluX25hdGl2ZV9waXhlbHM=", "dWx0cmFtYXhfbmF0aXZlX2J5cGFzcw==", "dWx0cmFtYXhfbWluX3BpeGVscw==",
-    "ZnJvbnRhbGl6YXRpb25fd2VpZ2h0", "cG9zZV9mcm9udGFsaXphdGlvbg==", "dHBzX2V4cHJlc3Npb25fd2VpZ2h0",
-    "cG9zZV9zdHJlbmd0aA==", "cG9zZV9tb2Rl", "cmVuZGVyX21vZGU=", "cmVzdG9yZXJfdGhyZWFkcw==", "cmVzdG9yZXJfcG9vbF9zaXpl",
-    "amF3X2FkYXB0YXRpb24=",
-])
-#: Values of kept enumerations that named a removed node.
-LEGACY_SOLO_NODES = frozenset(base64.b64decode(s).decode("ascii") for s in ["c3dhcHBlcg==", "cmVzdG9yZXI="])
-LEGACY_BYPASS = frozenset(base64.b64decode(s).decode("ascii") for s in ["cmVzdG9yZXI="])
-
-
-def migrate_legacy(data: Any) -> tuple[Any, list[str]]:
-    """Drop removed keys from a request-like mapping. Returns ``(clean_copy, dropped_names)``; non-mappings pass through."""
-    if not isinstance(data, dict):
-        return data, []
-    dropped = sorted(key for key in data if key in LEGACY_KEYS)
-    clean = {key: value for key, value in data.items() if key not in LEGACY_KEYS}
-    if clean.get("solo_node") in LEGACY_SOLO_NODES:
-        dropped.append(f"solo_node={clean['solo_node']}")
-        clean["solo_node"] = "final"
-    bypass = clean.get("bypass")
-    if isinstance(bypass, (list, tuple)) and any(item in LEGACY_BYPASS for item in bypass):
-        dropped.append("bypass=restorer")
-        clean["bypass"] = [item for item in bypass if item not in LEGACY_BYPASS]
-    camera = clean.get("camera")
-    if isinstance(camera, dict) and camera.get("projection") not in (None, "perspective"):
-        dropped.append(f"camera.projection={camera.get('projection')}")
-        clean["camera"] = {**camera, "projection": "perspective"}
-    return clean, dropped
-
-
-def migrate_true3d(data: Any) -> True3DSettings:
-    """Tolerant loader for persisted True3D settings: unknown / legacy values fall back to the defaults, never an error."""
-    clean, _ = migrate_legacy(data if isinstance(data, dict) else {})
-    values: dict[str, Any] = {}
-    topology = clean.get("head_topology_engine")
-    if topology in TOPOLOGY_REGISTRY_IDS:
-        values["head_topology_engine"] = topology
-    shader = clean.get("shader_mode")
-    if shader in SHADER_LABELS:
-        values["shader_mode"] = shader
-    if isinstance(clean.get("camera"), dict):
-        try:
-            values["camera"] = CameraIntrinsicsSpec.model_validate(clean["camera"])
-        except ValueError:
-            pass
-    return True3DSettings(**values)
 
 
 # --------------------------------------------------------------------------- camera maths

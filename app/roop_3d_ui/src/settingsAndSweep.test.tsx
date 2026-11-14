@@ -10,7 +10,7 @@ import { PreviewBusyError } from './api';
 
 describe('settings registry', () => {
   it('documents every setting with sane bounds, a recommended range inside them, and three distinct sweep values', () => {
-    expect(SETTINGS.map(spec => spec.id).sort()).toEqual(['color_strength', 'erosion_px', 'feather_px', 'pyramid_levels', 'swap_weight', 'xseg_occlusion_strength']);
+    expect(SETTINGS.map(spec => spec.id).sort()).toEqual(['color_strength', 'erosion_px', 'feather_px', 'pyramid_levels', 'xseg_occlusion_strength']);
     for (const spec of SETTINGS) {
       expect(spec.min, spec.id).toBeLessThan(spec.max);
       expect(spec.default, spec.id).toBeGreaterThanOrEqual(spec.min);
@@ -26,7 +26,7 @@ describe('settings registry', () => {
   });
 
   it('agrees with the application\'s real defaults, so "reset" restores what a fresh session has', () => {
-    for (const id of ['swap_weight', 'erosion_px', 'feather_px', 'color_strength'] as const) {
+    for (const id of ['erosion_px', 'feather_px', 'color_strength'] as const) {
       expect(SETTING_BY_ID[id].default, id).toBe((DEFAULT_PARAMETERS as any)[id]);
     }
     expect(settingValue(SETTING_BY_ID.xseg_occlusion_strength, DEFAULT_PARAMETERS)).toBe(1);                // omitted until touched
@@ -35,7 +35,7 @@ describe('settings registry', () => {
 
   it('groups settings into the Masking and Colour panels: no geometry-warp or restorer panel exists any more', () => {
     expect(Object.values(PANELS).map(panel => panel.title)).toEqual(['Masking', 'Colour']);
-    expect(settingsOf('masking').map(spec => spec.id)).toEqual(['swap_weight', 'erosion_px', 'feather_px', 'xseg_occlusion_strength', 'pyramid_levels']);
+    expect(settingsOf('masking').map(spec => spec.id)).toEqual(['erosion_px', 'feather_px', 'xseg_occlusion_strength', 'pyramid_levels']);
     expect(settingsOf('color').map(spec => spec.id)).toEqual(['color_strength']);
     expect(recommendedText(SETTING_BY_ID.feather_px)).toBe('3–12 px');
     expect(recommendedText(SETTING_BY_ID.color_strength)).toBe('0.40–0.80');
@@ -83,12 +83,12 @@ describe('SettingControl', () => {
   });
 
   it('keeps the slider and the numeric field in step, clamped to the registered range', async () => {
-    await act(async () => root.render(<Harness id="swap_weight" start={1}/>));
+    await act(async () => root.render(<Harness id="erosion_px" start={1}/>));
     const slider = host.querySelector<HTMLInputElement>('input[type="range"]')!;
-    expect([slider.min, slider.max, slider.step]).toEqual(['0', '1', '0.01']);
-    await setInput(slider, '0.4');
-    expect(value()).toBe(0.4);
-    expect(host.querySelector<HTMLInputElement>('input[aria-label="Identity weight"]')!.value).toBe('0.4');
+    expect([slider.min, slider.max, slider.step]).toEqual(['-32', '32', '1']);
+    await setInput(slider, '10');
+    expect(value()).toBe(10);
+    expect(host.querySelector<HTMLInputElement>('input[aria-label="Mask erosion"]')!.value).toBe('10');
   });
 
   it('accepts inline expression math in the numeric field', async () => {
@@ -157,8 +157,8 @@ describe('3×3 contact sheet', () => {
   });
 
   it('starts from the panel that opened it', () => {
-    expect(defaultAxes('masking')).toEqual(['swap_weight', 'erosion_px']);
-    expect(defaultAxes('color')).toEqual(['color_strength', 'swap_weight']);            // xseg_occlusion_strength is inactive under standard occlusion, so never pre-selected
+    expect(defaultAxes('masking')).toEqual(['erosion_px', 'feather_px']);
+    expect(defaultAxes('color')).toEqual(['color_strength', 'erosion_px']);            // xseg_occlusion_strength is inactive under standard occlusion, so never pre-selected
     expect(defaultAxes(undefined)).toHaveLength(2);
   });
 
@@ -180,9 +180,9 @@ describe('3×3 contact sheet', () => {
 
   it('clicking a tile applies both of its values and closes', async () => {
     const { onApply, onClose } = open();
-    await generate();                                                        // default axes: swap_weight (X) x erosion_px (Y)
+    await generate();                                                        // default axes: erosion_px (X) x feather_px (Y)
     await act(async () => document.querySelectorAll<HTMLButtonElement>('.sweep-cell')[7].click());   // Medium X, High Y
-    expect(onApply).toHaveBeenCalledWith({ swap_weight: .65, erosion_px: 6 });
+    expect(onApply).toHaveBeenCalledWith({ erosion_px: 0, feather_px: 20 });
     expect(onClose).toHaveBeenCalled();
   });
 
@@ -191,7 +191,7 @@ describe('3×3 contact sheet', () => {
     const options = [...document.querySelectorAll<HTMLOptionElement>('select[aria-label="X axis setting"] option')];
     expect(options.find(option => option.value === 'xseg_occlusion_strength')!.disabled).toBe(true);
     expect(options.find(option => option.value === 'xseg_occlusion_strength')!.textContent).toContain('(inactive)');
-    expect(options.find(option => option.value === 'erosion_px')!.disabled).toBe(true);            // already the Y axis
+    expect(options.find(option => option.value === 'feather_px')!.disabled).toBe(true);            // already the Y axis
   });
 
   it('retries a busy tile after retry_after_ms instead of failing the sheet', async () => {

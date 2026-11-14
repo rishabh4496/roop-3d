@@ -39,17 +39,13 @@ export function buildLivePayload({ request, time, fps, parameters, maskBase64, s
     head_topology_engine: parameters.head_topology_engine,
     shader_mode: parameters.shader_mode,
     camera: parameters.camera,
-    expression_restore_factor: parameters.expression_restore_factor,
-    face_expression_overrides: parameters.face_expression_overrides,
     solo_node: solo || undefined,
     occlusion: { erosion_px: parameters.erosion_px ?? 0, feather_px: parameters.feather_px },
     // A painted frame range overrides the whole-clip mask on the frames it covers, exactly as the render does.
     mask_base64: maskAtFrame(maskBase64 || request.mask_base64, request.mask_keyframes, Math.max(0, Math.round(time * fps))) || undefined,
     identity_blend: request.identity_blend ?? undefined,
-    identity_blend_t: parameters.identity_blend_t,
     color_strength: parameters.color_strength,
     color_method: parameters.color_method ?? 'lab',
-    swap_weight: parameters.swap_weight ?? 1,
     // Opt-in controls: only sent once touched, so earlier previews keep their cache keys.
     hairline_offset_px: parameters.hairline_offset_px || undefined,
     neck_protection: parameters.neck_protection,
@@ -57,9 +53,6 @@ export function buildLivePayload({ request, time, fps, parameters, maskBase64, s
     preserve_ears_glasses: parameters.preserve_ears_glasses,
     jaw_feather_px: parameters.jaw_feather_px,
     skin_texture_retention: parameters.skin_texture_retention,
-    // Stage 6B swap scope: only present once the user leaves the default full craniofacial lock.
-    swap_scope: parameters.swap_scope,
-    skull_blend: parameters.swap_scope === 'adaptive_skull' ? parameters.skull_blend : undefined,
     sensor_shutter_angle: parameters.sensor_shutter_angle,
     grain_match_strength: parameters.grain_match_strength,
     occlusion_threshold: parameters.occlusion_threshold,

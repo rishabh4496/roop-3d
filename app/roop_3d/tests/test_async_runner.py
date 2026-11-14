@@ -70,8 +70,8 @@ def test_stages_run_on_separate_threads_in_order_with_explicit_frame_indices(tmp
     # The composite stage was told the real frame index and clock; it never inferred them from the (ahead) session.
     assert [index for index, _ in session.composited] == list(range(8))
     assert [round(stamp, 3) for _, stamp in session.composited] == [round(i / 25, 3) for i in range(8)]
-    # Tracking only touched the tracker's clock, never the compositor's.
-    assert session.timestamps and all(compositor is False for _, compositor in session.timestamps)
+    # Tracking advances the clock of every frame, in decode order.
+    assert [round(stamp, 3) for stamp, _ in session.timestamps] == [round(i / 25, 3) for i in range(8)]
     names = [next(iter(session.threads[stage])) for stage in ("track", "swap", "composite")]
     assert len(set(names)) == 3 and all(name.startswith("r3d-") for name in names), names
     snapshot = worker.runner.last_pipeline_snapshot

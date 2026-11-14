@@ -2,7 +2,6 @@ import { lazy, Suspense, useEffect, useMemo, useState, type ReactNode, type Ref 
 import { api } from '../../api';
 import type { Capabilities, Config, Coverage, FaceSet, IdentitySheet, Reconstruction, ReconstructionStatus, Track } from '../../contracts';
 import EngineModelRack from '../modelhub/EngineModelRack';
-import { PREVIEW_TAB_LABEL, renderModeInfo } from '../workstation/renderModes';
 import { useFaceSelectionStore } from '../../useFaceSelectionStore';
 import { selectEngine, useSelectedEngine } from '../../stores/engineSelection';
 import type { WorkstationParameters } from '../workstation/pipeline';
@@ -14,14 +13,12 @@ import HardwareExplainer from '../guide/HardwareExplainer';
 import CoverageRadarPanel from '../three/CoverageRadarPanel';
 import IdentityMorphPanel from '../three/IdentityMorphPanel';
 import { viewerLighting, viewerMorph } from '../three/viewerRigs';
-import FaceExpressionEditor from './FaceExpressionEditor';
 import HairNeckProtection from './HairNeckProtection';
 import HeadModelBackbone from './HeadModelBackbone';
-import SwapScopeSelector from './SwapScopeSelector';
 import WorkstationControls3D from './WorkstationControls3D';
 import CompositingControls from './CompositingControls';
 import { occlusionModePatch } from './compositing';
-import { faceEditOf, jawDegToMouthOpen, mouthOpenToJawDeg, shLightOf, withFaceEdit, withManualLight, type ViewportTools } from '../three/viewportTools';
+import { shLightOf, withManualLight, type ViewportTools } from '../three/viewportTools';
 
 const PoseGeometryViewer = lazy(() => import('../../ThreeViewport').then(module => ({ default: module.PoseGeometryViewer })));
 const LightProbeSphere = lazy(() => import('../../ThreeViewport').then(module => ({ default: module.LightProbeSphere })));
@@ -77,53 +74,40 @@ export default function StudioInspector({ caps, config, onSaveConfig, track, she
   const engines = useEngines();
   const cluster = useFaceSelectionStore(state => (track ? state.targetClusters.find(item => item.id === track.track_id) ?? null : null));
   const sheetTrack = track ? sheet?.tracks.find(item => item.track_id === track.track_id) : undefined;
-  const renderMode = 'full_3d_head' as const;
   const robust = parameters.occlusion_mode === 'robust';
   const set = (patch: Partial<WorkstationParameters>) => setParameters({ ...parameters, ...patch });
-  const info = renderModeInfo(renderMode);
   const [morphPreview, setMorphPreview] = useState(false);
   const lighting = useMemo(() => viewerLighting(parameters), [parameters]);
   const morph = useMemo(() => viewerMorph(parameters, morphPreview), [parameters, morphPreview]);
-  // Gizmo bindings: jaw opening and gaze edit the selected face's real expression overrides, the light handle the manual key light.
-  const trackId = track?.track_id ?? null;
-  const faceEdit = faceEditOf(parameters, trackId);
   const keyLight = shLightOf(parameters);
   const viewportTools = useMemo<ViewportTools>(() => ({
-    trackId,
-    jawDeg: mouthOpenToJawDeg(faceEdit.mouth_open ?? 0),
-    onJaw: deg => { if (trackId) setParameters(withFaceEdit(parameters, trackId, { mouth_open: Number(jawDegToMouthOpen(deg).toFixed(2)) })); },
-    gaze: { x: faceEdit.gaze_x ?? 0, y: faceEdit.gaze_y ?? 0 },
-    onGaze: (x, y) => { if (trackId) setParameters(withFaceEdit(parameters, trackId, { gaze_x: Number(x.toFixed(2)), gaze_y: Number(y.toFixed(2)) })); },
     light: { yaw: keyLight.yaw, pitch: keyLight.pitch, strength: keyLight.strength, ambient: keyLight.ambient, manual: parameters.lighting_mode === 'manual' },
     onLight: (yaw, pitch) => setParameters(withManualLight(parameters, yaw, pitch)),
     relightOn: !!parameters.relight,
     onRelight: on => setParameters({ ...parameters, relight: on }),
-  }), [trackId, faceEdit.mouth_open, faceEdit.gaze_x, faceEdit.gaze_y, keyLight.yaw, keyLight.pitch, keyLight.strength, keyLight.ambient, parameters, setParameters]);
+  }), [keyLight.yaw, keyLight.pitch, keyLight.strength, keyLight.ambient, parameters, setParameters]);
 
   return (
     <div className="studio-inspector workflow-inspector">
       <div className="workflow-scroll">
         <section className="workflow-step" aria-labelledby="step-swap" data-testid="step-swap">
           <h3 id="step-swap"><span className="step-no">1</span>3D head reconstruction<span className="status-chip ok">3D</span></h3>
-          <small className="muted" data-testid="render-mode-hint">{info.hint}</small>
+          <small className="muted" data-testid="render-mode-hint">True 3D full-head reconstruction. Rendering is disabled until the volumetric renderer is wired.</small>
           <True3DControls params={parameters} onParams={set} />
-          <small className="render-mode-preview">Viewer tab for this mode: <b>{PREVIEW_TAB_LABEL[info.preview]}</b></small>
-          <SwapScopeSelector parameters={parameters} setParameters={setParameters} />
           <div className="inspector-viewer">
-            <Suspense fallback={<div className="skeleton-tile wide" aria-label="Loading 3D viewer" />}><PoseGeometryViewer coverage={coverage} track={track} mesh={mesh} renderMode={renderMode} reconstruction={reconstruction} creator={facesetCreator} lighting={lighting} morph={morph} tools={viewportTools} /></Suspense>
+            <Suspense fallback={<div className="skeleton-tile wide" aria-label="Loading 3D viewer" />}><PoseGeometryViewer coverage={coverage} track={track} mesh={mesh} reconstruction={reconstruction} creator={facesetCreator} lighting={lighting} morph={morph} tools={viewportTools} /></Suspense>
           </div>
           {reconstructionPicker}
-          <FaceExpressionEditor parameters={parameters} setParameters={setParameters} trackId={track?.track_id ?? null} />
           <details className="inspector-subsection" data-testid="coverage-section" open>
             <summary>Angular coverage<small>{coverage ? 'which head angles this FaceSet has' : 'load a FaceSet'}</small></summary>
             <CoverageRadarPanel coverage={coverage} track={track} compact />
           </details>
           <details className="inspector-subsection" data-testid="morph-section" open>
-            <summary>3D head model &amp; influence<small>backbone · influence mode · jaw reshape</small></summary>
+            <summary>3D head model &amp; influence<small>topology backbone and identity influence</small></summary>
             <HeadModelBackbone />
             <IdentityMorphPanel parameters={parameters} setParameters={setParameters} preview={morphPreview} onPreview={setMorphPreview} />
           </details>
-          <WorkstationControls3D parameters={parameters} setParameters={setParameters} trackId={trackId} facesetId={assignedId || coverage?.faceset_id || ''}
+          <WorkstationControls3D parameters={parameters} setParameters={setParameters} facesetId={assignedId || coverage?.faceset_id || ''}
             onMesh={value => onIdentityMesh?.(value)} config={config} onSaveConfig={onSaveConfig} />
         </section>
 

@@ -39,7 +39,7 @@ BUILTIN_RECIPES: list[dict[str, Any]] = [
         "name": "Natural 3D Head",
         "description": "Rendered head layer with a 2 px mask feather and erosion, no relighting.",
         "shader": "auto",
-        "parameters": {"feather_px": 2, "erosion_px": 2, "swap_weight": 1.0},
+        "parameters": {"feather_px": 2, "erosion_px": 2},
     },
     {
         "id": "relit_3d",
@@ -52,9 +52,9 @@ BUILTIN_RECIPES: list[dict[str, Any]] = [
     {
         "id": "soft_blend_3d",
         "name": "Soft Blend 3D Head",
-        "description": "Wider feather (4 px), reduced swap weight (0.90) and lower colour-match strength.",
+        "description": "Wider feather (4 px) and lower colour-match strength.",
         "shader": "auto",
-        "parameters": {"feather_px": 4, "erosion_px": 2, "swap_weight": 0.90, "color_strength": 0.5},
+        "parameters": {"feather_px": 4, "erosion_px": 2, "color_strength": 0.5},
     },
 ]
 

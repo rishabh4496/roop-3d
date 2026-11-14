@@ -44,10 +44,10 @@ it('offers legal controls and exports only successful completed output', async (
   expect(host.querySelector('[role="dialog"]')?.textContent).toContain('Synthetic media processed locally');
 });
 
-it('uses exact playhead timestamps for VFR preview and carries target lock and motion controls', () => {
+it('uses exact playhead timestamps for VFR preview and carries the target lock', () => {
   const request = { target_path: 'owned/video.mp4', inspection_id: 'a'.repeat(32), identity_lock_id: 'b'.repeat(32), face_mappings: [{ track_id: 'track_0000', faceset_id: 'alice' }] } as JobRequest;
   const payload = buildLivePayload({ request, time: .12, fps: 29.97, timestampSelection: true,
-    parameters: { ...DEFAULT_PARAMETERS, expression_restore_factor: .7 } });
-  expect(payload).toMatchObject({ timestamp: .12, identity_lock_id: request.identity_lock_id, expression_restore_factor: .7 });
+    parameters: { ...DEFAULT_PARAMETERS } });
+  expect(payload).toMatchObject({ timestamp: .12, identity_lock_id: request.identity_lock_id });
   expect(payload).not.toHaveProperty('frame_index');
 });

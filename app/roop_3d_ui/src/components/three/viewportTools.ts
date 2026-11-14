@@ -4,7 +4,7 @@
  * Frame: the viewer's own (+x image-right, +y up, +z toward the viewer), head normalised to a bounding radius of ~0.95.
  * Everything here is computed in the browser from the mesh the server already sent; nothing is fetched.
  */
-import type { WorkstationParameters, FaceEditor } from '../workstation/pipeline';
+import type { WorkstationParameters } from '../workstation/pipeline';
 
 // ------------------------------------------------------------------------------------------------ buffer views
 export type BufferView = 'lit' | 'wireframe' | 'albedo' | 'normals' | 'depth' | 'cavity' | 'sh';
@@ -240,30 +240,6 @@ export function eyeAnchors(positions: ArrayLike<number>, landmarks: ArrayLike<nu
   return { left: [centre - 0.17 * width, y, z], right: [centre + 0.17 * width, y, z] };
 }
 
-// ------------------------------------------------------------------------------------------------ wiring to the real parameters
-/** Sets (or, at 0, clears) fields of one target face's `face_expression_overrides`, dropping the entry when it is empty again. */
-export function withFaceEdit(parameters: WorkstationParameters, trackId: string, patch: FaceEditor): WorkstationParameters {
-  const all = { ...(parameters.face_expression_overrides ?? {}) };
-  const next: FaceEditor = { ...(all[trackId] ?? {}) };
-  for (const [key, value] of Object.entries(patch) as [string, unknown][]) {
-    if (key === 'arkit_blendshapes' && value && typeof value === 'object') {
-      const blendshapes = { ...(next.arkit_blendshapes ?? {}) };
-      for (const [name, amount] of Object.entries(value as Record<string, unknown>)) {
-        if (typeof amount !== 'number' || !Number.isFinite(amount) || amount === 0) delete blendshapes[name];
-        else blendshapes[name] = amount;
-      }
-      if (Object.keys(blendshapes).length) next.arkit_blendshapes = blendshapes;
-      else delete next.arkit_blendshapes;
-      continue;
-    }
-    const scalar = key as Exclude<keyof FaceEditor, 'arkit_blendshapes'>;
-    if (typeof value !== 'number' || !Number.isFinite(value) || value === 0) delete next[scalar];
-    else next[scalar] = value;
-  }
-  if (Object.keys(next).length) all[trackId] = next; else delete all[trackId];
-  return { ...parameters, face_expression_overrides: all };
-}
-export const faceEditOf = (parameters: WorkstationParameters, trackId: string | null): FaceEditor => (trackId ? parameters.face_expression_overrides?.[trackId] ?? {} : {});
 
 /** Manual key light from a gizmo drag. Relighting itself stays the user's choice (it is a render-cost toggle), so `relight` is untouched. */
 export function withManualLight(parameters: WorkstationParameters, yaw: number, pitch: number): WorkstationParameters {
@@ -281,12 +257,8 @@ export function shLightOf(parameters: WorkstationParameters | undefined): SHLigh
   };
 }
 
-/** What the viewport needs to drive the three gizmos; built by the inspector from the real workstation parameters. */
+/** Lighting controls for the 3D preview. */
 export interface ViewportTools {
-  /** Selected target track, or null: jaw and gaze edit that face's `face_expression_overrides`, so they are disabled without one. */
-  trackId: string | null;
-  jawDeg: number; onJaw: (deg: number) => void;
-  gaze: { x: number; y: number }; onGaze: (x: number, y: number) => void;
   light: SHLight & { manual: boolean }; onLight: (yaw: number, pitch: number) => void;
   relightOn: boolean; onRelight?: (on: boolean) => void;
 }

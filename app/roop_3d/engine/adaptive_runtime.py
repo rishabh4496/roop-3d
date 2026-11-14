@@ -28,21 +28,14 @@ ProfileType = Literal["12gb", "6gb", "cpu"]
 ResidencyStrategy = Literal["resident", "sequential", "cpu"]
 QualityTier = Literal["high", "conservative", "basic"]
 
-# Models classified as heavy requiring sequential eviction on 6GB profiles
-HEAVY_MODELS = {
-    "liveportrait_warping_spade.onnx",
-}
+HEAVY_MODELS = frozenset()
 
-# Lightweight models safe to keep resident on all GPU profiles (~250 MiB total)
+# Lightweight local detection, embedding and landmark models.
 LIGHT_MODELS = {
     "scrfd_10g_bnkps.onnx",
     "scrfd_2.5g_kps.onnx",
     "2d106det.onnx",
     "w600k_r50.onnx",
-    "liveportrait_motion_extractor.onnx",
-    "liveportrait_landmark.onnx",
-    "liveportrait_appearance_feature_extractor.onnx",
-    "liveportrait_stitching.onnx",
 }
 
 
@@ -61,15 +54,8 @@ class AdaptiveHardwareProfile:
     description: str = ""
 
     def validate_swap_precision(self, model_name: str, requested_precision: str | None = None) -> str:
-        """Strict Precision Rule: FP32-locked graphs (the LivePortrait motion extractor) keep their verified FP32 contract."""
-        if "motion_extractor" in model_name.lower():
-            if requested_precision and requested_precision.upper() not in ("FP32", "FLOAT32"):
-                raise DomainError(
-                    "PRECISION_CONTRACT_VIOLATION",
-                    f"Model {model_name} is locked to FP32; precision {requested_precision} is forbidden",
-                    422,
-                )
-            return "FP32"
+        """Resolve an explicitly requested precision without model-specific swapper exceptions."""
+        del model_name
         return requested_precision or ("FP16" if self.profile_type != "cpu" else "FP32")
 
 
@@ -227,7 +213,7 @@ class AdaptiveModelPool:
         gc.collect()
 
     def release_heavy(self) -> None:
-        """Release heavy models (swapper, restorer, warping generator) while keeping light models."""
+        """Release any models classified as heavy by the runtime profile."""
         with self._lock:
             for name in list(self._models.keys()):
                 if name in HEAVY_MODELS:

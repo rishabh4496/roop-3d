@@ -2,7 +2,6 @@ import { useState } from 'react';
 import { post } from '../../api';
 import type { Capabilities, Config } from '../../contracts';
 import type { WorkstationParameters } from '../workstation/pipeline';
-import { RENDER_MODES } from '../workstation/renderModes';
 import True3DControls from '../studio/True3DControls';
 import { modelStatus, useModelCatalog, type ModelStatus } from '../../stores/modelCatalog';
 import { setRack, useRack } from '../../stores/rackSelection';
@@ -114,8 +113,8 @@ export default function EngineModelRack({ params, onParams, config, caps, onSave
     <div className="rack" data-testid="engine-model-rack" data-variant={variant}>
       <ActiveModelBadge selected={{ detector: detectorValue, head: params.head_topology_engine, shader: params.shader_mode }} />
       <section className="rack-section" aria-label="3D head reconstruction" data-testid="rack-true3d">
-        <h4>3D head reconstruction <Wiring live /></h4>
-        <small className="muted" data-testid="render-mode-hint">{RENDER_MODES[0].hint}</small>
+        <h4>3D head reconstruction <Wiring live={false} /></h4>
+        <small className="muted" data-testid="render-mode-hint">The true-3D full-head renderer is not wired; render jobs fail closed.</small>
         <True3DControls params={params} onParams={onParams} compact={variant === 'batch'} />
       </section>
 

@@ -40,7 +40,6 @@ from roop_3d.media.video_reader import VideoReader
 from roop_3d.media.video_writer import encode_video
 from roop_3d.telemetry.pinokio_terminal import AUDIO_POLICY_TEXT, HUD
 from roop_3d.models.catalog import ModelCatalog, render_dependencies
-from roop_3d.compositor.pipeline import CompositeOptions
 from roop_3d.core.true3d_guard import require_true3d_renderer
 from roop_3d.engine.edit_plan import FrameEditPlan
 from roop_3d.engine.detection.track_policy import POLICY_VERSION, TrackPolicy
@@ -446,9 +445,6 @@ class MasterPipelineRunner:
             pair = [self.faceset_reader.read(self._faceset_path(item), faceset_id=item) for item in recipe.source_face_ids]
             blended = blend_documents(pair, recipe)
             documents = {track: blended for track in documents}
-        if settings.execution_mode == "diffusion_vfx":
-            raise DomainError("DIFFUSION_VFX_UNAVAILABLE",
-                              "Stage 11 requires a verified local family loader; no loader is configured", 503)
         return target, digest, total_frames, documents, track_ids, [item.faceset_id for item in request.face_mappings]
 
     @staticmethod
@@ -477,8 +473,8 @@ class MasterPipelineRunner:
         if record.request.export:
             from roop_3d.media.provenance import require_mode
             require_mode(record.request.export.finishing.provenance)
-            if {'normal', 'depth'} & set(record.request.export.passes):
-                require_true3d_renderer('normal/depth pass export')
+            if record.request.export.passes:
+                require_true3d_renderer('render-pass export')
             if record.request.export.passes and settings.video_timing_policy == 'cfr':
                 raise DomainError('VFX_TIMING_POLICY', 'Pass exports require preserved source timing; conform VFR media before rendering for NLE interchange', 422)
         target, digest, total, sources, labels_to_ids, faceset_ids = self._prepare_inputs(record, settings)
@@ -489,13 +485,6 @@ class MasterPipelineRunner:
         self._require_disk_space(record, target, total, checkpoint)
         # Bind actual verified local dependencies, not registry presence. Missing optional models stay optional.
         models = render_dependencies(self.catalog)
-        if settings.lip_sync_mode != "off":
-            candidates = [row for row in self.catalog.public() if row.get("installed")
-                          and row.get("local_format") == "onnx" and "wav2lip" in row["name"].casefold()
-                          and (settings.lip_sync_mode != "wav2lip_gan_fp16" or "gan" in row["name"].casefold())]
-            if candidates:
-                path = self.catalog.resolve_local_model(candidates[0]["id"])
-                models["lip_sync"] = sha256_file(path)[1]
         inspection_digest = sha256_file(owned(self.root,
             f"roop_3d/.runtime/inspections/{record.request.inspection_id}.json"))[1]
         if checkpoint.completed_frame >= 0 and not checkpoint.model_digests:
@@ -517,13 +506,6 @@ class MasterPipelineRunner:
             raise DomainError("JOB_SETTINGS_CHANGED", "Restore the job's effective settings before resuming", 409)
         curves_dict = record.request.parameter_curves.model_dump(mode="json") if record.request.parameter_curves else {}
         input_hashes_dict = {"target": digest, "target_path": record.request.target_path, "inspection_id": record.request.inspection_id}
-        if settings.lip_sync_mode != "off" and settings.lip_sync_audio_path:
-            audio_path = safe_path(self.root, settings.lip_sync_audio_path)
-            audio_digest = sha256_file(audio_path)[1]
-            previous = checkpoint.input_hashes.get("lip_sync_audio_sha256")
-            if checkpoint.completed_frame >= 0 and previous != audio_digest:
-                raise DomainError("JOB_AUDIO_CHANGED", "Voiceover changed since the saved checkpoint", 409)
-            input_hashes_dict["lip_sync_audio_sha256"] = audio_digest
         input_hashes_dict.update(source_fingerprints)
         if record.request.identity_lock_id:
             input_hashes_dict["identity_lock_id"] = record.request.identity_lock_id
@@ -699,8 +681,6 @@ class MasterPipelineRunner:
                 raise signal()
             session.prepare_session(base_source, track_ids=numeric_ids,
                                     sources_by_track=source_by_track,
-                                    retarget='auto',
-                                    **record.request.parameters_at(0).session_options(),
                                     **(prepared.tracking or {}))
             if hasattr(session, 'set_target_registry') and hasattr(self.media, 'target_locks'):
                 session.set_target_registry(self.media.target_locks.registry(record.request.target_path))
@@ -777,27 +757,10 @@ class MasterPipelineRunner:
             request = record.request
 
             # -- the four stages of one frame; identical whether they run on four threads or inline ------------------
-            def save_passes(collector, result, index):
-                collector.geometry(result.replacements, request.parameters_at(index).pose_strength)
-                collector.save(self.root, record.job_id, index)
-
-            lip_syncer = None
-            stage15_audio_source = None
-            if settings.lip_sync_mode != "off":
-                from roop_3d.engine.audio_sync.audio_features import LipSyncer
-                from roop_3d.audit.isolation import safe_path
-                audio_path = safe_path(self.root, settings.lip_sync_audio_path) if settings.lip_sync_audio_path else target
-                if settings.lip_sync_audio_path:
-                    if audio_path.suffix.casefold() not in {".wav", ".mp3"}:
-                        raise DomainError("LIPSYNC_AUDIO_FORMAT", "Voiceover must be WAV or MP3", 422)
-                    stage15_audio_source = audio_path
-                lip_syncer = LipSyncer(audio_path, stream_index=settings.lip_sync_audio_stream)
-                session.lip_sync.prepare(settings.lip_sync_mode, session.config)
-
             frame_stages = ReferenceStages(
                 session, request=request, edit_plan=prepared.edit_plan, export=export, identity_report=identity_report,
-                lip_sync=settings.lip_sync_mode != "off", lip_syncer=lip_syncer, working_transfer=lambda: reader.working.transfer,
-                resume_after=resume_after, scene_cuts=scene_cuts, swapped_ranges=swapped_ranges, save_passes=save_passes,
+                working_transfer=lambda: reader.working.transfer, resume_after=resume_after,
+                scene_cuts=scene_cuts, swapped_ranges=swapped_ranges,
                 write_frame=lambda index, image, shape: self._save_frame(record.job_id, index, image, shape),
                 watchdog=watchdog if admission.profile != "cpu" else None)
             stages = frame_stages.stages()
@@ -966,10 +929,6 @@ class MasterPipelineRunner:
                 "runtime_profile": admission.profile,
                 "provider": admission.provider,
                 "renderer": capability.get("renderer", {"wired": False}),
-                "liveportrait": capability.get("portrait", {}).get("state", "UNKNOWN"),
-                "stage08_uv": "UNSUPPORTED" if settings.execution_mode in {"volumetric", "hybrid"} else "NOT_REQUESTED",
-                "stage10_lip_sync": capability.get("lip_sync", {}).get("state", "UNKNOWN"),
-                "stage11_diffusion_vfx": "UNSUPPORTED" if settings.execution_mode in {"hybrid", "diffusion_vfx"} else "NOT_REQUESTED",
                 "face_mappings": [{"track_id": label, "faceset_id": source_id}
                                    for (label, source_id) in zip(labels_to_ids, faceset_ids)],
                 "model_hashes": model_hashes,
@@ -1025,7 +984,6 @@ class MasterPipelineRunner:
                     hardware="software" if admission.profile == "cpu" else "auto", timing=timing,
                     rate=output_rate, audio_policy=settings.audio_policy, transform=completed_frame,
                     output_dir=settings.output_root, manifest_metadata=metadata,
-                    **({"audio_source": stage15_audio_source} if stage15_audio_source is not None else {}),
                     start=Fraction(str(record.request.trim_start_seconds)) if record.request.trim_start_seconds is not None else None,
                     end=Fraction(str(record.request.trim_end_seconds)) if record.request.trim_end_seconds is not None else None,
                     before_publish=lambda: self._check_control(control, checkpoint, last_completed),

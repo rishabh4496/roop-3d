@@ -16,37 +16,37 @@ export const BUILTIN_RECIPES = [
     id: 'photoreal_natural',
     name: 'Natural Photoreal',
     description: 'MakeHuman CC0 head, PBR subsurface scattering, auto camera, 2 px mask feather.',
-    parameters: { head_topology_engine: 'MakeHuman-CC0-Craniofacial-3D', shader_mode: PBR, camera: { mode: 'auto', projection: 'perspective', focal_unit: 'fov_deg' }, feather_px: 2, erosion_px: 2, swap_weight: 1.0 }
+    parameters: { head_topology_engine: 'MakeHuman-CC0-Craniofacial-3D', shader_mode: PBR, camera: { mode: 'auto', projection: 'perspective', focal_unit: 'fov_deg' }, feather_px: 2, erosion_px: 2 }
   },
   {
     id: 'flame_full_head',
     name: 'FLAME Full Head',
     description: 'FLAME full-head topology with PBR subsurface scattering, 3 px mask feather and erosion.',
-    parameters: { head_topology_engine: 'FLAME-FullHead-3D', shader_mode: PBR, feather_px: 3, erosion_px: 3, swap_weight: 1.0 }
+    parameters: { head_topology_engine: 'FLAME-FullHead-3D', shader_mode: PBR, feather_px: 3, erosion_px: 3 }
   },
   {
     id: 'gaussian_avatar',
     name: 'Gaussian Head Avatar',
-    description: 'MakeHuman CC0 head shaded as a 3D Gaussian head avatar, swap weight 0.95.',
-    parameters: { head_topology_engine: 'MakeHuman-CC0-Craniofacial-3D', shader_mode: '3D-Gaussian-Head-Avatar', feather_px: 4, erosion_px: 2, swap_weight: 0.95 }
+    description: 'MakeHuman CC0 head shaded as a 3D Gaussian head avatar, 4 px mask feather.',
+    parameters: { head_topology_engine: 'MakeHuman-CC0-Craniofacial-3D', shader_mode: '3D-Gaussian-Head-Avatar', feather_px: 4, erosion_px: 2 }
   },
   {
     id: 'cinematic_soft',
     name: 'Cinematic Soft Blend',
-    description: 'Wide 5 px mask feather, partial identity weight 0.85.',
-    parameters: { head_topology_engine: 'MakeHuman-CC0-Craniofacial-3D', shader_mode: PBR, feather_px: 5, erosion_px: 1, swap_weight: 0.85 }
+    description: 'Wide 5 px mask feather with a tight 1 px erosion.',
+    parameters: { head_topology_engine: 'MakeHuman-CC0-Craniofacial-3D', shader_mode: PBR, feather_px: 5, erosion_px: 1 }
   },
   {
     id: 'wide_angle_selfie',
     name: 'Wide-Angle Selfie Camera',
     description: 'Manual perspective camera, 85 degree horizontal field of view, for close-up phone footage.',
-    parameters: { head_topology_engine: 'MakeHuman-CC0-Craniofacial-3D', shader_mode: PBR, camera: { mode: 'manual', projection: 'perspective', focal_unit: 'fov_deg', fov_deg: 85 }, feather_px: 3, erosion_px: 2, swap_weight: 1.0 }
+    parameters: { head_topology_engine: 'MakeHuman-CC0-Craniofacial-3D', shader_mode: PBR, camera: { mode: 'manual', projection: 'perspective', focal_unit: 'fov_deg', fov_deg: 85 }, feather_px: 3, erosion_px: 2 }
   },
   {
     id: 'telephoto_portrait',
     name: 'Telephoto Portrait Camera',
     description: 'Manual perspective camera, 20 degree horizontal field of view, for long-lens footage.',
-    parameters: { head_topology_engine: 'MakeHuman-CC0-Craniofacial-3D', shader_mode: PBR, camera: { mode: 'manual', projection: 'perspective', focal_unit: 'fov_deg', fov_deg: 20 }, feather_px: 3, erosion_px: 2, swap_weight: 1.0 }
+    parameters: { head_topology_engine: 'MakeHuman-CC0-Craniofacial-3D', shader_mode: PBR, camera: { mode: 'manual', projection: 'perspective', focal_unit: 'fov_deg', fov_deg: 20 }, feather_px: 3, erosion_px: 2 }
   }
 ];
 
@@ -451,7 +451,6 @@ export default function BatchMatrixScreen({
         shader_mode: newRecipeShader,
         feather_px: 2,
         erosion_px: 2,
-        swap_weight: 1.0,
       }
     };
     setRecipes(prev => [...prev, custom]);

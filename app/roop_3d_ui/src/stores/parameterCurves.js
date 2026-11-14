@@ -6,7 +6,6 @@ export const CURVE_PARAMETERS = {
   mask_feather: { label: 'Mask feather radius', min: 0, max: 64, initial: 5, field: 'feather_px' },
   occlusion_threshold: { label: 'Occlusion threshold (XSeg / BiSeNet)', min: 0, max: 1, initial: .55, field: 'occlusion_threshold' },
   identity_blend_t: {label: 'Identity A to B (Slerp)', min: 0, max: 1, initial: 0, field: 'identity_blend_t'},
-  swap_weight: { label: 'Identity weight', min: 0, max: 1, initial: 1, field: 'swap_weight' },
   mask_erosion: { label: 'Mask erosion', min: -32, max: 32, initial: 0, field: 'erosion_px' },
 };
 /** What each animatable parameter really does, shown under the curve. Only claims the engine keeps. */

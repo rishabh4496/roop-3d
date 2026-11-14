@@ -46,7 +46,7 @@ def compile_plan(plan: Plan, strengths: dict[str, float] | None = None) -> Compi
     if "true3d_head_renderer" not in ids:
         unsupported.append("3D_HEAD_RENDERER_REQUIRED: the plan has no true-3D head render engine")
     if backend == "stream":
-        if ids & ({"identity_asset_builder", "liveportrait_retarget"} | OCCLUSION_ENGINES):
+        if ids & ({"identity_asset_builder"} | OCCLUSION_ENGINES):
             unsupported.append("STREAM_BACKEND_LACKS_3D_EXPRESSION_AND_OCCLUSION_ENGINES")
         notes.append("stream backend jobs must stay 'basic': no workstation parameters are emitted")
     else:

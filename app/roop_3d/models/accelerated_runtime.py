@@ -97,12 +97,8 @@ class AcceleratorFactory:
             ort.preload_dlls()
             budget = self.config.gpu_budget_bytes
             if online:
-                # Detector/recognizer now join the accelerated chain. Fractions
-                # reserve the largest share for the identity model; warp may
-                # retain its CPU reference independently.
-                divisor = {"recognizer": 8, "detector": 16,
-                           "liveportrait_warp": 4, "liveportrait_motion": 16,
-                           "liveportrait_appearance": 32}.get(record.get("role"), 32)
+                # Detectors/landmarks receive bounded admission; the recognizer gets the largest share.
+                divisor = {"recognizer": 8, "detector": 16}.get(record.get("role"), 32)
                 budget //= divisor
             providers = [(provider, {"gpu_mem_limit": budget, "arena_extend_strategy": "kSameAsRequested",
                 "use_tf32": False, "cudnn_conv_use_max_workspace": False, "cudnn_conv_algo_search": "HEURISTIC"}), "CPUExecutionProvider"]

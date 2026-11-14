@@ -77,7 +77,7 @@ export function defaultAxes(panel?: PanelId, parameters: WorkstationParameters =
   const inPanel = active.filter(spec => spec.panel === panel).map(spec => spec.id);
   const rest = active.filter(spec => !inPanel.includes(spec.id)).map(spec => spec.id);
   const pool = [...inPanel, ...rest];
-  return [pool[0] ?? 'swap_weight', pool[1] ?? 'feather_px'];
+  return [pool[0] ?? 'erosion_px', pool[1] ?? 'feather_px'];
 }
 
 /**

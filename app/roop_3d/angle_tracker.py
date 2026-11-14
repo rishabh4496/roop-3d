@@ -22,19 +22,6 @@ from roop_3d.temporal import OneEuroFilter
 MAX_BRIDGE_GAP = 8
 TARGET_MATCH_SAME_ANGLE = 0.40
 TARGET_MATCH_PROFILE_CONTINUITY = 0.22
-RENDER_MODE_TO_ENGINE = {
-    "full_3d_head": "true_3d",
-}
-
-
-def normalize_render_mode(mode: str) -> str:
-    """Translate the workstation's Stage 13 labels to the established engine names."""
-    if mode in RENDER_MODE_TO_ENGINE:
-        return RENDER_MODE_TO_ENGINE[mode]
-    return "true_3d"
-    if mode in RENDER_MODE_TO_ENGINE.values():
-        return mode
-    raise ValueError(f"Unsupported render mode: {mode}")
 
 
 def pose_match_threshold(pose_delta: float, *, yaw: float, spatial_iou: float) -> float:
@@ -121,7 +108,6 @@ class AngleScanResult:
     forward_tracks: int
     backward_tracks: int
     bridged_frames: int
-    render_modes: tuple[str, ...] = ("full_3d_head",)
 
     @property
     def locked_frames(self) -> int:

@@ -2,21 +2,11 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../../api';
 import type { Config, Reconstruction } from '../../contracts';
 import type { WorkstationParameters } from '../workstation/pipeline';
-import { faceEditOf, withFaceEdit } from '../three/viewportTools';
-import { PrecisionRangeSlider } from '../ui-layouts';
 import { loadIdentityMesh, type MeshSource } from '../../utils/glbMesh';
-import { skullBlendOf, swapScopeOf, withSkullBlend, withSwapScope } from './swapScope';
 
 /**
- * Stage 8 workstation control panels. Each control says what it really drives:
- *  - Topology engine + semantic sliders  -> `GET /facesets/{id}/identity-asset/mesh?template=makehuman&topology=&<sliders>` (preview of the
- *    MakeHuman identity asset for inspection and export; the render modes use the canonical asset).
- *  - Source-to-target beta blend         -> `skull_blend` of the adaptive skull swap scope (a real compositor option).
- *  - Skin-tone vs ambient adaptation     -> `color_strength` (the colour-transfer weight), nothing else.
- *  - Expression offsets                  -> `face_expression_overrides` of the selected target face (the engine's expression editor).
- *  - Temporal smoothing                  -> the global `temporal_min_cutoff` runtime setting (One-Euro cutoff of the track stabiliser).
- *  - Speech-lip lock, scene adaptation   -> not supported: the render pipeline has no consumer for them, so they are shown disabled with the
- *    reason instead of being remembered and ignored.
+ * 3D topology preview and track stabilization controls. The preview is an inspection asset;
+ * the render service remains unavailable until its full-head renderer is wired.
  */
 
 // ---------------------------------------------------------------------------------------------------- smoothing <-> One-Euro cutoff
@@ -62,8 +52,8 @@ export function meshQuery(topology: string, values: Record<string, number>): str
   return params.toString();
 }
 
-function TopologySemantic({ facesetId, parameters, setParameters, onMesh }: {
-  facesetId: string; parameters: WorkstationParameters; setParameters: (value: WorkstationParameters) => void; onMesh: (mesh: Reconstruction | null) => void;
+function TopologySemantic({ facesetId, onMesh }: {
+  facesetId: string; onMesh: (mesh: Reconstruction | null) => void;
 }) {
   const [report, setReport] = useState<{ value: TopologyReport | null; error: string; attempt: number }>({ value: null, error: '', attempt: 0 });
   const [topology, setTopology] = useState('');
@@ -96,11 +86,6 @@ function TopologySemantic({ facesetId, parameters, setParameters, onMesh }: {
   }, [touched, facesetId, active, values, onMesh]);
 
   const reset = () => { setValues({}); setTopology(''); setTouched(false); setMesh({ state: 'idle', message: '', provenance: '' }); onMesh(null); };
-  const beta = Math.round((swapScopeOf(parameters) === 'adaptive_skull' ? skullBlendOf(parameters) : 1) * 100);
-  const setBeta = (percent: number) => {
-    const adaptive = swapScopeOf(parameters) === 'adaptive_skull' ? parameters : withSwapScope(parameters, 'adaptive_skull');
-    setParameters(withSkullBlend(adaptive, percent / 100));
-  };
 
   return (
     <div className="topology-semantic" data-testid="topology-semantic">
@@ -130,10 +115,6 @@ function TopologySemantic({ facesetId, parameters, setParameters, onMesh }: {
               title={def?.description} onChange={event => { setValues(previous => ({ ...previous, [key]: Number(event.target.value) })); setTouched(true); }} />
           </label>);
       })}
-      <label className="inspector-field">Source-to-Target β blend <output aria-live="off">β source {beta}% · β target {100 - beta}%</output>
-        <input type="range" aria-label="Source to target beta blend" min={0} max={100} step={1} value={beta} aria-valuetext={`${beta} percent source skull`} onChange={event => setBeta(Number(event.target.value))} />
-        <small className="muted">Drives the skull share of the swap (Adaptive Skull Blend). Moving it switches the swap scope to Adaptive.</small>
-      </label>
       <div className="morph-actions">
         <button type="button" className="button small" disabled={!touched && !Object.keys(values).length} onClick={reset}>Reset shape</button>
         {mesh.state === 'loading' && <span className="build-progress" role="status">Rebuilding the mesh…</span>}
@@ -145,32 +126,24 @@ function TopologySemantic({ facesetId, parameters, setParameters, onMesh }: {
           {mesh.source === 'glb' ? `Loaded as binary glTF${mesh.bytes ? ` (${(mesh.bytes / 1024).toFixed(0)} KB)` : ''}` : `Loaded as JSON${mesh.fallbackReason ? ` (GLB unavailable: ${mesh.fallbackReason})` : ''}`}
         </small>)}
       <small className="muted" data-testid="semantic-limits">Forehead height and temple width are not offered: the engine has no landmarks above the brows or at the temples, and head width is held fixed.</small>
-      <small className="muted">Previews the MakeHuman identity asset in the 3D viewport (inspection and export only); 3D Facial Warp and 3D Expression Transfer use the canonical head asset.</small>
+      <small className="muted">Previews the MakeHuman full-head asset for inspection. Rendering remains unavailable until the 3D renderer is wired.</small>
     </div>
   );
 }
 
 // ---------------------------------------------------------------------------------------------------- the panel set
-export const NED_OFFSETS = [
-  { key: 'mouth_smile', label: 'Smile', min: -1, max: 1 }, { key: 'eyebrow_raise', label: 'Brow raise', min: -1, max: 1 },
-  { key: 'eyebrow_tilt', label: 'Brow tilt', min: -1, max: 1 }, { key: 'mouth_open', label: 'Mouth open', min: 0, max: 1 },
-] as const;
 
 export interface WorkstationControls3DProps {
   parameters: WorkstationParameters; setParameters: (value: WorkstationParameters) => void;
-  /** Selected target track; expression offsets edit that face. */
-  trackId: string | null;
-  /** Source FaceSet for the topology preview ('' when none). */
   facesetId: string;
   onMesh: (mesh: Reconstruction | null) => void;
   config?: Config | null; onSaveConfig?: (value: Config) => void;
 }
 
-export default function WorkstationControls3D({ parameters, setParameters, trackId, facesetId, onMesh, config, onSaveConfig }: WorkstationControls3DProps) {
+export default function WorkstationControls3D({ parameters, setParameters, facesetId, onMesh, config, onSaveConfig }: WorkstationControls3DProps) {
   const [topologyOpen, setTopologyOpen] = useState(false);
   const colour = parameters.color_strength;
   const colourBypassed = parameters.bypass.includes('color');
-  const edit = faceEditOf(parameters, trackId);
 
   const cutoff = typeof config?.temporal_min_cutoff === 'number' ? config.temporal_min_cutoff : DEFAULT_MIN_CUTOFF;
   const [smoothing, setSmoothing] = useState(() => cutoffToSmoothing(cutoff));
@@ -194,7 +167,7 @@ export default function WorkstationControls3D({ parameters, setParameters, track
     <div className="workstation-controls-3d" data-testid="workstation-controls-3d">
       <details className="inspector-subsection" data-testid="topology-section" onToggle={event => setTopologyOpen((event.currentTarget as HTMLDetailsElement).open)}>
         <summary>Topology &amp; semantic shape<small>MakeHuman CC0 · FLAME 2023 Open · bone sliders</small></summary>
-        {topologyOpen && <TopologySemantic facesetId={facesetId} parameters={parameters} setParameters={setParameters} onMesh={onMesh} />}
+        {topologyOpen && <TopologySemantic facesetId={facesetId} onMesh={onMesh} />}
       </details>
 
       <details className="inspector-subsection" data-testid="tone-section">
@@ -209,21 +182,6 @@ export default function WorkstationControls3D({ parameters, setParameters, track
         <small className="muted">This is the swap's Lab colour-transfer weight, an original calibration, not the TRUST network (not installed).</small>
       </details>
 
-      <details className="inspector-subsection" data-testid="expression-section">
-        <summary>Expression offsets &amp; speech<small>{trackId ?? 'select a target face'}</small></summary>
-        <fieldset disabled={!trackId} aria-label="Expression offsets for the selected face">
-          {NED_OFFSETS.map(item => (
-            <PrecisionRangeSlider key={item.key} className="inspector-field" label={item.label} ariaLabel={`Expression offset ${item.label.toLowerCase()}`}
-              min={item.min} max={item.max} step={0.01} disabled={!trackId} value={edit[item.key] ?? 0}
-              onChange={value => trackId && setParameters(withFaceEdit(parameters, trackId, { [item.key]: value }))} />))}
-          <button type="button" className="button small" disabled={!trackId || !NED_OFFSETS.some(item => edit[item.key])}
-            onClick={() => trackId && setParameters(withFaceEdit(parameters, trackId, Object.fromEntries(NED_OFFSETS.map(item => [item.key, 0]))))}>Reset offsets</button>
-        </fieldset>
-        <small className="muted">Per-face offsets on the engine's expression editor (the same values as “Micro-expression &amp; 3D Face Editor”); the NED network is not installed.</small>
-        <label className="inspector-toggle unsupported-control" data-testid="lip-lock-unsupported" title="The render pipeline has no speech-driven lip stage">
-          <input type="checkbox" checked={false} disabled readOnly />Speech-lip lock <span className="status-chip">not supported</span></label>
-        <small className="muted">The render pipeline has no speech-driven lip stage (SPECTRE is not installed), so this cannot be switched on. Lip sync from an audio file is a separate engine setting: Settings → Pipeline → lip sync mode.</small>
-      </details>
 
       <details className="inspector-subsection" data-testid="adaptation-section">
         <summary>Scene adaptation &amp; smoothing<small>3 s adaptation · temporal filter</small></summary>

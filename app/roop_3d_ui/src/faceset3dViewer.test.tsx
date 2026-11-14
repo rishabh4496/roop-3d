@@ -6,7 +6,6 @@ import * as THREE from 'three';
 import PoseGeometryViewer, {
   buildMeshAssets, formatPose, legacyPoseToStandard, payloadToReconstruction, poseDirection, poseQuaternion, TEMPLATE_LANDMARK_COUNT,
 } from './components/three/PoseGeometryViewer';
-import { RENDER_MODES, renderModeInfo } from './components/workstation/renderModes';
 import { useFaceSelectionStore } from './useFaceSelectionStore';
 import type { Coverage, ReconstructedMesh } from './contracts';
 
@@ -39,7 +38,7 @@ const payload = (overrides: Partial<Coverage> = {}): Coverage => ({
     { view_index: 0, yaw: 0, pitch: 0, roll: 0, bin_index: 46, position_xyz: [0, 0, 1], reprojection_error_px: 0 },
     { view_index: 1, yaw: 45, pitch: 10, roll: 0, bin_index: 59, position_xyz: [0.7, 0.17, 0.69], reprojection_error_px: 0 },
   ],
-  mesh_2_5d: payloadMesh(TEMPLATE_LANDMARK_COUNT), mesh_full_3d: payloadMesh(),
+  mesh_full_3d: payloadMesh(),
   uv_texture_data_url: 'data:image/png;base64,iVBORw0KGgo=', ...overrides,
 });
 
@@ -68,7 +67,7 @@ describe('mesh frame conversion', () => {
   });
 
   it('centres and fits every mesh to the viewer, keeps one UV per vertex, and drops invalid triangles', () => {
-    const mesh = payloadToReconstruction({ ...payloadMesh(), indices: [[0, 1, 2], [0, 2, 99], [1, 2]] as any }, 'tps_2_5d')!;
+    const mesh = payloadToReconstruction({ ...payloadMesh(), indices: [[0, 1, 2], [0, 2, 99], [1, 2]] as any }, 'flame')!;
     const { geometry } = buildMeshAssets(mesh)!;
     expect(geometry.getIndex()!.count).toBe(3);
     expect(geometry.getAttribute('uv').count).toBe(geometry.getAttribute('position').count);
@@ -77,7 +76,7 @@ describe('mesh frame conversion', () => {
   });
 
   it('lifts the 68 template landmarks only when asked, and only from the leading vertices', () => {
-    const recon = payloadToReconstruction(payloadMesh(TEMPLATE_LANDMARK_COUNT), 'tps_2_5d')!;
+    const recon = payloadToReconstruction(payloadMesh(TEMPLATE_LANDMARK_COUNT), 'flame')!;
     expect(buildMeshAssets(recon)!.landmarks).toBeNull();
     const withLandmarks = buildMeshAssets(recon, { landmarkCount: TEMPLATE_LANDMARK_COUNT })!;
     expect(withLandmarks.landmarks!.length).toBe(TEMPLATE_LANDMARK_COUNT * 3);
@@ -112,18 +111,11 @@ describe('pose maths', () => {
   });
 });
 
-describe('render modes', () => {
-  it('has exactly one mode, the full 3D head, and maps legacy ids onto it (no 2D or 2.5D mode survives)', () => {
-    expect(RENDER_MODES.map(mode => [mode.id, mode.label])).toEqual([['full_3d_head', 'Full 3D Head Reconstruction']]);
-    expect(RENDER_MODES.map(mode => mode.preview)).toEqual(['reconstruction']);
-    for (const legacy of ['standard', 'pose_3d', 'reenactment_3d', 'estimated_2_5d', 'unknown']) expect(renderModeInfo(legacy).id).toBe('full_3d_head');
-  });
-});
 
 describe('PoseGeometryViewer with a FaceSet reconstruction payload', () => {
   let host: HTMLDivElement, root: Root;
   const render = async (props: Record<string, unknown>) => { await act(async () => { root.render(<PoseGeometryViewer {...props} />); }); };
-  const tabs = () => [...host.querySelectorAll<HTMLButtonElement>('.viewer-mode-btn')];
+  const tabs = () => [...host.querySelectorAll<HTMLElement>('.viewer-mode-btn')];
   const activeTab = () => host.querySelector('.viewer-mode-btn.active')?.textContent ?? '';
   const readout = () => [...host.querySelectorAll('.pose-status-readout .status-metric')]
     .map(metric => `${metric.querySelector('.status-label')!.textContent} ${metric.querySelector('strong')!.textContent}`).join(' | ');
@@ -141,7 +133,6 @@ describe('PoseGeometryViewer with a FaceSet reconstruction payload', () => {
     expect(readout()).toContain('Observed Views 0');
     expect(readout()).toContain('0 / 96 (0%)');
     expect(readout()).toContain('+0.0° Y · +0.0° P');
-    expect(tabs()[0].disabled).toBe(true);
   });
 
   it('reports the loading and error states, and offers a retry', async () => {
@@ -172,14 +163,12 @@ describe('PoseGeometryViewer with a FaceSet reconstruction payload', () => {
     expect(live.getAttribute('data-source')).toBe('target');
   });
 
-  it('opens the one fitted reconstruction tab, marks it as the render geometry, and offers no 2.5D tab', async () => {
-    await render({ coverage: payload(), track: null, mesh: null, renderMode: 'full_3d_head' });
+  it('shows one fixed full-3D reconstruction status', async () => {
+    await render({ coverage: payload(), track: null, mesh: null });
     expect(tabs()).toHaveLength(1);
     expect(activeTab()).toContain('Full 3D Reconstructed');
-    expect(tabs()[0].disabled).toBe(false);
-    expect(tabs()[0].dataset.pipeline).toBe('true');
-    expect(tabs()[0].textContent).toContain('render');
-    expect(host.textContent).not.toMatch(/2\.5D/);
+    expect(tabs()[0].tagName).toBe('SPAN');
+    expect(tabs()[0].title).toContain('3D reconstruction');
   });
 
   it('selects a fitted anatomical surface over the canonical proxy when one is available', async () => {

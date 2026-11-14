@@ -43,14 +43,6 @@ def policy_for(model_name: str, role: str | None) -> PrecisionPolicy:
     if role == "recognizer":
         fp32, fp16 = Tolerance(0.001, 0.00005, 0.995), Tolerance(0.02, 0.002, 0.995)
         candidate = True
-    elif role == "liveportrait_appearance":
-        candidate = True
-    elif role == "liveportrait_warp":
-        fp32 = Tolerance(0.001, 0.00005, image_psnr_db=65, image_ssim=0.9995, border_absolute=0.0005)
-        sensitive, excluded = "3-D warp coordinates and output borders retain FP32", ("GridSample",)
-    elif role in ("liveportrait_motion", "liveportrait_stitch"):
-        fp32 = Tolerance(0.0005, 0.00005)
-        sensitive = "Pose/regression heads and stitching offsets retain FP32"
     elif role == "detector" or "landmark" in model_name or model_name == "2d106det.onnx":
         fp32 = Tolerance(0.0005, 0.00005)
         sensitive = "Detection/landmark regression retains FP32 to avoid jitter"

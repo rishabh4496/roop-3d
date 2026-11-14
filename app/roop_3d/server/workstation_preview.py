@@ -24,7 +24,7 @@ from roop_3d.core.settings import Contract
 from roop_3d.core.workstation import WorkstationParameters
 from roop_3d.faceset.identity_blend import IdentityBlendSpec
 from roop_3d.jobs.schema import JobRequest
-from roop_3d.server.true3d import NOT_WIRED_CODE, NOT_WIRED_MESSAGE, True3DSettings, migrate_legacy, require_renderer
+from roop_3d.server.true3d import NOT_WIRED_CODE, NOT_WIRED_MESSAGE, True3DSettings, require_renderer
 
 router = APIRouter(prefix='/api/v1/workstation')
 #: Numeric parameters a sweep may vary. Only controls that exist on the true-3D path are listed.
@@ -55,36 +55,6 @@ class PreviewRequest(Contract):
     identity_blend: IdentityBlendSpec | None = None
     # Head topology engine, shader mode and perspective camera for this preview (server defaults when omitted).
     true3d: True3DSettings = True3DSettings()
-    # Removed 2D / 2.5D fields a legacy client sent (migrated away by the before-validator).
-    legacy_dropped: tuple[str, ...] = Field(default=(), max_length=64)
-
-    @model_validator(mode='before')
-    @classmethod
-    def drop_removed_fields(cls, data: Any) -> Any:
-        """Old saved previews / clients: removed keys are dropped at every level instead of failing validation."""
-        clean, dropped = migrate_legacy(data)
-        if not isinstance(clean, dict):
-            return clean
-        clean = dict(clean)
-        if isinstance(clean.get('parameters'), dict):
-            clean['parameters'], more = migrate_legacy(clean['parameters'])
-            dropped += more
-        if isinstance(clean.get('request'), dict):
-            request, more = migrate_legacy(clean['request'])
-            dropped += more
-            if isinstance(request.get('workstation_parameters'), dict):
-                request['workstation_parameters'], more = migrate_legacy(request['workstation_parameters'])
-                dropped += more
-            clean['request'] = request
-        for axis in ('x', 'y'):
-            import base64
-            legacy_blend_axis = base64.b64decode('cmVzdG9yYXRpb25fYmxlbmQ=').decode('ascii')
-            if isinstance(clean.get(axis), dict) and clean[axis].get('parameter') in (legacy_blend_axis, 'pose_strength'):
-                dropped.append(f'{axis}.parameter={clean[axis]["parameter"]}')
-                clean[axis] = None
-        if dropped:
-            clean['legacy_dropped'] = tuple(sorted(set(dropped)))
-        return clean
 
     @property
     def effective_parameters(self) -> WorkstationParameters:

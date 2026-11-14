@@ -5,8 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { drawerOf, isDeepLink, normalizeRoute, useHashDrawer, useHashRoute } from './router/AppRouter';
 import MagneticDock, { DOCK_ITEMS, activeDockItem, magnetScale } from './shell/MagneticDock';
 import ShellDrawers from './shell/ShellDrawers';
-import TelemetryHeader, { GRAPH_NODES, nodeForStage, swapModeLabel } from './shell/TelemetryHeader';
-import { DEFAULT_PARAMETERS } from './components/workstation/pipeline';
+import TelemetryHeader, { GRAPH_NODES, nodeForStage } from './shell/TelemetryHeader';
 import { publishHardware, publishProgress, resetTelemetry } from './stores/telemetryStore';
 
 vi.mock('./api', () => ({ api: vi.fn(() => Promise.reject(new Error('offline'))), post: vi.fn() }));
@@ -120,26 +119,21 @@ describe('TelemetryHeader', () => {
     expect([nodeForStage('idle'), nodeForStage(''), nodeForStage(null), nodeForStage('something_new')]).toEqual([null, null, null, null]);
   });
 
-  it('names the swap mode from the real swap scope', () => {
-    expect(swapModeLabel(DEFAULT_PARAMETERS)).toBe('100% FULL CRANIOFACIAL LOCK');
-    expect(swapModeLabel({ ...DEFAULT_PARAMETERS, swap_scope: 'adaptive_skull', skull_blend: 0.6 })).toBe('ADAPTIVE SKULL BLEND · 60% SOURCE');
-    expect(swapModeLabel({ ...DEFAULT_PARAMETERS, swap_scope: 'inner_face' })).toBe('INNER FACE ONLY');
-  });
 
   it('says n/a for everything the server has not reported, instead of inventing figures', async () => {
-    const { host } = await mount(<TelemetryHeader parameters={DEFAULT_PARAMETERS} />);
+    const { host } = await mount(<TelemetryHeader />);
     await flush();
     expect(host.querySelector('[data-testid=thm-gpu]')!.textContent).toContain('n/a');
     expect(host.querySelector('[data-testid=thm-trt]')!.textContent).toContain('n/a');
     expect(host.querySelector('[data-testid=thm-vram]')!.textContent).toContain('n/a');
     expect(host.querySelector('[data-testid=thm-fps] .ul-sr-only')!.textContent).toBe('—');
-    expect(host.querySelector('[data-testid=thm-swap-mode]')!.textContent).toBe('100% FULL CRANIOFACIAL LOCK');
+    expect(host.querySelector('[data-testid=thm-pipeline-mode]')!.textContent).toBe('PURE 3D HEAD');
     expect(host.querySelector('[data-testid=thm-map]')!.getAttribute('aria-label')).toBe('Pipeline graph, idle');
     expect(host.querySelectorAll('.thm-node[data-active=true]')).toHaveLength(0);
   });
 
   it('shows the reported GPU, VRAM in use / total, live FPS and glows the node of the running stage', async () => {
-    const { host } = await mount(<TelemetryHeader parameters={DEFAULT_PARAMETERS} />);
+    const { host } = await mount(<TelemetryHeader />);
     await act(async () => {
       publishHardware({ gpus: [{ name: 'NVIDIA GeForce RTX 4090', total_vram_mib: 24576, free_vram_mib: 18432 }], logical_cpu_count: 16 });
       publishProgress({ stage: 'pose', fps: 23.46 });
@@ -158,7 +152,7 @@ describe('TelemetryHeader', () => {
   });
 
   it('every graph node is a link, so the graph is navigable by keyboard', async () => {
-    const { host } = await mount(<TelemetryHeader parameters={DEFAULT_PARAMETERS} />);
+    const { host } = await mount(<TelemetryHeader />);
     expect([...host.querySelectorAll<HTMLAnchorElement>('a.thm-node')].map(node => node.getAttribute('href'))).toEqual(['#/identity-forge', '#/studio', '#/studio', '#/studio', '#/queue']);
   });
 });

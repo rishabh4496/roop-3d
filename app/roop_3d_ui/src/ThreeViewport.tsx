@@ -1,7 +1,6 @@
 import React from 'react';
 import type { Coverage, Reconstruction, Track } from './contracts';
 import type { WorkstationParameters } from './components/workstation/pipeline';
-import type { RenderModeId } from './components/workstation/renderModes';
 import type { ReconstructionStatus } from './contracts';
 import PoseGeometryViewer from './components/three/PoseGeometryViewer';
 import LightProbeSphere from './components/three/LightProbeSphere';
@@ -16,15 +15,13 @@ export function ThreeViewport({
   track,
   mesh,
   reconstruction,
-  renderMode,
 }: {
   coverage: Coverage | null;
   track: Track | null;
   mesh: Reconstruction | null;
   reconstruction?: ReconstructionStatus | null;
-  renderMode?: RenderModeId;
 }) {
-  return <PoseGeometryViewer coverage={coverage} track={track} mesh={mesh} reconstruction={reconstruction} renderMode={renderMode} />;
+  return <PoseGeometryViewer coverage={coverage} track={track} mesh={mesh} reconstruction={reconstruction} />;
 }
 
 export function PoseCoverageInspector({

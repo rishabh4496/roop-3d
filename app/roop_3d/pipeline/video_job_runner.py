@@ -372,10 +372,8 @@ class EndToEndVideoJobRunner(MasterPipelineRunner):
     def _core_options(self, record: JobRecord):
         from roop_3d.pipeline.photorealistic_swap_core import SwapCoreOptions
         parameters = record.request.parameters_at(0)
-        composite = parameters.composite_options()
-        return SwapCoreOptions(swap_scope=parameters.swap_scope, skull_blend=parameters.skull_blend,
-                               relight_strength=parameters.relight_strength,
-                               pyramid_levels=max(4, min(6, composite.pyramid_levels)))
+        return SwapCoreOptions(feather_px=parameters.feather_px,
+                               pyramid_levels=max(1, min(6, parameters.pyramid_levels)))
 
     # ---- the render loop --------------------------------------------------------------------------------------------
     def run_prepared(self, record: JobRecord, admission, *, prepared: PreparedPipeline, control, mark_running, report_progress) -> JobOutput:
@@ -404,8 +402,7 @@ class EndToEndVideoJobRunner(MasterPipelineRunner):
             if signal is not None:
                 raise signal()
             session.prepare_session(base_source, track_ids=numeric_ids, sources_by_track=prepared.sources_by_track,
-                                    retarget="auto",
-                                    **parameters.session_options(), **(prepared.tracking or {}))
+                                    **(prepared.tracking or {}))
             if hasattr(session, "set_target_registry") and hasattr(self.media, "target_locks"):
                 session.set_target_registry(self.media.target_locks.registry(request.target_path))
             if prepared.identity_guard is not None:
@@ -416,7 +413,7 @@ class EndToEndVideoJobRunner(MasterPipelineRunner):
             processor = SessionFrameProcessor(session, core)
             mark_running()
             HUD.milestone("PIPE", "ffmpeg stream started", job=record.job_id[:8], size=f"{info.width}x{info.height}",
-                          fps=f"{float(info.rate):.3f}", scope=core.options.swap_scope)
+                          fps=f"{float(info.rate):.3f}")
 
             def frame_fn(frame: np.ndarray, index: int) -> np.ndarray:
                 swapped, report = processor.process(frame, index)
@@ -486,10 +483,8 @@ class EndToEndVideoJobRunner(MasterPipelineRunner):
             "source_audio_codec": info.audio_codec, "metadata_stripped": False,
             "audio_streams_out": result.remux.audio_streams, "subtitle_policy": result.remux.subtitles,
             "subtitle_streams_out": result.remux.subtitle_streams, "metadata_and_chapters": "copied_from_source",
-            "swap_scope": core.options.swap_scope, "skull_blend": core.options.skull_blend,
             "per_frame_mean_ms": processor.mean_stage_ms(), "decode_ms": round(result.decode_ms, 3), "encode_ms": round(result.encode_ms, 3),
             "faces": {"swapped": processor.faces_swapped, "skipped": processor.faces_skipped, "withheld": processor.faces_withheld},
-            "fallbacks": dict(sorted(processor.fallbacks.items())),
             "geometry_modes": dict(sorted(processor.geometry_modes.items())),
             "mask_tiers": dict(sorted(processor.mask_tiers.items())),
             "renderer": capability.get("renderer", {}), "face_mappings": [

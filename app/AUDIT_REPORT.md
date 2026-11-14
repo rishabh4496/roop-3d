@@ -195,3 +195,62 @@ The active venv is `G:\pinokio\api\roop-3d\app\roop_3d\.venv` (Python 3.10.20). 
 ## Audit limits
 
 This was read-only. No app startup, UI session, model inference, output render, test suite, or video decode was run. The binary FaceSet, input videos, and model weights were not opened; package status came from the configured venv’s distribution/provider metadata. Static call-path findings are distinguished from archived results. The startup-factory mismatch and hypothetical face-identity collisions are not runtime-reproduced.
+
+## Stage 0.5 Purge Report: pure-3D full-head reconstruction only
+
+**Date:** 2026-11-15. **Scope:** `app/roop_3d/`, `app/roop_3d_ui/src/`, `app/api.py`. Evidence labels: **ran** = executed in this session; **not run** = not executed.
+
+### Mandate and result
+
+No 2D planar swap, 2.5D landmark-warp, crop paste-back, mode toggle or silent fallback remains in the active code. The one required frame path is `3D Head Pose & Volumetric Mesh Fitting -> 3D UV Identity Texture Projection -> 3D Mesh Rasterization & Lighting -> Hair-Excluding Semantic Mask -> Soft Feathered Edge Blend`. **Blocker unchanged: `true3d_renderer.is_wired()` is still false, so every render request still fails closed (HTTP 503 `RENDERER_NOT_WIRED`). This stage removed the alternatives; it did not wire the renderer.**
+
+### 1. 2D / 2.5D code paths removed
+
+| Area | Removed |
+|---|---|
+| Compositor | `compositor/pipeline.py` (crop-based `FrameCompositor`, `CompositeOptions`, `_remove_old_silhouette`, expression/LivePortrait hooks, affine paste-back). `compositor/__init__.py` exports only mask/fusion primitives. |
+| Image-warp silhouette stack | `rendering/silhouette_replacement.py`, `rendering/silhouette_inpaint.py`, `rendering/perimeter_cage.py`, their lazy exports, and the `swap_scope` / `skull_blend` fields. |
+| Expression retargeting | `expression_restorer.py`, `engine/volumetric/reference_adapter.py`, `liveportrait_trt.py` (LivePortrait warp/stitch crop retargeting). |
+| Swap core | `pipeline/photorealistic_swap_core.py` now accepts only full-frame rasters that carry the ordered stage trace; geometry/rectify branches, source-photo patching and unprojected photo fill are gone. `pipeline/session_adapter.py` builds a full-frame `FacePacket` from the real 3D layer. |
+| Session | `ReferencePipeline` has no swapper, portrait/LivePortrait, TPS or compositor state; `infer_frame` fails closed through `require_true3d_renderer`. `retarget`, `render_mode`, `pose_blend` and `session_options()` / `inference_options()` plumbing are gone from the runners. |
+| Tools | `tools/occlusion_acceptance.py` (exercised the removed compositor). |
+| Dead helpers | `angle_tracker.normalize_render_mode` / `RENDER_MODE_TO_ENGINE`, runtime-registry swap filters (`_REMOVED_SWAP_ROLES`, `_REMOVED_SWAP_TOKENS`), `execution_mode`, `swap_weight` / `swap_opacity` curves, batch-recipe `swap_weight`. |
+
+### 2. Mode switches, config keys, schema fields, UI controls removed
+
+Backend: `Settings.execution_mode` (`swap` / `volumetric` / `hybrid` / `diffusion_vfx`), `render_mode`, `active_processors` and its `/api/v1/processors` routes, `swap_scope`, `skull_blend`, `expression_restore_factor`, `face_expression_overrides`, `lip_sync_*`, `supports_3d_hybrid`, `adapter_supported` plumbing, and the `fallback_2d` / `use_3d=False` flags. Settings, workstation and live-preview contracts are `extra="forbid"`; removed fields fail validation instead of being silently dropped. `unified_state` is now sources, target media and `true3d` settings only (`POST /api/v1/state`).
+
+Frontend: the target-2D / identity-3D center-mode toggle in `App.tsx`, `renderModes.ts` / `RenderModeId`, `SwapScopeSelector`, `FaceExpressionEditor`, `arkit52`, the swap-weight (identity weight) setting and curve, the expression/gaze edit gizmos (`withFaceEdit` / `faceEditOf`), the telemetry swap-mode badge (now `PURE 3D HEAD`), `supports_3d_hybrid` and `mesh_2_5d` types. `migrateParameters` rejects unsupported keys instead of dropping them.
+
+### 3. Model registry pruned to pure-3D components
+
+Removed from `models/model_manifest.json`, `stage16_models.json`, the orchestrator `engines_manifest.json` / `render_profiles.json`, `supported_models.json` and `model_registry.py`: the LivePortrait appearance, motion, warp and stitch checkpoints (12 manifest records), `liveportrait_retarget`, the Stage 16 LivePortrait / generator records, and the `liveportrait_*` `Role` literals. Retained: detectors (SCRFD / RetinaFace / YOLOFace), ArcFace recognizer, 1k3d68 / 2d106 / 203-point landmarks, MakeHuman / FLAME mesh assets, `bisenet_resnet_34` and XSeg semantic parsers, RealESRGAN UV/skin detail upscalers. `rg -i "inswapper|simswap|hyperswap|ghost"` finds no match in any manifest. No file in `roop-ultimate` was touched.
+
+### 4. Hard runtime guard
+
+`core/true3d_guard.py` defines `FRAME_PIPELINE_STAGES` and `require_true3d_frame_pipeline(stages, through=...)`, which raises `True3DFramePipelineError` (`TRUE3D_FRAME_PIPELINE_INVALID`, HTTP 422) with `expected`, `observed` and `next_stage` if a frame lacks or reorders a stage. It is asserted at three points: replacement attestation (`SessionFrameProcessor._packet`, stages 1-3), semantic-mask completion (stage 4) and the blend (`Photorealistic3DSwapCore.process_face`, stage 5). A fit failure (`HEAD_POSE_FAILED`, `HEAD_CORRESPONDENCE_*`, `DENSE_HEAD_LANDMARKS_REQUIRED`, `HEAD_BEHIND_CAMERA`, `TRUE3D_SEMANTIC_*` and related codes in `SessionFrameProcessor.FIT_SKIP_CODES`) logs a structured `true3d_frame_skipped` warning, records it in `FrameReport.skipped` and returns the frame untouched. Every other error (including `RENDERER_NOT_WIRED`) propagates. **ran:** throwaway probe, then `tests/test_pure_3d_frame_guard.py` (new, passes), covering ordering rejection, skip diagnostic with an untouched frame, and no swallowing of non-fit errors.
+
+### 5. Verification gate
+
+| Check | Result |
+|---|---|
+| **ran** `rg -i` for `fallback_2d`, `use_3d=False`, `estimated_2_5d`, `standard_2d`, `inswapper`, `simswap`, `hyperswap`, `face_swapper`, `swap_scope`, `skull_blend`, `swap_weight`, `execution_mode`, `LivePortraitAdapter`, `liveportrait_*` roles, `expression_restorer`, `reference_adapter`, `perimeter_cage`, `silhouette_replacement` over `app/roop_3d`, `app/roop_3d_ui/src`, `app/api.py` (excluding tests, docs, audit history, venvs) | zero matches |
+| Remaining `2d` / `2.5d` text | Guard vocabulary in `core/true3d_guard.py` (the banned-token list that rejects those shapes), explanatory docstrings, and HTML canvas `getContext('2d')` for mask-brush overlays; none is a swap path |
+| **ran** import of every `roop_3d.*` module | clean except `reconstruction.lbs` and `reconstruction.monocular_regressors`, which need `torch` (not installed in the venv; optional, pre-existing) |
+| **ran** `tests/test_zero_2d_and_25d_policy.py` (AST import-graph gate: swapper ids, 5-point paste, 2.5D, post-crop GAN, OpenAPI/`contracts.ts`) | 20 passed |
+| **ran** `tests/test_pure_3d_frame_guard.py` | 7 passed |
+| **ran** `test_async_runner`, `test_async_pipeline`, `test_stage12_worker`, `test_identity_lock`, `test_stage02_jobs`, `test_stage02_settings`, `test_stage13_bridges`, `test_batch_matrix_and_checkpoint_history` | all pass |
+| **ran** `npx tsc --noEmit` and `npx vitest run` in `app/roop_3d_ui` | no type errors; 89 files, 869 tests passed |
+| **not run** | the full backend suite to completion (it exceeds the per-run budget here), ESLint, any GPU / model inference, and any real render (renderer is unwired) |
+
+### 6. Tests removed or changed
+
+Deleted because they exercised only deleted code: `test_silhouette_replacement`, `test_dense_compositor`, `test_occlusion_compositor`, `test_occlusion_real_models`, `test_stage09_compositor`, `test_stage10_audio_sync`, `test_stage15_linear_light`, `test_temporal_consistency`, `test_visual_quality_regressions`, `test_hair_neck_protection_controls`, `test_photometric_head`, `test_photorealistic_swap_core`, `test_workstation3d_controls`, `test_workstation_preview`, `test_animation_history_roles`, `test_expression_and_synthesis`, `test_stage06_pipeline`, `test_extreme_pose_3d_swap`, `test_full_head`. **Coverage cost:** these also held checks on retained primitives (matte, hairline, linear-light blend, temporal stabilizers) that were only reachable through the deleted `CompositeOptions` / `FrameCompositor`; those primitives now have no direct test and should get new tests against the 3D compositor.
+
+Rewritten: the identity-lock session gate tests (now assert withholding and fail-closed behavior), the policy allow-list, session stubs, and the frontend tests that referenced removed controls.
+
+### 7. Known issues left (not caused by this stage)
+
+- Many backend test files fail or error at collection from the earlier Phase 0 purge (examples: `test_stage14_orchestrator`, `test_stage03_registry`, `test_stage06_model_hub`, `test_head_tracking_3d`, `test_head_tracking_stream`, `test_identity_asset_session`, `test_remediation_stage2`, `test_flame_and_liveportrait`); they reference deleted swapper roles, engines and modules and need a separate test-suite rewrite. I did not baseline them against the pre-stage tree.
+- `reconstruction/reenactment.py` lines 155-157 use an undefined name `group` (pyflakes); it was not edited here.
+- Compositor modules `boundary_fusion`, `robust_fusion`, `masks` and others remain and are used only by the 3D path; `reconstruction/tps_fallback.py` is kept for its canonical landmark set and PnP solver (the 2.5D warper is gone; the docstring now says so).

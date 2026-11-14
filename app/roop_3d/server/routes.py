@@ -66,11 +66,8 @@ def capabilities(request: Request) -> Capabilities:
     hardware = probe_hardware(state.settings)
     precision_status = hardware.tensorrt_mixed_precision
     model_rows = state.models.public()
-    available = {item['id'] for item in model_rows if item.get('installed') and item.get('state') == 'VERIFIED_LOCAL'}
-    available.update(item['name'] for item in model_rows if item.get('installed') and item.get('state') == 'VERIFIED_LOCAL')
     gpu = ("CUDAExecutionProvider" in (hardware.advertised_providers or [])
            and (bool(hardware.gpus) or bool(precision_status.get("cuda_fp16_available"))))
-    lp = all(name in available for name in ("liveportrait_appearance_feature_extractor.onnx", "liveportrait_motion_extractor.onnx", "liveportrait_warping_spade.onnx"))
     trt = bool(precision_status.get("tensorrt_available"))
     cuda_fp16 = bool(precision_status.get("cuda_fp16_available"))
     mixed_precision = bool(precision_status.get("available") or trt or cuda_fp16)
@@ -117,14 +114,11 @@ def capabilities(request: Request) -> Capabilities:
         "shader_mode": {row["id"]: row["reason"] for row in shader_rows},
         "camera_projection": {"perspective": None},
         "camera_mode": {"auto": None, "manual": None},
-        "execution_mode": {"swap": None, "volumetric": None if lp else "LivePortrait weights are unavailable", "hybrid": "No verified diffusion loader is configured", "diffusion_vfx": "No verified diffusion loader is configured"},
         "preferred_provider": {"auto": None, "CPUExecutionProvider": None, "CUDAExecutionProvider": None if gpu else "CUDA is unavailable", "TensorrtExecutionProvider": None if trt else "TensorRT requires an NVIDIA GPU, its execution provider and packaged TensorRT libraries"},
         "hardware_profile": {"auto": None, "cpu": None, "6gb": None if gpu else "No CUDA GPU is available", "12gb": None if gpu and hardware.gpus and hardware.gpus[0].total_vram_mib >= MIN_12GB_PROFILE_VRAM_MIB else "A CUDA GPU with at least 10 GB of video memory is required"},
         "precision_policy": {"auto": None, "fp32": None, "fp16": None if mixed_precision else "FP16 mixed precision requires TensorRT or CUDA FP16 support"},
         "detector_model_id": {key: governed_reason(key) for key in ('scrfd', 'retinaface', 'yoloface')},
         "render_backend": {"auto": None, "reference": None, "stream": None},
-        "lip_sync_mode": {"off": None, "wav2lip": None, "wav2lip_gan_fp16": None,
-                          "musetalk": "Whisper/VAE engine bundle unavailable", "edtalk": "Pose/emotion engine bundle unavailable"},
         "audio_policy": {"copy": None, "transcode": None, "drop": "The workstation preserves source audio; use copy or transcode"},
     }
     workstation = {"features": {key: {"enabled": True, "reason": None} for key in

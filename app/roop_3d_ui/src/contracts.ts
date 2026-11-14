@@ -8,7 +8,7 @@ export interface Capabilities {
   inspection_parameter_bounds: Schema; job_parameter_bounds: Schema;
   models: { id?: string; model_id: string; name: string; category?: string; native_resolution?: number | null;
     installed?: boolean; selectable?: boolean; vram_loaded?: boolean; trt_cached?: boolean; download_url?: string | null;
-    supports_3d_hybrid?: boolean; state: string; license_state: string; inference_state: string; sha256?: string | null;
+    state: string; license_state: string; inference_state: string; sha256?: string | null;
     verified?: boolean; governance_approved?: boolean | null; blocked?: boolean; local_trust?: boolean;
     license_id?: string; commercial_use?: string; license_notice?: string; manual_acceptance_required?: boolean;
     role?: string; family_hint?: string; adapter_supported?: boolean | null; adapter_unsupported_reason?: string | null }[];

@@ -1,15 +1,12 @@
-import { stripRemovedParameters, type CameraIntrinsics, type HeadTopologyEngine, type ShaderMode } from '../../true3d';
+import { type CameraIntrinsics, type HeadTopologyEngine, type ShaderMode } from '../../true3d';
 /** Seam fusion of the rendered head into the frame (engine default `multi_band`: a four-band Laplacian pyramid). */
 export type BlendMode = 'feather' | 'multi_band' | 'poisson' | 'frequency_separated';
 /** Pyramid bands only exist in the multi-band and frequency-separated fusions (an unset mode is the multi-band default). */
 export const bandedBlend = (mode: BlendMode | undefined): boolean => !mode || mode === 'multi_band' || mode === 'frequency_separated';
 export type WorkstationParameters = {
-  expression_restore_factor?: number;
-  face_expression_overrides?: Record<string, FaceEditor>;
-  color_method?: 'lab' | 'reinhard_lab' | 'histogram';
-  identity_blend_t?: number;
   feather_px: number; color_strength: number;
-  swap_weight?: number; erosion_px?: number; bypass: 'color'[];
+  erosion_px?: number; bypass: 'color'[];
+  color_method?: 'lab' | 'reinhard_lab' | 'histogram' | 'ycbcr' | 'oklab' | 'oklab_wasserstein';
   /** 3D head topology engine. Omitted until the user picks one (server default: MakeHuman CC0 craniofacial). */
   head_topology_engine?: HeadTopologyEngine;
   /** 3D photorealistic shader mode. Omitted until the user picks one (server default: PBR subsurface scattering + neural deferred UV). */
@@ -24,10 +21,6 @@ export type WorkstationParameters = {
   blend_mode?: BlendMode;
   /** Bands of multi-band / frequency-separated fusion, 4..6 (engine default 4). */
   pyramid_levels?: number;
-  /** Stage 6B swap scope: which part of the target's head the source geometry replaces. Omitted (= 'full_craniofacial') until the user picks another. */
-  swap_scope?: 'full_craniofacial' | 'adaptive_skull' | 'inner_face';
-  /** Adaptive scope only: share of the source skull (β source) in the blended skull, 0..1. Omitted otherwise. */
-  skull_blend?: number;
   /** Stage 17 3D Relighting: off unless enabled; the strength / light controls below only apply while it is on. */
   relight?: boolean;
   relight_strength?: number;
@@ -58,14 +51,9 @@ export type WorkstationParameters = {
   /** Grain variance match strength, 0..100 percent. */
   grain_match_strength?: number;
 };
-export type FaceEditor = Partial<Record<'head_pitch' | 'head_yaw' | 'head_roll' | 'gaze_x' | 'gaze_y' | 'blink_left' | 'blink_right' | 'eyebrow_tilt' | 'eyebrow_raise' | 'mouth_smile' | 'mouth_pout' | 'mouth_open' | 'jaw_width' | 'chin_length', number>> & {
-  /** Sparse standard ARKit 52 blendshape values, each in [0,1]. */
-  arkit_blendshapes?: Record<string, number>;
-};
 export const DEFAULT_PARAMETERS: WorkstationParameters = {
   feather_px: 5,
   color_strength: .65,
-  swap_weight: 1,
   erosion_px: 0,
   bypass: [],
   relight_strength: 0.8,
@@ -86,13 +74,20 @@ export function wireParameters<T extends Partial<WorkstationParameters>>(paramet
   return next as T;
 }
 
-/**
- * Saved parameters (sessions, projects, jobs, batch presets) from before the purge may carry removed 2D / 2.5D keys. They are dropped, the
- * kept fields are layered over the defaults, and the 3D fields fall back to their defaults when the saved value is no longer valid.
- */
+const WORKSTATION_PARAMETER_KEYS = new Set<keyof WorkstationParameters>([
+  'feather_px', 'color_strength', 'erosion_px', 'bypass', 'color_method', 'head_topology_engine', 'shader_mode', 'camera',
+  'occlusion_mode', 'xseg_occlusion_strength', 'blend_mode', 'pyramid_levels', 'relight', 'relight_strength',
+  'occlusion_threshold', 'specular_sheen', 'shadow_preservation', 'lighting_mode', 'manual_light_yaw',
+  'manual_light_pitch', 'ambient_fill', 'hairline_offset_px', 'neck_protection', 'hair_matting', 'preserve_ears_glasses',
+  'jaw_feather_px', 'skin_texture_retention', 'sensor_shutter_angle', 'grain_match_strength',
+]);
+
+/** Restore persisted parameters only when every key belongs to the current full-head contract. */
 export function migrateParameters(raw: unknown): WorkstationParameters {
   const value = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw as Record<string, unknown> : {};
-  return { ...DEFAULT_PARAMETERS, ...stripRemovedParameters(value) } as WorkstationParameters;
+  const unsupported = Object.keys(value).filter(key => !WORKSTATION_PARAMETER_KEYS.has(key as keyof WorkstationParameters));
+  if (unsupported.length) throw new Error(`Unsupported workstation parameter keys: ${unsupported.join(', ')}`);
+  return { ...DEFAULT_PARAMETERS, ...value } as WorkstationParameters;
 }
 
 /** `buffer` is the `solo_node` that `POST /api/preview` returns for this stage. `latencyKeys` are the measured fields of the preview's `latency` object that make up this stage's time. */
@@ -114,7 +109,6 @@ export const PIPELINE_NODES: PipelineNode[] = [
 ];
 /** Secondary buffers reached from a chip on their parent stage; they are not stages of their own (and have no hotkey). */
 export const PIPELINE_ALT_NODES: (PipelineNode & { parent: string })[] = [
-  { id: 'expression', parent: 'head', label: 'Expression Transfer', short: 'Expression', buffer: 'expression', optional: true, note: 'Target expression residual and per-face 3D edits applied to the head rig' },
   { id: 'normal', parent: 'lighting', label: '3D Normal Map', short: 'Normals', buffer: 'normal_map', note: 'RGB-encoded 3D Surface Normal map (nx, ny, nz)' },
 ];
 export const pipelineNode = (id: string | null): PipelineNode | undefined => PIPELINE_NODES.find(node => node.id === id) ?? PIPELINE_ALT_NODES.find(node => node.id === id);

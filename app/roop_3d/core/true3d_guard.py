@@ -91,6 +91,40 @@ class True3DRendererUnavailable(True3DArchitectureError):
 
     def __init__(self, message: str = NOT_WIRED_MESSAGE, details=None):
         super().__init__(message, NOT_WIRED_CODE, 503, details)
+FRAME_PIPELINE_STAGES = (
+    "3D Head Pose & Volumetric Mesh Fitting",
+    "3D UV Identity Texture Projection",
+    "3D Mesh Rasterization & Lighting",
+    "Hair-Excluding Semantic Mask",
+    "Soft Feathered Edge Blend",
+)
+
+
+class True3DFramePipelineError(True3DArchitectureError):
+    """One face did not complete the required full-head rendering stages in order."""
+
+    def __init__(self, message: str, details: Mapping[str, Any]):
+        super().__init__(message, "TRUE3D_FRAME_PIPELINE_INVALID", 422, details)
+
+
+def require_true3d_frame_pipeline(stages: Iterable[str], *, through: str | None = None) -> tuple[str, ...]:
+    """Require an exact ordered prefix (or the complete sequence) of the true-3D frame stages."""
+    actual = tuple(stages)
+    if through is None:
+        expected = FRAME_PIPELINE_STAGES
+    else:
+        try:
+            expected = FRAME_PIPELINE_STAGES[:FRAME_PIPELINE_STAGES.index(through) + 1]
+        except ValueError:
+            raise ValueError(f"Unknown true-3D pipeline stage: {through}") from None
+    if actual != expected:
+        raise True3DFramePipelineError(
+            "Frame skipped: the required true-3D pipeline stages are missing or out of order",
+            {"expected": list(expected), "observed": list(actual), "next_stage": expected[len(actual)] if len(actual) < len(expected) else None},
+        )
+    return actual
+
+
 
 
 # --------------------------------------------------------------------------- policy

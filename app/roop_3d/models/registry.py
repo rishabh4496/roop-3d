@@ -15,10 +15,8 @@ from roop_3d.audit.project_paths import application_root
 from roop_3d.core.errors import DomainError
 from roop_3d.core.settings import Contract
 
-Role = Literal["detector", "recognizer", "liveportrait_appearance",
-               "liveportrait_motion", "liveportrait_warp", "liveportrait_stitch", "face_parser",
-               "occlusion_mask", "flame_geometry", "lip_sync", "diffusion_base",
-               "diffusion_adapter", "frame_upscaler",
+Role = Literal["detector", "recognizer", "face_parser", "occlusion_mask", "flame_geometry",
+               "lip_sync", "diffusion_base", "diffusion_adapter", "frame_upscaler",
                "flame_encoder", "dense_mesh"]
 RESERVED = {"con", "prn", "aux", "nul", *(f"com{i}" for i in range(1, 10)),
             *(f"lpt{i}" for i in range(1, 10))}
@@ -299,12 +297,16 @@ def _apply_governance_reviews(manifest: Manifest, document: dict[str, Any]) -> M
                     source_documents=manifest.source_documents, models=tuple(models))
 
 
+
 class ModelRegistry:
     def __init__(self, root: Path | None = None, *, manifest: Manifest | None = None):
         self.root = root or application_root()
         try:
-            self.manifest = manifest or Manifest.model_validate_json(
-                safe_path(self.root, "roop_3d/models/model_manifest.json").read_text("utf-8"))
+            if manifest is not None:
+                self.manifest = manifest
+            else:
+                manifest_document = json.loads(safe_path(self.root, "roop_3d/models/model_manifest.json").read_text("utf-8"))
+                self.manifest = Manifest.model_validate(manifest_document)
             for relative, digest in self.manifest.source_documents.items():
                 if hashlib.sha256(safe_path(self.root, relative).read_bytes()).hexdigest() != digest:
                     raise ValueError("Preserved discovery evidence changed")
@@ -313,7 +315,7 @@ class ModelRegistry:
                 for relative in ("roop_3d/models/stage16_models.json", "roop_3d/models/stage6_models.json"):
                     supplemental = safe_path(self.root, relative)
                     if supplemental.is_file():
-                        extension = Manifest.model_validate_json(supplemental.read_text("utf-8"))
+                        extension = Manifest.model_validate(json.loads(supplemental.read_text("utf-8")))
                         self.manifest = Manifest(
                             evidence_scope=self.manifest.evidence_scope + " " + extension.evidence_scope,
                             source_documents=self.manifest.source_documents,
@@ -324,7 +326,6 @@ class ModelRegistry:
                 reviews = safe_path(self.root, "roop_3d/models/governance_reviews.json")
                 if reviews.is_file():
                     self.manifest = _apply_governance_reviews(self.manifest, json.loads(reviews.read_text("utf-8")))
-                self.manifest = _with_supported_candidates(self.manifest, self.root)
         except (OSError, ValueError):
             raise DomainError("MODEL_REGISTRY_INVALID", "Model manifest or its discovery evidence is invalid", 503) from None
         self._records = {item.model_id: item for item in self.manifest.models}

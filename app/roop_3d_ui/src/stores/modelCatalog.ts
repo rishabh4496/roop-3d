@@ -11,7 +11,7 @@ export type CatalogModel = {
   tensorrt_mixed_precision?: { available: boolean; active: boolean; configured?: boolean };
   download_url: string | null; state: string; sha256: string | null; size_bytes: number | null;
   license_id?: string; license_notice?: string; commercial_use?: string; manual_acceptance_required?: boolean;
-  local_format?: string | null; supports_3d_hybrid?: boolean;
+  local_format?: string | null;
   /** A weight present in app/models is verified, approved and never blocked (server models/local_trust.py). */
   verified?: boolean; governance_approved?: boolean | null; blocked?: boolean; local_trust?: boolean;
 };

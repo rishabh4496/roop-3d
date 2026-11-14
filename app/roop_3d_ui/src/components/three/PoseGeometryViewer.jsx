@@ -6,17 +6,16 @@ import WebGLFallbackInspector from './WebGLFallbackInspector';
 import { OrbitControls, GizmoHelper, GizmoViewport } from '@react-three/drei';
 import { useFaceSelectionStore } from '../../useFaceSelectionStore';
 import { reducedMotion } from '../../utils/motionPrefs';
-import { renderModeInfo } from '../workstation/renderModes';
 import {
-  BUFFER_VIEWS, DEFAULT_SH_LIGHT, DEPTH_FRAGMENT_SHADER, DEPTH_VERTEX_SHADER, JAW_MAX_DEG, SH_FRAGMENT_SHADER, SH_VERTEX_SHADER,
-  buildJawRig, eyeAnchors, openJaw, shLightCoefficientsRGB,
+  BUFFER_VIEWS, DEFAULT_SH_LIGHT, DEPTH_FRAGMENT_SHADER, DEPTH_VERTEX_SHADER, SH_FRAGMENT_SHADER, SH_VERTEX_SHADER,
+  shLightCoefficientsRGB,
 } from './viewportTools';
 import {
   CAVITY_FRAGMENT_SHADER, CAVITY_VERTEX_SHADER, DEFAULT_FOCAL_MM, FOCAL_RANGE_MM, clampFocal, computeVertexCavity, dollyFactor, environmentToViewerSH, exposeEnvironment,
   horizontalFovDeg, verticalFovDeg,
 } from './studioTools';
 import { useStudioEnvironments } from './useStudioEnvironments';
-import { GazeGizmo, JawGizmo, LightGizmo } from './ViewportGizmos';
+import { LightGizmo } from './ViewportGizmos';
 import { PrecisionRangeSlider } from '../ui-layouts';
 export { generateFibonacciSphere, projectViewsToLattice } from './poseLattice';
 
@@ -430,9 +429,9 @@ function BufferMaterial({ kind, texture, shLight, shCoefficients = null }) {
  * will pose it; the orbit camera moves independently around it.
  */
 function ReconstructedHead({ pose, assets, texture, volumetric, wireframe, landmarks, lighting = null, morph = null, targetAssets = null,
-  bufferView = 'lit', shLight = DEFAULT_SH_LIGHT, shCoefficients = null, tools = null, gizmos = null }) {
+  bufferView = 'lit', shLight = DEFAULT_SH_LIGHT, shCoefficients = null }) {
   const group = useRef(null);
-  const jawDeg = tools?.jawDeg ?? 0;
+
   // Cavity buffer: the per-vertex concavity attribute must exist before the first frame that uses the shader, so it is attached while
   // rendering (idempotent, belongs to the geometry and is released with it).
   useMemo(() => {
@@ -467,30 +466,15 @@ function ReconstructedHead({ pose, assets, texture, volumetric, wireframe, landm
     group.current.quaternion.copy(current.current);
   });
 
-  // Jaw hinge: the geometry is edited in place from a copy of its rest pose (so opening then closing restores it exactly).
-  const rest = useMemo(() => {
-    const position = assets.geometry.getAttribute('position'), normal = assets.geometry.getAttribute('normal');
-    return { position: Float32Array.from(position.array), normal: normal ? Float32Array.from(normal.array) : null, landmarks: assets.landmarks ?? null };
-  }, [assets]);
-  const jawRig = useMemo(() => buildJawRig(rest.position), [rest]);
-  const eyes = useMemo(() => eyeAnchors(rest.position, rest.landmarks), [rest]);
-  useEffect(() => {
-    const position = assets.geometry.getAttribute('position');
-    if (!jawRig || !position) return;
-    openJaw(rest.position, position.array, jawRig, jawDeg);
-    position.needsUpdate = true;
-    const normal = assets.geometry.getAttribute('normal');
-    if (jawDeg === 0 && normal && rest.normal) { normal.array.set(rest.normal); normal.needsUpdate = true; } else assets.geometry.computeVertexNormals();
-  }, [assets, rest, jawRig, jawDeg]);
 
   const landmarkPoints = useMemo(() => {
     if (!assets?.landmarks) return [];
-    let source = assets.landmarks;
-    if (jawRig && jawDeg !== 0) { source = new Float32Array(assets.landmarks.length); openJaw(assets.landmarks, source, jawRig, jawDeg); }
     const points = [];
-    for (let i = 0; i < source.length; i += 3) points.push([source[i], source[i + 1], source[i + 2]]);
+    for (let i = 0; i < assets.landmarks.length; i += 3) {
+      points.push([assets.landmarks[i], assets.landmarks[i + 1], assets.landmarks[i + 2]]);
+    }
     return points;
-  }, [assets, jawRig, jawDeg]);
+  }, [assets]);
 
   return (
     <group ref={group}>
@@ -539,8 +523,6 @@ function ReconstructedHead({ pose, assets, texture, volumetric, wireframe, landm
           <meshBasicMaterial color={CYAN} />
         </mesh>
       ))}
-      {tools && gizmos?.jaw && jawRig && <JawGizmo rig={jawRig} theta={jawDeg} onChange={tools.onJaw} enabled={!!tools.trackId} />}
-      {tools && gizmos?.gaze && eyes && <GazeGizmo eyes={eyes} gaze={tools.gaze} onChange={tools.onGaze} enabled={!!tools.trackId} />}
     </group>
   );
 }
@@ -736,15 +718,13 @@ function FaceCameraFocus({ resetCamera }) {
  *
  * `coverage` is the `POST /faceset/reconstruct-3d` payload (`mesh_full_3d`, `observed_pose_points`, the
  * telemetry counts). `mesh` is an explicitly chosen reconstruction (a built identity asset, an imported artifact) and
- * overrides `coverage.mesh_full_3d`. `renderMode` is the workstation render mode: it selects the tab showing the
- * geometry that mode works from. `reconstruction` is the request state (idle | loading | ready | error).
+ * overrides `coverage.mesh_full_3d`. `reconstruction` is the request state (idle | loading | ready | error).
  * @param {any} props
  */
 export default function PoseGeometryViewer({
   coverage = null,
   track = null,
   mesh = null,
-  renderMode,
   reconstruction = null,
   creator = null,
   lighting = null,
@@ -752,9 +732,9 @@ export default function PoseGeometryViewer({
   tools = null,
 }) {
   const hostRef = useRef(null);
-  // Buffer switcher + gizmos. `tools` (jaw / gaze / light callbacks bound to the real parameters) is supplied by the inspector.
+  // The viewport has one fixed 3D reconstruction view and optional lighting controls.
   const [bufferView, setBufferView] = useState('lit');
-  const [gizmos, setGizmos] = useState({ jaw: false, gaze: false, light: false });
+  const [gizmos, setGizmos] = useState({ light: false });
   const toggleGizmo = key => setGizmos(value => ({ ...value, [key]: !value[key] }));
   const lightSource = tools?.light ?? lighting ?? null;
   const shLight = useMemo(
@@ -762,7 +742,6 @@ export default function PoseGeometryViewer({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- the four scalars are the whole input
     [lightSource?.yaw, lightSource?.pitch, lightSource?.strength, lightSource?.ambient]);
   const controlsRef = useRef(null);
-  const viewMode = 'reconstruction'; // the single-view 2.5D estimate tab was removed: the viewer shows the full 3D head only
   const viewSetter = useRef(null);
   const registerView = useCallback(setter => { viewSetter.current = setter; }, []);
   const reportView = useCallback(pose => viewSetter.current?.(pose), []);
@@ -811,7 +790,6 @@ export default function PoseGeometryViewer({
   const lightRig = useMemo(() => (lighting ? lightingRig(lighting) : null), [lighting]);
   const texture = useDataTexture(assets && typeof displayedMesh?.texture === 'string' && assets.geometry.getAttribute('uv') ? displayedMesh.texture : null);
 
-  const modeInfo = useMemo(() => renderModeInfo(renderMode), [renderMode]);
 
   // Observed pose points -> counts per cell of the exact backend 12x8 grid.
   const baseLattice = useMemo(() => generatePoseGrid(SPHERE_RADIUS), []);
@@ -852,28 +830,15 @@ export default function PoseGeometryViewer({
   const info = displayedMesh?.provenance ? `${denseFace ? 'Facial surface' : 'Full 3D'} · ${String(displayedMesh.provenance).replaceAll('_', ' ')}` : '';
   const limitation = coverage?.mesh_full_3d?.limitations?.[0] ?? '';
 
-  const tab = (id, label, disabled, title) => (
-    <button
-      type="button"
-      className={`viewer-mode-btn ${viewMode === id ? 'active' : ''}`}
-      onClick={() => undefined}
-      disabled={disabled}
-      title={title}
-      aria-pressed={viewMode === id}
-      data-pipeline={renderMode !== undefined && modeInfo.preview === id ? 'true' : undefined}
-    >
-      {label}
-      {renderMode !== undefined && modeInfo.preview === id && <span className="viewer-pipeline-tag" aria-label={`Render mode ${modeInfo.label}: ${modeInfo.previewNote}`}>{modeInfo.previewNote === 'preview only' ? 'preview' : 'render'}</span>}
-    </button>
-  );
 
   return (
     <div className="pose-geometry-container" ref={hostRef}>
       {/* Top Controls Overlay */}
       <div className="pose-viewer-toolbar">
         <div className="pose-mode-toggle">
-          {tab('reconstruction', denseFace ? 'Fitted facial surface' : 'Full 3D Reconstructed', !fullMesh,
-            fullMesh ? (denseFace ? 'Anatomical face fitted from observed photographs' : `Legacy preview: ${fullMesh.provenance ?? fullMesh.method}`) : 'Load a FaceSet to reconstruct its facial surface')}
+          <span className="viewer-mode-btn active" title={fullMesh ? (denseFace ? 'Anatomical face fitted from observed photographs' : `3D reconstruction: ${fullMesh.provenance ?? fullMesh.method}`) : 'Load a FaceSet to reconstruct its facial surface'}>
+            {denseFace ? 'Fitted facial surface' : 'Full 3D Reconstructed'}
+          </span>
         </div>
       </div>
       <div className="pose-viewer-options" role="group" aria-label="3D viewer overlays">
@@ -921,25 +886,11 @@ export default function PoseGeometryViewer({
         <small className="muted">Previews the look of the lens (36 × 24 mm sensor, head kept the same size) and of the lighting. The physical-camera matcher and the probes are not part of the render pipeline yet, so neither changes an output.</small>
       </details>
       {tools && (
-        <div className="viewport-gizmo-dock" role="group" aria-label="3D gizmos" data-testid="viewport-gizmos">
+        <div className="viewport-gizmo-dock" role="group" aria-label="3D lighting controls" data-testid="viewport-gizmos">
           <div className="gizmo-toggles">
-            <button type="button" className="viewer-toggle" aria-pressed={gizmos.jaw} disabled={!hasGeometry} onClick={() => toggleGizmo('jaw')}
-              title="Drag the chin handle to open the jaw (θ jaw). Edits the selected face's mouth-open value.">Jaw opening</button>
-            <button type="button" className="viewer-toggle" aria-pressed={gizmos.gaze} disabled={!hasGeometry} onClick={() => toggleGizmo('gaze')}
-              title="Drag the gaze target in front of the eyes (θ eyes). Edits the selected face's eyeball gaze.">Eye gaze target</button>
             <button type="button" className="viewer-toggle" aria-pressed={gizmos.light} disabled={!hasGeometry} onClick={() => toggleGizmo('light')}
               title="Drag the light handle around the head. Sets the manual key light direction.">Light direction</button>
           </div>
-          {(gizmos.jaw || gizmos.gaze) && !tools.trackId && <small className="muted" role="status">Select a target face to edit jaw opening and eye gaze.</small>}
-          {gizmos.jaw && (
-            <PrecisionRangeSlider className="inspector-field gizmo-field" label="Jaw opening θ" ariaLabel="Jaw opening angle" unit="°" min={0} max={JAW_MAX_DEG} step={1}
-              value={Math.round(tools.jawDeg)} defaultValue={0} disabled={!tools.trackId} onChange={tools.onJaw} />)}
-          {gizmos.gaze && (<>
-            <PrecisionRangeSlider className="inspector-field gizmo-field" label="Gaze horizontal" min={-1} max={1} step={0.01}
-              value={tools.gaze.x} defaultValue={0} disabled={!tools.trackId} onChange={value => tools.onGaze(value, tools.gaze.y)} />
-            <PrecisionRangeSlider className="inspector-field gizmo-field" label="Gaze vertical" min={-1} max={1} step={0.01}
-              value={tools.gaze.y} defaultValue={0} disabled={!tools.trackId} onChange={value => tools.onGaze(tools.gaze.x, value)} />
-          </>)}
           {gizmos.light && (<>
             <PrecisionRangeSlider className="inspector-field gizmo-field" label="Light yaw" unit="°" min={-180} max={180} step={1}
               value={Math.round(tools.light.yaw)} defaultValue={0} onChange={value => tools.onLight(value, tools.light.pitch)} />
@@ -995,7 +946,7 @@ export default function PoseGeometryViewer({
           {tools && gizmos.light && <LightGizmo light={tools.light} onChange={tools.onLight} enabled />}
           {assets ? (
             <ReconstructedHead pose={targetPose} assets={assets} texture={texture} volumetric={volumetric}
-              bufferView={bufferView} shLight={shLight} shCoefficients={environmentSH} tools={tools} gizmos={gizmos}
+              bufferView={bufferView} shLight={shLight} shCoefficients={environmentSH}
               wireframe={wireframe} landmarks={false}
               lighting={lighting} morph={morph} targetAssets={null} />
           ) : !sourceLoaded ? (

@@ -32,7 +32,6 @@ ADAPTERS: dict[str, str] = {
     "arcface_recognizer": "roop_3d.faceset.recognizer:Recognizer",
     "landmarks_106": "roop_3d.engine.detection.dense_landmarks:DenseLandmarks",
     "identity_asset_builder": "roop_3d.reconstruction.identity_asset:IdentityAssetStore",
-    "liveportrait_retarget": "roop_3d.engine.volumetric.reference_adapter:LivePortraitAdapter",
     "bisenet_face_parser": "roop_3d.compositor.masks:BisenetFaceParser",
     "xseg_visible_face": "roop_3d.compositor.occlusion_analysis:OcclusionAnalyzer",
     "pyav_video_writer": "roop_3d.media.video_writer:encode_video",

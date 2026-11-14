@@ -25,7 +25,7 @@ def test_invalid_catalog(change: dict) -> None:
 
 
 def test_catalog_has_all_requested_keys() -> None:
-    required = "schema_version execution_mode hardware_profile preferred_provider precision_policy vram_limit_mb memory_safety_reserve_mb max_concurrent_jobs face_restoration_policy video_timing_policy audio_policy lip_sync_mode model_search_paths output_root cache_root remote_processing_enabled synthetic_media_notice diagnostics_level".split()
+    required = "schema_version hardware_profile preferred_provider precision_policy vram_limit_mb memory_safety_reserve_mb max_concurrent_jobs video_timing_policy audio_policy model_search_paths output_root cache_root remote_processing_enabled synthetic_media_notice diagnostics_level".split()
     assert set(required) <= Settings.model_fields.keys()
     assert Settings.model_json_schema()["additionalProperties"] is False
     assert Settings(preferred_provider="TensorrtExecutionProvider").preferred_provider == "TensorrtExecutionProvider"

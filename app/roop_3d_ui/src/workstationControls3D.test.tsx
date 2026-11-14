@@ -39,10 +39,10 @@ let latest: { parameters: WorkstationParameters };
 const saveConfig = vi.fn();
 const onMesh = vi.fn();
 
-function Harness({ trackId = 'track_0001', facesetId = 'fs1', config = { temporal_min_cutoff: 0.15 } as Config | null }: { trackId?: string | null; facesetId?: string; config?: Config | null }) {
+function Harness({ facesetId = 'fs1', config = { temporal_min_cutoff: 0.15 } as Config | null }: { facesetId?: string; config?: Config | null }) {
   const [parameters, setParameters] = useState<WorkstationParameters>({ ...DEFAULT_PARAMETERS });
   latest = { parameters };
-  return <WorkstationControls3D parameters={parameters} setParameters={setParameters} trackId={trackId} facesetId={facesetId} onMesh={onMesh} config={config} onSaveConfig={saveConfig} />;
+  return <WorkstationControls3D parameters={parameters} setParameters={setParameters} facesetId={facesetId} onMesh={onMesh} config={config} onSaveConfig={saveConfig} />;
 }
 const mount = async (props: Parameters<typeof Harness>[0] = {}) => { await act(async () => { root.render(<Harness {...props} />); }); };
 const open = async (testid: string) => act(async () => {
@@ -72,35 +72,13 @@ describe('skin tone vs ambient adaptation', () => {
   });
 });
 
-describe('expression offsets', () => {
-  it('edit the selected face through the real face_expression_overrides, and clear when back at zero', async () => {
+describe('the controls panel exposes only controls the 3D pipeline has a stage for', () => {
+  it('shows scene adaptation disabled with the reason, no lip-sync control, and sends neither in the preview request', async () => {
     await mount();
-    await setSlider(thumb(host, 'Expression offset smile'), 0.6);
-    await setSlider(thumb(host, 'Expression offset mouth open'), 0.3);
-    expect(latest.parameters.face_expression_overrides).toEqual({ track_0001: { mouth_smile: 0.6, mouth_open: 0.3 } });
-    await act(async () => { [...host.querySelectorAll('button')].find(b => b.textContent === 'Reset offsets')!.click(); });
-    expect(latest.parameters.face_expression_overrides).toEqual({});
-  });
-  it('are disabled until a target face is selected', async () => {
-    await mount({ trackId: null });
-    expect(thumb(host, 'Expression offset smile').closest('fieldset')!.disabled).toBe(true);
-    expect(isDisabled(thumb(host, 'Expression offset smile'))).toBe(true); // spans ignore <fieldset disabled>, so the slider carries it itself
-    expect(host.textContent).toMatch(/select a target face/);
-  });
-});
-
-describe('controls the render pipeline has no stage for', () => {
-  it('are shown disabled with the reason, remembered nowhere, and never reach the preview request', async () => {
-    await mount();
-    const lip = host.querySelector<HTMLElement>('[data-testid="lip-lock-unsupported"]')!;
+    expect(host.querySelector('[data-testid="lip-lock-unsupported"]')).toBeNull();
     const adapt = host.querySelector<HTMLElement>('[data-testid="scene-adapt-unsupported"]')!;
-    for (const label of [lip, adapt]) {
-      expect(label.querySelector<HTMLInputElement>('input[type=checkbox]')!.disabled).toBe(true);
-      expect(label.textContent).toContain('not supported');
-    }
-    expect(host.textContent).toContain('SPECTRE is not installed');
-    expect(host.textContent).toContain('SPARK is not installed');
-    expect(host.textContent).not.toMatch(/saved preference/i);
+    expect(adapt.querySelector<HTMLInputElement>('input[type=checkbox]')!.disabled).toBe(true);
+    expect(adapt.textContent).toContain('not supported');
     expect(localStorage.length).toBe(0);
     expect(latest.parameters).toEqual(DEFAULT_PARAMETERS);
     const request = { engine_id: 'x', target_path: 't', inspection_id: 'i', face_mappings: [{ track_id: 'track_0001', faceset_id: 'fs1' }] } as unknown as JobRequest;
@@ -182,14 +160,6 @@ describe('topology engine and semantic shape', () => {
     expect(slider(host, 'Semantic Jawline Width').disabled).toBe(true);
   });
 
-  it('beta blend switches to the adaptive skull scope and sets the real skull_blend', async () => {
-    await mount(); await open('topology-section'); await flush();
-    const beta = slider(host, 'Source to target beta blend');
-    expect(beta.value).toBe('100');
-    await change(beta, '30');
-    expect(latest.parameters).toMatchObject({ swap_scope: 'adaptive_skull', skull_blend: 0.3 });
-    expect(host.textContent).toContain('β source 30% · β target 70%');
-  });
 
   it('reset clears the preview mesh', async () => {
     vi.useFakeTimers();

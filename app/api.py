@@ -1,7 +1,6 @@
 """Unified FastAPI backend entrypoint for Roop 3D.
 
-Exposes the unified application and central state store managing source faces,
-.fsz facesets, target media, render modes, and active processors.
+Exposes unified state for sources, facesets, target media, and true-3D settings.
 """
 from __future__ import annotations
 
@@ -28,9 +27,6 @@ from fastapi import FastAPI
 from roop_3d.core.settings import Settings
 from roop_3d.server.app import create_app
 from roop_3d.server.unified_state import (
-    ActiveProcessorsPayload,
-    RenderMode,
-    RenderModePayload,
     SourceFacePayload,
     UnifiedStateStore,
     router as state_router,
@@ -53,9 +49,6 @@ __all__ = [
     "app",
     "state",
     "create_unified_app",
-    "RenderMode",
     "UnifiedStateStore",
-    "RenderModePayload",
     "SourceFacePayload",
-    "ActiveProcessorsPayload",
 ]

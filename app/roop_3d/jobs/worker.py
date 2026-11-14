@@ -297,7 +297,7 @@ class JobWorker:
                     self._wake_event.wait(self.poll_interval)
                     self._wake_event.clear()
             hud_job = True
-            _hud(lambda: HUD.job_started(job_id, swap_mode=getattr(record.request.parameters_at(0), "swap_scope", None),
+            _hud(lambda: HUD.job_started(job_id, swap_mode="full_head_3d",
                                          with_gpu=with_gpu))
             output = runner.run_prepared(record, admission.lease.admission, prepared=prepared,
                 control=lambda: self._control(job_id),

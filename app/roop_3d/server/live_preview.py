@@ -5,12 +5,11 @@
     GET  /api/target/preview_grid   contact sheet of rendered frames spread across the clip
     GET  /api/target/preview_seq    consecutive rendered frames (JSON manifest of per-frame URLs)
 
-Every frame comes from the true-3D full-head renderer (see ``server/true3d.py``). While that renderer is not wired an uncached
-frame answers HTTP 503 ``RENDERER_NOT_WIRED`` ("3D renderer not wired"); nothing is faked. Requests that still carry the removed
-2D / 2.5D fields (swapper, restorer, frontalization, TPS, render_mode ...) are accepted, the fields are dropped and listed in
-``legacy_dropped``.
+Every render request passes through the true-3D full-head renderer (see ``server/true3d.py``). While that renderer is not wired,
+an uncached frame answers HTTP 503 ``RENDERER_NOT_WIRED``; no alternate image-swap path is accepted.
 
-(`/api/<x>` is served from `/api/v1/<x>` by the alias middleware.)
+(``/api/<x>`` is served from ``/api/v1/<x>`` by the alias middleware.)
+
 
 Concurrency contract
 --------------------
@@ -47,17 +46,16 @@ from roop_3d.audit.isolation import safe_path
 from roop_3d.core.animation import FaceSegment, ParameterCurves
 from roop_3d.core.errors import DomainError
 from roop_3d.core.settings import Contract
-from roop_3d.core.workstation import (BlendModeName, FREQUENCY_BLEND_CONFLICT, FUSION_FIELDS, PROTECTION_FIELDS, PYRAMID_LEVELS,
-                                      SCOPE_FIELDS, WorkstationParameters)
-from roop_3d.core.face_editor import FaceExpressionOverrides
 from roop_3d.faceset.identity_blend import IdentityBlendSpec
+from roop_3d.core.workstation import (BlendModeName, FREQUENCY_BLEND_CONFLICT, FUSION_FIELDS, PROTECTION_FIELDS, PYRAMID_LEVELS,
+                                      WorkstationParameters)
 from roop_3d.jobs.schema import JobRequest
 from roop_3d.media.finishing import ExportOptions
 from roop_3d.media.schema import FaceInspection, TrackToFaceSetMap
 from roop_3d.server.engine_gate import REBIND, EngineBusy
 from roop_3d.server.pipeline_status import STAGE_ORDER
 from roop_3d.server.true3d import (CameraIntrinsicsSpec, HeadTopologyEngine, NOT_WIRED_CODE, NOT_WIRED_MESSAGE, ShaderMode,
-                                   True3DSettings, forward_to, migrate_legacy, renderer_module)
+                                   True3DSettings, forward_to, renderer_module)
 from roop_3d.server.workstation_preview import PreviewRequest
 
 router = APIRouter(prefix="/api/v1")
@@ -93,14 +91,10 @@ class OcclusionSettings(Contract):
 
 
 class LivePreviewPayload(Contract):
-    # Removed 2D / 2.5D request fields that a legacy client sent; recorded by the before-validator, never acted on.
-    legacy_dropped: tuple[str, ...] = Field(default=(), max_length=64)
     # True-3D controls (None = the renderer / server default). See server/true3d.py.
     head_topology_engine: HeadTopologyEngine | None = None
     shader_mode: ShaderMode | None = None
     camera: CameraIntrinsicsSpec | None = None
-    expression_restore_factor: float | None = Field(default=None, ge=0, le=1)
-    face_expression_overrides: FaceExpressionOverrides = Field(default_factory=dict, max_length=64)
     engine_id: str = Field(default="reference_onnx", pattern=r"^[a-z0-9][a-z0-9_]{0,95}$")
     detector_model_id: Literal['scrfd', 'retinaface', 'yoloface'] | None = None
     # media + frame
@@ -123,10 +117,8 @@ class LivePreviewPayload(Contract):
     mask_base64: str | None = Field(default=None, max_length=12_000_000)
     mask_strokes: tuple[MaskStroke, ...] = Field(default=(), max_length=256)
     # grading
-    identity_blend_t: float | None = Field(default=None, ge=0, le=1)
     color_method: Literal['lab', 'reinhard_lab', 'histogram'] = 'lab'
     color_strength: float = Field(default=0.65, ge=0, le=1)
-    swap_weight: float = Field(default=1, ge=0, le=1)
     bypass: tuple[Literal["color"], ...] = Field(default=(), max_length=1)
     solo_node: SoloNode = "final"
     # The compositor occlusion strategy reaches the live preview too, so the workstation previews exactly what Start would
@@ -153,21 +145,10 @@ class LivePreviewPayload(Contract):
     preserve_ears_glasses: bool | None = None
     jaw_feather_px: float | None = Field(default=None, ge=2, le=24)
     skin_texture_retention: float | None = Field(default=None, ge=0, le=1)
-    # Stage 6B swap scope; None = the compositor default (full_craniofacial, skull_blend 1).
-    swap_scope: Literal['full_craniofacial', 'adaptive_skull', 'inner_face'] | None = None
-    skull_blend: float | None = Field(default=None, ge=0, le=1)
-    # job-request pass-through so the preview matches what Start would render
     face_segments: tuple[FaceSegment, ...] | None = Field(default=None, max_length=256)
     parameter_curves: ParameterCurves | None = None
     export: ExportOptions | None = None
 
-    @model_validator(mode="before")
-    @classmethod
-    def drop_removed_fields(cls, data: Any) -> Any:
-        clean, dropped = migrate_legacy(data)
-        if dropped:
-            clean = {**clean, "legacy_dropped": tuple(dropped)}
-        return clean
 
     @model_validator(mode="after")
     def coherent(self) -> "LivePreviewPayload":
@@ -218,19 +199,18 @@ class LivePreviewPayload(Contract):
         return True3DSettings(**values)
 
     def unsupported(self) -> list[str]:
-        """Accepted-but-inert fields: the engine has no corresponding control. Never silently dropped."""
-        items = [f"legacy:{name}" for name in self.legacy_dropped]
+        """Fields without an active pixel-producing control."""
+        items = []
         if self.xseg_occlusion_strength is not None and self.occlusion_mode != "robust":
-            items.append("xseg_occlusion_strength")  # the visible-face networks only run in the robust occlusion mode
+            items.append("xseg_occlusion_strength")
         if self.pyramid_levels is not None and (self.blend_mode or "multi_band") not in ("multi_band", "frequency_separated"):
-            items.append("pyramid_levels")  # feather and Poisson fusion have no pyramid
+            items.append("pyramid_levels")
         return items
 
     def config_digest(self) -> dict[str, Any]:
         """Everything that changes the pixels, nothing that selects the frame."""
-        value = self.model_dump(mode="json", exclude={"frame_index", "timestamp", "legacy_dropped"})
-        for key in ("identity_lock_id", "ambient_fill", "hairline_offset_px", "occlusion_threshold", *PROTECTION_FIELDS, *SCOPE_FIELDS, *FUSION_FIELDS):
-            if value[key] is None:
+        value = self.model_dump(mode="json", exclude={"frame_index", "timestamp"})
+        for key in ("identity_lock_id", "ambient_fill", "hairline_offset_px", "occlusion_threshold", *PROTECTION_FIELDS, *FUSION_FIELDS):
                 value.pop(key)
         if value.get("mask_base64"):
             value["mask_base64"] = hashlib.sha256(value["mask_base64"].encode()).hexdigest()
@@ -546,14 +526,7 @@ class LivePreviewService:
 
         values: dict[str, Any] = {"feather_px": payload.occlusion.feather_px,
                                   "erosion_px": payload.occlusion.erosion_px, "color_strength": payload.color_strength,
-                                  "swap_weight": payload.swap_weight, "bypass": payload.bypass,
-                                  "color_method": payload.color_method}
-        if payload.expression_restore_factor is not None:
-            values['expression_restore_factor'] = payload.expression_restore_factor
-        if payload.face_expression_overrides:
-            values['face_expression_overrides'] = payload.face_expression_overrides
-        if payload.identity_blend_t is not None:
-            values['identity_blend_t'] = payload.identity_blend_t
+                                  "bypass": payload.bypass, "color_method": payload.color_method}
         if payload.relight is not None:
             values['relight'] = payload.relight
         elif payload.solo_node in ('normal_map', 'sh_lighting') or payload.relight_strength is not None:
@@ -576,7 +549,7 @@ class LivePreviewService:
             values['occlusion_threshold'] = payload.occlusion_threshold
         if payload.hairline_offset_px is not None:
             values['hairline_offset_px'] = payload.hairline_offset_px
-        for name in (*PROTECTION_FIELDS, *SCOPE_FIELDS, *FUSION_FIELDS):
+        for name in (*PROTECTION_FIELDS, *FUSION_FIELDS):
             if getattr(payload, name) is not None:
                 values[name] = getattr(payload, name)
         if payload.occlusion_mode is not None:
@@ -639,12 +612,8 @@ class LivePreviewService:
 
     @staticmethod
     def _applied(payload: LivePreviewPayload) -> list[str]:
-        applied = ["swap_weight", "color_strength", "mask_erosion_px", "mask_feather_px"]
+        applied = ["color_strength", "mask_erosion_px", "mask_feather_px"]
         applied += [name for name in ("head_topology_engine", "shader_mode", "camera") if getattr(payload, name) is not None]
-        if payload.expression_restore_factor:
-            applied.append('expression_restore_factor')
-        if payload.face_expression_overrides:
-            applied.append('face_expression_overrides')
         if payload.mask_base64 or payload.mask_strokes:
             applied.append("custom_mask")
         if payload.relight_strength is not None:

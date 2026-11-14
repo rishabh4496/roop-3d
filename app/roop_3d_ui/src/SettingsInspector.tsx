@@ -29,7 +29,6 @@ const SETTING_DOMAINS: Record<string, DomainId> = {
   stream_ring_slots: 'compute',
   render_backend: 'compute',
 
-  execution_mode: 'spatial',
   pose_hysteresis_degrees: 'spatial',
   temporal_min_cutoff: 'spatial',
   temporal_beta: 'spatial',

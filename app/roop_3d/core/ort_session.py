@@ -35,8 +35,6 @@ def _string_provider_options(options: Mapping[str, object]) -> dict[str, str]:
 # time and kernel selection quality. [INFERENCE] no on-device A/B of 3 vs 5 exists in this repo; revisit with measurements.
 TRT_BUILDER_OPTIMIZATION_LEVEL = 5
 
-# FP32 locks (never FP16, therefore never INT8): the LivePortrait motion extractor.
-FP32_LOCKED_MODEL_TOKENS = ("motion_extractor",)
 
 INT8_ENV_FLAG = "ROOP_TRT_INT8"
 INT8_CACHE_ENV = "ROOP_TRT_INT8_CALIBRATION_CACHE"
@@ -62,9 +60,6 @@ def trt_int8_options(model_name: str, engine_cache_dir: Path | str,
     env = os.environ if environ is None else environ
     if str(env.get(INT8_ENV_FLAG, "")).strip().lower() not in ("1", "true", "yes", "on"):
         return {}
-    folded = str(model_name).casefold()
-    if any(token in folded for token in FP32_LOCKED_MODEL_TOKENS):
-        raise TensorRTInt8Refused("INT8_FP32_LOCKED_MODEL", f"{model_name} is locked to FP32 and cannot run INT8")
     raw = str(env.get(INT8_CACHE_ENV, "")).strip()
     table = Path(raw) if raw else None
     if table is None or not table.is_file():
@@ -290,9 +285,6 @@ def _cuda_fp16_model_path(path: Path, cache_path: Path):
     from onnxruntime.transformers.float16 import convert_float_to_float16
 
     path = Path(path).resolve(strict=True)
-    if any(token in path.name.casefold() for token in FP32_LOCKED_MODEL_TOKENS):
-        # The motion extractor is FP32-locked: the mixed-precision rewrite makes its output NaN.
-        return path, None
     digest = hashlib.sha256()
     with path.open("rb") as stream:
         for chunk in iter(lambda: stream.read(1024 * 1024), b""):
@@ -655,9 +647,7 @@ class SessionManager:
         if CUDA not in available:
             return []
         static = _static_graph_inputs(model)
-        folded_name = name.casefold()
-        fp16_sensitive = any(token in folded_name for token in FP32_LOCKED_MODEL_TOKENS)
-        fp16 = force_fp16 or (self.fp16 and not fp16_sensitive)
+        fp16 = force_fp16 or self.fp16
         excluded_ops = _trt_excluded_ops(model, name)
         int8 = trt_int8_options(name, self.cache_path)
         cache_policy = {"fp16": fp16, "optimization_level": TRT_BUILDER_OPTIMIZATION_LEVEL, "auxiliary_streams": 2,

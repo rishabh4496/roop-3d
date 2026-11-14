@@ -24,14 +24,10 @@ from roop_3d.engine.runtime import RuntimeConfig, image_bgr
 from roop_3d.engine.volumetric.angle_diagnostics import AngleDiagnostics
 from roop_3d.engine.volumetric.presence import PoseFade, SwapPresence
 from roop_3d.engine.volumetric.preprocess import landmark_crop, transform_points
-from roop_3d.engine.volumetric.reference_adapter import LivePortraitAdapter
 from roop_3d.faceset.schemas import FaceSetDocument
 from roop_3d.models.catalog import ModelCatalog
 from roop_3d.engine.resources import guarded, inference, register
 from roop_3d.temporal import smoothstep
-from roop_3d.compositor.pipeline import CompositeOptions, FrameCompositor
-from roop_3d.engine.audio_sync.lip_sync_adapter import LipSyncAdapter, LipSyncFrameInput
-from roop_3d.reconstruction.reenactment import ReenactmentSettings
 
 
 @dataclass(frozen=True)
@@ -60,22 +56,15 @@ class TrackedFrame:
 @dataclass(frozen=True)
 class Replacement:
     track_id: int
-    image: np.ndarray
-    inverse: np.ndarray
-    reference_index: int
-    method: str
-    coverage: np.ndarray | None = None
-    landmarks5: np.ndarray | None = None
-    # Why a face was not rendered (never silent); there is no 2D fallback path.
-    render_mode: str = "true_3d"
-    fallback_reason: str | None = None
-    full_head: bool = False
-    target_silhouette: np.ndarray | None = None
-    source_silhouette: np.ndarray | None = None
-    photometry: object = None
-    face_detail: object = None
-    # Fade factor of a face whose swap is held through, or returning from, a one/two-frame tracker gate.
-    presence: float = 1.0
+    rendered_frame: np.ndarray
+    coverage: np.ndarray
+    skin_mask: np.ndarray
+    hair_mask: np.ndarray
+    normals: np.ndarray
+    pipeline_stages: tuple[str, ...]
+    full_head: bool
+    occluder: np.ndarray | None = None
+
 
 
 @dataclass(frozen=True)
@@ -100,14 +89,10 @@ class ReferencePipeline:
     def __init__(self, catalog: ModelCatalog | None = None, config: RuntimeConfig = RuntimeConfig()):
         self.catalog, self.config = catalog or ModelCatalog(), config
         self.tracker: FaceTracker | None = None
-        self.portrait = LivePortraitAdapter(self.catalog, config)
-        # The compositor and its parser adapters are lazy; session creation does not activate any additional model.
-        self.compositor = FrameCompositor(self.catalog, config)
-        self.compositor.expression_portrait = self.portrait
         self.angle_diagnostics = AngleDiagnostics()
         self.dense_enhancer_calls = 0
-        self.compositor.angle_diagnostics = self.angle_diagnostics
-        self.lip_sync = LipSyncAdapter(self.catalog)
+        self._frame_processor = None
+        self.last_frame_report = None
         self.selected_ids: frozenset[int] | None = None
         self.sources_by_track: dict[int, FaceSetDocument] = {}
         self.identity_guard = None
@@ -128,7 +113,6 @@ class ReferencePipeline:
         self.head_landmarks = None
         self.angle_trajectories: dict[int, tuple[Any, ...]] = {}
         self.angle_frame_index: int | None = None
-        self.reenactment_settings = ReenactmentSettings()
         self.pose_hysteresis_degrees = Settings.model_fields["pose_hysteresis_degrees"].default
         self._roll_latched: dict[int, bool] = {}
         self._presence = SwapPresence()
@@ -137,11 +121,10 @@ class ReferencePipeline:
 
     def prepare_session(self, source: FaceSetDocument, *, track_ids: set[int] | None = None,
                         sources_by_track: Mapping[int, FaceSetDocument] | None = None,
-                        retarget: str = "auto", track_policy=None, detection_threshold: float = 0.5,
-                        identity_store=None, reenactment_settings: ReenactmentSettings | None = None) -> dict:
-        """Track-and-gate session setup. It does NOT require the renderer; rendering a face does (see ``infer_frame``)."""
+                        track_policy=None, detection_threshold: float = 0.5, identity_store=None) -> dict:
+        """Prepare tracking and identity gating; rendering requires the wired true-3D renderer."""
         with self.lock:
-            if retarget not in ("auto", "off", "required") or track_ids is not None and (
+            if track_ids is not None and (
                     len(track_ids) > 32 or any(type(i) is not int or i < 0 for i in track_ids)):
                 raise ValueError("Invalid session selection/policy")
             mapped_sources = dict(sources_by_track or {})
@@ -156,11 +139,6 @@ class ReferencePipeline:
                 self.sources_by_track = mapped_sources
                 self.default_source = source
                 self.identity_store = identity_store
-                self.reenactment_settings = reenactment_settings or ReenactmentSettings()
-                if retarget != "off":
-                    self.portrait.prepare_session(required=retarget == "required")
-                else:
-                    self.portrait.fallback_reason = "LivePortrait expression retargeting disabled explicitly"
                 self.prepared = True
                 return self.capability()
             except BaseException:
@@ -247,24 +225,17 @@ class ReferencePipeline:
 
     def configure_temporal(self, settings) -> None:
         from roop_3d.temporal import TrackTemporalStabilizer
-        from roop_3d.temporal_stabilizer import TemporalStabilizer
         config = dict(min_cutoff=settings.temporal_min_cutoff, beta=settings.temporal_beta,
                       derivative_cutoff=settings.temporal_d_cutoff)
         if self.tracker is not None:
             self.tracker.stabilizer = TrackTemporalStabilizer(**config)
-        # The histogram stabilizer's One-Euro filter names the derivative cutoff `d_cutoff`.
-        self.compositor.histogram_stabilizer = TemporalStabilizer(
-            min_cutoff=config['min_cutoff'], beta=config['beta'], d_cutoff=config['derivative_cutoff'])
         self.pose_hysteresis_degrees = settings.pose_hysteresis_degrees
 
-    def set_frame_timestamp(self, seconds: float, *, compositor: bool = True) -> None:
-        """``compositor=False`` is for the asynchronous pipeline, where the composite stage sets its own per frame."""
+    def set_frame_timestamp(self, seconds: float) -> None:
         if not np.isfinite(seconds):
-            raise ValueError('Frame timestamp must be finite')
+            raise ValueError("Frame timestamp must be finite")
         if self.tracker is not None:
             self.tracker.timestamp_seconds = seconds
-        if compositor:
-            self.compositor.timestamp_seconds = seconds
 
     def set_angle_trajectories(self, trajectories: Mapping[int, tuple[Any, ...]]) -> None:
         """Install the Stage 13 scan before rendering begins; keys are replayed tracker IDs."""
@@ -486,9 +457,8 @@ class ReferencePipeline:
         return tuple(by_id[key] for key in sorted(by_id))
 
     @inference
-    def infer_frame(self, image: np.ndarray, *, tracked: TrackedFrame | None = None, **_unused) -> FrameResult:
-        """Track, gate, then render. Rendering a face needs the true-3D FullHeadEngine path, which is not wired:
-        any face that passes the gates raises ``True3DRendererUnavailable`` (no 2D / 2.5D fallback, no fake output).
+    def infer_frame(self, image: np.ndarray, *, tracked: TrackedFrame | None = None) -> FrameResult:
+        """Track, gate, then render only with the wired true-3D FullHeadEngine; no alternate renderer is accepted.
 
         ``tracked`` (from :meth:`track_frame`) lets Stage 1 run ahead; without it tracking happens inline. A frame with no
         selected, gate-passing face returns an empty result (nothing to render, so nothing is falsely reported as rendered)."""
@@ -508,7 +478,6 @@ class ReferencePipeline:
                 faces, detection_end = tracked.faces, began + tracked.detection_ms / 1000
             self._frame_context = tracked
             scene_cut, active_ids = tracked.scene_cut, tracked.active_ids
-            self.portrait.retain_tracks(active_ids)
             for track_id in set(self.full_head_engines) - set(active_ids):
                 self.full_head_engines.pop(track_id).rasterizer.release()
             if scene_cut:
@@ -543,10 +512,10 @@ class ReferencePipeline:
             self.last_latency = StageLatency((detection_end - began) * 1000, 0.0, 0.0, (ended - began) * 1000, 0.0)
             return FrameResult(faces, (), self.last_latency, scene_cut, tuple(withheld))
 
-    def track_frame(self, image: np.ndarray, **_kwargs) -> TrackedFrame:
+    def track_frame(self, image: np.ndarray) -> TrackedFrame:
         """Stage 1: detection, landmarks, pose and track association for one frame (no render work).
 
-        Pass the result to :meth:`infer_frame` as ``tracked``.  Frames must be tracked in order; only this method
+        Pass the result to :meth:`infer_frame` as ``tracked``. Frames must be tracked in order; only this method
         touches the tracker, so it may safely run on a thread of its own while Stage 2 works on an earlier frame.
         """
         with self.track_lock:
@@ -562,12 +531,6 @@ class ReferencePipeline:
             return TrackedFrame(faces, bool(self.tracker.scene_cut), frozenset(self.tracker.active_ids), frame_time,
                                 (time.perf_counter() - began) * 1000)
 
-    def begin_fit_ahead(self) -> None:
-        """No-op: the dense-correspondence fit-ahead belonged to the removed 2D swap path."""
-
-    def prefetch_target_fits(self, image: np.ndarray, tracked: TrackedFrame, *, render_mode: str | None = None) -> None:
-        """No-op: see :meth:`begin_fit_ahead`."""
-
     def _detect_landmarks106(self, crop: np.ndarray) -> np.ndarray | None:
         """106 dense landmarks of a crop (the crop is a tight face, so the box is the whole image)."""
         if self.tracker is None:
@@ -577,66 +540,37 @@ class ReferencePipeline:
 
     def capability(self) -> dict:
         from roop_3d.pipeline import true3d_renderer
+        wired = true3d_renderer.is_wired()
         return {"prepared": self.prepared, "frames_processed": self.frames_processed,
-                "renderer": {"wired": true3d_renderer.is_wired(), "message": "3D renderer not wired"
-                             if not true3d_renderer.is_wired() else "ready"},
-                "portrait": self.portrait.capability(), "profile": self.config.hardware_profile,
+                "renderer": {"wired": wired, "message": "ready" if wired else "3D renderer not wired"},
+                "profile": self.config.hardware_profile,
                 "selected_track_ids": sorted(self.selected_ids) if self.selected_ids is not None else None,
                 "dense_landmarks": (68, 106, 203),
                 "full_head": {"active": False, "renderer": "not_wired"},
-                "full_frame_compositor": self.compositor.capability(),
-                "lip_sync": self.lip_sync.capability(),
-                "render_modes": {"available": ["true_3d"], "default": "true_3d",
-                                 "fallback": "none: faces that cannot be rendered by the true-3D path raise "
-                                             "True3DRendererUnavailable; there is no 2D / 2.5D fallback"}}
-
-    def prefetch_composite_inputs(self, image: np.ndarray, result: FrameResult, options: CompositeOptions = CompositeOptions()) -> int:
-        """Warm the compositor's face-parser cache for ``result`` (no state is touched; safe next to ``composite_frame``)."""
-        if not result.replacements or getattr(self, "compositor", None) is None:
-            return 0
-        return self.compositor.prefetch_parser(image, result.replacements, options)
+                "compositor": {"architecture": "full_frame_true3d_only", "wired": wired}}
 
     def composite_frame(self, image: np.ndarray, result: FrameResult, *,
-                        options: CompositeOptions = CompositeOptions(),
-                        occluder_masks: dict[int, np.ndarray] | None = None,
-                        mask_temporal_context: Mapping[int, Mapping[str, np.ndarray]] | None = None,
-                        lip_sync_enabled: bool = False,
-                        lip_sync_inputs: Mapping[int, LipSyncFrameInput] | None = None,
-                        observer=None, frame_index: int | None = None,
+                        options=None, frame_index: int | None = None,
                         timestamp_seconds: float | None = None) -> np.ndarray:
-        """Run optional post-swap lip sync, then fuse mouth/face regions into the frame.
-
-        ``frame_index`` / ``timestamp_seconds`` make the call independent of how far Stage 2 has advanced, which the
-        asynchronous pipeline needs (defaults reproduce the inline behaviour).  Uses ``composite_lock`` so it can
-        overlap :meth:`infer_frame` on another thread. ``mask_temporal_context`` is an optional per-track buffered
-        lookahead supplied by offline callers; it contains previous/next masks and their guide images so the
-        compositor can repair a verified one-frame matte dropout. The realtime path does not add one-frame latency.
-        """
+        """Composite only a complete 3D mesh raster with full-frame semantic masks."""
+        if timestamp_seconds is not None and not np.isfinite(timestamp_seconds):
+            raise ValueError("Frame timestamp must be finite")
+        if not result.replacements:
+            return image
         with self.composite_lock:
-            if timestamp_seconds is not None:
-                if not np.isfinite(timestamp_seconds):
-                    raise ValueError('Frame timestamp must be finite')
-                self.compositor.timestamp_seconds = timestamp_seconds
-            landmarks = {item.track_id: item.observation.landmarks106 for item in result.observations}
-            lip_results = {}
-            active_tracks = {item.track_id for item in result.replacements}
-            self.lip_sync.gate.begin_frame(active_track_ids=active_tracks if lip_sync_enabled else set(),
-                                           scene_cut=result.scene_cut)
-            if lip_sync_enabled:
-                supplied = lip_sync_inputs or {}
-                for replacement in result.replacements:
-                    frame_input = supplied.get(replacement.track_id)
-                    if frame_input is None:
-                        frame_input = LipSyncFrameInput(np.zeros((80, 1), np.float32), 0.0, 0.0)
-                    lip_results[replacement.track_id] = self.lip_sync.process_frame(
-                        replacement.image, replacement.track_id, frame_input, scene_cut=result.scene_cut)
-            return self.compositor.compose(image, result.replacements, landmarks,
-                                           scene_cut=result.scene_cut,
-                                           frame_index=max(0, self.frames_processed - 1) if frame_index is None else frame_index,
-                                           occluder_masks=occluder_masks, mask_temporal_context=mask_temporal_context,
-                                           lip_sync_results=lip_results,
-                                           options=options, observer=observer)
-
+            from roop_3d.pipeline.photorealistic_swap_core import Photorealistic3DSwapCore, SwapCoreOptions
+            from roop_3d.pipeline.session_adapter import SessionFrameProcessor
+            if self._frame_processor is None:
+                self._frame_processor = SessionFrameProcessor(self, Photorealistic3DSwapCore())
+            core_options = SwapCoreOptions(
+                feather_px=float(getattr(options, "feather_px", 5.0)),
+                pyramid_levels=int(getattr(options, "pyramid_levels", 4)),
+            )
+            self._frame_processor.core.options = core_options
+            index = max(0, self.frames_processed - 1) if frame_index is None else frame_index
+            output, report = self._frame_processor.process_result(image, result, index)
+            self.last_frame_report = report
+            return output
     @guarded
     def release_session(self) -> None:
         with self.track_lock, self.lock, self.composite_lock:
@@ -645,9 +579,10 @@ class ReferencePipeline:
             if self.tracker is not None:
                 self.tracker.release()
             self.tracker = None
-            self.portrait.release_session()
-            self.compositor.release()
-            self.lip_sync.release()
+            if self._frame_processor is not None:
+                self._frame_processor.release()
+                self._frame_processor = None
+            self.last_frame_report = None
             self.selected_ids = None
             self.sources_by_track.clear()
             self.identity_guard = None

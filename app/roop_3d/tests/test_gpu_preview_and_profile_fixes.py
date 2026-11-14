@@ -307,19 +307,6 @@ def test_the_parser_cache_can_be_switched_off(monkeypatch):
     assert calls["n"] == 2
 
 
-def test_the_compositor_prefetch_only_runs_for_the_standard_occlusion_path():
-    from roop_3d.compositor.pipeline import CompositeOptions, FrameCompositor
-    parser, calls = _fake_parser()
-    compositor = FrameCompositor.__new__(FrameCompositor)
-    compositor.parser = parser
-    crop = np.full((64, 64, 3), 120, np.uint8)
-    replacement = SimpleNamespace(image=crop, inverse=np.array([[1, 0, 0], [0, 1, 0]], np.float32))
-    frame = np.full((64, 64, 3), 130, np.uint8)
-    assert compositor.prefetch_parser(frame, [replacement], CompositeOptions(occlusion_mode="robust")) == 0
-    assert calls["n"] == 0
-    assert compositor.prefetch_parser(frame, [replacement], CompositeOptions()) == 2 and calls["n"] == 2
-
-
 # ------------------------------------------------------------------------------------------------ chin clamp
 def test_chin_line_clamp_cuts_below_the_chin_at_any_yaw_and_leaves_the_face_alone():
     from roop_3d.compositor.masks import chin_line_clamp

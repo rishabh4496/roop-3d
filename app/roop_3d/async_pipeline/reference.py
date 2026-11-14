@@ -19,7 +19,7 @@ import logging
 from typing import Any, Callable
 
 from roop_3d.async_pipeline.stages import Item
-from roop_3d.compositor.pipeline import CompositeOptions
+from roop_3d.core.errors import DomainError
 
 STAGE_NAMES = ("track", "swap", "composite", "write")
 logger = logging.getLogger(__name__)
@@ -27,21 +27,19 @@ logger = logging.getLogger(__name__)
 
 class ReferenceStages:
     def __init__(self, session, *, request, edit_plan=None, export=None, identity_report=None,
-                 lip_sync: bool = False, lip_syncer=None, working_transfer: Any = None, resume_after: int = -1,
-                 write_frame: Callable[[int, Any, tuple], None] | None = None,
-                 save_passes: Callable[[Any, Any, int], None] | None = None, watchdog=None,
+                 working_transfer: Any = None, resume_after: int = -1,
+                 write_frame: Callable[[int, Any, tuple], None] | None = None, watchdog=None,
                  scene_cuts: list | None = None, swapped_ranges: list | None = None):
-        self.lip_syncer = lip_syncer
         self.session, self.request, self.edit_plan, self.export = session, request, edit_plan, export
-        self.identity_report, self.lip_sync, self.working_transfer = identity_report, lip_sync, working_transfer
+        self.identity_report, self.working_transfer = identity_report, working_transfer
         self.watchdog = watchdog
-        self.resume_after, self.write_frame, self.save_passes = resume_after, write_frame, save_passes
+        self.resume_after, self.write_frame = resume_after, write_frame
         self.scene_cuts = scene_cuts if scene_cuts is not None else []
         self.swapped_ranges = swapped_ranges if swapped_ranges is not None else []
         self.staged = hasattr(session, "track_frame")
         self.expected_shape: tuple | None = None
         if self.staged and hasattr(session, "begin_fit_ahead"):
-            session.begin_fit_ahead()       # the swap stage's frame counter is read here, before any frame is processed
+            session.begin_fit_ahead()
 
     def _transfer(self):
         """``working_transfer`` may be a callable: the reader only knows its working colour after the first frame."""
@@ -59,13 +57,9 @@ class ReferenceStages:
         item.meta["decoded"] = decoded
         parameters = (request.parameters_at(decoded.index)
                       if request.workstation_parameters or request.parameter_curves else None)
-        options = parameters.inference_options() if parameters else {}
-        item.meta.update(parameters=parameters, options=options)
+        item.meta.update(parameters=parameters)
         if hasattr(session, "set_frame_timestamp"):
-            if self.staged:   # the composite stage owns the compositor's clock (see ReferencePipeline.composite_frame)
-                session.set_frame_timestamp(float(decoded.timestamp.seconds), compositor=False)
-            else:
-                session.set_frame_timestamp(float(decoded.timestamp.seconds))
+            session.set_frame_timestamp(float(decoded.timestamp.seconds))
         if hasattr(session, "set_angle_frame"):
             session.set_angle_frame(decoded.index)
         if not self.staged:
@@ -75,10 +69,10 @@ class ReferenceStages:
     # -- Stage 2 ----------------------------------------------------------------------------------------------
     def swap(self, item: Item):
         session = self.session
-        decoded, options, tracked = item.meta["decoded"], item.meta["options"], item.payload
+        decoded, tracked = item.meta["decoded"], item.payload
         if self.edit_plan:
             self.edit_plan.apply(session, decoded.index)
-        result = session.infer_frame(decoded.image, **options, **({"tracked": tracked} if tracked is not None else {}))
+        result = session.infer_frame(decoded.image, **({"tracked": tracked} if tracked is not None else {}))
         if self.staged:
             item.meta["frame_index"] = max(0, session.frames_processed - 1)   # only this stage advances the counter
         if self.identity_report is not None:
@@ -93,37 +87,20 @@ class ReferenceStages:
                 else:
                     ranges.append([decoded.index, decoded.index + 1])
         item.meta["result"] = result
-        if self.staged and hasattr(session, "prefetch_composite_inputs"):
-            # The composite stage is the slowest; let this lighter stage parse the faces for it, in parallel.
-            parameters = item.meta.get("parameters")
-            session.prefetch_composite_inputs(decoded.image, result, parameters.composite_options() if parameters else CompositeOptions())
-        return result
 
-    # -- Stage 3 ----------------------------------------------------------------------------------------------
     def composite(self, item: Item):
-        session, edit_plan = self.session, self.edit_plan
+        session = self.session
         decoded, result, parameters = item.meta["decoded"], item.meta["result"], item.meta["parameters"]
-        collector = None
         if self.export and self.export.passes:
-            from roop_3d.media.vfx import PassCollector
-            collector = PassCollector(decoded.image.shape[:2], self.export.passes)
-        explicit = ({"frame_index": item.meta["frame_index"], "timestamp_seconds": float(decoded.timestamp.seconds)}
-                    if self.staged else {})
-        composite_options = (parameters.with_source_transfer(self._transfer()).composite_options() if parameters
-                             else CompositeOptions())
+            raise DomainError("TRUE3D_RENDER_PASSES_UNAVAILABLE",
+                              "Requested render passes require the unwired full-head 3D renderer", 503)
+        options = parameters
         output = session.composite_frame(
-            decoded.image, result,
-            options=composite_options,
-            occluder_masks=(edit_plan.occluders(decoded.image, result, decoded.index)
-                            if edit_plan and edit_plan.has_masks else None),
-            lip_sync_enabled=self.lip_sync,
-            **({"lip_sync_inputs": {replacement.track_id: self.lip_syncer.frame_input(decoded.timestamp.seconds, confidence=next((getattr(face, "confidence", 1.0) for face in result.observations if face.track_id == replacement.track_id), 1.0))
-                                   for replacement in result.replacements}} if self.lip_syncer else {}),
-            **({"observer": collector.observe} if collector else {}), **explicit)
-        if collector is not None and decoded.index > self.resume_after and self.save_passes is not None:
-            self.save_passes(collector, result, decoded.index)
-        # Read in the stage that produced it: the compositor is already working on a later frame by now.
-        item.meta["timing"] = dict(getattr(getattr(session, "compositor", None), "last_timing", None) or {})
+            decoded.image, result, options=options,
+            **({"frame_index": item.meta["frame_index"]} if self.staged else {}),
+            timestamp_seconds=float(decoded.timestamp.seconds))
+        report = getattr(session, "last_frame_report", None)
+        item.meta["timing"] = dict(report.stage_ms) if report is not None else {}
         return output
 
     # -- Stage 4 ----------------------------------------------------------------------------------------------

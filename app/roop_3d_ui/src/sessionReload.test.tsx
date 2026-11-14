@@ -40,7 +40,7 @@ vi.mock('./api', () => ({
 const TARGET = 'roop_3d/.runtime/media/803b3b70f4334d17a2835b843ff5dd99.mp4';
 const snapshot = (over: Record<string, unknown> = {}) => ({
   target: TARGET, inspectionId: 'insp1', selectedJob: 'job46', projectId: '', projectName: 'Untitled project', identityLockId: '', engineId: 'reference_onnx',
-  time: 42, sourceId: 'fs1', identitySourceB: '', selectedTrack: 'track_0004', trimStart: 5, trimEnd: 60, parameters: { swap_weight: 0.3 },
+  time: 42, sourceId: 'fs1', identitySourceB: '', selectedTrack: 'track_0004', trimStart: 5, trimEnd: 60, parameters: { erosion_px: 3 },
   exportOptions: null, curves: {}, assigned: { track_0004: 'fs1' }, faceSegments: [], ...over });
 
 beforeEach(() => { calls.length = 0; jobList = []; missingTarget = false; localStorage.clear(); useHistoryStore.getState().reset(); location.hash = '#/faceswap'; });
@@ -62,7 +62,7 @@ it('rebuilds the workstation from the saved session after the page reloads (Pino
     expect(host.querySelector('[data-target]')?.textContent).toBe(TARGET);
     const restored = workspace(host);
     expect(restored.time).toBe(42); expect(restored.sourceId).toBe('fs1'); expect(restored.trimStart).toBe(5); expect(restored.trimEnd).toBe(60);
-    expect(restored.selectedTrack).toBe('track_0004'); expect(restored.parameters.swap_weight).toBe(0.3);
+    expect(restored.selectedTrack).toBe('track_0004'); expect(restored.parameters.erosion_px).toBe(3);
     expect(calls).toContain('POST /media/probe'); expect(calls.some(call => call.startsWith('GET /media/inspections/insp1'))).toBe(true);
     expect(host.textContent).toContain('restored after the page reloaded');
   } finally { await unmount(); }

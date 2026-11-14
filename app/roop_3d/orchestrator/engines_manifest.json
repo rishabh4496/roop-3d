@@ -77,7 +77,6 @@
       "exclusive_with": [
         "bisenet_face_parser",
         "identity_asset_builder",
-        "liveportrait_retarget",
         "pyav_video_reader",
         "pyav_video_writer",
         "xseg_visible_face"
@@ -289,74 +288,9 @@
       "residency": "none",
       "exclusive_with": [
         "ffmpeg_stream_source",
-        "ffmpeg_stream_writer",
-        "liveportrait_retarget"
+        "ffmpeg_stream_writer"
       ],
       "description": "Multi-view identity asset on the full-head MakeHuman template. Classical CPU, no neural model.",
-      "fallback": {
-        "mode": "none",
-        "target_engine_id": null,
-        "reason_codes": []
-      }
-    },
-    {
-      "engine_id": "liveportrait_retarget",
-      "category": "expression_transfer",
-      "adapter_id": "liveportrait_retarget",
-      "models": [
-        {
-          "model_id": "98116e7c72cff8d2131d7b33",
-          "role": "liveportrait_appearance"
-        },
-        {
-          "model_id": "b9e27bfca5bbd6b991e3cd4a",
-          "role": "liveportrait_motion"
-        },
-        {
-          "model_id": "4b583cf7d4667da7ed3b843e",
-          "role": "liveportrait_warp"
-        },
-        {
-          "model_id": "3bafec2b580cdf85d942454d",
-          "role": "liveportrait_stitch"
-        },
-        {
-          "model_id": "19afcbd3028e1b64abec0686",
-          "role": "landmarks_203"
-        }
-      ],
-      "inputs": [
-        "rendered_head_layer",
-        "landmarks_106",
-        "face_detections"
-      ],
-      "outputs": [
-        "rendered_head_layer"
-      ],
-      "resolution": {
-        "min": 64,
-        "max": 7680
-      },
-      "precisions": [
-        "FP32"
-      ],
-      "providers": [
-        "CUDAExecutionProvider",
-        "CPUExecutionProvider"
-      ],
-      "hardware_tiers": [
-        "cpu",
-        "6gb",
-        "12gb"
-      ],
-      "declared_peak_vram_mib": null,
-      "residency": "heavy",
-      "exclusive_with": [
-        "ffmpeg_stream_source",
-        "ffmpeg_stream_writer",
-        "identity_asset_builder"
-      ],
-      "description": "LivePortrait retargeting; the warp model is CPU-only in current receipts.",
       "fallback": {
         "mode": "none",
         "target_engine_id": null,
@@ -541,7 +475,6 @@
       "exclusive_with": [
         "bisenet_face_parser",
         "identity_asset_builder",
-        "liveportrait_retarget",
         "pyav_video_reader",
         "pyav_video_writer",
         "xseg_visible_face"

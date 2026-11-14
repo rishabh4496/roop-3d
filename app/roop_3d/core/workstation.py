@@ -2,37 +2,22 @@
 from typing import Literal
 from pydantic import Field, model_serializer, model_validator
 from roop_3d.core.settings import Contract
-from roop_3d.core.face_editor import FaceExpressionOverrides
 
 #: Hair / neck / ear protection fields: absent from a serialisation (and so from fingerprints) until the caller sets them.
 PROTECTION_FIELDS = ('neck_protection', 'hair_matting', 'preserve_ears_glasses', 'jaw_feather_px', 'skin_texture_retention')
-#: Stage 6B swap-scope fields: same opt-in rule, absent from a serialisation (and so from fingerprints) until the caller sets them.
-SCOPE_FIELDS = ('swap_scope', 'skull_blend')
-#: Compositor fusion / occlusion fields: same opt-in rule. ``xseg_occlusion_strength`` only acts in ``occlusion_mode='robust'`` (the
-#: visible-face networks run there); ``blend_mode`` / ``pyramid_levels`` are ``CompositeOptions.mode`` / ``.pyramid_levels``.
+#: Fusion and occlusion fields are opt-in for request fingerprints; XSeg applies only in robust mode.
+#: Blend mode and pyramid depth configure the full-frame true-3D raster blend.
 FUSION_FIELDS = ('xseg_occlusion_strength', 'blend_mode', 'pyramid_levels')
 BlendModeName = Literal['feather', 'multi_band', 'poisson', 'frequency_separated']
-#: Pyramid bands every renderer honours: the stream core clamps ``CompositeOptions.pyramid_levels`` to 4..6.
+#: Pyramid bands used by the full-frame true-3D raster blend.
 PYRAMID_LEVELS = (4, 6)
-import base64
-
-#: Fields of the removed 2D swapper / restorer / 2.5D pose-blend paths; accepted on input and ignored.
-REMOVED_FIELDS = frozenset(base64.b64decode(s).decode("ascii") for s in [
-    'cmVzdG9yZXJfbW9kZWw=', 'ZmlkZWxpdHlfd2VpZ2h0', 'cmVzdG9yYXRpb25fYmxlbmQ=', 'cG9zZV9zdHJlbmd0aA==',
-    'cG9zZV9tb2Rl', 'cG9zZV9mcm9udGFsaXphdGlvbg==', 'dHBzX2V4cHJlc3Npb25fd2VpZ2h0', 'cmVuZGVyX21vZGU=',
-    'amF3X2FkYXB0YXRpb24=', 'dWx0cmFtYXhfc21hbGxfZmFjZV9tb2Rl', 'dWx0cmFtYXhfbWluX25hdGl2ZV9waXhlbHM='
-])
 FREQUENCY_BLEND_CONFLICT = ("blend_mode 'frequency_separated' blends on encoded values and cannot be combined with linear-light "
                             "blending (occlusion_mode 'robust' and linear_light=true both blend in linear light)")
 
 class WorkstationParameters(Contract):
-    expression_restore_factor: float = Field(default=0, ge=0, le=1)
-    face_expression_overrides: FaceExpressionOverrides = Field(default_factory=dict, max_length=64)
     color_method: Literal['lab', 'reinhard_lab', 'histogram', 'ycbcr', 'oklab', 'oklab_wasserstein'] = 'lab'
-    identity_blend_t: float | None = Field(default=None, ge=0, le=1)
     feather_px: float = Field(default=5, ge=0, le=64)
     color_strength: float = Field(default=0.65, ge=0, le=1)
-    swap_weight: float = Field(default=1, ge=0, le=1)
     erosion_px: float = Field(default=0, ge=-32, le=32)
     bypass: tuple[Literal['color'], ...] = Field(default=(), max_length=1)
     # Stage 15: blend in linear light. 'auto' follows the source's actual transfer (see composite_options).
@@ -79,11 +64,6 @@ class WorkstationParameters(Contract):
     preserve_ears_glasses: bool = True
     jaw_feather_px: float = Field(default=6.0, ge=2, le=24)
     skin_texture_retention: float = Field(default=0.25, ge=0, le=1)
-    # Stage 6B swap scope. full_craniofacial = 100% source skull/jaw/forehead with the old silhouette removed (hair, ears and neck
-    # warped onto the new perimeter, overhang filled with background); adaptive_skull = skull_blend is the share of beta_source in the
-    # skull (the rest is beta_target); inner_face = legacy, only the inside of the target's own face outline is replaced.
-    swap_scope: Literal['full_craniofacial', 'adaptive_skull', 'inner_face'] = 'full_craniofacial'
-    skull_blend: float = Field(default=1.0, ge=0, le=1)
     boundary_ribbon_matting: bool = False
     submental_contact_shadow: bool = False
     contact_shadow_opacity: float = Field(default=0.12, ge=0, le=0.15)
@@ -96,21 +76,11 @@ class WorkstationParameters(Contract):
     @model_serializer(mode='wrap')
     def compatible_serialization(self, handler):
         value = handler(self)
-        for field in ('expression_restore_factor', 'face_expression_overrides'):
-            if field not in self.model_fields_set:
-                value.pop(field, None)
-        for field in ('color_method', 'identity_blend_t', 'swap_weight', 'erosion_px', 'head_topology_engine', 'shader_mode', 'camera_intrinsics', 'occlusion_mode', 'strand_matte', 'linear_light', 'blend_transfer', 'ambient_fill', 'hairline_offset_px', 'occlusion_threshold', 'sensor_shutter_angle', 'grain_match_strength') + PROTECTION_FIELDS + SCOPE_FIELDS + FUSION_FIELDS:
+        for field in ('color_method', 'erosion_px', 'head_topology_engine', 'shader_mode', 'camera_intrinsics', 'occlusion_mode', 'strand_matte', 'linear_light', 'blend_transfer', 'ambient_fill', 'hairline_offset_px', 'occlusion_threshold', 'sensor_shutter_angle', 'grain_match_strength') + PROTECTION_FIELDS + FUSION_FIELDS:
             if field not in self.model_fields_set:
                 value.pop(field, None)
         return value
 
-    @model_validator(mode='before')
-    @classmethod
-    def drop_removed_2d_fields(cls, data):
-        """Saved jobs / projects written before the 2D & 2.5D purge may still carry the removed keys: they are dropped."""
-        if isinstance(data, dict):
-            return {key: value for key, value in data.items() if key not in REMOVED_FIELDS}
-        return data
 
     @model_validator(mode='after')
     def fusion_modes_agree(self):
@@ -118,60 +88,9 @@ class WorkstationParameters(Contract):
             raise ValueError(FREQUENCY_BLEND_CONFLICT)
         return self
 
-    def inference_options(self) -> dict[str, float]:
-        """Per-frame inference options (only the identity blend remains; 2D pose / TPS / frontalization options are gone)."""
-        return {'identity_blend_t': self.identity_blend_t} if self.identity_blend_t is not None else {}
-
-    def session_options(self) -> dict[str, str]:
-        return {}
-
-    def uses_mesh_projection(self) -> bool:
-        return False
-
     def with_source_transfer(self, transfer_code: int) -> 'WorkstationParameters':
         """Resolve ``blend_transfer='auto'`` to the display transfer matching the media's (working) transfer code."""
         from roop_3d.color.transfer import blend_transfer_for
         if self.blend_transfer != 'auto':
             return self
         return self.model_copy(update={'blend_transfer': blend_transfer_for(transfer_code)})
-
-    def composite_options(self):
-        from roop_3d.compositor.boundary_fusion import BlendMode
-        from roop_3d.compositor.pipeline import CompositeOptions, RobustOptions
-        # Unresolved 'auto' falls back to sRGB, the pre-Stage-15 curve; callers with media context resolve it first.
-        blend = 'srgb' if self.blend_transfer == 'auto' else self.blend_transfer
-        return CompositeOptions(color_method=self.color_method,
-                                expression_restore_factor=self.expression_restore_factor,
-                                face_expression_overrides=self.face_expression_overrides,
-                                feather_px=self.feather_px,
-                                mode=BlendMode(self.blend_mode), pyramid_levels=self.pyramid_levels,
-                                xseg_occlusion_strength=self.xseg_occlusion_strength,
-                                swap_weight=self.swap_weight, erosion_px=self.erosion_px,
-                                occlusion_mode=self.occlusion_mode,
-                                robust=RobustOptions(strand_matte=self.strand_matte),
-                                semantic_confidence_threshold=self.occlusion_threshold,
-                                color_strength=0 if 'color' in self.bypass else self.color_strength,
-                                relight=self.relight,
-                                relight_strength=self.relight_strength,
-                                specular_sheen=self.specular_sheen,
-                                shadow_preservation=self.shadow_preservation,
-                                lighting_mode=self.lighting_mode,
-                                manual_light_yaw=self.manual_light_yaw,
-                                manual_light_pitch=self.manual_light_pitch,
-                                ambient_fill=self.ambient_fill,
-                                hairline_offset_px=self.hairline_offset_px,
-                                neck_protection=self.neck_protection,
-                                hair_matting=self.hair_matting,
-                                preserve_ears_glasses=self.preserve_ears_glasses,
-                                jaw_feather_px=self.jaw_feather_px,
-                                skin_texture_retention=self.skin_texture_retention,
-                                swap_scope=self.swap_scope, skull_blend=self.skull_blend,
-                                boundary_ribbon_matting=self.boundary_ribbon_matting,
-                                submental_contact_shadow=self.submental_contact_shadow,
-                                contact_shadow_opacity=self.contact_shadow_opacity,
-                                contact_shadow_falloff_px=self.contact_shadow_falloff_px,
-                                sss_shadow_warmth=self.sss_shadow_warmth,
-                                sss_warmth_amount=self.sss_warmth_amount,
-                                linear_light=self.linear_light, blend_transfer=blend,
-                                sensor_shutter_angle=self.sensor_shutter_angle,
-                                sensor_grain_strength=self.grain_match_strength)

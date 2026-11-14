@@ -76,7 +76,7 @@ export function SpatialInspector({
         style={{ display: activeTab === 'pose' || activeTab === 'morph' || activeTab === 'lighting' ? 'block' : 'none' }}
       >
         <PoseGeometryViewer coverage={coverage} track={track} mesh={mesh} reconstruction={reconstruction}
-          renderMode={parameters ? 'full_3d_head' : undefined} lighting={lighting} morph={morph} />
+          lighting={lighting} morph={morph} />
       </div>
 
       <div

@@ -1,10 +1,10 @@
 """Unified Declarative Model Registry & Resilient Auto-Downloader.
 
 Single source-of-truth manifest for all deep learning models across:
-1. Frame upscaler: RealESRGAN_x4plus. (2D face swappers and 2D face restorers were removed from this registry.)
-3. 3D Pose, Landmarks & Expression: 1k3d68, 2d106det, 2dfan4, and LivePortrait modules.
-4. Detectors & Embedders: scrfd_2.5g_kps, det_10g, yoloface_8n, w600k_r50.
-5. Occlusion & Semantic Parsers: xseg_3, bisenet_resnet_34, clipseg_rd64_refined.
+1. Frame upscaler: RealESRGAN_x4plus.
+2. 3D pose, dense landmarks and mesh fitting: 1k3d68 and the 3DMM reconstruction stack.
+3. Detectors & Embedders: scrfd_2.5g_kps, det_10g, yoloface_8n, w600k_r50.
+4. Occlusion & Semantic Parsers: xseg_3, bisenet_resnet_34, clipseg_rd64_refined.
 """
 from __future__ import annotations
 
@@ -119,68 +119,7 @@ UNIFIED_MODEL_ENTRIES: tuple[ModelManifestEntry, ...] = (
         vram_footprint_mb=450,
         description="2DFAN-4 stacked hourglass facial landmark detector.",
     ),
-    ModelManifestEntry(
-        model_id="liveportrait_appearance",
-        name="liveportrait_appearance_feature_extractor.onnx",
-        category="3d_geometry",
-        primary_url="https://huggingface.co/facefusion/models-3.0.0/resolve/main/liveportrait_appearance_feature_extractor.onnx",
-        fallback_url="https://github.com/visomaster/visomaster-assets/releases/download/v0.1.0/liveportrait_appearance_feature_extractor.onnx",
-        expected_size_bytes=13280000,
-        expected_sha256="80cfeb5176b91122a6136d892797669d084cb9ec4d740eb70a92d47ad68fbf64",
-        input_shapes={"input": [1, 3, 256, 256]},
-        output_shapes={"output": [1, 32, 16, 64, 64]},
-        precision_policy="FP16",
-        supports_dynamic_batch=True,
-        vram_footprint_mb=520,
-        description="LivePortrait appearance feature extractor module.",
-    ),
-    ModelManifestEntry(
-        model_id="liveportrait_motion",
-        name="liveportrait_motion_extractor.onnx",
-        category="3d_geometry",
-        primary_url="https://huggingface.co/facefusion/models-3.0.0/resolve/main/liveportrait_motion_extractor.onnx",
-        fallback_url="https://github.com/visomaster/visomaster-assets/releases/download/v0.1.0/liveportrait_motion_extractor.onnx",
-        expected_size_bytes=38200000,
-        expected_sha256="bfd058a5ae03154101e9be7520e11893c83a7c646b194f48ff61df9cf67ec805",
-        input_shapes={"input": [1, 3, 256, 256]},
-        output_shapes={"pitch": [1, 66], "yaw": [1, 66], "roll": [1, 66], "t": [1, 3], "exp": [1, 21, 3], "scale": [1, 1], "kp": [1, 21, 3]},
-        precision_policy="FP16",
-        supports_dynamic_batch=True,
-        vram_footprint_mb=680,
-        description="LivePortrait motion and head pose expression extractor.",
-    ),
-    ModelManifestEntry(
-        model_id="liveportrait_stitching",
-        name="liveportrait_stitching.onnx",
-        category="3d_geometry",
-        primary_url="https://huggingface.co/facefusion/models-3.0.0/resolve/main/liveportrait_stitching.onnx",
-        fallback_url="https://github.com/visomaster/visomaster-assets/releases/download/v0.1.0/liveportrait_stitching.onnx",
-        expected_size_bytes=1040000,
-        expected_sha256="0681df70cff15ba6cfb81467df9964585c5484fe98c484a0d923058a26b1c312",
-        input_shapes={"input": [1, 126]},
-        output_shapes={"output": [1, 126]},
-        precision_policy="FP16",
-        supports_dynamic_batch=True,
-        vram_footprint_mb=120,
-        description="LivePortrait expression stitching and delta adaptation module.",
-    ),
-    ModelManifestEntry(
-        model_id="liveportrait_warping_spade",
-        name="liveportrait_warping_spade.onnx",
-        category="3d_geometry",
-        primary_url="https://huggingface.co/facefusion/models-3.0.0/resolve/main/liveportrait_warping_spade.onnx",
-        fallback_url="https://github.com/visomaster/visomaster-assets/releases/download/v0.1.0/liveportrait_warping_spade.onnx",
-        expected_size_bytes=64100000,
-        expected_sha256="bfd9df4841604a113d09a259c63b72c918cba4ea988a8f4c1c9b6be672433ea1",
-        input_shapes={"feature": [1, 32, 16, 64, 64], "kp_s": [1, 21, 3], "kp_d": [1, 21, 3]},
-        output_shapes={"out": [1, 3, 512, 512]},
-        precision_policy="FP16",
-        supports_dynamic_batch=True,
-        vram_footprint_mb=890,
-        description="LivePortrait warping SPADE generator neural renderer.",
-    ),
-
-    # ── Category 4: Detectors & Embedders ─────────────────────────────────────
+    # ── Category 3: Detectors & Embedders ─────────────────────────────────────
     ModelManifestEntry(
         model_id="scrfd_2_5g_kps",
         name="scrfd_2.5g_kps.onnx",
@@ -244,7 +183,7 @@ UNIFIED_MODEL_ENTRIES: tuple[ModelManifestEntry, ...] = (
         description="ArcFace ResNet-50 512-dimensional facial identity feature embedder.",
     ),
 
-    # ── Category 5: Occlusion & Semantic Parsers ──────────────────────────────
+    # ── Category 4: Occlusion & Semantic Parsers ──────────────────────────────
     ModelManifestEntry(
         model_id="xseg_3",
         name="xseg_3.onnx",

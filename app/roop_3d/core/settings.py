@@ -5,7 +5,7 @@ import json
 import os
 from pathlib import Path
 from typing import Any, Literal
-from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator
 
 from roop_3d.audit.isolation import AuditError, safe_path
 from roop_3d.audit.project_paths import application_root
@@ -34,20 +34,6 @@ def runtime_path(value: str, root: Path | None = None) -> Path:
     return path
 
 
-import base64
-
-#: Settings of the removed 2D swapper / face-restoration paths; tolerated when loading an old saved config.
-REMOVED_SETTINGS = frozenset(base64.b64decode(s).decode("ascii") for s in [
-    "c3dhcHBlcl9tb2RlbF9pZA==",
-    "ZGZtX21vcnBoX2ZhY3Rvcg==",
-    "ZmFjZV9yZXN0b3JhdGlvbl9wb2xpY3k=",
-    "cmVzdG9yZXJfdGhyZWFkcw==",
-    "cmVzdG9yZXJfcG9vbF9zaXpl",
-    "ZW5oYW5jZXJfYmxlbmQ=",
-    "cmVzdG9yZXJfZmlkZWxpdHk=",
-    "dWx0cmFtYXhfbmF0aXZlX2J5cGFzcw==",
-    "dWx0cmFtYXhfbWluX3BpeGVscw==",
-])
 
 
 class Settings(Contract):
@@ -62,7 +48,6 @@ class Settings(Contract):
     auxiliary_offload_enabled: bool = True
 
     schema_version: Literal[2] = 2
-    execution_mode: Literal["swap", "volumetric", "hybrid", "diffusion_vfx"] = "swap"
     hardware_profile: Literal["auto", "cpu", "6gb", "12gb"] = "auto"
     preferred_provider: Literal["auto", "TensorrtExecutionProvider", "CUDAExecutionProvider", "CPUExecutionProvider"] = "auto"
     precision_policy: Literal["auto", "fp32", "fp16"] = "auto"
@@ -74,9 +59,6 @@ class Settings(Contract):
     max_concurrent_jobs: int = Field(default=1, ge=1, le=8, strict=True)
     video_timing_policy: Literal["preserve", "cfr"] = "preserve"
     audio_policy: Literal["copy", "transcode", "drop"] = "copy"
-    lip_sync_mode: Literal["off", "wav2lip", "wav2lip_gan_fp16", "musetalk", "edtalk"] = "off"
-    lip_sync_audio_path: str | None = Field(default=None, max_length=1024)
-    lip_sync_audio_stream: int | None = Field(default=None, ge=0)
     model_search_paths: tuple[str, ...] = ()
     output_root: str = "roop_3d/.runtime/outputs"
     cache_root: str = "roop_3d/.runtime/cache"
@@ -94,13 +76,6 @@ class Settings(Contract):
     max_body_bytes: int = Field(default=2 * 1024 * 1024, ge=1, le=64 * 1024 * 1024)
     dev_cors: bool = False
 
-    @model_validator(mode="before")
-    @classmethod
-    def drop_removed_2d_settings(cls, data):
-        """A saved config written before the 2D swapper / restorer purge may still carry the removed keys: they are ignored."""
-        if isinstance(data, dict):
-            return {key: value for key, value in data.items() if key not in REMOVED_SETTINGS}
-        return data
 
     @field_validator("port")
     @classmethod

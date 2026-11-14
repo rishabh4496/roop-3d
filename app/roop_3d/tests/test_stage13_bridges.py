@@ -280,28 +280,6 @@ def test_secret_redaction_including_logging_exceptions():
     assert "jsonsecret" not in redact_secrets('{"token": "jsonsecret"}')
 
 
-def test_real_stage09_compositor_handoff(tmp_path):
-    from roop_3d.compositor.pipeline import CompositeOptions, FrameCompositor
-    class Parser:
-        def predict(self, image):
-            return None
-    async def run():
-        server = Server()
-        async with bridge(tmp_path, server) as local:
-            handle = await local.submit("job", WORKFLOW)
-            server.complete = True
-            frame = np.full((32, 32, 3), 32, np.uint8)
-            inverse = np.array([[1, 0, 8], [0, 1, 8]], np.float32)
-            result = await local.composite_output(handle, OutputRef("face.png"),
-                compositor=FrameCompositor(parser=Parser()), frame=frame, inverse=inverse, track_id=0,
-                landmarks=np.array([[10, 10], [21, 10], [21, 21], [10, 21]], np.float32),
-                options=CompositeOptions(color_strength=0))
-            assert result.shape == frame.shape and result.dtype == np.uint8
-            assert np.any(result != frame)
-            assert np.array_equal(result[0], frame[0])
-    asyncio.run(run())
-
-
 def test_reconnect_exhaustion_keeps_prompt_receipt(tmp_path):
     async def run():
         server = Server()
