@@ -47,28 +47,24 @@ ARCFACE_112 = np.array([[38.2946, 51.6963], [73.5318, 51.5014], [56.0252, 71.736
 
 # --------------------------------------------------------------------------- landmark models
 def _model_dirs(root: Path | None) -> list[Path]:
-    dirs: list[Path] = []
+    """Optional owner-specified search root; every file still needs a registry pin."""
     env = os.environ.get("ROOP3D_LANDMARK_MODEL_DIR")
-    if env:
-        dirs.append(Path(env))
-    if root is not None:
-        dirs += [root / "roop_3d/.runtime/models", root / "roop_3d/.runtime/models/buffalo_l", root / "models/buffalo_l",
-                 root.parent / "roop-ultimate/app/models/buffalo_l"]
-        # the app root is <pinokio>/api/roop-3d/app, so a sibling launcher's insightface pack sits two levels up
-        dirs.append(root.parent.parent / "roop-ultimate/app/models/buffalo_l")
-    return [d for d in dirs if d.is_dir()]
+    return [Path(env)] if env else []
 
 
 class LandmarkEngine:
     """Lazy ``1k3d68`` + ``2d106det`` ONNX runner (insightface protocol: 192 px crop at 1.5x the face box)."""
 
-    # Only the 68-point model is routed to the GPU: 43 ms on the CPU vs ~10 ms on CUDA with identical output, whereas the
-    # 106-point model takes ~3 ms on the CPU and 130 ms on plain CUDA (cuDNN fallback mode under its small arena cap).
-    GPU_MODELS = ("1k3d68.onnx",)
+    # Provider initialization is shared with the runtime and records actual fallback attempts.
+    GPU_MODELS = ("1k3d68.onnx", "2d106det.onnx")
 
     def __init__(self, root: Path | None = None, model_dirs: Sequence[Path] | None = None, *,
-                 session_factory=None, gpu_models: Sequence[str] | None = None):
+                 session_factory=None, gpu_models: Sequence[str] | None = None, catalog=None):
+        from roop_3d.models.catalog import ModelCatalog
+        self.catalog = catalog or ModelCatalog(root)
         self._dirs = [Path(d) for d in model_dirs] if model_dirs is not None else _model_dirs(root)
+        self._records: dict[str, Any] = {}
+        self._diagnostics: dict[str, dict[str, Any]] = {}
         self._sessions: dict[str, Any] = {}
         self._io_bindings: dict[str, Any] = {}
         self._lock = threading.Lock()
@@ -77,38 +73,76 @@ class LandmarkEngine:
         self._gpu_models = tuple(self.GPU_MODELS if gpu_models is None else gpu_models)
 
     def _path(self, name: str) -> Path | None:
-        for d in self._dirs:
-            if (d / name).is_file():
-                return d / name
-        return None
+        from roop_3d.models.registry import authorize
+        from roop_3d.models.verifier import verify_file
+        try:
+            # Explicit directories are an exact-byte registry search, never a trust bypass.
+            for directory in self._dirs:
+                candidate = directory / name
+                if not candidate.is_file():
+                    continue
+                for record in self.catalog.registry.records():
+                    if name in record.filenames and record.expected_sha256 and record.byte_size:
+                        authorize(record, action="resolve")
+                        try:
+                            verify_file(candidate, record.expected_sha256, record.byte_size)
+                        except DomainError as error:
+                            if error.code == "MODEL_DRIFT":
+                                continue
+                            raise
+                        # Runtime governance must be evaluated on the same resolved artifact.
+                        # External paths may only be opened if this registry provider selects them.
+                        path = self.catalog.resolve_for_inference(record.model_id)
+                        if candidate.resolve(strict=True) != path.resolve(strict=True):
+                            raise DomainError("MODEL_PATH_NOT_REGISTERED",
+                                              f"{candidate} matches known bytes but is not the registry-selected path; "
+                                              "place independent weights directly in app/models", 403)
+                        self._records[name] = record
+                        return path
+            record, path = self.catalog.resolve_named_artifact(name)
+            self._records[name] = record
+            return path
+        except DomainError as error:
+            self._diagnostics[name] = {"path": None, "provider": None, "loaded": False,
+                                       "error": {"code": error.code, "message": error.message, "status": error.status}}
+            if error.code == "MODEL_NOT_INSTALLED":
+                return None
+            raise
 
     def _session(self, name: str):
         with self._lock:
             if name not in self._sessions:
                 path = self._path(name)
-                session = None
-                if path is not None:
+                if path is None:
+                    self._sessions[name] = None
+                    return None
+                try:
+                    session = None
                     if self._session_factory is not None and name in self._gpu_models:
                         from roop_3d.engine.runtime import build_with_cpu_fallback
-                        session = build_with_cpu_fallback(self._session_factory, {"name": name}, name)
+                        session = build_with_cpu_fallback(self._session_factory, self.catalog._legacy(self._records[name]), name)
                     if session is None:
-                        try:
-                            import onnxruntime as ort
-                            session = ort.InferenceSession(str(path), providers=["CPUExecutionProvider"])
-                            from roop_3d.core.ort_session import GpuIoBinding
-                            self._io_bindings[name] = GpuIoBinding(session)
-                        except Exception as err:                   # unreadable model == unavailable, never fabricated
-                            log.warning("landmark model %s unusable: %s", name, err)
-                self._sessions[name] = session
+                        from roop_3d.core.ort_session import GpuIoBinding, SessionManager
+                        info = SessionManager().create(
+                            path, model_name=name,
+                            providers=("CUDAExecutionProvider", "DmlExecutionProvider"), cpu_last_resort=True)
+                        session = info.session
+                        self._io_bindings[name] = GpuIoBinding(session)
+                    self._diagnostics[name] = {"path": str(path), "provider": session.get_providers()[0],
+                                               "loaded": True, "error": None}
+                    self._sessions[name] = session
+                except Exception as error:
+                    failure = error if isinstance(error, DomainError) else DomainError(
+                        "MODEL_SESSION_FAILED", f"{name}: {type(error).__name__}: {error}", 503)
+                    self._diagnostics[name] = {"path": str(path), "provider": None, "loaded": False,
+                                               "error": {"code": failure.code, "message": failure.message, "status": failure.status}}
+                    raise failure from error
             return self._sessions[name]
 
     def provider(self, name: str) -> str | None:
         """Execution provider the named model really runs on (None when the model is unavailable)."""
         session = self._session(name)
-        try:
-            return session.get_providers()[0] if session is not None else None
-        except Exception:
-            return None
+        return session.get_providers()[0] if session is not None else None
 
     def _run(self, name: str, session, feeds: dict[str, np.ndarray]) -> list[np.ndarray]:
         names = tuple(node.name for node in session.get_outputs())
@@ -132,9 +166,14 @@ class LandmarkEngine:
         """Identity of the available models, part of cache keys (dense landmarks change when the model does)."""
         parts = []
         for name in ("1k3d68.onnx", "2d106det.onnx"):
-            p = self._path(name)
-            parts.append(f"{name}:{p.stat().st_size if p and p.is_file() else 'absent'}")
+            path = self._path(name)
+            identity = self.catalog.artifact_identity(path) if path is not None else None
+            parts.append(f"{name}:{identity['sha256'] if identity else 'absent'}")
         return "|".join(parts)
+
+    def diagnostics(self) -> dict[str, dict[str, Any]]:
+        """Resolution/session evidence only; no forward is implied by loaded=True."""
+        return {name: dict(row) for name, row in self._diagnostics.items()}
 
     @staticmethod
     def _crop(image: np.ndarray, bbox: Sequence[float]) -> tuple[np.ndarray, np.ndarray]:
@@ -152,8 +191,10 @@ class LandmarkEngine:
             return None
         crop, inverse = self._crop(image, bbox)
         blob = cv2.dnn.blobFromImage(crop, 1.0, (192, 192), (0, 0, 0), swapRB=True)
-        out = self._run("1k3d68.onnx", session,
-                        {session.get_inputs()[0].name: blob})[0][0].reshape(-1, 3)[-68:].astype(np.float64)
+        raw = np.asarray(self._run("1k3d68.onnx", session, {session.get_inputs()[0].name: blob})[0])
+        if raw.size < 68 * 3 or raw.size % 3 or not np.isfinite(raw).all():
+            raise DomainError("LANDMARK_68_OUTPUT_INVALID", "1k3d68 returned invalid xyz landmarks", 503)
+        out = raw.reshape(-1, 3)[-68:].astype(np.float64)
         xy = (out[:, :2] + 1.0) * 96.0
         z = out[:, 2] * 96.0 * float(np.hypot(inverse[0, 0], inverse[1, 0]))
         xy = xy @ inverse[:, :2].T + inverse[:, 2]
@@ -165,8 +206,10 @@ class LandmarkEngine:
             return None
         crop, inverse = self._crop(image, bbox)
         blob = cv2.dnn.blobFromImage(crop, 1.0, (192, 192), (0, 0, 0), swapRB=True)
-        out = self._run("2d106det.onnx", session,
-                        {session.get_inputs()[0].name: blob})[0][0].reshape(-1, 2).astype(np.float64)
+        raw = np.asarray(self._run("2d106det.onnx", session, {session.get_inputs()[0].name: blob})[0])
+        if raw.size != 106 * 2 or not np.isfinite(raw).all():
+            raise DomainError("LANDMARK_106_OUTPUT_INVALID", "2d106det returned invalid contour landmarks", 503)
+        out = raw.reshape(106, 2).astype(np.float64)
         return ((out + 1.0) * 96.0) @ inverse[:, :2].T + inverse[:, 2]
 
 
@@ -303,8 +346,8 @@ def build_loaded(document: FaceSetDocument, engine: LandmarkEngine | None) -> Lo
     notes = []
     models = {"1k3d68": bool(engine and engine.has_68), "2d106det": bool(engine and engine.has_106)}
     if not models["1k3d68"]:
-        notes.append("1k3d68 model not installed: geometry fits use the archive's 5-point landmarks (set "
-                     "ROOP3D_LANDMARK_MODEL_DIR to an insightface buffalo_l folder).")
+        notes.append("1k3d68 is unavailable through the verified model registry; the archive's 5-point data is retained "
+                     "for inspection only. Install licensed buffalo_l weights in app/models; full-head rendering still requires dense landmarks.")
     dense = sum(s.landmarks_68 is not None for s in samples)
     if models["1k3d68"] and dense < len(samples):
         notes.append(f"{len(samples) - dense} of {len(samples)} views kept 5-point landmarks (dense fit missing or "
@@ -346,7 +389,7 @@ def load_faceset(source: Path | str | Sequence[Path | str], *, catalog: Any = No
                  cache_root: Path | None = None, engine: LandmarkEngine | None = None,
                  faceset_id: str | None = None) -> LoadedFaceSet:
     """Load a ``.fsz`` archive, a photo directory, or one/many photos into a :class:`LoadedFaceSet`."""
-    engine = engine if engine is not None else LandmarkEngine(root)
+    engine = engine if engine is not None else LandmarkEngine(root, catalog=catalog)
     reader = FaceSetReader(catalog, cache_root=cache_root)
     paths = [Path(p) for p in ([source] if isinstance(source, (str, Path)) else source)]
     if not paths:

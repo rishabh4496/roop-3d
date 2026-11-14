@@ -457,12 +457,8 @@ class MasterPipelineRunner:
     def _runtime_config(admission: Admission, settings: Settings) -> RuntimeConfig:
         provider = admission.provider
         if admission.profile != "cpu":
-            if settings.preferred_provider == "TensorrtExecutionProvider":
+            if settings.preferred_provider in ("TensorrtExecutionProvider", "DmlExecutionProvider"):
                 provider = settings.preferred_provider
-            elif settings.preferred_provider == "auto":
-                from roop_3d.core.hardware import probe_hardware, resolve_accelerator
-                hardware = probe_hardware(settings)
-                provider = resolve_accelerator("auto", hardware.advertised_providers, bool(hardware.gpus))
         return RuntimeConfig(provider=provider, hardware_profile=admission.profile,
                              reserve_mib=settings.memory_safety_reserve_mb,
                              precision_policy=settings.precision_policy, detector_model_id=settings.detector_model_id)

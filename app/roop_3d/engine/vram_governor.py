@@ -21,7 +21,7 @@ RuntimeProfile = Literal["cpu", "6gb", "12gb"]
 @dataclass(frozen=True)
 class Admission:
     profile: RuntimeProfile
-    provider: Literal["CPUExecutionProvider", "CUDAExecutionProvider"]
+    provider: Literal["CPUExecutionProvider", "CUDAExecutionProvider", "DmlExecutionProvider"]
     free_vram_mib: int
     reserved_vram_mib: int
     reason: str
@@ -77,6 +77,18 @@ class VRAMGovernor:
                 return VRAMLease(self, key, admission)
 
             hardware = self._probe(settings)
+            # DirectML has no NVIDIA VRAM telemetry. Admit one bounded stream without
+            # inventing a free-memory figure; real session/forward probes own readiness.
+            if (settings.preferred_provider in {"auto", "DmlExecutionProvider"}
+                    and "DmlExecutionProvider" in (hardware.advertised_providers or [])
+                    and (settings.preferred_provider == "DmlExecutionProvider"
+                         or "CUDAExecutionProvider" not in (hardware.advertised_providers or []))):
+                if any(value.provider == "DmlExecutionProvider" for value in self._active.values()):
+                    return None
+                admission = Admission("6gb", "DmlExecutionProvider", 0, 0,
+                                      "DirectML advertised; one stream admitted, execution unverified")
+                self._active[key] = admission
+                return VRAMLease(self, key, admission)
             if not hardware.gpus:
                 admission = self._cpu("No local GPU was verified; CPU reference selected")
                 self._active[key] = admission
@@ -84,11 +96,9 @@ class VRAMGovernor:
 
             gpu = hardware.gpus[0]
             free = max(0, int(gpu.effective_vram_budget_mib))
-            try:   # idle warm-preview sessions are released the moment a job/compile owns the GPU, so they count as free
-                from roop_3d.core.ort_session import reclaimable_vram_mib
-                free += reclaimable_vram_mib()
-            except Exception:
-                pass
+            # Idle preview sessions are released when a job owns the GPU.
+            from roop_3d.core.ort_session import reclaimable_vram_mib
+            free += reclaimable_vram_mib()
             active_gpu = [value for value in self._active.values() if value.provider == "CUDAExecutionProvider"]
             active_reserved = sum(value.reserved_vram_mib for value in active_gpu)
             usable = max(0, min(free, int(gpu.total_vram_mib) - active_reserved))

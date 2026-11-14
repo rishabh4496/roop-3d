@@ -12,7 +12,7 @@ export type CatalogModel = {
   download_url: string | null; state: string; sha256: string | null; size_bytes: number | null;
   license_id?: string; license_notice?: string; commercial_use?: string; manual_acceptance_required?: boolean;
   local_format?: string | null;
-  /** A weight present in app/models is verified, approved and never blocked (server models/local_trust.py). */
+  /** Integrity and license/governance approval are independent of local file placement. */
   verified?: boolean; governance_approved?: boolean | null; blocked?: boolean; local_trust?: boolean;
 };
 export type DownloadJob = { download_id: string; model_id: string; state: string; bytes_downloaded: number; total_bytes: number; percent: number; error_code: string | null };

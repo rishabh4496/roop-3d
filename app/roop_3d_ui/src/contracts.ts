@@ -3,6 +3,34 @@ import type { ProjectPreview } from './previewPreferences';
 export type Schema = { type?: string; title?: string; description?: string; enum?: (string | number | boolean)[]; const?: unknown; minimum?: number; maximum?: number; properties?: Record<string, Schema> };
 export type Config = Record<string, string | number | boolean | string[]>;
 export type Feature = { enabled: boolean; reason: string | null };
+
+/** GET /api/v1/models/components: availability, session residency and forward receipts are separate evidence. */
+export interface ComponentError { code: string; message: string; status: number }
+export interface ComponentRuntime {
+  load_status: 'not_loaded' | 'loaded' | 'failed' | 'released' | 'stale' | 'not_applicable';
+  active_provider: string | null; session_path: string | null; error: string | null;
+  requested_providers: string[]; fallback_errors: string[]; execution_verified: boolean;
+  warnings: string[]; fallback_reason: string | null;
+}
+export interface ComponentDiagnostic {
+  component: string; label: string; kind: 'weight' | 'asset' | 'implementation'; required: boolean;
+  state: 'READY' | 'MISSING' | 'CORRUPT' | 'BLOCKED' | 'UNAVAILABLE';
+  model_id: string | null; filename: string | null; path: string | null;
+  sha256: string | null; size_bytes: number | null; trust_basis: string | null; integrity_verified: boolean;
+  license: { license_id: string; reviewed: boolean; commercial_use: string; notice: string } | null;
+  error: ComponentError | null; acquisition: string | null;
+  assets: ComponentDiagnostic[];
+  file_identity: { path: string; size_bytes: number; mtime_ns: number } | null;
+  runtime: ComponentRuntime;
+  last_forward: { state: 'not_run' | 'verified' | 'failed' | 'stale'; provider: string | null; error: string | null };
+}
+export interface ComponentStatus {
+  schema_version: 1; checked_at: number; components: ComponentDiagnostic[];
+  renderer: { wired: boolean; state: string; code?: string; message?: string; detail?: string };
+  render_ready: boolean; verification_report: { state: string; generated_at: string | null; error: ComponentError | null };
+  providers: { advertised: string[]; error: ComponentError | null; availability_is_load_proof: false };
+  note: string;
+}
 export interface Capabilities {
   enabled_modes: string[]; rendering_worker_available: boolean; legal_parameter_bounds: Schema;
   inspection_parameter_bounds: Schema; job_parameter_bounds: Schema;

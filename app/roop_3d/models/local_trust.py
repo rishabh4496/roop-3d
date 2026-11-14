@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import hashlib
 import logging
-import os
 import re
 import threading
 import time
@@ -22,6 +21,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Iterable
 
+from roop_3d.audit.isolation import is_link
+from roop_3d.core.errors import DomainError
 log = logging.getLogger(__name__)
 
 MIN_TRUST_BYTES = 1024 * 1024
@@ -78,23 +79,17 @@ class LocalTrust:
                 return listing
         root = self._root()
         found: list[Path] = []
-        if root.is_dir() and not root.is_symlink():
-            count = 0
-            for parent, directories, names in os.walk(root, followlinks=False):
-                directories[:] = sorted(d for d in directories
-                                        if d.casefold() != ".trt_cache" and not (Path(parent) / d).is_symlink())
-                for name in sorted(names):
-                    count += 1
-                    if count > 50000:
-                        break
-                    path = Path(parent) / name
-                    if path.suffix.casefold() not in SUFFIX_PRIORITY or path.is_symlink():
-                        continue
-                    try:
-                        if path.is_file() and path.stat().st_size > MIN_TRUST_BYTES:
-                            found.append(path.resolve(strict=True))
-                    except OSError:
-                        continue
+        if root.is_dir() and not is_link(root):
+            for count, path in enumerate(sorted(root.iterdir()), start=1):
+                if count > 50000:
+                    raise DomainError("MODEL_SEARCH_LIMIT", "Local model directory exceeds 50000 entries", 413)
+                if path.suffix.casefold() not in SUFFIX_PRIORITY or is_link(path):
+                    continue
+                try:
+                    if path.is_file() and path.stat().st_size > MIN_TRUST_BYTES:
+                        found.append(path.resolve(strict=True))
+                except OSError:
+                    continue
         with self._lock:
             self._listing = (time.monotonic(), tuple(found))
             return self._listing[1]
@@ -124,12 +119,16 @@ class LocalTrust:
     @staticmethod
     def _identity(path: Path) -> tuple:
         stat = path.stat()
-        return stat.st_size, stat.st_mtime_ns, stat.st_ino, stat.st_dev
+        return stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns, stat.st_ino, stat.st_dev
 
     def trust(self, path: Path) -> TrustedFile:
-        """Hash ``path`` once per file identity and remember it. Never raises for a readable file."""
+        """Remember observed bytes under the explicit local-use policy, not license approval."""
         path = Path(path)
+        if not self.inside_root(path) or is_link(path) or is_link(self._root()):
+            raise DomainError("LOCAL_MODEL_PATH_INVALID", "Local-use trust requires a regular file directly in app/models", 403)
         identity = self._identity(path)
+        if identity[0] <= MIN_TRUST_BYTES:
+            raise DomainError("LOCAL_MODEL_TOO_SMALL", "Local-use trust requires a weight larger than 1 MiB", 422)
         with self._lock:
             known = self._trusted.get(path)
             if known is not None and known.identity == identity:
@@ -139,6 +138,8 @@ class LocalTrust:
             while block := stream.read(4 * 1024 * 1024):
                 digest.update(block)
         after = self._identity(path)
+        if identity != after:
+            raise DomainError("MODEL_CHANGED", "Local weight changed while its digest was being observed", 409)
         entry = TrustedFile(path, digest.hexdigest(), after[0], after)
         with self._lock:
             self._trusted[path] = entry
@@ -162,7 +163,8 @@ class LocalTrust:
 
     def inside_root(self, path: Path) -> bool:
         try:
-            Path(path).resolve(strict=True).relative_to(self._root().resolve())
-            return True
+            candidate = Path(path)
+            return (not is_link(candidate) and not is_link(self._root())
+                    and candidate.resolve(strict=True).parent == self._root().resolve(strict=True))
         except (OSError, ValueError):
             return False

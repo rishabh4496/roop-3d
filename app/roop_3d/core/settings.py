@@ -49,7 +49,7 @@ class Settings(Contract):
 
     schema_version: Literal[2] = 2
     hardware_profile: Literal["auto", "cpu", "6gb", "12gb"] = "auto"
-    preferred_provider: Literal["auto", "TensorrtExecutionProvider", "CUDAExecutionProvider", "CPUExecutionProvider"] = "auto"
+    preferred_provider: Literal["auto", "TensorrtExecutionProvider", "CUDAExecutionProvider", "DmlExecutionProvider", "CPUExecutionProvider"] = "auto"
     precision_policy: Literal["auto", "fp32", "fp16"] = "auto"
     detector_model_id: Literal['scrfd', 'retinaface', 'yoloface'] = 'scrfd'
     vram_limit_mb: int = Field(default=0, ge=0, le=131072, strict=True, description="0 uses available VRAM")

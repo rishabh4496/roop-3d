@@ -50,3 +50,15 @@
 .active-model-meta{color:var(--muted);font-size:10px}
 .active-model-none{color:var(--muted)}
 .active-model-pending{flex-basis:100%;color:#b8860b;font-size:10px}
+.component-diagnostic-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px}
+.component-diagnostic{border:1px solid var(--line);border-radius:8px;padding:8px;min-width:0;font-size:11px}
+.component-diagnostic-heading{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:6px;margin-bottom:6px}
+.component-diagnostic-fields{display:grid;grid-template-columns:minmax(75px,1fr) minmax(0,2fr);gap:4px 8px;margin:6px 0}
+.component-diagnostic-fields dt{color:var(--muted)}
+.component-diagnostic-fields dd{margin:0;overflow-wrap:anywhere}
+.component-diagnostic-fields dd p{margin:4px 0}
+.component-diagnostic pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:10px;margin:6px 0}
+.component-diagnostic-error,.component-renderer-state{white-space:pre-wrap;overflow-wrap:anywhere;color:var(--danger,#d4483b)}
+.component-diagnostic details{margin-top:6px}
+.component-diagnostic summary{cursor:pointer;color:var(--muted)}
+.component-missing,.component-corrupt,.component-blocked,.component-unavailable{border-color:var(--danger,#d4483b)}

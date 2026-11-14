@@ -6,7 +6,7 @@ and strict FP32 precision contract enforcement for FP32-locked graphs.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 import gc
 import os
 from pathlib import Path
@@ -167,18 +167,20 @@ class AdaptiveModelPool:
     def acquire(self, catalog: ModelCatalog, name: str, config: RuntimeConfig) -> OrtModel:
         """Acquire a warm or newly initialized OrtModel session according to profile policy."""
         # Enforce precision rule before session initialization
-        self.profile.validate_swap_precision(name)
+        self.profile.validate_swap_precision(name, config.precision_policy if config.precision_policy != "auto" else None)
+        raw_config = replace(config, model_factory=None)
 
         with self._lock:
             # Check if model is already loaded and valid
             if name in self._models:
                 existing = self._models[name]
-                if existing.session is not None and existing.provider == config.provider:
+                if existing.session is not None and existing.config == raw_config and existing.catalog is catalog:
                     # Update access order
                     if name in self._access_order:
                         self._access_order.remove(name)
                     self._access_order.append(name)
                     return existing
+                self._evict_model(name)
 
             # 6GB sequential eviction policy: evict previous heavy model before loading new one
             if self.profile.model_residency == "sequential" and name in HEAVY_MODELS:
@@ -186,15 +188,6 @@ class AdaptiveModelPool:
                     self._evict_model(self._active_heavy)
                 self._active_heavy = name
 
-            # Initialize new OrtModel session with raw factory to prevent recursion
-            raw_config = RuntimeConfig(
-                provider=config.provider,
-                hardware_profile=config.hardware_profile,
-                reserve_mib=config.reserve_mib,
-                cpu_threads=config.cpu_threads,
-                model_factory=None,
-                graph_optimization=config.graph_optimization,
-            )
             model = OrtModel(catalog, name, raw_config)
             self._models[name] = model
             self._access_order.append(name)
@@ -204,10 +197,7 @@ class AdaptiveModelPool:
         """Evict a specific model and collect Python / CUDA memory."""
         if name in self._models:
             model = self._models.pop(name)
-            try:
-                model.release()
-            except Exception:
-                pass
+            model.release()
             if name in self._access_order:
                 self._access_order.remove(name)
         gc.collect()

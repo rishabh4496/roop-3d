@@ -51,29 +51,22 @@ def observed_digest(path: Path) -> tuple[str, int]:
 
 
 def render_dependencies(catalog) -> dict[str, str]:
-    """Snapshot reference/stream model candidates, including optional local adapters.
+    """Bind all required pure-3D inputs, not only detector/recognizer presence.
 
-    These are dependency identities, not a claim that every candidate ran. Actual activation
-    still verifies bytes and reports providers through the existing inference adapters.
+    Successful resolution is not a provider/forward receipt, and never bypasses
+    the independent production-renderer guard.
     """
-    names = {"2d106det.onnx", "1k3d68.onnx", "bisenet_resnet_34.onnx"}
-    selected = [catalog.detector(), catalog.recognizer()]
-    required = {record["model_id"] for record in selected}
-    seen = set()
-    for record in catalog.records():
-        if record["name"] in names and record["name"] not in seen:
-            selected.append(record)
-            seen.add(record["name"])
-    records = {record["model_id"]: record for record in selected}
+    from roop_3d.models.pure3d import resolve_components
     available = {}
-    for key, record in records.items():
-        try:
-            catalog.verify(record)
-        except DomainError as error:
-            if key not in required and error.code == "MODEL_NOT_INSTALLED":
-                continue
-            raise
-        available[key] = record["sha256"]
+    for row in resolve_components(catalog):
+        if row["required"] and row["state"] != "READY":
+            error = row["error"]
+            raise DomainError(error["code"], error["message"], error["status"])
+        if row["sha256"]:
+            available[row["model_id"]] = row["sha256"]
+        for asset in row["assets"]:
+            if asset["required"] and asset["sha256"]:
+                available[asset["model_id"]] = asset["sha256"]
     return available
 
 
@@ -230,13 +223,17 @@ class ModelCatalog:
                     if candidate is not None and candidate.suffix.casefold() == '.onnx':
                         return self.resolve_for_inference(record.model_id)
             raise DomainError("MODEL_NOT_INSTALLED", self.missing_reason(model_id), 404)
-        try:
-            resolved = path.resolve(strict=True)
-            if not resolved.is_relative_to((self.root / "models").resolve(strict=True)) or not resolved.is_file():
-                raise ValueError
-        except (OSError, ValueError):
-            raise DomainError("MODEL_PATH_INVALID", "Local model path is outside app/models", 403) from None
-        return resolved
+        if not self.local_trust.inside_root(path):
+            # Nested files may be used only as registry-pinned artifacts, never by placement.
+            spec = self._supported_spec(model_id)
+            if spec is not None:
+                for record in self._records_for_spec(spec):
+                    candidate = self._provider_path(record)
+                    if candidate is not None and candidate == path:
+                        return self.resolve_for_inference(record.model_id)
+            raise DomainError("MODEL_PATH_INVALID", "Local-use trust requires a file directly in app/models", 403)
+        self.local_trust.trust(path)
+        return path
 
     @staticmethod
     def _file_identity(path: Path) -> tuple:
@@ -277,13 +274,22 @@ class ModelCatalog:
             self._provider_files[record.model_id] = None, None
             return None
 
-    def _trust_flags(self, provider_path: Path | None, on_disk: Path | None) -> dict[str, Any]:
-        """Per-row verification flags. A weight present in app/models is verified, approved and never blocked."""
-        local = on_disk is not None
-        return {"verified": provider_path is not None or local,
-                "governance_approved": True if local else None,
-                "blocked": False,
-                "local_trust": local}
+    def _trust_flags(self, provider_path: Path | None, on_disk: Path | None,
+                     record: ModelRecord | None = None) -> dict[str, Any]:
+        """Byte identity, use policy and rights review are separate facts."""
+        path = provider_path or on_disk
+        identity = self.artifact_identity(path) if path is not None else None
+        pinned = bool(identity and identity["registry_model_id"])
+        blocked = record is not None and record.status == "blocked"
+        approved = None
+        if pinned and not blocked:
+            matched = self.registry.get(identity["registry_model_id"])
+            reviewed = matched.license_id not in {"UNKNOWN", "LOCAL-USE-ACKNOWLEDGED-UNVERIFIED"}
+            approved = reviewed and self.governance.scan(
+                matched, installed=True, integrity_verified=True)["lifecycle_state"] == "READY"
+        return {"verified": pinned, "governance_approved": False if blocked else approved,
+                "blocked": blocked, "local_trust": bool(path and self.local_trust.inside_root(path)
+                    and path.stat().st_size > MIN_TRUST_BYTES)}
 
     def is_local_trusted(self, path: Path | None) -> bool:
         return self.provider.trusted_identity(path) is not None
@@ -348,7 +354,7 @@ class ModelCatalog:
         return {"model_id": record.model_id, "name": record.name, "sha256": record.expected_sha256,
                 "size_bytes": record.byte_size, "state": record.status.upper(), "family_hint": record.family_hint,
                 "upstream_url": record.upstream_url,
-                "verified_at": record.verified_at, "license_state": "UNKNOWN" if record.license_id == "UNKNOWN" else "VERIFIED_REMOTE",
+                "verified_at": record.verified_at, "license_state": "UNKNOWN" if record.license_id in {"UNKNOWN", "LOCAL-USE-ACKNOWLEDGED-UNVERIFIED"} else "VERIFIED_REMOTE",
                 "provenance_state": record.provenance_state, "inference_state": "UNKNOWN",
                 "commercial_permission": "UNKNOWN", "graph": record.input_output_contract,
                 "locator": record.locator.model_dump() if record.locator else None,
@@ -388,23 +394,32 @@ class ModelCatalog:
             expected_names = {Path(filename).name.casefold()
                               for filename in (self.registry.get(source["model_id"]).filenames if source else ())}
             installed = local_path is not None or provider_path is not None or any(path.name.casefold() in expected_names for path in self._scanned_paths)
-            # A weight physically present in app/models is verified, approved and unblocked (local_trust.py).
+            # Local placement authorizes local use; it never establishes upstream rights.
             on_disk = provider_path if provider_path is not None and self.local_trust.inside_root(provider_path) else None
             if on_disk is None and local_path is not None and local_path.stat().st_size > MIN_TRUST_BYTES:
                 on_disk = local_path
             if on_disk is not None and provider_path is None:
                 provider_path = on_disk
             observed = self.provider.trusted_identity(on_disk) if on_disk is not None else None
+            flags = self._trust_flags(provider_path, on_disk, self.registry.get(source["model_id"]) if source else None)
+            if provider_path is not None:
+                identity = self.artifact_identity(provider_path, spec["id"])
+                observed = identity["sha256"], identity["size_bytes"]
+                if identity["registry_model_id"]:
+                    source = self._legacy(self.registry.get(identity["registry_model_id"]))
+                else:
+                    source = {"license_state": "UNKNOWN", "provenance_state": "UNKNOWN",
+                              "license_notice": "Local-use bytes; upstream identity and rights are not reviewed"}
             trt_cached = (local_path is not None and local_path.suffix.casefold() == ".trt") or any(
                 any(part in name for part in aliases) for name in self._trt_cache_names)
             rows.append({"id": spec["id"], "model_id": spec["id"], "name": spec["name"],
-                **self._trust_flags(provider_path, on_disk), **self._adapter_support(spec["category"], spec["id"]),
+                **flags, **self._adapter_support(spec["category"], spec["id"]),
                 "category": spec["category"], "native_resolution": spec.get("native_resolution"),
                 "installed": bool(installed), **self._selection(spec["category"], spec["id"]), "vram_loaded": spec["id"] in self._vram_loaded,
                 "trt_cached": trt_cached, "download_url": source.get("upstream_url") if source else None,
-                "sha256": source.get("sha256") or (observed[0] if observed else None),
-                "size_bytes": source.get("size_bytes") or (observed[1] if observed else (local_path.stat().st_size if local_path else None)),
-                "state": "VERIFIED_LOCAL" if provider_path else ("CANDIDATE" if source.get('state') == 'VERIFIED_LOCAL' else source.get('state', 'CANDIDATE')), "family_hint": source.get("family_hint", spec["category"]),
+                "sha256": observed[0] if observed else source.get("sha256"),
+                "size_bytes": observed[1] if observed else source.get("size_bytes"),
+                "state": "VERIFIED_LOCAL" if flags["verified"] else ("BLOCKED" if flags["blocked"] else "CANDIDATE"), "family_hint": source.get("family_hint", spec["category"]),
                 "verified_at": source.get("verified_at"), "license_state": source.get("license_state", "UNKNOWN"),
                 "provenance_state": source.get("provenance_state", "UNKNOWN"),
                 "inference_state": source.get("inference_state", "UNKNOWN"),
@@ -427,9 +442,11 @@ class ModelCatalog:
             category = {"detector": "detector", "occlusion_mask": "occluder", "frame_upscaler": "upscaler"}.get(source.get("role"), "other")
             on_disk = provider_path if provider_path is not None and self.local_trust.inside_root(provider_path) else None
             rows.append({**{key: value for key, value in source.items() if key not in {"graph", "locator", "upstream_url"}},
-                **({"state": "VERIFIED_LOCAL", "sha256": self.provider.trusted_identity(on_disk)[0]}
-                   if on_disk is not None and self.provider.trusted_identity(on_disk) else {}),
-                **self._trust_flags(provider_path, on_disk), **self._adapter_support(category, source["model_id"]),
+                **({"state": "CANDIDATE", "sha256": self.provider.trusted_identity(on_disk)[0],
+                    "license_state": "UNKNOWN", "provenance_state": "UNKNOWN"}
+                   if on_disk is not None and self.provider.trusted_identity(on_disk)
+                   and self.artifact_identity(on_disk)["registry_model_id"] is None else {}),
+                **self._trust_flags(provider_path, on_disk, record), **self._adapter_support(category, source["model_id"]),
                 "id": source["model_id"], "category": category, "native_resolution": None,
                 "installed": installed, **self._selection(category, source["model_id"]), "vram_loaded": source["model_id"] in self._vram_loaded,
                 "trt_cached": False, "download_url": record.upstream_url, "local_format": None})
@@ -445,8 +462,8 @@ class ModelCatalog:
                 "native_resolution": None, "installed": True, **self._selection("custom", row_id), "vram_loaded": row_id in self._vram_loaded,
                 "trt_cached": path.suffix.casefold() == ".trt", "download_url": None,
                 "sha256": None, "size_bytes": path.stat().st_size,
-                "state": "VERIFIED_LOCAL" if path.stat().st_size > MIN_TRUST_BYTES else "CANDIDATE",
-                **self._trust_flags(path, path if path.stat().st_size > MIN_TRUST_BYTES else None),
+                "state": "CANDIDATE",
+                **self._trust_flags(None, path if path.stat().st_size > MIN_TRUST_BYTES else None),
                 **self._adapter_support("custom", row_id),
                 "family_hint": "custom", "verified_at": None, "license_state": "UNKNOWN",
                 "provenance_state": "UNKNOWN", "inference_state": "UNKNOWN",
@@ -510,10 +527,11 @@ class ModelCatalog:
             path = self.provider.trusted_path(model)
             if path is not None:
                 identity = self.artifact_identity(path)
-                return {**result, "lifecycle_state": "READY", "issues": [], "integrity_verified": True,
+                return {**result, "lifecycle_state": "READY", "issues": [],
+                        "integrity_verified": identity["registry_model_id"] is not None,
                         "governance_state": result.get("lifecycle_state"),
                         "governance_issues": list(result.get("issues", ())),
-                        "installed": True, "local_trust": True, "governance_approved": True, "blocked": False,
+                        "installed": True, "local_trust": True, "governance_approved": False, "blocked": False,
                         "trust_policy": "LOCAL_USE_TRUST",
                         "trust_basis": identity["trust_basis"], "observed_sha256": identity["sha256"],
                         "registry_match": identity["registry_model_id"]}
@@ -525,7 +543,7 @@ class ModelCatalog:
         if model.status == "candidate" or not model.expected_sha256 or not model.byte_size:
             return self.governance.scan(model, installed=False, integrity_verified=None, hardware=hardware)
         try:
-            self.provider.resolve(model)
+            path = self.provider.resolve(model)
         except DomainError as error:
             if error.code == "MODEL_NOT_INSTALLED":
                 return self.governance.scan(model, installed=False, integrity_verified=None, hardware=hardware)
@@ -534,15 +552,18 @@ class ModelCatalog:
                 result["lifecycle_state"] = "QUARANTINED"
                 return result
             raise
-        return self.governance.scan(model, installed=True, integrity_verified=True, hardware=hardware)
+        digest, size = self.provider.trusted_identity(path) or observed_digest(path)
+        pinned = digest == model.expected_sha256 and size == model.byte_size
+        return self.governance.scan(model, installed=True, integrity_verified=pinned, hardware=hardware)
 
     def resolve_for_inference(self, model_id: str, *, hardware: dict[str, Any] | None = None,
                               precision: str | None = None) -> Path:
-        """Resolve only a hash-verified artifact that passes the governance gate."""
+        """Resolve immutable bytes or explicitly admitted local bytes, without implying execution."""
         model = self.registry.get(model_id)
         path = self.provider.resolve(model)
-        if self.is_local_trusted(path):
-            # The user placed this file in app/models: no license/compatibility gate may switch the model off.
+        if (self.unblock_local_models and model.status != "blocked"
+                and self.local_trust.inside_root(path) and path.stat().st_size > MIN_TRUST_BYTES):
+            self.local_trust.trust(path)
             return path
         result = self.governance.scan(model, installed=True, integrity_verified=True,
                                       hardware=hardware, precision=precision)
@@ -551,6 +572,41 @@ class ModelCatalog:
             raise DomainError(code, "Model is not eligible for inference: " + "; ".join(result["issues"]), 409)
         authorize(model, action="activate")
         return path
+
+    def resolve_named_artifact(self, name: str) -> tuple[ModelRecord, Path]:
+        """Resolve an exact registered filename, respecting explicit family pins.
+
+        A missing record may try another registered identity of that name. Integrity,
+        license and compatibility failures are preserved rather than misreported as missing.
+        """
+        wanted = Path(name).name.casefold()
+        direct = next((record for record in self.registry.records() if record.model_id == name), None)
+        if direct is not None:
+            record = self.select_version(direct)
+            return record, self.resolve_for_inference(record.model_id)
+        candidates = []
+        pinned = []
+        for registered in self.registry.records():
+            selected = self.select_version(registered)
+            matches = registered.name.casefold() == wanted or wanted in {n.casefold() for n in registered.filenames}
+            selected_matches = selected.name.casefold() == wanted or wanted in {n.casefold() for n in selected.filenames}
+            if selected.model_id != registered.model_id and (matches or selected_matches):
+                pinned.append(selected)
+            if matches:
+                candidates.append(registered)
+        if pinned:
+            record = pinned[0]
+            return record, self.resolve_for_inference(record.model_id)
+        if not candidates:
+            raise DomainError("MODEL_NOT_INSTALLED", f"No registered artifact for {name}; obtain a licensed ONNX export and register its exact bytes", 404)
+        failures = []
+        for record in candidates:
+            try:
+                return record, self.resolve_for_inference(record.model_id)
+            except DomainError as error:
+                failures.append(error)
+        error = next((error for error in failures if error.code != "MODEL_NOT_INSTALLED"), failures[0])
+        raise error
 
     def pin_version(self, family: str, model_id: str, *, hardware: dict[str, Any] | None = None) -> dict[str, Any]:
         """Atomically pin an already-installed, fully governed immutable version."""
@@ -631,17 +687,21 @@ class ModelCatalog:
 
     def detector(self, model_id: str = 'scrfd') -> dict[str, Any]:
         names = {
-            'scrfd': ('scrfd_10g_bnkps.onnx', 'scrfd_2.5g_kps.onnx', 'det_10g.onnx'),
+            'scrfd': ('det_10g.onnx', 'scrfd_10g_bnkps.onnx', 'scrfd_2.5g_kps.onnx'),
             'retinaface': ('retinaface_10g.onnx', 'retinaface_r50.onnx'),
             'yoloface': ('yoloface_8n.onnx',),
         }
         if model_id not in names:
             raise DomainError('DETECTOR_UNAVAILABLE', 'Unknown face detector selection', 422)
+        failures = []
         for name in names[model_id]:
-            for registered in self.registry.records():
-                record = self._legacy(self.select_version(registered))
-                if record['name'] == name and self._provider_path(self.registry.get(record['model_id'])) is not None:
-                    return record
+            try:
+                record, _ = self.resolve_named_artifact(name)
+                return self._legacy(record)
+            except DomainError as error:
+                failures.append(error)
+        if any(error.code != "MODEL_NOT_INSTALLED" for error in failures):
+            raise next(error for error in failures if error.code != "MODEL_NOT_INSTALLED")
         # Preserve metadata-only catalog use and let activation surface missing weights.
         for registered in self.registry.records():
             record = self.select_version(registered)

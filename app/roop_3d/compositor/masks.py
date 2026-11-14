@@ -65,24 +65,22 @@ def compute_dual_bisenet_forbidden_mask(
         (target_forbidden, swap_forbidden, combined_forbidden_mask)
     """
     height, width = target_crop.shape[:2]
-    empty = np.zeros((height, width), dtype=np.float32)
     if parser is None:
-        return empty, None, empty
+        raise DomainError("TRUE3D_SEMANTIC_PARSER_REQUIRED", "Hair exclusion requires a loaded semantic parser", 503)
     try:
         target_prob = parser.predict(target_crop)
         target_forbidden = extract_forbidden_mask(target_prob, forbidden_classes)
-    except Exception:
-        target_forbidden = empty
-
-    swap_forbidden = None
-    if swapped_crop is not None:
-        try:
+        swap_forbidden = None
+        if swapped_crop is not None:
             swap_prob = parser.predict(swapped_crop)
             if swap_prob.shape[:2] != (height, width):
                 swap_prob = cv2.resize(swap_prob, (width, height), interpolation=cv2.INTER_LINEAR)
             swap_forbidden = extract_forbidden_mask(swap_prob, forbidden_classes)
-        except Exception:
-            swap_forbidden = None
+    except DomainError:
+        raise
+    except Exception as error:
+        raise DomainError("TRUE3D_SEMANTIC_INFERENCE_FAILED",
+                          f"Hair exclusion failed: {type(error).__name__}: {error}", 503) from error
 
     if swap_forbidden is not None:
         combined = np.maximum(target_forbidden, swap_forbidden)

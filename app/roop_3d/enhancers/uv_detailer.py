@@ -86,6 +86,20 @@ def _validate_uv(image: np.ndarray, name: str) -> None:
 class UVTextureDetailer:
     """Tile-wise neural detail for a canonical UV albedo atlas (offline texture builder)."""
 
+    @classmethod
+    def from_catalog(cls, catalog, config=None, *, model_name: str = "ultramax_uv", fidelity_weight: float = 0.7):
+        """Load only a catalog-resolved, hash-checked UV enhancer; never a frame/crop restorer."""
+        from roop_3d.engine.runtime import OrtModel, RuntimeConfig, SessionFacade
+        model = OrtModel(catalog, model_name, config or RuntimeConfig(provider="auto"))
+        try:
+            return cls(SessionFacade(model), fidelity_weight=fidelity_weight)
+        except Exception as error:
+            from roop_3d.core.ort_session import record_session_failure, provider_chain
+            model.release()
+            record_session_failure(model.record["name"], model.path, error,
+                                   requested_providers=provider_chain(model.config.provider))
+            raise
+
     def __init__(self, session: Any = None, *, runner: Callable[[np.ndarray], np.ndarray] | None = None,
                  fidelity_weight: float = 0.7):
         if not np.isfinite(fidelity_weight) or not 0.0 <= fidelity_weight <= 1.0:
@@ -94,20 +108,50 @@ class UVTextureDetailer:
             raise DomainError("ENHANCER_SESSION_MISSING",
                               "UVTextureDetailer requires a loaded model session or an explicit runner", 503)
         self.session, self._runner, self.fidelity_weight = session, runner, float(fidelity_weight)
-        self._input_names = tuple(node.name for node in session.get_inputs()) if session is not None else ()
+        self._inputs = tuple(session.get_inputs()) if session is not None else ()
+        self._binding = None
+        if session is not None:
+            if not 1 <= len(self._inputs) <= 2:
+                raise DomainError("ENHANCER_GRAPH_UNSUPPORTED", "UV enhancer must have an image and optional fidelity input", 422)
+            image = self._inputs[0]
+            if (image.type not in ("tensor(float)", "tensor(float16)") or len(image.shape) != 4
+                    or any(isinstance(actual, int) and actual > 0 and actual != expected
+                           for actual, expected in zip(image.shape, (1, 3, TILE, TILE)))):
+                raise DomainError("ENHANCER_GRAPH_UNSUPPORTED",
+                                  f"Unsupported UV image input {image.name}: {image.type} {image.shape}", 422)
+            if len(self._inputs) == 2:
+                fidelity = self._inputs[1]
+                if (fidelity.type not in ("tensor(float)", "tensor(float16)", "tensor(double)")
+                        or tuple(fidelity.shape) not in ((), (1,))):
+                    raise DomainError("ENHANCER_GRAPH_UNSUPPORTED",
+                                      f"Unsupported fidelity input {fidelity.name}: {fidelity.type} {fidelity.shape}", 422)
+            outputs = tuple(session.get_outputs())
+            if not outputs:
+                raise DomainError("ENHANCER_GRAPH_UNSUPPORTED", "UV enhancer has no image output", 422)
+            self._output_name = outputs[0].name
+            if callable(getattr(session, "io_binding", None)):
+                from roop_3d.core.ort_session import GpuIoBinding
+                self._binding = GpuIoBinding(session)
 
     def _infer_tile(self, tile_bgr: np.ndarray) -> np.ndarray:
         chw = to_model_input(tile_bgr)
-        if self._runner is not None:
-            raw = np.asarray(self._runner(chw))
-        else:
-            feeds = {self._input_names[0]: chw}
-            if len(self._input_names) > 1:
-                feeds[self._input_names[1]] = np.array([self.fidelity_weight], dtype=np.float32)
-            try:
-                raw = self.session.run(None, feeds)[0]
-            except Exception as error:
-                raise DomainError("ENHANCER_INFERENCE_FAILED", f"UV detail inference failed: {error}", 503) from error
+        try:
+            if self._runner is not None:
+                raw = np.asarray(self._runner(chw))
+            else:
+                image = self._inputs[0]
+                feeds = {image.name: chw.astype(np.float16) if image.type == "tensor(float16)" else chw}
+                if len(self._inputs) == 2:
+                    fidelity = self._inputs[1]
+                    dtype = {"tensor(float)": np.float32, "tensor(float16)": np.float16, "tensor(double)": np.float64}[fidelity.type]
+                    feeds[fidelity.name] = np.full(tuple(fidelity.shape), self.fidelity_weight, dtype=dtype)
+                if self._binding is not None:
+                    raw = self._binding.run(feeds, output_names=(self._output_name,))[self._output_name].numpy()
+                else:
+                    raw = self.session.run([self._output_name], feeds)[0]
+        except Exception as error:
+            raise DomainError("ENHANCER_INFERENCE_FAILED",
+                              f"UV detail inference failed: {type(error).__name__}: {error}", 503) from error
         if raw.shape != (1, 3, TILE, TILE) or not np.isfinite(raw).all():
             raise DomainError("ENHANCER_OUTPUT_INVALID", "UV detail model returned an unsupported tensor", 503)
         return from_model_output(raw)

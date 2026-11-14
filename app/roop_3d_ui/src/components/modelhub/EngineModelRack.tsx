@@ -9,6 +9,7 @@ import ModelSelect, { StatusPill, type RackOption } from './ModelSelect';
 import ActiveModelBadge from './ActiveModelBadge';
 import CompositingControls from '../studio/CompositingControls';
 import { occlusionModePatch } from '../studio/compositing';
+import ComponentDiagnostics from './ComponentDiagnostics';
 
 type Params = Partial<WorkstationParameters>;
 export type RackProps = {
@@ -30,11 +31,12 @@ const Wiring = ({ live }: { live: boolean }) => (
 const DETECTORS: RackOption[] = [{ id: 'scrfd' }, { id: 'retinaface' }, { id: 'yoloface' }];
 
 const RUNTIMES = [
-  { id: 'auto', label: 'Auto (engine decides)', provider: 'auto', precision: 'auto' },
+  { id: 'auto', label: 'Auto (CUDA → DirectML → CPU)', provider: 'auto', precision: 'auto' },
   { id: 'trt_fp16', label: 'TensorRT (FP16 mixed precision)', provider: 'TensorrtExecutionProvider', precision: 'fp16' },
   { id: 'trt_fp32', label: 'TensorRT (FP32)', provider: 'TensorrtExecutionProvider', precision: 'fp32' },
   { id: 'cuda_fp16', label: 'CUDA (FP16)', provider: 'CUDAExecutionProvider', precision: 'fp16' },
   { id: 'cuda_fp32', label: 'CUDA (FP32)', provider: 'CUDAExecutionProvider', precision: 'fp32' },
+  { id: 'dml', label: 'DirectML (FP32)', provider: 'DmlExecutionProvider', precision: 'fp32' },
   { id: 'cpu', label: 'CPU', provider: 'CPUExecutionProvider', precision: 'auto' },
 ] as const;
 
@@ -76,13 +78,14 @@ export default function EngineModelRack({ params, onParams, config, caps, onSave
   const provider = typeof config?.preferred_provider === 'string' ? config.preferred_provider : 'auto';
   const configuredPrecision = typeof config?.precision_policy === 'string' ? config.precision_policy : 'auto';
   const precision = configuredPrecision === 'auto' && provider === 'TensorrtExecutionProvider' ? 'fp16'
-    : configuredPrecision === 'auto' && provider === 'CUDAExecutionProvider' ? 'fp32' : configuredPrecision;
+    : configuredPrecision === 'auto' && (provider === 'CUDAExecutionProvider' || provider === 'DmlExecutionProvider') ? 'fp32' : configuredPrecision;
   const runtimeValue = (RUNTIMES.find(item => item.provider === provider && item.precision === precision) ?? RUNTIMES.find(item => item.provider === provider && item.precision === 'auto') ?? RUNTIMES[0]).id;
   const mixedPrecisionStatus = caps?.workstation.tensorrt_mixed_precision;
   const runtimeReason = (item: (typeof RUNTIMES)[number]): string | null => {
     const controls = caps?.workstation.controls;
     if (!controls) return null;
     const providers = controls.preferred_provider;
+    if (item.id === 'dml' && !Object.prototype.hasOwnProperty.call(providers ?? {}, item.provider)) return 'DirectML is not enabled by this service configuration.';
     const status = mixedPrecisionStatus;
     if (item.id === 'trt_fp16' && status && !status.tensorrt_available) {
       return providers?.[item.provider] ?? 'TensorRT Execution Provider is unavailable.';
@@ -112,6 +115,7 @@ export default function EngineModelRack({ params, onParams, config, caps, onSave
   return (
     <div className="rack" data-testid="engine-model-rack" data-variant={variant}>
       <ActiveModelBadge selected={{ detector: detectorValue, head: params.head_topology_engine, shader: params.shader_mode }} />
+      <ComponentDiagnostics />
       <section className="rack-section" aria-label="3D head reconstruction" data-testid="rack-true3d">
         <h4>3D head reconstruction <Wiring live={false} /></h4>
         <small className="muted" data-testid="render-mode-hint">The true-3D full-head renderer is not wired; render jobs fail closed.</small>

@@ -17,7 +17,7 @@ from roop_3d.core.settings import Contract
 
 Role = Literal["detector", "recognizer", "face_parser", "occlusion_mask", "flame_geometry",
                "lip_sync", "diffusion_base", "diffusion_adapter", "frame_upscaler",
-               "flame_encoder", "dense_mesh"]
+               "flame_encoder", "dense_mesh", "uv_enhancer"]
 RESERVED = {"con", "prn", "aux", "nul", *(f"com{i}" for i in range(1, 10)),
             *(f"lpt{i}" for i in range(1, 10))}
 
@@ -151,48 +151,6 @@ class Manifest(Contract):
         return self
 
 
-def _with_supported_candidates(manifest: Manifest, root: Path) -> Manifest:
-    """Append cataloged architecture candidates without inventing artifact evidence.
-
-    These records make supported engines visible to registry clients while their
-    hash, source, provider and license remain explicitly unknown until reviewed.
-    """
-    catalog_path = root / "roop_3d/supported_models.json"
-    if not catalog_path.is_file():
-        return manifest
-    try:
-        document = json.loads(catalog_path.read_text("utf-8"))
-        if document.get("schema_version") != 1 or not isinstance(document.get("models"), list):
-            raise ValueError
-    except (OSError, ValueError, TypeError):
-        raise DomainError("MODEL_CATALOG_INVALID", "Supported model catalog is invalid", 503) from None
-    existing = {item.model_id for item in manifest.models}
-    candidates = []
-    role_map = {"detector": "detector",
-                "occluder": "occlusion_mask", "upscaler": "frame_upscaler"}
-    for spec in document["models"]:
-        model_id = spec["id"]
-        if model_id in existing:
-            continue
-        filename = str(spec.get("aliases", [model_id])[0]) + ".onnx"
-        category = spec["category"]
-        candidates.append(ModelRecord(
-            model_id=model_id, name=spec["name"], role=role_map.get(category),
-            role_evidence="Architecture is listed in the supported catalog; artifact provenance and rights remain unreviewed",
-            filenames=(filename,), expected_sha256=None, byte_size=None,
-            input_output_contract={"state": "NOT_INSPECTED", "native_resolution": spec.get("native_resolution")},
-            supported_providers=(), provider_evidence="UNKNOWN: provider execution has not been verified",
-            status="candidate", evidence="Selectable architecture catalog entry; exact local bytes have not been observed",
-            provenance_state="CANDIDATE", license_notice="Source, license and redistribution terms have not been reviewed",
-            manual_acceptance_required=True, family_hint=category, model_family=spec.get("architecture", category),
-            architecture=spec.get("architecture", "UNKNOWN"), engine_type="ONNX", purpose=category,
-            serialization_format="ONNX", security_status="REVIEW_REQUIRED",
-            inference_availability="UNKNOWN"))
-        existing.add(model_id)
-    if not candidates:
-        return manifest
-    return Manifest(evidence_scope=manifest.evidence_scope + " Supported architecture catalog entries are candidates only.",
-                    source_documents=manifest.source_documents, models=manifest.models + tuple(candidates))
 
 
 def _apply_verified_sources(manifest: Manifest, document: dict[str, Any]) -> Manifest:
@@ -256,16 +214,6 @@ def _acknowledge_local_use(record: ModelRecord, ack: dict[str, Any] | None) -> M
     for field in ("attribution_requirements", "original_repository", "source_revision", "architecture"):
         if getattr(record, field) in unknown:
             update[field] = "LOCAL-UNVERIFIED" if field != "attribution_requirements" else "Retain upstream notices"
-    if record.required_base_model in unknown:
-        update.update(required_base_model="NONE", base_model_license_id="NONE")
-    if record.hardware_requirements.get("state") != "VERIFIED":
-        update["hardware_requirements"] = {"state": "VERIFIED", "devices": ["CPU", "CUDA"]}
-    if not record.precision_requirements:
-        update["precision_requirements"] = ("FP32", "FP16")
-    if record.dependency_compatibility.get("state", "UNKNOWN").upper() != "COMPATIBLE":
-        update["dependency_compatibility"] = {"state": "COMPATIBLE", "requirements": []}
-    if record.security_status != "VERIFIED":
-        update["security_status"] = "VERIFIED"  # hash-verified ONNX: no pickle, no external data
     return ModelRecord.model_validate({**record.model_dump(), **update}) if update else record
 
 
@@ -284,12 +232,10 @@ def _apply_governance_reviews(manifest: Manifest, document: dict[str, Any]) -> M
             continue
         update = {key: review[key] for key in ("license_id", "license_url", "commercial_use", "redistribution_permission",
                                                "attribution_requirements", "license_notice")}
-        update.update(
-            architecture=review["architecture"], required_base_model="NONE",
-            base_model_license_id="NONE", hardware_requirements={"state": "VERIFIED", "devices": ["CPU", "CUDA"]},
-            precision_requirements=("FP32",), dependency_compatibility={"state": "COMPATIBLE", "requirements": []},
-            serialization_format="ONNX", security_status="VERIFIED", rights_unpublished=False,
-            manual_acceptance_required=False)
+        # A license review does not verify hardware, installed dependencies,
+        # serialization safety, reduced precision or successful execution.
+        update.update(architecture=review["architecture"], rights_unpublished=False,
+                      manual_acceptance_required=False)
         if record.original_repository == "UNKNOWN":
             update.update(original_repository="https://github.com/deepinsight/insightface", source_revision="buffalo_l")
         models.append(ModelRecord.model_validate({**record.model_dump(), **update}))
@@ -312,7 +258,8 @@ class ModelRegistry:
                     raise ValueError("Preserved discovery evidence changed")
             # Supplement the preserved discovery manifest; never rewrite its local evidence.
             if manifest is None:
-                for relative in ("roop_3d/models/stage16_models.json", "roop_3d/models/stage6_models.json"):
+                for relative in ("roop_3d/models/stage16_models.json", "roop_3d/models/stage6_models.json",
+                                 "roop_3d/models/pure3d_models.json"):
                     supplemental = safe_path(self.root, relative)
                     if supplemental.is_file():
                         extension = Manifest.model_validate(json.loads(supplemental.read_text("utf-8")))

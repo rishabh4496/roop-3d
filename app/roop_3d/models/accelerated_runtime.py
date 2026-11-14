@@ -11,6 +11,10 @@ import numpy as np
 
 from roop_3d.audit.project_paths import application_root
 from roop_3d.core.errors import DomainError
+from roop_3d.core.ort_session import (
+    CUDA, DML, CPU, TRT, provider_chain, record_session_failure, record_session_execution,
+    record_session_release, record_session_loaded,
+)
 from roop_3d.core.storage import atomic_json, owned
 from roop_3d.engine.resources import guarded, inference, register
 from roop_3d.engine.runtime import RuntimeConfig, record_named, contract_array
@@ -25,7 +29,7 @@ from roop_3d.models.trt_builder import TensorRTBuilder, finish_profile, session_
 from roop_3d.models.registry import authorize
 
 LOGGER = logging.getLogger(__name__)
-PROVIDERS = ("TensorrtExecutionProvider", "CUDAExecutionProvider", "CPUExecutionProvider")
+PROVIDERS = (TRT, CUDA, DML, CPU)
 
 
 def run_checked(session, record: dict, values: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
@@ -46,7 +50,7 @@ def run_checked(session, record: dict, values: dict[str, np.ndarray]) -> dict[st
         # the source contract's order explicitly; every name remains mandatory.
         arrays = session.run(names, values)
     except Exception as error:
-        raise DomainError("PROVIDER_EXECUTION_FAILED", str(error)[:4096], 503) from None
+        raise DomainError("PROVIDER_EXECUTION_FAILED", f"{type(error).__name__}: {error}", 503) from error
     result = {}
     if len(arrays) != len(names):
         raise DomainError("INFERENCE_OUTPUT_CONTRACT", "Output count differs", 503)
@@ -63,7 +67,7 @@ class AcceleratorFactory:
     session replays the fixed cases before becoming visible to frame inference.
     """
     def __init__(self, bank: GoldenBank, catalog: ModelCatalog | None = None, *, root: Path | None = None,
-                 profile: str = "6gb", preferred: str = "TensorrtExecutionProvider", reserve_mib: int = 768,
+                 profile: str = "6gb", preferred: str = CUDA, reserve_mib: int = 768,
                  cpu_threads: int = 2, allow_fp16: bool = True, custom_ops: bool = False, engine_observer=None):
         require_no_custom_ops(custom_ops)
         if preferred not in PROVIDERS or profile not in ("6gb", "12gb"):
@@ -71,7 +75,7 @@ class AcceleratorFactory:
         self.bank, self.catalog, self.root = bank, catalog or ModelCatalog(), root or application_root()
         self.profile, self.preferred, self.reserve_mib, self.cpu_threads = profile, preferred, reserve_mib, cpu_threads
         self.allow_fp16 = allow_fp16
-        self.config = RuntimeConfig(provider="CUDAExecutionProvider", hardware_profile=profile,
+        self.config = RuntimeConfig(provider=preferred, hardware_profile=profile,
                                     reserve_mib=reserve_mib, cpu_threads=cpu_threads)
         self.builder = TensorRTBuilder(self.catalog, root=self.root, profile=profile, reserve_mib=reserve_mib, cpu_threads=cpu_threads,
                                     engine_observer=engine_observer)
@@ -80,8 +84,10 @@ class AcceleratorFactory:
         self._rejections: dict[str, dict[str, list[dict]]] = {}
 
     def _open(self, record: dict, provider: str, *, engine_key: EngineKey | None = None, online: bool = False):
+        from roop_3d.models.native_libraries import register_native_libraries
+        register_native_libraries()
         import onnxruntime as ort
-        source = self.catalog._path(record)
+        source = self.catalog.resolve_for_inference(record["model_id"])
         options = session_options(self.root, self.cpu_threads)
         if provider == "TensorrtExecutionProvider":
             if engine_key is None:
@@ -94,7 +100,11 @@ class AcceleratorFactory:
         elif provider == "CUDAExecutionProvider":
             if provider not in ort.get_available_providers():
                 raise DomainError("PROVIDER_UNAVAILABLE", "ORT does not advertise CUDA EP", 503)
-            ort.preload_dlls()
+            try:
+                ort.preload_dlls()
+            except (AttributeError, OSError, RuntimeError) as error:
+                LOGGER.warning("ORT DLL preload warning (actual session decides provider health): %s: %s",
+                               type(error).__name__, error)
             budget = self.config.gpu_budget_bytes
             if online:
                 # Detectors/landmarks receive bounded admission; the recognizer gets the largest share.
@@ -102,17 +112,24 @@ class AcceleratorFactory:
                 budget //= divisor
             providers = [(provider, {"gpu_mem_limit": budget, "arena_extend_strategy": "kSameAsRequested",
                 "use_tf32": False, "cudnn_conv_use_max_workspace": False, "cudnn_conv_algo_search": "HEURISTIC"}), "CPUExecutionProvider"]
+        elif provider == DML:
+            if DML not in ort.get_available_providers():
+                raise DomainError("PROVIDER_UNAVAILABLE", "ORT does not advertise DmlExecutionProvider", 503)
+            options.enable_mem_pattern = False
+            options.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
+            providers = [(DML, {"device_id": "0"}), CPU]
         else:
             providers = ["CPUExecutionProvider"]
         try:
             session = ort.InferenceSession(str(source), sess_options=options, providers=providers)
         except Exception as error:
-            raise DomainError("PROVIDER_SESSION_FAILED", str(error)[:4096], 503) from None
+            raise DomainError("PROVIDER_SESSION_FAILED", f"{source}: {type(error).__name__}: {error}", 503) from error
         if session.get_providers()[0] != provider:
             actual = session.get_providers()
             session = None
             raise DomainError("PROVIDER_ACTIVATION_FAILED", f"Requested {provider}; ORT activated {actual}", 503)
         session.disable_fallback()
+        session._model_path = str(source)
         self.catalog.verify(record)
         return session
 
@@ -129,7 +146,7 @@ class AcceleratorFactory:
         return reports
 
     def _failure(self, history: list[dict], provider: str, precision: str, error: Exception) -> None:
-        reason = f"{getattr(error, 'code', type(error).__name__)}: {error}"[:4096]
+        reason = f"{getattr(error, 'code', type(error).__name__)}: {error}"
         history.append({"provider": provider, "precision": precision, "reason": reason})
         LOGGER.warning("Model provider fallback from %s (%s): %s", provider, precision, reason)
 
@@ -161,9 +178,7 @@ class AcceleratorFactory:
         session = None
         reports, nodes = (), {}
         candidates = [selected] if selected else []
-        if self.preferred != "CPUExecutionProvider":
-            candidates.append(("CUDAExecutionProvider", "fp32"))
-        candidates.append(("CPUExecutionProvider", "fp32"))
+        candidates.extend((candidate, "fp32") for candidate in provider_chain(self.preferred) if candidate != TRT)
         try:
             for provider, precision in candidates:
                 try:
@@ -178,7 +193,11 @@ class AcceleratorFactory:
                     session = None
                     self._failure(history, provider, precision, error)
             if session is None or selected is None:
-                raise DomainError("REFERENCE_INFERENCE_FAILED", "No provider passed reference parity", 503)
+                reason = "No provider passed reference parity: " + " | ".join(item["reason"] for item in history)
+                error = DomainError("REFERENCE_INFERENCE_FAILED", reason, 503)
+                record_session_failure(name, self.catalog.resolve_for_inference(record["model_id"]), error,
+                                       requested_providers=provider_chain(self.preferred))
+                raise error
             provider, precision = selected
             candidate_time = benchmark(lambda: run_checked(session, record, golden.cases[0]), warmups=warmups, iterations=iterations)
         finally:
@@ -237,7 +256,7 @@ class AcceleratedModel:
     def __init__(self, factory: AcceleratorFactory, catalog: ModelCatalog, name: str):
         self.factory, self.catalog = factory, catalog
         self.record = record_named(catalog, name)
-        self.path = catalog._path(self.record)
+        self.path = catalog.resolve_for_inference(self.record["model_id"])
         self.identity = self._stat()
         self.executions = 0
         self.session = None
@@ -268,11 +287,19 @@ class AcceleratedModel:
                 if not nodes.get(provider):
                     raise DomainError("PROVIDER_NOT_EXECUTED", f"Profile executed {nodes} instead of {provider}", 503)
                 self.provider, self.precision, self.node_providers = provider, precision, nodes
+                record_session_loaded(self.record["name"], self.path, self.session, provider,
+                    provider_chain(self.factory.preferred), [item["reason"] for item in self.history],
+                    precision == "fp16", True, cpu_partitions=provider != CPU,
+                    session_path=Path(self.session._model_path))
                 return
             except (DomainError, RuntimeError) as error:
                 self.session = None
                 self.factory._failure(self.history, provider, "fp32", error)
-        raise DomainError("REFERENCE_INFERENCE_FAILED", "No runtime provider passed golden parity", 503)
+        error = DomainError("REFERENCE_INFERENCE_FAILED",
+            "No runtime provider passed golden parity: " + " | ".join(item["reason"] for item in self.history), 503)
+        record_session_failure(self.record["name"], self.path, error,
+                               requested_providers=provider_chain(self.factory.preferred))
+        raise error
 
     @inference
     def run(self, values: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
@@ -285,32 +312,38 @@ class AcceleratedModel:
                 not isinstance(value, np.ndarray) or list(value.shape) != self.receipt["shape_profile"][name]
                 for name, value in values.items()):
             raise DomainError("INFERENCE_PROFILE_MISMATCH", "Frame tensor differs from its qualified fixed shape profile", 422)
-        failed = None
-        try:
-            result = run_checked(self.session, self.record, values)
-        except DomainError as error:
-            if error.code != "PROVIDER_EXECUTION_FAILED":
-                raise  # Input/output assertions are never hidden by a retry.
-            if self.provider == "CPUExecutionProvider":
-                raise DomainError("MODEL_INFERENCE_FAILED", str(error)[:4096], 503) from None
-            failed = self.provider
-            self.session = None
-            self.factory._failure(self.history, failed, self.precision, error)
-        # Leave the exception scope so its traceback cannot retain the failed
-        # native session/arena while the lower provider allocates a replacement.
-        if failed is not None:
+        while True:
+            failed = None
+            try:
+                result = run_checked(self.session, self.record, values)
+            except DomainError as error:
+                record_session_execution(self.record["name"], self.path, error=error)
+                if error.code != "PROVIDER_EXECUTION_FAILED":
+                    raise  # Input/output assertions are never hidden by a retry.
+                if self.provider == CPU:
+                    raise DomainError("MODEL_INFERENCE_FAILED", str(error), 503) from error
+                failed = self.provider
+                self.session = None
+                self.factory._failure(self.history, failed, self.precision, error)
+            # Leave the failed native session's traceback before allocating the next arena.
+            if failed is None:
+                break
             self._activate(PROVIDERS[PROVIDERS.index(failed) + 1])
-            result = run_checked(self.session, self.record, values)
         self.executions += 1
+        record_session_execution(self.record["name"], self.path)
         return result
 
     @guarded
     def release(self) -> None:
+        record_session_release(self.record["name"], self.path)
         self.session = None
 
     def capability(self) -> dict[str, Any]:
         return {"model_id": self.record["model_id"], "sha256": self.record["sha256"], "artifact_state": "VERIFIED_LOCAL",
             "inference_state": "VERIFIED_LOCAL" if self.executions else "UNKNOWN", "provider": self.provider,
+            "path": str(self.path), "session_path": getattr(self.session, "_model_path", None),
+            "active_provider": self.provider if self.session is not None else None,
+            "load_status": "loaded" if self.session is not None else "released", "error": None,
             "requested_provider": self.factory.preferred, "precision": self.precision, "node_providers": self.node_providers,
             "executions": self.executions, "golden_digest": self.receipt["golden_digest"],
             "fallback_reason": self.history[-1]["reason"] if self.history else None, "fallback_history": self.history,

@@ -1,37 +1,21 @@
-"""Unified Declarative Model Registry & Resilient Auto-Downloader.
+"""Unified model inspection backed by the authoritative artifact registry.
 
-Single source-of-truth manifest for all deep learning models across:
-1. Frame upscaler: RealESRGAN_x4plus.
-2. 3D pose, dense landmarks and mesh fitting: 1k3d68 and the 3DMM reconstruction stack.
-3. Detectors & Embedders: scrfd_2.5g_kps, det_10g, yoloface_8n, w600k_r50.
-4. Occlusion & Semantic Parsers: xseg_3, bisenet_resnet_34, clipseg_rd64_refined.
+Identity and download evidence are never duplicated as hand-written hashes or
+guessed tensor/VRAM declarations. Byte availability does not establish inference.
 """
 from __future__ import annotations
 
-import asyncio
-from dataclasses import dataclass, field
-import hashlib
-import os
+from dataclasses import dataclass
 from pathlib import Path
-import time
-from typing import Any, Callable, Literal
+from typing import Any, Literal
 
 from roop_3d.audit.project_paths import application_root
+from roop_3d.core.errors import DomainError
+from roop_3d.models.catalog import ModelCatalog
+from roop_3d.models.registry import ModelRegistry, authorize
 
-ModelCategory = Literal[
-    "enhancer",
-    "3d_geometry",
-    "detector_embedder",
-    "occlusion_masking",
-]
-
-ReadinessState = Literal[
-    "READY + TRT ENGINE",
-    "DOWNLOADED (NEEDS TRT)",
-    "MISSING",
-    "CORRUPT HASH",
-]
-
+ModelCategory = Literal["enhancer", "3d_geometry", "detector_embedder", "occlusion_masking"]
+ReadinessState = Literal["DOWNLOADED (NEEDS TRT)", "MISSING", "CORRUPT HASH", "BLOCKED"]
 PrecisionPolicy = Literal["FP32", "FP16"]
 
 
@@ -40,505 +24,112 @@ class ModelManifestEntry:
     model_id: str
     name: str
     category: ModelCategory
-    primary_url: str
-    fallback_url: str
+    primary_url: str | None
+    fallback_url: str | None
     expected_size_bytes: int
     expected_sha256: str
     input_shapes: dict[str, list[int | str]]
     output_shapes: dict[str, list[int | str]]
     precision_policy: PrecisionPolicy
     supports_dynamic_batch: bool
-    vram_footprint_mb: int
+    vram_footprint_mb: int | None
     description: str
     companion_files: tuple[str, ...] = ()
-    license_id: str = "custom"
+    license_id: str = "UNKNOWN"
+    registry_model_id: str = ""
 
 
-# Canonical definitions across all 5 model categories
-UNIFIED_MODEL_ENTRIES: tuple[ModelManifestEntry, ...] = (
-    # ── Category 1: Frame upscalers ───────────────────────────────────────────────────
-    ModelManifestEntry(
-        model_id="realesrgan_x4plus",
-        name="RealESRGAN_x4plus.onnx",
-        category="enhancer",
-        primary_url="https://huggingface.co/facefusion/models-3.0.0/resolve/main/RealESRGAN_x4plus.onnx",
-        fallback_url="https://github.com/visomaster/visomaster-assets/releases/download/v0.1.0/RealESRGAN_x4plus.onnx",
-        expected_size_bytes=67041792,
-        expected_sha256="a248f760e402fd055eeab9fae829d115e580e07ae41bf6beeb3bb4bf7a8ba3fb",
-        input_shapes={"input": [1, 3, -1, -1]},
-        output_shapes={"output": [1, 3, -1, -1]},
-        precision_policy="FP16",
-        supports_dynamic_batch=True,
-        vram_footprint_mb=980,
-        description="RealESRGAN x4plus high-order degradation super-resolution model.",
-    ),
-
-    # ── Category 3: 3D Pose, Landmarks & Expression ───────────────────────────
-    ModelManifestEntry(
-        model_id="1k3d68",
-        name="1k3d68.onnx",
-        category="3d_geometry",
-        primary_url="https://huggingface.co/facefusion/models-3.0.0/resolve/main/1k3d68.onnx",
-        fallback_url="https://github.com/visomaster/visomaster-assets/releases/download/v0.1.0/1k3d68.onnx",
-        expected_size_bytes=9040332,
-        expected_sha256="df5c06b8a0c109b82e21ee648a734685ff4cfc79469e38e68cfb9efbe7b274c6",
-        input_shapes={"input": [1, 3, 192, 192]},
-        output_shapes={"output": [1, 68, 3]},
-        precision_policy="FP16",
-        supports_dynamic_batch=True,
-        vram_footprint_mb=280,
-        description="68-point 3D landmark regressor.",
-    ),
-    ModelManifestEntry(
-        model_id="2d106det",
-        name="2d106det.onnx",
-        category="3d_geometry",
-        primary_url="https://huggingface.co/facefusion/models-3.0.0/resolve/main/2d106det.onnx",
-        fallback_url="https://github.com/visomaster/visomaster-assets/releases/download/v0.1.0/2d106det.onnx",
-        expected_size_bytes=4944948,
-        expected_sha256="f001b856447ce7c8340d046c3ef6be59cb7a3fa0b7b1ca2cb5c50c37f4cf9983",
-        input_shapes={"input": [1, 3, 192, 192]},
-        output_shapes={"output": [1, 212]},
-        precision_policy="FP16",
-        supports_dynamic_batch=True,
-        vram_footprint_mb=190,
-        description="106-point dense 2D contour and facial feature landmark detector.",
-    ),
-    ModelManifestEntry(
-        model_id="2dfan4",
-        name="2dfan4.onnx",
-        category="3d_geometry",
-        primary_url="https://huggingface.co/facefusion/models-3.0.0/resolve/main/2dfan4.onnx",
-        fallback_url="https://github.com/visomaster/visomaster-assets/releases/download/v0.1.0/2dfan4.onnx",
-        expected_size_bytes=96349000,
-        expected_sha256="78ea5553556093539744cfa068e2f89c6cf84381389e6eb1264c84a5a544c9d7",
-        input_shapes={"input": [1, 3, 256, 256]},
-        output_shapes={"output": [1, 68, 64, 64]},
-        precision_policy="FP16",
-        supports_dynamic_batch=True,
-        vram_footprint_mb=450,
-        description="2DFAN-4 stacked hourglass facial landmark detector.",
-    ),
-    # ── Category 3: Detectors & Embedders ─────────────────────────────────────
-    ModelManifestEntry(
-        model_id="scrfd_2_5g_kps",
-        name="scrfd_2.5g_kps.onnx",
-        category="detector_embedder",
-        primary_url="https://huggingface.co/facefusion/models-3.0.0/resolve/main/scrfd_2.5g_kps.onnx",
-        fallback_url="https://github.com/visomaster/visomaster-assets/releases/download/v0.1.0/scrfd_2.5g_kps.onnx",
-        expected_size_bytes=3272996,
-        expected_sha256="b0959828d11ca7ff989a50ae40da1f5ee7e54c87da2364c3c3a9d2ec05cb51dc",
-        input_shapes={"input": [1, 3, 640, 640]},
-        output_shapes={"score_8": [1, 12800, 1], "score_16": [1, 3200, 1], "score_32": [1, 800, 1]},
-        precision_policy="FP16",
-        supports_dynamic_batch=True,
-        vram_footprint_mb=180,
-        description="High-speed lightweight 2.5G SCRFD face and 5-point landmark detector.",
-        companion_files=("scrfd_2.5g_kps_dynamic.onnx",),
-    ),
-    ModelManifestEntry(
-        model_id="det_10g",
-        name="det_10g.onnx",
-        category="detector_embedder",
-        primary_url="https://huggingface.co/facefusion/models-3.0.0/resolve/main/det_10g.onnx",
-        fallback_url="https://github.com/visomaster/visomaster-assets/releases/download/v0.1.0/det_10g.onnx",
-        expected_size_bytes=16867080,
-        expected_sha256="5838f7fe0536ef55fa3ba422709a3fc3a4b008d66ff97b4c3ae6a090e9cc0c7b",
-        input_shapes={"input": [1, 3, 640, 640]},
-        output_shapes={"score_8": [1, 12800, 1], "score_16": [1, 3200, 1], "score_32": [1, 800, 1]},
-        precision_policy="FP16",
-        supports_dynamic_batch=True,
-        vram_footprint_mb=350,
-        description="SCRFD 10G high-accuracy multi-scale face detector.",
-        companion_files=("det_10g_dynamic.onnx",),
-    ),
-    ModelManifestEntry(
-        model_id="yoloface_8n",
-        name="yoloface_8n.onnx",
-        category="detector_embedder",
-        primary_url="https://huggingface.co/facefusion/models-3.0.0/resolve/main/yoloface_8n.onnx",
-        fallback_url="https://github.com/visomaster/visomaster-assets/releases/download/v0.1.0/yoloface_8n.onnx",
-        expected_size_bytes=6246416,
-        expected_sha256="821cdbb1e65f3f044bb77ce9df4249a0397576595d7cf1417a80ee327fefefaa",
-        input_shapes={"images": [1, 3, 640, 640]},
-        output_shapes={"output0": [1, 16, 8400]},
-        precision_policy="FP16",
-        supports_dynamic_batch=True,
-        vram_footprint_mb=240,
-        description="YOLOv8-Face nano ultra-fast bounding box and landmark detector.",
-    ),
-    ModelManifestEntry(
-        model_id="w600k_r50",
-        name="w600k_r50.onnx",
-        category="detector_embedder",
-        primary_url="https://huggingface.co/facefusion/models-3.0.0/resolve/main/w600k_r50.onnx",
-        fallback_url="https://github.com/visomaster/visomaster-assets/releases/download/v0.1.0/w600k_r50.onnx",
-        expected_size_bytes=174388474,
-        expected_sha256="4c06341c33c2a68be0004523e64aa34f0d367c3cae8eb276e033a5538d35e165",
-        input_shapes={"input": [1, 3, 112, 112]},
-        output_shapes={"output": [1, 512]},
-        precision_policy="FP16",
-        supports_dynamic_batch=True,
-        vram_footprint_mb=720,
-        description="ArcFace ResNet-50 512-dimensional facial identity feature embedder.",
-    ),
-
-    # ── Category 4: Occlusion & Semantic Parsers ──────────────────────────────
-    ModelManifestEntry(
-        model_id="xseg_3",
-        name="xseg_3.onnx",
-        category="occlusion_masking",
-        primary_url="https://huggingface.co/facefusion/models-3.0.0/resolve/main/xseg_3.onnx",
-        fallback_url="https://github.com/visomaster/visomaster-assets/releases/download/v0.1.0/xseg_3.onnx",
-        expected_size_bytes=160492582,
-        expected_sha256="48ccd7e8541e2b6c38260421711204b4cfab13f4fd80004ca5187ea1c0a0c29f",
-        input_shapes={"input": [1, 3, 256, 256]},
-        output_shapes={"output": [1, 1, 256, 256]},
-        precision_policy="FP16",
-        supports_dynamic_batch=True,
-        vram_footprint_mb=640,
-        description="DeepFaceLab XSeg-3 neural occluder (preserves hands, glasses, hair, props).",
-    ),
-    ModelManifestEntry(
-        model_id="bisenet_resnet_34",
-        name="bisenet_resnet_34.onnx",
-        category="occlusion_masking",
-        primary_url="https://huggingface.co/facefusion/models-3.0.0/resolve/main/bisenet_resnet_34.onnx",
-        fallback_url="https://github.com/visomaster/visomaster-assets/releases/download/v0.1.0/bisenet_resnet_34.onnx",
-        expected_size_bytes=53342080,
-        expected_sha256="4a0b8c958a3cbf34800b6564e525beeb56c80249c5be4e3cae6d1912a2333796",
-        input_shapes={"input": [1, 3, 512, 512]},
-        output_shapes={"output": [1, 19, 512, 512]},
-        precision_policy="FP16",
-        supports_dynamic_batch=True,
-        vram_footprint_mb=580,
-        description="BiSeNet ResNet-34 19-class semantic face parsing model.",
-    ),
-    ModelManifestEntry(
-        model_id="clipseg_rd64_refined",
-        name="clipseg_rd64_refined.onnx",
-        category="occlusion_masking",
-        primary_url="https://huggingface.co/facefusion/models-3.0.0/resolve/main/clipseg_rd64_refined.onnx",
-        fallback_url="https://github.com/visomaster/visomaster-assets/releases/download/v0.1.0/clipseg_rd64_refined.onnx",
-        expected_size_bytes=158498800,
-        expected_sha256="78c949c81121de4e1eb33d596ee248ea871804c86cb356230f2526ae75bf7121",
-        input_shapes={"input": [1, 3, 352, 352]},
-        output_shapes={"output": [1, 1, 352, 352]},
-        precision_policy="FP16",
-        supports_dynamic_batch=True,
-        vram_footprint_mb=750,
-        description="CLIPSeg ViT-B/16 text-prompted neural occlusion and object segmentation.",
-    ),
-)
-
-UNIFIED_MANIFEST_MAP: dict[str, ModelManifestEntry] = {
-    entry.model_id: entry for entry in UNIFIED_MODEL_ENTRIES
-}
-UNIFIED_NAME_MAP: dict[str, ModelManifestEntry] = {
-    entry.name: entry for entry in UNIFIED_MODEL_ENTRIES
-}
+def _entries() -> tuple[ModelManifestEntry, ...]:
+    registry = ModelRegistry()
+    selections = (
+        ("1k3d68", "f4d0609acdc3491ba09003bc", "3d_geometry"),
+        ("2d106det", "7515daa40c84ce8be15c8a3c", "3d_geometry"),
+        ("det_10g", "caa047119ea73fb50b225d60", "detector_embedder"),
+        ("w600k_r50", "d9235365b06d994596a8ef35", "detector_embedder"),
+        ("yoloface_8n", "d1d47cf8fa4f92704da30528", "detector_embedder"),
+        ("xseg", "58e30ce4736df56fb21d47e2", "occlusion_masking"),
+        ("xseg_3", "48cc67a78ac3f81a9c5c1499", "occlusion_masking"),
+        ("bisenet_resnet_34", "9aed4e37a414df474326e07a", "occlusion_masking"),
+        ("ultramax_uv", "ultramax_uv", "enhancer"),
+    )
+    result = []
+    for model_id, registry_id, category in selections:
+        record = registry.get(registry_id)
+        graph = record.input_output_contract
+        shapes = lambda key: {node["name"]: node["shape"] for node in graph.get(key, ())
+                              if "name" in node and "shape" in node}
+        result.append(ModelManifestEntry(
+            model_id=model_id, name=record.name, category=category,
+            primary_url=record.upstream_url, fallback_url=None,
+            expected_size_bytes=record.byte_size, expected_sha256=record.expected_sha256,
+            input_shapes=shapes("inputs"), output_shapes=shapes("outputs"),
+            precision_policy="FP32", supports_dynamic_batch=False, vram_footprint_mb=None,
+            description=record.role_evidence, license_id=record.license_id, registry_model_id=registry_id))
+    return tuple(result)
 
 
-_HASH_CACHE: dict[tuple[str, int, int], str] = {}
-
-
-def _sha256_cached(path: Path) -> str:
-    """Streaming SHA-256, remembered per (path, size, mtime) so repeated readiness polls never re-read a 500 MB weight."""
-    status = path.stat()
-    key = (str(path), status.st_size, status.st_mtime_ns)
-    known = _HASH_CACHE.get(key)
-    if known is None:
-        digest = hashlib.sha256()
-        with path.open("rb") as stream:
-            while block := stream.read(4 * 1024 * 1024):
-                digest.update(block)
-        known = _HASH_CACHE[key] = digest.hexdigest()
-    return known
+UNIFIED_MODEL_ENTRIES = _entries()
+UNIFIED_MANIFEST_MAP = {entry.model_id: entry for entry in UNIFIED_MODEL_ENTRIES}
+UNIFIED_NAME_MAP = {entry.name: entry for entry in UNIFIED_MODEL_ENTRIES}
 
 
 class UnifiedModelRegistry:
-    """Unified declarative model registry and status inspector.
-
-    ``root`` is the application root (``<repo>/app``), where the runtime catalog keeps weights in ``root/models``. The
-    ``root/app/models`` spelling is kept for repository-root layouts. Discovery order for a weight is:
-
-    1. ``app/models`` (and the cache folders below), where a file whose bytes match the pinned SHA-256 is
-       ``hash_valid``; a different export of the same network above 1 MiB is **locally trusted** (``trust_basis``
-       ``LOCAL_USE_TRUST``, the explicit app/models placement policy, rights NOT reviewed); a small mismatching file is
-       ``CORRUPT HASH``.
-    2. The read-only sibling ``roop-ultimate`` model folders (``audit/model_sources.json``), accepted **only** when the bytes
-       match the pinned SHA-256. Nothing outside app/models is ever trusted by placement, and nothing is written there.
-    """
+    """Read-only byte inspection; session execution remains a separate receipt."""
 
     def __init__(self, root: Path | None = None):
         self.root = root or application_root()
         self.entries = UNIFIED_MANIFEST_MAP
         self.name_map = UNIFIED_NAME_MAP
+        self.catalog = ModelCatalog(self.root)
 
     def get_search_paths(self) -> list[Path]:
-        return [
-            self.root / "models",
-            self.root / "app/models",
-            self.root / "roop_3d/models/cache",
-            self.root / ".cache/models",
-            self.root / "cache/models",
-        ]
-
-    def get_legacy_search_paths(self) -> list[Path]:
-        """Read-only roop-ultimate model folders; empty when the source is not configured or does not exist."""
-        try:
-            from roop_3d.audit.project_paths import legacy_root
-            base = legacy_root(self.root)
-        except Exception:
-            return []
-        return [path for path in (base / ".cache/models", base / "app/models") if path.is_dir()]
-
-    def get_trt_cache_paths(self) -> list[Path]:
-        return [
-            self.root / "models/.trt_cache",
-            self.root / "models/trt_cache",
-            self.root / "app/models/.trt_cache",
-            self.root / "app/models/trt_cache",
-            self.root / ".cache/trt",
-            self.root / "cache/trt",
-        ]
-
-    @staticmethod
-    def _candidate(base: Path, entry: ModelManifestEntry) -> Path | None:
-        for name in (entry.name, f"{entry.model_id}.onnx"):
-            path = base / name
-            if path.is_file():
-                return path
-        return None
+        return [self.root / "models", self.root / "models/buffalo_l",
+                self.root / "roop_3d/models/cache"]
 
     def resolve_model_file(self, entry: ModelManifestEntry) -> Path | None:
-        """Search local candidate paths for the model file."""
-        for base in self.get_search_paths():
-            found = self._candidate(base, entry)
-            if found is not None:
-                return found
-        return None
-
-    def resolve_trt_engine(self, entry: ModelManifestEntry) -> Path | None:
-        """Search local candidate paths for a compiled TensorRT engine."""
-        stem = Path(entry.name).stem
-        for base in self.get_trt_cache_paths():
-            for cand in base.glob(f"*{stem}*.engine"):
-                if cand.is_file():
-                    return cand
-        return None
-
-    def _locate(self, entry: ModelManifestEntry) -> tuple[Path | None, str | None, str | None, str]:
-        """``(path, actual_sha256, trust_basis, state)``; ``state`` is ``valid``, ``trusted``, ``corrupt`` or ``missing``."""
-        from roop_3d.models.local_trust import MIN_TRUST_BYTES
-        expected = entry.expected_sha256.lower()
-        trusted: tuple[Path, str] | None = None
-        corrupt: tuple[Path, str | None] | None = None
-        local_bases = self.get_search_paths()
-        models_root = self.root / "models"
-        for base in (*local_bases, *self.get_legacy_search_paths()):
-            legacy = base not in local_bases
-            path = self._candidate(base, entry)
-            if path is None:
-                continue
-            try:
-                actual = _sha256_cached(path)
-            except OSError:
-                corrupt = corrupt or (path, None)
-                continue
-            if actual.lower() == expected:
-                return path, actual, "REGISTRY_PINNED_SHA256", "valid"
-            if legacy:
-                continue  # roop-ultimate bytes are never trusted by placement
-            direct_child = models_root.is_dir() and path.parent.resolve() == models_root.resolve()
-            if direct_child and not path.is_symlink() and path.stat().st_size > MIN_TRUST_BYTES:
-                trusted = trusted or (path, actual)
-            else:
-                corrupt = corrupt or (path, actual)
-        if trusted is not None:
-            return trusted[0], trusted[1], "LOCAL_USE_TRUST", "trusted"
-        if corrupt is not None:
-            return corrupt[0], corrupt[1], None, "corrupt"
-        return None, None, None, "missing"
+        try:
+            return self.catalog.resolve_named_artifact(entry.name)[1]
+        except DomainError as error:
+            if error.code == "MODEL_NOT_INSTALLED":
+                return None
+            raise
 
     def inspect_model_readiness(self, entry: ModelManifestEntry) -> dict[str, Any]:
-        """Inspect model presence, hash validity, and TRT engine readiness."""
-        file_path, actual_sha256, trust_basis, state = self._locate(entry)
-        trt_path = self.resolve_trt_engine(entry)
-        reason = None
-        if state == "missing":
-            readiness: ReadinessState = "MISSING"
-            reason = (f"{entry.name} was not found in app/models (searched {', '.join(str(p) for p in self.get_search_paths()[:2])}) "
-                      "nor, with a matching SHA-256, in the read-only roop-ultimate model folders")
-        elif state == "corrupt":
-            readiness = "CORRUPT HASH"
-            reason = ("The file's bytes do not match the pinned SHA-256 and it is not eligible for local-use trust "
-                      "(under 1 MiB or outside app/models)")
-        elif state == "trusted":
-            # A different export of the same network, placed in app/models on purpose: usable under the local-use policy.
+        path = None
+        identity = None
+        error = None
+        try:
+            _, path = self.catalog.resolve_named_artifact(entry.name)
+            identity = self.catalog.artifact_identity(path)
             readiness = "DOWNLOADED (NEEDS TRT)"
-            reason = "Bytes differ from the pinned artifact; admitted by the app/models local-use trust policy (rights not reviewed)"
-        elif trt_path is not None and trt_path.is_file():
-            readiness = "READY + TRT ENGINE"
-        else:
-            readiness = "DOWNLOADED (NEEDS TRT)"
+            reason = "Input bytes resolved; provider initialization and forward execution have not been verified."
+        except DomainError as failure:
+            error = {"code": failure.code, "message": failure.message, "status": failure.status}
+            readiness = ("MISSING" if failure.code == "MODEL_NOT_INSTALLED" else
+                         "CORRUPT HASH" if failure.code in {"MODEL_DRIFT", "MODEL_QUARANTINED"} else "BLOCKED")
+            reason = failure.message
+        record = self.catalog.registry.get(entry.registry_model_id)
+        try:
+            authorize(record, action="download")
+            download_error = None
+        except DomainError as failure:
+            download_error = failure.code
         return {
-            "model_id": entry.model_id,
-            "name": entry.name,
-            "category": entry.category,
-            "readiness_state": readiness,
-            "vram_footprint_mb": entry.vram_footprint_mb,
-            "precision_policy": entry.precision_policy,
-            "supports_dynamic_batch": entry.supports_dynamic_batch,
-            "expected_size_bytes": entry.expected_size_bytes,
-            "expected_sha256": entry.expected_sha256,
-            "actual_sha256": actual_sha256,
-            "hash_valid": state == "valid",
-            "trust_basis": trust_basis,
-            "reason": reason,
-            "model_path": str(file_path) if file_path else None,
-            "trt_engine_path": str(trt_path) if trt_path else None,
-            "description": entry.description,
-            "primary_url": entry.primary_url,
-            "fallback_url": entry.fallback_url,
+            "model_id": entry.model_id, "registry_model_id": entry.registry_model_id,
+            "name": entry.name, "category": entry.category, "readiness_state": readiness,
+            "vram_footprint_mb": None, "precision_policy": None, "supports_dynamic_batch": None,
+            "expected_size_bytes": entry.expected_size_bytes, "expected_sha256": entry.expected_sha256,
+            "actual_sha256": identity["sha256"] if identity else None,
+            "hash_valid": bool(identity and identity["sha256"] == entry.expected_sha256
+                               and identity["size_bytes"] == entry.expected_size_bytes),
+            "trust_basis": identity["trust_basis"] if identity else None,
+            "reason": reason, "error": error, "model_path": str(path) if path else None,
+            "trt_engine_path": None, "engine_presence_verified": False, "actual_inference_available": False,
+            "description": entry.description, "primary_url": record.upstream_url, "fallback_url": None,
+            "download_gate": download_error, "license_id": record.license_id,
+            "license_notice": record.license_notice, "commercial_use": record.commercial_use,
         }
 
     def get_full_readiness_report(self) -> list[dict[str, Any]]:
-        report = [self.inspect_model_readiness(entry) for entry in UNIFIED_MODEL_ENTRIES]
-        # Stage 16 uses the authoritative registry with explicit unknown evidence.
-        # Do not fill in guessed shapes/VRAM or infer compiled readiness from a filename.
         from roop_3d.models.stage16 import readiness_report
-        return report + readiness_report(self.root)
-
-
-class ResilientModelDownloader:
-    """Chunked, resumable (*.part) downloader with telemetry progress hooks."""
-
-    def __init__(self, destination_dir: Path, timeout_seconds: float = 60.0):
-        self.destination_dir = destination_dir
-        self.destination_dir.mkdir(parents=True, exist_ok=True)
-        self.timeout_seconds = timeout_seconds
-
-    def download_model(
-        self,
-        entry: ModelManifestEntry,
-        progress_callback: Callable[[dict[str, Any]], None] | None = None,
-        use_fallback: bool = False,
-    ) -> Path:
-        """Download model into *.part file with resumption and verification."""
-        import urllib.request
-        from urllib.error import URLError
-
-        url = entry.fallback_url if use_fallback else entry.primary_url
-        target_path = self.destination_dir / entry.name
-        part_path = self.destination_dir / f"{entry.name}.part"
-
-        # If already verified on disk, return immediately
-        if target_path.is_file():
-            hasher = hashlib.sha256()
-            with open(target_path, "rb") as f:
-                for chunk in iter(lambda: f.read(65536), b""):
-                    hasher.update(chunk)
-            if hasher.hexdigest().lower() == entry.expected_sha256.lower():
-                if progress_callback:
-                    progress_callback({
-                        "type": "model_download_progress",
-                        "model_id": entry.model_id,
-                        "bytes_downloaded": target_path.stat().st_size,
-                        "total_bytes": entry.expected_size_bytes,
-                        "percent": 100.0,
-                        "speed_mbps": 0.0,
-                        "eta_seconds": 0.0,
-                        "status": "ready",
-                    })
-                return target_path
-
-        existing_bytes = part_path.stat().st_size if part_path.is_file() else 0
-        req = urllib.request.Request(url, headers={"User-Agent": "roop-3d/1.0"})
-        if existing_bytes > 0:
-            req.add_header("Range", f"bytes={existing_bytes}-")
-
-        mode = "ab" if existing_bytes > 0 else "wb"
-        start_time = time.monotonic()
-        downloaded = existing_bytes
-        total_size = entry.expected_size_bytes
-
-        try:
-            with urllib.request.urlopen(req, timeout=self.timeout_seconds) as resp, open(part_path, mode) as out_f:
-                content_len = resp.headers.get("Content-Length")
-                if content_len:
-                    total_size = existing_bytes + int(content_len)
-
-                while True:
-                    chunk = resp.read(65536)
-                    if not chunk:
-                        break
-                    out_f.write(chunk)
-                    downloaded += len(chunk)
-                    elapsed = max(0.001, time.monotonic() - start_time)
-                    speed_mbps = (downloaded - existing_bytes) / (1024 * 1024) / elapsed
-                    pct = min(100.0, (downloaded / max(1, total_size)) * 100.0)
-                    eta = max(0.0, (total_size - downloaded) / max(0.001, speed_mbps * 1024 * 1024))
-
-                    if progress_callback:
-                        progress_callback({
-                            "type": "model_download_progress",
-                            "model_id": entry.model_id,
-                            "bytes_downloaded": downloaded,
-                            "total_bytes": total_size,
-                            "percent": round(pct, 1),
-                            "speed_mbps": round(speed_mbps, 2),
-                            "eta_seconds": round(eta, 1),
-                            "status": "downloading",
-                        })
-
-        except (URLError, OSError) as err:
-            if not use_fallback:
-                # Retry with fallback URL
-                return self.download_model(entry, progress_callback, use_fallback=True)
-            raise RuntimeError(f"Download failed for {entry.name}: {err}") from err
-
-        # Verify hash
-        if progress_callback:
-            progress_callback({
-                "type": "model_download_progress",
-                "model_id": entry.model_id,
-                "bytes_downloaded": downloaded,
-                "total_bytes": total_size,
-                "percent": 100.0,
-                "speed_mbps": 0.0,
-                "eta_seconds": 0.0,
-                "status": "verifying",
-            })
-
-        hasher = hashlib.sha256()
-        with open(part_path, "rb") as f:
-            for chunk in iter(lambda: f.read(65536), b""):
-                hasher.update(chunk)
-        digest = hasher.hexdigest().lower()
-
-        if digest != entry.expected_sha256.lower():
-            if part_path.is_file():
-                part_path.unlink()
-            raise ValueError(
-                f"SHA-256 hash mismatch for {entry.name}: expected {entry.expected_sha256}, got {digest}"
-            )
-
-        # Atomic rename from .part to final destination
-        if target_path.is_file():
-            target_path.unlink()
-        part_path.rename(target_path)
-
-        if progress_callback:
-            progress_callback({
-                "type": "model_download_progress",
-                "model_id": entry.model_id,
-                "bytes_downloaded": target_path.stat().st_size,
-                "total_bytes": target_path.stat().st_size,
-                "percent": 100.0,
-                "speed_mbps": 0.0,
-                "eta_seconds": 0.0,
-                "status": "ready",
-            })
-
-        return target_path
+        return [self.inspect_model_readiness(entry) for entry in UNIFIED_MODEL_ENTRIES] + readiness_report(self.root)

@@ -32,18 +32,31 @@ class LocalWeightProvider:
         if self._scopes is not None:
             return self._scopes
         home = Path.home()
-        return {"repository": legacy_root(), "user_cache": home / ".cache",
-                "insightface_cache": home / ".insightface", "torch_cache": home / ".torch"}
+        scopes = {"application": self.root, "user_cache": home / ".cache",
+                  "insightface_cache": home / ".insightface", "torch_cache": home / ".torch"}
+        try:
+            scopes["repository"] = legacy_root(self.root)
+        except (OSError, ValueError, KeyError):
+            # The optional external store is not needed for an independent local install.
+            pass
+        return scopes
 
     def _locations(self, record: ModelRecord) -> Iterator[Path]:
         authorize(record, action="resolve")
         if not record.expected_sha256 or not record.byte_size:
             raise DomainError("MODEL_IDENTITY_UNKNOWN", "No observed artifact identity is registered")
+        # Prefer an independent copy, but verify it against the same immutable identity.
+        # A differently exported file can only run through the explicit local-use policy.
+        for name in record.filenames:
+            for directory in ("models", "models/buffalo_l"):
+                path = safe_path(self.root, f"{directory}/{name}")
+                if path.is_file():
+                    yield path
         if record.locator:
             scope = self.scopes().get(record.locator.scope)
-            if scope is None:
+            if scope is None and record.locator.scope != "repository":
                 raise DomainError("MODEL_SCOPE_UNKNOWN", "Model locator scope is not configured")
-            if os.path.lexists(scope):
+            if scope is not None and os.path.lexists(scope):
                 path = safe_path(scope, record.locator.path)
                 if path.exists():
                     # Drift at an authoritative locator is fatal, even if another copy exists.
@@ -98,7 +111,7 @@ class LocalWeightProvider:
         try:
             return self._resolve_pinned(record)
         except DomainError:
-            # A weight the user put in app/models is never refused for lacking the pinned digest.
+            # Only explicit local-use placement may relax an unknown or different pin.
             trusted = self.trusted_path(record)
             if trusted is None:
                 raise
@@ -122,13 +135,14 @@ class LocalWeightProvider:
              commercial: bool = False) -> Iterator[BinaryIO]:
         record = self.registry.get(model) if isinstance(model, str) else model
         path = None
-        try:
+        # Commercial and explicitly blocked requests must never fall through to local trust.
+        if commercial or record.status == "blocked":
             authorize(record, action="activate", accepted_license=accepted_license, commercial=commercial)
-            path = self.resolve(record)
-        except DomainError:
-            path = self.trusted_path(record)
-            if path is None:
-                raise
+        path = self.resolve(record)
+        if self.trust is not None and self.trust.inside_root(path) and path in self.trust.files():
+            self.trust.trust(path)
+        if self.trusted_identity(path) is None:
+            authorize(record, action="activate", accepted_license=accepted_license, commercial=commercial)
         identity = self.trusted_identity(path)
         if identity is not None:
             with verified_stream(path, identity[0], identity[1]) as stream:

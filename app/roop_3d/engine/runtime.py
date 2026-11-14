@@ -16,7 +16,10 @@ from roop_3d.engine.resources import guarded, inference, register
 
 # Shared low-level session construction is also available to GPU graph callers.
 # This additive adapter keeps the verified catalog as the only model path source.
-from roop_3d.core.ort_session import GpuIoBinding, SessionManager, SessionInfo, _cuda_fp16_model_path
+from roop_3d.core.ort_session import (
+    CPU, CUDA, DML, TRT, DEFAULT_PROVIDERS, GpuIoBinding, SessionManager, SessionInfo, provider_chain,
+    record_session_failure, record_session_execution, record_session_release,
+)
 
 log = logging.getLogger(__name__)
 
@@ -33,7 +36,7 @@ class RuntimeConfig:
     detector_model_id: str = 'scrfd'
 
     def __post_init__(self) -> None:
-        if self.provider not in ("CPUExecutionProvider", "CUDAExecutionProvider", "TensorrtExecutionProvider"):
+        if self.provider not in ("auto", CPU, CUDA, DML, TRT):
             raise ValueError("Unsupported ONNX Runtime provider")
         if self.hardware_profile not in ("cpu", "6gb", "12gb") or self.reserve_mib < 0:
             raise ValueError("Invalid hardware profile")
@@ -90,34 +93,17 @@ def image_bgr(value: np.ndarray) -> np.ndarray:
 
 
 def record_named(catalog: ModelCatalog, name: str) -> dict[str, Any]:
-    # Explicit family pins take precedence over registry order after an update.
-    for registered in catalog.registry.records():
-        selected = catalog.select_version(registered)
-        if selected.model_id != registered.model_id and selected.name == name:
-            catalog.resolve_for_inference(selected.model_id)
-            return catalog._legacy(selected)
-    for record in catalog.records():
-        if record["name"] == name:
-            return record
-    raise DomainError("MODEL_NOT_INSTALLED", "Required verified local artifact is unavailable", 503)
+    record, _ = catalog.resolve_named_artifact(name)
+    return catalog._legacy(record)
 
 
-def cuda_fallback_reason(message: str) -> str | None:
-    if "Only 4-D tensor is supported" in message:
-        return "CUDA GridSample cannot execute the verified 5-D reference graph; CPU reference selected"
-    if any(fragment in message for fragment in (
-            "BFCArena::AllocateRawInternal", "cudaErrorMemoryAllocation", "CUDA failure 2:",
-            "CUDNN_STATUS_ALLOC_FAILED", "CUDA out of memory")):
-        return "CUDA allocation exceeded the available model budget; CPU reference selected"
-    return None
 
 
 class OrtModel:
     """Hash at load, stat-guard every call, and rehash at explicit verification.
 
-    Sessions contain no per-frame history. No optimization files are written.
-    CUDA arena budgets share one profile/free-memory snapshot. The allocation
-    fractions for this reference chain sum to at most one, including optional lip.
+    Sessions contain no per-frame history. Derived precision/TRT graphs are written
+    only to the owned cache; source artifacts remain read-only.
     """
 
     def __new__(cls, catalog: ModelCatalog, name: str, config: RuntimeConfig = RuntimeConfig()):
@@ -130,17 +116,12 @@ class OrtModel:
         try:
             self._construct(catalog, name, config)
         except Exception as error:
-            # An enhancer that cannot be built is reported with the backend's exact reason, so the UI can say why the
-            # old model is still in use instead of silently keeping it.
-            record = getattr(self, "record", None)
-            if isinstance(record, dict) and record.get("role") == "face_restorer":
-                from roop_3d.engine import active_models
-                active_models.report_failure("enhancer", record.get("model_id") or name, error)
+            record_session_failure(name, getattr(self, "path", None), error.__cause__ or error,
+                                   requested_providers=provider_chain(config.provider))
             raise
 
     def _construct(self, catalog: ModelCatalog, name: str, config: RuntimeConfig):
-        import onnxruntime as ort
-
+        self._last_error = None
         self.catalog, self.record = catalog, record_named(catalog, name)
         self.config = config
         registered = catalog.registry.get(self.record["model_id"])
@@ -154,133 +135,66 @@ class OrtModel:
             raise DomainError("MODEL_GRAPH_UNSUPPORTED", "External tensor references are not supported by this adapter", 422)
         self.path = catalog.resolve_for_inference(self.record["model_id"])
         trusted = catalog.provider.trusted_identity(self.path)
-        # Auto-trusted local weights (FP16 / custom exports) carry their own digest and relaxed tensor checks.
-        self.local_trust = trusted is not None
+        # Local-use authorization is independent of graph identity. Exact pins keep strict tensor validation.
+        self.local_trust = trusted is not None and trusted != (self.record["sha256"], self.record["size_bytes"])
         if trusted is not None:
             self.record = {**self.record, "sha256": trusted[0], "size_bytes": trusted[1]}
-        if config.provider == "CUDAExecutionProvider" and config.precision_policy == "fp16":
-            fp16_cache = catalog.root / "roop_3d/.runtime/cache/cuda_fp16"
-            try:
-                self.path, _ = _cuda_fp16_model_path(self.path, fp16_cache)
-            except Exception as error:
-                # The mixed-precision rewrite is an optimisation: a graph it cannot convert runs as shipped, it never goes offline.
-                log.warning("CUDA FP16 graph conversion failed for %s (%s); using the file as shipped", self.path.name, type(error).__name__)
         self._identity = self._stat()
-        options = ort.SessionOptions()
-        options.intra_op_num_threads, options.inter_op_num_threads = config.cpu_threads, 1
-        options.enable_mem_pattern = False
-        options.log_severity_level = 3
-        options.graph_optimization_level = (ort.GraphOptimizationLevel.ORT_ENABLE_EXTENDED
-            if config.graph_optimization == "extended" else ort.GraphOptimizationLevel.ORT_ENABLE_ALL)
-        if config.provider == "TensorrtExecutionProvider":
-            options.add_session_config_entry("session.disable_cpu_ep_fallback", "1")
         self.executions = 0
         self.provider = self.requested_provider = config.provider
         self.fallback_reason: str | None = None
-        self._options = options
         self.session = None
-        providers: list = ["CPUExecutionProvider"]
         divisor = {
             "scrfd_2.5g_kps.onnx": 32, "scrfd_10g_bnkps.onnx": 16, "det_10g.onnx": 16,
             "w600k_r50.onnx": 16, "bisenet_resnet_34.onnx": 16, "face_parser.onnx": 16,
             "1k3d68.onnx": 16, "2d106det.onnx": 32, "landmark_203.onnx": 32,
         }.get(name, 32)
         self._gpu_memory_limit = (config.gpu_budget_bytes // divisor
-                                  if config.provider in ("CUDAExecutionProvider", "TensorrtExecutionProvider") else None)
-        if config.provider == "TensorrtExecutionProvider":
-            # A missing TensorRT/CUDA execution provider, a failed engine build or a stale cache no longer takes the model
-            # offline: SessionManager walks TensorRT -> CUDA -> CPU, and the provider that really runs is read back below.
-            try:
-                trt_provider = ("tensorrt_mixed" if config.precision_policy == "fp16"
-                                else "TensorrtExecutionProvider")
-                info = SessionManager(fp16=config.precision_policy != 'fp32', hardware_profile=config.hardware_profile,
-                    gpu_memory_limit=self._gpu_memory_limit).create(self.path, model_name=name,
-                        providers=(trt_provider, "CUDAExecutionProvider"), cpu_last_resort=True)
-                self.session = info.session
-                self.provider = self.session.get_providers()[0]
-                if self.provider != "TensorrtExecutionProvider":
-                    self.fallback_reason = "; ".join(info.fallback_errors) or f"TensorRT initialization failed; session runs on {self.provider}"
-            except Exception:
-                raise DomainError("MODEL_SESSION_FAILED", "Verified model could not initialize on TensorRT, CUDA or CPU", 503) from None
-        elif config.provider == "CUDAExecutionProvider" and config.provider not in ort.get_available_providers():
-            self.provider, self.fallback_reason = "CPUExecutionProvider", "CUDAExecutionProvider is not available in this ONNX Runtime build"
-            providers = ["CPUExecutionProvider"]
-        elif config.provider == "CUDAExecutionProvider":
-            ort.preload_dlls()
-            arena = "kNextPowerOfTwo" if config.hardware_profile == "12gb" else "kSameAsRequested"
-            cuda_opts = {
-                "gpu_mem_limit": config.gpu_budget_bytes // divisor,
-                "arena_extend_strategy": arena,
-                "do_copy_in_default_stream": "1",
-            }
-            if config.hardware_profile == "12gb":
-                cuda_opts["cudnn_conv_algo_search"] = "DEFAULT"
-            else:
-                cuda_opts["cudnn_conv_algo_search"] = "HEURISTIC"
-            # Reference ONNX graphs include host shape/control operations. Allow
-            # those graph partitions while keeping CUDA first and disabling
-            # whole-session fallback below. Strict TRT builders retain their
-            # separate GPU-only graph/canary policy.
-            providers = [(config.provider, cuda_opts), "CPUExecutionProvider"]
-        if config.provider != "TensorrtExecutionProvider":
-            retry_reason = None
-            try:
-                self.session = ort.InferenceSession(str(self.path), sess_options=options, providers=providers)
-                if config.provider == "CUDAExecutionProvider" and self.provider == "CUDAExecutionProvider":
-                    self.session.disable_fallback()
-            except Exception as error:
-                retry_reason = ((cuda_fallback_reason(str(error))
-                                 or f"CUDA session initialization failed ({type(error).__name__}); CPU reference selected")
-                                if config.provider == "CUDAExecutionProvider" and self.provider == "CUDAExecutionProvider" else None)
-                if retry_reason is None:
-                    raise DomainError("MODEL_SESSION_FAILED", "Verified model could not initialize on the requested provider", 503) from None
-            if retry_reason is not None:
-                self._switch_to_cpu(retry_reason)
-        if self.session.get_providers()[0] != self.provider:
-            self.session = None
-            raise DomainError("PROVIDER_UNAVAILABLE", "Runtime did not activate the requested provider", 503)
+                                  if config.provider in (CUDA, TRT) else None)
+        self._open_session(provider_chain(config.provider))
         catalog.verify(self.record)
         self._check_graph()
         self._io_binder = GpuIoBinding(self.session)
         # Upscalers report themselves to the active-model read-back (the detector reports from its own holder).
         self._active_key = None
-        if self.record.get("role") == "frame_upscaler":
+        if self.record.get("role") in ("frame_upscaler", "uv_enhancer"):
             from roop_3d.engine import active_models
             entry = active_models.activate("enhancer", self.record["model_id"], self.path, self.provider,
                                            config.precision_policy, self.record.get("sha256"))
             self._active_key = entry.key
         register(self, "release")
 
-    @guarded
-    def _switch_to_cpu(self, reason: str) -> None:
-        import onnxruntime as ort
-        self.session = None
-        self._io_binder = None
-        self.path = self.catalog._path(self.record)
-        self._identity = self._stat()
-        self.catalog.verify(self.record)
+    def _open_session(self, providers: tuple[str, ...]) -> None:
+        """Every loader uses the same real-session probe and exact fallback diagnostics."""
         try:
-            self.session = ort.InferenceSession(str(self.path), sess_options=self._options, providers=["CPUExecutionProvider"])
-        except Exception:
-            raise DomainError("MODEL_SESSION_FAILED", "CPU reference session could not initialize", 503) from None
-        self.provider = "CPUExecutionProvider"
-        self.fallback_reason = reason
-        self._check_graph()
-        self._io_binder = GpuIoBinding(self.session)
+            info = SessionManager(
+                hardware_profile="12gb" if self.config.hardware_profile == "12gb" else "6gb",
+                fp16=self.config.precision_policy != "fp32",
+                cuda_fp16=self.config.precision_policy == "fp16",
+                gpu_memory_limit=self._gpu_memory_limit,
+                graph_optimization=self.config.graph_optimization,
+            ).create(self.path, model_name=self.record["name"], providers=providers,
+                     intra_op_threads=self.config.cpu_threads)
+        except Exception as error:
+            raise DomainError("MODEL_SESSION_FAILED", f"{self.path}: {type(error).__name__}: {error}", 503) from error
+        # Diagnostics must not retain the native session after release/provider recovery.
+        self._session_diagnostics = info.capability()
+        self.session, self.provider = info.session, info.provider
+        self.fallback_reason = "; ".join(info.fallback_errors) or None
 
     @guarded
-    def _switch_to_cuda(self, reason: str) -> None:
-        """Recover a failed TensorRT engine with a CUDA-only session."""
-        self.session = None
-        self._io_binder = None
-        try:
-            info = SessionManager(fp16=False, hardware_profile=self.config.hardware_profile,
-                gpu_memory_limit=self._gpu_memory_limit).create(self.path, model_name=self.record["name"],
-                    providers=("CUDAExecutionProvider",))
-        except Exception:
-            raise DomainError("MODEL_SESSION_FAILED", "CUDA-only recovery session could not initialize", 503) from None
-        self.session, self.provider = info.session, info.provider
-        self.fallback_reason = reason
+    def _recover(self, reason: str) -> None:
+        """Retry the same graph on the next supported provider, never skip its computation."""
+        order = provider_chain(self.requested_provider)
+        remaining = order[order.index(self.provider) + 1:]
+        if not remaining:
+            raise DomainError("MODEL_INFERENCE_FAILED", reason, 503)
+        previous_reason = self.fallback_reason
+        self.session = self._io_binder = None
+        self._open_session(remaining)
+        self.fallback_reason = "; ".join(item for item in (previous_reason, reason, self.fallback_reason) if item)
+        from roop_3d.core.ort_session import record_session_fallback
+        record_session_fallback(self.record["name"], self.path, self.fallback_reason)
         self._identity = self._stat()
         self._check_graph()
         self._io_binder = GpuIoBinding(self.session)
@@ -344,51 +258,41 @@ class OrtModel:
             value = values[node.name]
             contract_array(value, node.shape, batch_one=True,
                            dtype=np.dtype({"tensor(float16)": "float16", "tensor(double)": "float64"}.get(node.type, "float32")))
-        retry_reason = None
-        try:
-            if getattr(self, "_io_binder", None) is not None:
+        while True:
+            retry_reason = None
+            try:
                 out_map = self._io_binder.run(values)
                 arrays = [out_map[node.name].numpy() for node in self.session.get_outputs()]
-            else:
-                arrays = self.session.run(None, values)
-        except Exception as error:
-            if self.provider == "TensorrtExecutionProvider":
-                retry_reason = f"TensorRT inference failed; CUDA-only session selected: {type(error).__name__}"
-            elif self.requested_provider == "TensorrtExecutionProvider":
-                raise DomainError("MODEL_INFERENCE_FAILED", "CUDA-only inference failed after TensorRT recovery", 503) from None
-            else:
-                retry_reason = cuda_fallback_reason(str(error)) if self.provider == "CUDAExecutionProvider" else None
+            except Exception as error:
+                self._last_error = f"{self.provider}: {type(error).__name__}: {error}"
+                record_session_execution(self.record["name"], self.path, error=error)
+                if self.provider == CPU:
+                    raise DomainError("MODEL_INFERENCE_FAILED", self._last_error, 503) from error
+                retry_reason = self._last_error
+            # Leave the traceback scope before allocating the next provider's arena.
             if retry_reason is None:
-                raise DomainError("MODEL_INFERENCE_FAILED", "Model execution failed", 503) from None
-        # Exit the exception handler first so its traceback cannot retain the
-        # failed CUDA session/arena while the reference session is constructed.
-        if retry_reason is not None:
-            if self.requested_provider == "TensorrtExecutionProvider":
-                self._switch_to_cuda(retry_reason)
-            else:
-                self._switch_to_cpu(retry_reason)
-            try:
-                if self._io_binder is not None:
-                    out_map = self._io_binder.run(values)
-                    arrays = [out_map[node.name].numpy() for node in self.session.get_outputs()]
-                else:
-                    arrays = self.session.run(None, values)
-            except Exception:
-                message = ("CUDA-only inference failed after TensorRT recovery"
-                           if self.requested_provider == "TensorrtExecutionProvider"
-                           else "CPU reference execution failed")
-                raise DomainError("MODEL_INFERENCE_FAILED", message, 503) from None
+                break
+            log.warning("%s failed on %s; retrying the same model: %s", self.path, self.provider, retry_reason)
+            self._recover(retry_reason)
         outputs = {}
-        for node, value in zip(self.session.get_outputs(), arrays):
-            checked = contract_array(value, node.shape,
-                dtype=np.dtype({"tensor(float16)": "float16", "tensor(double)": "float64"}.get(node.type, "float32")))
-            # Callers consume float32 regardless of the graph's storage precision.
-            outputs[node.name] = checked.astype(np.float32) if checked.dtype == np.float16 else checked
+        try:
+            for node, value in zip(self.session.get_outputs(), arrays):
+                checked = contract_array(value, node.shape,
+                    dtype=np.dtype({"tensor(float16)": "float16", "tensor(double)": "float64"}.get(node.type, "float32")))
+                # Callers consume float32 regardless of the graph's storage precision.
+                outputs[node.name] = checked.astype(np.float32) if checked.dtype == np.float16 else checked
+        except DomainError as error:
+            self._last_error = f"{self.provider}: {error.code}: {error}"
+            record_session_execution(self.record["name"], self.path, error=error)
+            raise
         self.executions += 1
+        self._last_error = None
+        record_session_execution(self.record["name"], self.path)
         return outputs
 
     @guarded
     def release(self) -> None:
+        record_session_release(self.record["name"], self.path)
         self.session = None
         self._io_binder = None
         if getattr(self, "_active_key", None) is not None:
@@ -397,11 +301,15 @@ class OrtModel:
             self._active_key = None
 
     def capability(self) -> dict:
-        return {"model_id": self.record["model_id"], "sha256": self.record["sha256"],
+        diagnostics = self._session_diagnostics
+        return {**diagnostics, "model_id": self.record["model_id"], "sha256": self.record["sha256"],
                 "artifact_state": "VERIFIED_LOCAL", "inference_state": "VERIFIED_LOCAL" if self.executions else "UNKNOWN",
-                "provider": self.provider, "executions": self.executions,
+                "provider": self.provider, "executions": self.executions, "execution_verified": bool(self.executions),
+                "path": str(self.path),
+                "active_provider": self.provider if self.session is not None else None,
+                "load_status": "loaded" if self.session is not None else "released", "error": self._last_error,
                 "execution_providers": self.session.get_providers() if self.session is not None else [],
-                "cpu_graph_partitions_allowed": self.requested_provider == "CUDAExecutionProvider",
+                "cpu_graph_partitions_allowed": diagnostics.get("cpu_partitions", False),
                 "requested_provider": self.requested_provider, "fallback_reason": self.fallback_reason,
                 "license_state": self.record["license_state"], "commercial_permission": self.record["commercial_permission"]}
 
@@ -430,25 +338,17 @@ class SessionFacade:
 
 def session_factory(catalog: ModelCatalog, config: RuntimeConfig):
     factory = config.model_factory
-    if factory is None and config.provider in ("CUDAExecutionProvider", "TensorrtExecutionProvider"):
-        factory = OrtModel
     if factory is None:
-        return None
+        factory = OrtModel
     return lambda record: SessionFacade(factory(catalog, record["name"], config))
 
 
-class InspectionOnCpu(RuntimeError):
-    """The inspection factory chose (or fell back to) the CPU; the caller builds its own CPU session."""
-
-
 def inspection_runtime(settings=None) -> RuntimeConfig | None:
-    """CUDA runtime for the inspection / target-lock models (detector, ArcFace, 68-point landmarks), or None for CPU.
+    """Admit CUDA/DirectML inspection sessions, or reserve GPU memory and select CPU.
 
-    Inspection and the target-lock keyframe scan analyse every frame of the video, usually while a render job is running.
-    On the CPU that costs ~200 ms (RetinaFace) + ~200 ms (ArcFace) + ~45 ms (1k3d68) per frame and pegs every core; on
-    CUDA the same graphs run in 26 / 17 / 10 ms with identical output.  Cards under 10 GiB stay on the CPU: the resident
-    inspection models would shrink the free VRAM the job admission needs and could push the whole render onto the CPU
-    profile.  ``ROOP3D_INSPECTION_PROVIDER`` = ``cpu`` | ``cuda`` overrides the decision.
+    Small NVIDIA cards retain the inspection memory policy; advertised providers
+    are only candidates. SessionManager must initialize the actual model before
+    diagnostics report a loaded provider. ``ROOP3D_INSPECTION_PROVIDER`` accepts cpu/cuda/dml.
     """
     import os
     override = os.environ.get("ROOP3D_INSPECTION_PROVIDER", "").strip().casefold()
@@ -460,11 +360,14 @@ def inspection_runtime(settings=None) -> RuntimeConfig | None:
         return None
     try:
         import onnxruntime as ort
-        if "CUDAExecutionProvider" not in ort.get_available_providers():
-            return None
+        available = ort.get_available_providers()
+        if override == "dml" or settings.preferred_provider == DML or CUDA not in available:
+            return (RuntimeConfig(provider=DML, reserve_mib=settings.memory_safety_reserve_mb)
+                    if DML in available else None)
         from roop_3d.core.hardware import MIN_12GB_PROFILE_VRAM_MIB, probe_hardware, resolve_hardware_profile
         hardware = probe_hardware(settings)
-    except Exception:
+    except Exception as error:
+        log.warning("Inspection hardware admission probe failed; CPU policy selected: %s: %s", type(error).__name__, error)
         return None
     if not hardware.gpus:
         return None
@@ -479,35 +382,23 @@ def inspection_runtime(settings=None) -> RuntimeConfig | None:
 
 
 def inspection_session_factory(catalog: ModelCatalog, settings_provider=None, config: RuntimeConfig | None = None):
-    """``factory(record_or_name_dict) -> session`` on CUDA, raising :class:`InspectionOnCpu` when the CPU should be used.
+    """Build observed model sessions on the admitted GPU, or CPU when inspection policy reserves GPU memory.
 
-    The decision is re-evaluated on every call (sessions are built rarely) so it follows the current free VRAM.  A fixed
-    ``config`` (a render job's own runtime) skips the decision; a CPU config always means CPU.
+    CPU uses the same hash, graph and diagnostic path. Model/graph failures are not hidden by a second loader.
     """
     def factory(record):
-        resolved = ((None if config.provider == "CPUExecutionProvider" else config) if config is not None
+        resolved = (config if config is not None
                     else inspection_runtime(settings_provider() if settings_provider is not None else None))
         if resolved is None:
-            raise InspectionOnCpu("inspection models stay on the CPU")
+            resolved = RuntimeConfig()
         return SessionFacade(OrtModel(catalog, record["name"], resolved))
-    factory.cpu_fallback = True      # callers build their own CPU session when this factory raises
     return factory
 
 
 def build_with_cpu_fallback(factory, record, name: str):
-    """``factory(record)``, or None when an inspection factory declines / fails (the caller then builds its CPU session).
-
-    A factory without ``cpu_fallback`` (the render trackers') keeps its errors: a failed GPU session must stay visible there."""
-    if factory is None:
-        return None
-    try:
-        return factory(record)
-    except Exception as error:
-        if not getattr(factory, "cpu_fallback", False):
-            raise
-        if not isinstance(error, InspectionOnCpu):
-            log.warning("%s could not start on the GPU (%s); using the CPU", name, error)
-        return None
+    """Use the selected factory; its provider chain owns fallback and preserves graph failures."""
+    del name
+    return factory(record) if factory is not None else None
 
 
 def adaptive_session_factory(catalog: ModelCatalog, config: RuntimeConfig):
@@ -518,10 +409,8 @@ def adaptive_session_factory(catalog: ModelCatalog, config: RuntimeConfig):
 
 
 def managed_session_factory(catalog: ModelCatalog, *, manager: SessionManager | None = None,
-                            providers: tuple[str, ...] = ("TensorrtExecutionProvider",
-                                                           "CUDAExecutionProvider",
-                                                           "CPUExecutionProvider")):
-    """Build TensorRT/CUDA/CPU sessions for hash-verified catalog entries.
+                            providers: tuple[str, ...] = DEFAULT_PROVIDERS):
+    """Build CUDA/DirectML/CPU sessions for hash-verified catalog entries.
 
     Unlike the strict canary builder this is a provider fallback adapter; it still
     resolves paths through ModelCatalog and checks the runtime graph against its

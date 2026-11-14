@@ -19,12 +19,6 @@ DOWNLOAD_BLOCKERS = {
     "MODEL_BLOCKED": "This model is blocked by its license.",
     "DOWNLOAD_FORMAT_BLOCKED": "Pickle-based formats (.pt/.pth) are not downloaded because loading them can execute code.",
 }
-CORE_INFERENCE_EVIDENCE = {
-    "scrfd_10g_bnkps.onnx": ("5838f7fe053675b1c7a08b633df49e7af5495cee0493c7dcf6697200b85b5b91",
-                             "tests/test_identity_real_inference.py"),
-    "w600k_r50.onnx": ("4c06341c33c2ca1f86781dab0e829f88ad5b64be9fba56e56bc9ebdefc619e43",
-                       "tests/test_identity_real_inference.py"),
-}
 
 
 class ModelHubService:
@@ -58,27 +52,17 @@ class ModelHubService:
     def _core_status(self, record: ModelRecord) -> tuple[str, bool, str]:
         if record.model_id in self._core_cache:
             return self._core_cache[record.model_id]
-        evidence = CORE_INFERENCE_EVIDENCE.get(record.name)
-        if evidence is None or record.expected_sha256 != evidence[0]:
-            result = ("UNVERIFIED", False, "No matching real-inference evidence is registered for this artifact digest.")
-            self._core_cache[record.model_id] = result
-            return result
         try:
-            path = self.catalog.provider.resolve(record)
-            governance = self.catalog.governance.scan(record, installed=True, integrity_verified=True)
-            if governance["lifecycle_state"] == "READY":
-                result = ("READY_FOR_INFERENCE", True, (f"Hash verified at {path.name}; reference adapter is registered; "
-                                                        f"real local inference is covered by {evidence[1]}.") )
-            else:
-                result = (governance["lifecycle_state"], False,
-                          "Governance gate prevents inference: " + "; ".join(governance["issues"]))
+            path = self.catalog.resolve_for_inference(record.model_id)
+            identity = self.catalog.artifact_identity(path)
+            result = ("AVAILABLE", False,
+                      f"Input bytes resolved at {path}; trust={identity['trust_basis']}. "
+                      "No successful provider/session forward is established by registry or test-source presence.")
         except DomainError as error:
-            if error.code == "MODEL_DRIFT":
-                result = ("BROKEN", False, "A local artifact failed the registered size or SHA-256 check.")
-            elif error.code == "MODEL_NOT_INSTALLED":
-                result = ("NOT_INSTALLED", False, "The reference engine weight is not installed.")
-            else:
-                result = ("UNVERIFIED", False, f"Weight verification failed closed: {error.code}.")
+            state = ("BROKEN" if error.code == "MODEL_DRIFT" else
+                     "NOT_INSTALLED" if error.code == "MODEL_NOT_INSTALLED" else
+                     "LICENSE_RESTRICTED" if error.code in {"LICENSE_UNVERIFIED", "MODEL_BLOCKED"} else "UNVERIFIED")
+            result = (state, False, f"{error.code}: {error.message}")
         self._core_cache[record.model_id] = result
         return result
 
@@ -193,9 +177,7 @@ class ModelHubService:
         providers = list(record.supported_providers)
         provider_evidence = record.provider_evidence
         if core:
-            if "CPUExecutionProvider" not in providers:
-                providers.append("CPUExecutionProvider")
-            provider_evidence = "Covered by unmocked CPU reference-pipeline inference tests; other providers are unverified."
+            provider_evidence = "Session initialization and standalone forward execution are not established by this registry view."
         dependencies = list(record.dependencies)
         if core and not dependencies:
             dependencies = ["ONNX Runtime", "Roop 3D ReferencePipeline"]
@@ -289,22 +271,19 @@ class ModelHubService:
                 "actual_inference_available": False,
                 "selectable": self.engines_registry.selectable("reference_onnx"),
                 "selected": True,
-                "evidence": ("Existing production ReferencePipeline adapter; all three model files are hash checked on hub refresh."
-                             if ready else "Existing production path is preserved; " + ", ".join(sorted(states or {"missing registry models"})) + "."),
+                "evidence": "Resolved detector/recognizer bytes are not proof of an executable head renderer or successful model forwards.",
             },
             {
                 "engine_id": "photoreal_3d_ffmpeg",
                 "name": "Photoreal 3D (FFmpeg stream)",
                 "family": "Same detector and ArcFace; then true-3D head render layer, quotient-image relight and Laplacian composite",
                 "engine_type": "ONNX Runtime + FFmpeg decode/encode pipes",
-                "purpose": ("Video swap whose pixels are always photographic (swap + FaceSet photograph + restorer): the source jaw/skull outline "
-                            "is projected into the target, the old overhang is filled with background, and a smooth spherical-harmonics ratio "
-                            "matches the scene light. Streams frames through FFmpeg (NVENC with libx264 fallback) and stream-copies the audio."),
+                "purpose": "Full-head mesh rendering, semantic hair exclusion and multiband blending through the guarded true-3D path.",
                 "model_ids": [record.model_id for record in required],
                 "minimum_vram_gib": None,
                 "recommended_vram_gib": None,
-                "dependencies": ["The reference engine's three models", "FFmpeg", "BiSeNet / XSeg / occluder (hair, skin and occlusion masks)",
-                                 "True-3D head renderer (not wired)"],
+                "dependencies": ["Reference detector and ArcFace", "FFmpeg", "Measured dense landmarks",
+                                 "BiSeNet / XSeg semantic masks", "True-3D head renderer (not wired)"],
                 "supported_precision": ["Follows the saved precision policy"],
                 "supported_execution_providers": sorted({provider for record in required for provider in record.supported_providers}),
                 "status": reference_state,
@@ -312,9 +291,7 @@ class ModelHubService:
                 "actual_inference_available": False,
                 "selectable": self.engines_registry.selectable("photoreal_3d_ffmpeg"),
                 "selected": False,
-                "evidence": ("Not resumable (a paused job restarts at frame 0); SDR sources only; the skull outline is the FaceSet photograph's 106 "
-                             "landmarks aligned to the target, not a per-frame fitted 3DMM; relighting normals are a silhouette ellipsoid. "
-                             "Every manifest records what actually ran."),
+                "evidence": "The true-3D renderer remains unwired. No model-selection or artifact-presence check establishes production rendering.",
             },
             {
                 "engine_id": "minimax_h3_ref2va_experimental",

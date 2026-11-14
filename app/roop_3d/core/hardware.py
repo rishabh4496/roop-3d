@@ -121,12 +121,12 @@ def effective_vram_budget(total: int, free: int, settings: Settings) -> int:
 
 
 def resolve_accelerator(preferred: str, advertised: list[str] | None, has_gpu: bool = True) -> str:
-    """Concrete provider for a preference: `auto` means TensorRT when ORT advertises it, else CUDA."""
+    """Select advertised hardware in CUDA -> DirectML -> CPU order; session creation proves usability."""
     advertised = advertised or []
-    if preferred == "CPUExecutionProvider" or not has_gpu:
+    if preferred == "CPUExecutionProvider":
         return "CPUExecutionProvider"
     if preferred == "auto":
-        for candidate in ("TensorrtExecutionProvider", "CUDAExecutionProvider"):
+        for candidate in ("CUDAExecutionProvider", "DmlExecutionProvider"):
             if candidate in advertised:
                 return candidate
         return "CPUExecutionProvider"

@@ -114,7 +114,12 @@ def capabilities(request: Request) -> Capabilities:
         "shader_mode": {row["id"]: row["reason"] for row in shader_rows},
         "camera_projection": {"perspective": None},
         "camera_mode": {"auto": None, "manual": None},
-        "preferred_provider": {"auto": None, "CPUExecutionProvider": None, "CUDAExecutionProvider": None if gpu else "CUDA is unavailable", "TensorrtExecutionProvider": None if trt else "TensorRT requires an NVIDIA GPU, its execution provider and packaged TensorRT libraries"},
+        "preferred_provider": {
+            "auto": None, "CPUExecutionProvider": None, "CUDAExecutionProvider": None if gpu else "CUDA is unavailable",
+            "DmlExecutionProvider": (None if "DmlExecutionProvider" in (hardware.advertised_providers or [])
+                and "DmlExecutionProvider" in Settings.model_json_schema()["properties"]["preferred_provider"].get("enum", [])
+                else "DirectML is unavailable in this runtime or service configuration"),
+            "TensorrtExecutionProvider": None if trt else "TensorRT requires an NVIDIA GPU, its execution provider and packaged TensorRT libraries"},
         "hardware_profile": {"auto": None, "cpu": None, "6gb": None if gpu else "No CUDA GPU is available", "12gb": None if gpu and hardware.gpus and hardware.gpus[0].total_vram_mib >= MIN_12GB_PROFILE_VRAM_MIB else "A CUDA GPU with at least 10 GB of video memory is required"},
         "precision_policy": {"auto": None, "fp32": None, "fp16": None if mixed_precision else "FP16 mixed precision requires TensorRT or CUDA FP16 support"},
         "detector_model_id": {key: governed_reason(key) for key in ('scrfd', 'retinaface', 'yoloface')},
@@ -182,6 +187,13 @@ def active_model_readback(request: Request) -> dict[str, Any]:
     """
     from roop_3d.engine import active_models
     return {"selected": _selected_models(request.app.state.settings), "active": active_models.snapshot()}
+
+
+@router.get("/models/components")
+def model_component_status(request: Request) -> dict[str, Any]:
+    """Resolved artifacts, real session diagnostics and identity-checked standalone forward receipts."""
+    from roop_3d.server.model_status import component_status
+    return component_status(request.app.state)
 
 
 @router.get("/engines/readiness")

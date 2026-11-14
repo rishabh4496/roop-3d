@@ -254,3 +254,53 @@ Rewritten: the identity-lock session gate tests (now assert withholding and fail
 - Many backend test files fail or error at collection from the earlier Phase 0 purge (examples: `test_stage14_orchestrator`, `test_stage03_registry`, `test_stage06_model_hub`, `test_head_tracking_3d`, `test_head_tracking_stream`, `test_identity_asset_session`, `test_remediation_stage2`, `test_flame_and_liveportrait`); they reference deleted swapper roles, engines and modules and need a separate test-suite rewrite. I did not baseline them against the pre-stage tree.
 - `reconstruction/reenactment.py` lines 155-157 use an undefined name `group` (pyflakes); it was not edited here.
 - Compositor modules `boundary_fusion`, `robust_fusion`, `masks` and others remain and are used only by the 3D path; `reconstruction/tps_fallback.py` is kept for its canonical landmark set and PnP solver (the 2.5D warper is gone; the docstring now says so).
+
+## Stage 1 — Pure-3D model availability and execution providers
+
+**Scope:** model inputs, real standalone component forwards, provider initialization, and component-status API/UI. This does **not** wire the production renderer or certify a finished video render.
+
+### Repairs
+
+- Added `models/pure3d_models.json` and `models/pure3d.py` for explicit required-component identities, verified local resolution, acquisition instructions, and head-asset integrity checks. The existing mathematical `UVSynthesizer` needs no neural texture-generator checkpoint.
+- Unified model identities with the authoritative registry; removed fabricated universal hashes/URLs. Local placement, exact registry-byte identity, license review, successful initialization, and executed inference are separate facts. Local-use policy does not grant commercial rights.
+- Prefer the resolvable Buffalo `det_10g.onnx` artifact rather than a same-byte SCRFD alias with incomplete governance metadata. Detector selection now checks inference eligibility, not only file presence. FaceSet landmark loading uses the registry instead of opening sibling model paths directly.
+- Default ONNX sessions try CUDA, DirectML, then CPU. TensorRT remains explicit opt-in. Actual initialization/forward exceptions retain their text; advisory preload/conversion warnings do not turn a successful load into an unavailable engine. Fixed scalar fidelity-input binding and FP16 image/DOUBLE scalar inputs for the real UltraMax graph.
+- Added lazy optional PyTorch CUDA/DirectML/CPU tensor-operation probing in `core/torch_device.py`; wired automatic splat device selection and explicit UV GPU sampling to it. Explicit sampling failure raises a structured diagnostic instead of silently executing CPU. **PyTorch is not installed in this venv:** its structured `PYTORCH_NOT_INSTALLED` diagnostic was exercised, not successful PyTorch GPU execution. Required verified modules below use ONNX Runtime or NumPy/OpenCV/SciPy.
+- Hair-exclusion parser absence/failure now raises a structured error instead of returning an empty forbidden mask.
+- `GET /api/v1/models/components` and the workstation Engine & Model Rack display resolved file, integrity/license evidence, actual resident provider/load/error diagnostics, fallback warnings, and file-identity-bound standalone forward receipts. Saved forwards never imply resident sessions or production render readiness.
+- Fixed the launcher factory mismatch. Removed 13 retired Stage-0.5 fields from the existing ignored runtime config so current Settings can load; retained remaining user settings. Normal startup then exposed a separate `JOB_STORE_INVALID` failure. Persisted jobs were preserved, not rewritten or deleted.
+
+### Stage 1 Verification Report
+
+**Ran from `app/`, using the active Pinokio interpreter:**
+
+```bat
+"roop_3d/.venv/Scripts/python.exe" -B -m roop_3d.tools.verify_stage1
+```
+
+Test image: actual `0.png` in `app/facesets/harjot.fsz`. Each row executed its real adapter/mathematical implementation. No fake session or replacement engine was used.
+
+| Component | Result | Actual execution backend |
+|---|---|---|
+| Buffalo detector | PASS; 1 face, confidence 0.7776 | CUDAExecutionProvider |
+| ArcFace embedder | PASS; finite unit 512-vector | CUDAExecutionProvider |
+| 1k3d68 landmarker | PASS; 68 x 3 | CUDAExecutionProvider |
+| Dense contour landmarker | PASS; 106 x 2 | CUDAExecutionProvider |
+| MakeHuman head reconstructor | PASS; fitted 4,289 vertices / 8,524 triangles; RMS 1.8784 px | CPU, NumPy/SciPy |
+| UV texture synthesis | PASS; 128 x 128 atlas with observed texels | CPU, NumPy/OpenCV |
+| Perspective UV mesh rasterization | PASS; 3,866 visible triangles / 39,134 covered pixels | CPU, NumPy/OpenCV |
+| Hair-excluding semantic parser | PASS; normalized 19-class probabilities | CUDAExecutionProvider |
+| XSeg mask | PASS; finite 1 x 256 x 256 x 1 tensor | CUDAExecutionProvider |
+| UltraMax canonical-UV detailer | PASS; 1024 x 1024 atlas, 325,479 changed channel values | CUDAExecutionProvider |
+
+**10/10 passed.** Machine: RTX 4070. Structured receipts: `app/roop_3d/.runtime/stage1_verification.json`; reproducible verifier: `app/roop_3d/tools/verify_stage1.py`. The reconstruction pass is a single-view template fit, not proof of observed back-of-head identity. UltraMax normalization remains the existing CodeFormer RGB [-1,1] convention, not independently verified upstream preprocessing or photorealism.
+
+### Additional observed checks and limits
+
+- Focused receipt/governor/hardware tests: **13 passed**.
+- Frontend `npm run typecheck` and `npm run lint`: **passed**.
+- Provider-order/DirectML-admission smoke and semantic missing-parser refusal: **passed**. DirectML is not installed in this ORT build; no DirectML hardware execution is claimed.
+- Browser inspection and screenshots exercised the actual workstation diagnostic panel. API returned HTTP 200, all ten top-level standalone receipts verified, and `render_ready=false`. This diagnostic-only launch explicitly disabled jobs and lifespan because normal startup stops at the preserved invalid job store; it is not proof of normal application startup.
+- No packages, model weights, FaceSets, or sibling-application files were changed. No new download was needed: all required inputs were present.
+- **Production blockers remain:** `RENDERER_NOT_WIRED` and persisted `JOB_STORE_INVALID`. A passing component canary does not make an unwired render engine selectable.
+- Real missing-DirectML -> CPU detector canary: **passed**, nine finite output tensors; exact DirectML-unavailable diagnostic retained without marking the CPU-loaded component unavailable.

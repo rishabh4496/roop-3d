@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "evidence_scope": "Independent app/models bytes hashed read-only on 2026-11-15. This records byte identity only, not license approval, graph compatibility, provider execution or production rendering readiness.",
+  "models": [
+    {
+      "model_id": "ultramax_uv",
+      "name": "ultramax.onnx",
+      "role": "uv_enhancer",
+      "role_evidence": "Local 512-tile enhancer candidate for canonical UVTextureDetailer only. Never a screen-space frame or crop restorer.",
+      "filenames": ["ultramax.onnx"],
+      "expected_sha256": "5414b2c989eb93feb7b5bccd22a1a9f3842a127411932663d03884af140a48b6",
+      "byte_size": 188576500,
+      "input_output_contract": {
+        "state": "VERIFIED_LOCAL",
+        "evidence": "Static ONNX metadata inspection with onnx.load(load_external_data=False), 2026-11-15; no session or inference.",
+        "inputs": [
+          {"name":"x","dtype":"FLOAT16","shape":["batch",3,512,512]},
+          {"name":"w","dtype":"DOUBLE","shape":[]}
+        ],
+        "outputs": [
+          {"name":"y","dtype":"FLOAT16","shape":["batch",3,"Convy_dim_2","Convy_dim_3"]},
+          {"name":"logits","dtype":"FLOAT16","shape":["Transposelogits_dim_0","Transposelogits_dim_1",1024]},
+          {"name":"style_feat","dtype":"FLOAT16","shape":["Convstyle_feat_dim_0",256,"Convy_dim_2","Convy_dim_3"]}
+        ],
+        "opsets": [{"domain":"","version":11}],
+        "external_data": [],
+        "normalization_evidence": "UNKNOWN: no normalization metadata published in this file"
+      },
+      "status": "verified_local",
+      "locator": {"scope": "application", "path": "models/ultramax.onnx"},
+      "evidence": "sha256sum of app/models/ultramax.onnx and filesystem size observed on 2026-11-15; no upstream source or license inferred from the filename.",
+      "verified_at": "2026-11-15",
+      "license_id": "UNKNOWN",
+      "license_notice": "Upstream terms for these exact bytes are unreviewed. Existing explicit local-use policy permits local evaluation only; no commercial rights or redistribution approval is asserted. Obtain a compatible export under your own license and place it in app/models/ultramax.onnx. No verified public download is registered.",
+      "provenance_state": "VERIFIED_LOCAL",
+      "family_hint": "uv_enhancer",
+      "serialization_format": "ONNX",
+      "security_status": "REVIEW_REQUIRED"
+    }
+  ]
+}

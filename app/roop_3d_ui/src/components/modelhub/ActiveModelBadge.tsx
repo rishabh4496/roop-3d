@@ -32,7 +32,7 @@ function Row({ label, stage, active, selected }: { label: string; stage: string;
   );
 }
 
-/** Live read-back of the exact weight file each stage currently has in VRAM (`GET /models/active`). */
+/** Live read-back of loaded CPU/GPU sessions (`GET /models/active`), not a VRAM residency claim. */
 export default function ActiveModelBadge({ selected }: { selected?: Partial<Record<string, string>> }) {
   useActiveModelPolling();
   const value = useActiveModels(state => state.value);
@@ -41,7 +41,7 @@ export default function ActiveModelBadge({ selected }: { selected?: Partial<Reco
   const stages = ['detector', ...Object.keys(value?.active ?? {}).filter(stage => stage !== 'detector')];
   return (
     <section className="rack-section active-models" aria-label="Loaded models" data-testid="active-models">
-      <h4>Loaded in VRAM</h4>
+      <h4>Loaded model sessions</h4>
       <ul className="active-model-list">
         {stages.map(stage => (
           <Row key={stage} label={labelOf(stage)} stage={stage} active={value?.active?.[stage] ?? null} selected={selected?.[stage] ?? (value?.selected as Record<string, string | undefined> | undefined)?.[`${stage}_model`]} />

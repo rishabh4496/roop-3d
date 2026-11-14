@@ -492,7 +492,11 @@ class BoundaryGaussianSplatRenderer:
             raise ValueError("Gaussian splats are limited to eyebrow, eyelash, beard_stubble, and inner_mouth regions")
         reference = next((v for v in (splats.points_camera, splats.colors_bgr, mesh_depth) if _is_tensor(v)), None)
         if device is None:
-            device = str(reference.device) if reference is not None else ("cuda" if torch.cuda.is_available() else "cpu")
+            if reference is not None:
+                device = reference.device
+            else:
+                from roop_3d.core.torch_device import select_torch_device
+                device = select_torch_device().device
         depth = torch.as_tensor(mesh_depth, dtype=torch.float32, device=device)
         points = torch.as_tensor(splats.points_camera, dtype=torch.float32, device=device)
         colors = torch.as_tensor(splats.colors_bgr, dtype=torch.float32, device=device)
