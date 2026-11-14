@@ -74,3 +74,4 @@ FLAME*.zip
 
 # Local assistant & IDE state
 .claude/
+.omp/

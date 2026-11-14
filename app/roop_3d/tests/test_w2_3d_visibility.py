@@ -10,7 +10,6 @@ from roop_3d.core.errors import DomainError
 from roop_3d.mesh_raycaster import MeshRaycaster
 from roop_3d.reconstruction.geometry_types import CameraIntrinsics, Mesh3D
 from roop_3d.reconstruction.makehuman_template import makehuman_template
-from roop_3d.reconstruction.tps_fallback import build_canonical_head_mesh
 
 ASSET = Path(__file__).resolve().parents[1] / "reconstruction" / "assets" / "makehuman_head_v1.npz"
 INTR = CameraIntrinsics(fx=500.0, fy=500.0, cx=256.0, cy=256.0, width=512, height=512)
@@ -23,7 +22,8 @@ def _vis(mesh, yaw, **pose):
 
 @pytest.fixture(scope="module")
 def canonical():
-    return build_canonical_head_mesh(68)
+    # Closed full-head shell: the former 68-landmark 2.5D strip fixture was removed with the Phase 0 purge.
+    return _sphere_head()
 
 
 def _sphere_head(rings=40, segments=48) -> Mesh3D:
@@ -52,27 +52,6 @@ def _sphere_head(rings=40, segments=48) -> Mesh3D:
     # make sure the winding is outward (normal . radial > 0) for the test mesh itself
     outward = np.einsum("ij,ij->i", mesh.compute_face_normals(), mesh.vertices[mesh.faces].mean(axis=1))
     return mesh if (outward > 0).mean() > 0.9 else Mesh3D(mesh.vertices, mesh.faces[:, [0, 2, 1]])
-
-
-def test_frontal_canonical_head_is_almost_fully_visible(canonical):
-    result = _vis(canonical, 0.0)
-    assert result.vertex_visible.mean() >= 0.95
-    assert result.vertex_depth_tested.all()
-    assert result.visibility_map.max() > 0.9 and result.execution_time_ms > 0
-
-
-@pytest.mark.parametrize("yaw", [60.0, 75.0, 90.0])
-def test_far_side_is_occluded_and_near_side_visible_on_both_yaw_signs(canonical, yaw):
-    # canonical x>0 is the subject's left cheek/eye (image right); +yaw (nose to image right) hides it.
-    far_cheek, near_cheek, far_eye, near_eye, nose = 15, 1, 45, 36, 30
-    pos, neg = _vis(canonical, yaw).vertex_visible, _vis(canonical, -yaw).vertex_visible
-    assert not pos[far_cheek] and pos[near_cheek] and pos[near_eye]
-    assert not neg[near_cheek] and neg[far_cheek] and neg[far_eye]
-    if yaw >= 75.0:      # at 60 deg the outer eye corner is still genuinely in view; from 75 deg the nose hides it
-        assert not pos[far_eye] and not neg[near_eye]
-    if yaw < 90:
-        assert pos[nose] and neg[nose]
-    assert _vis(canonical, yaw).self_occluded_fraction > 0.25
 
 
 def test_visibility_is_mirror_symmetric_on_a_symmetric_mesh():

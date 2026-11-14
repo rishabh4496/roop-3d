@@ -174,8 +174,7 @@ def _cpu(c: _Context, s: Section) -> None:
     logical = hardware.logical_cpu_count if hardware else os.cpu_count()
     s.add("Logical / physical cores", f"{show(logical)} / {show(hardware.physical_cpu_count if hardware else None)}")
     s.add("System RAM", f"{mib(hardware.system_ram_total_mib) if hardware else NOT_MEASURED} · available {mib(hardware.system_ram_available_mib) if hardware else NOT_MEASURED}")
-    s.add("Execution threads / restorer threads", f"{settings.execution_threads} / {settings.restorer_threads}")
-    s.add("Restorer pool size · stream batch", f"{settings.restorer_pool_size} · {settings.stream_batch_size}")
+    s.add("Execution threads · stream batch", f"{settings.execution_threads} · {settings.stream_batch_size}")
     s.add("Concurrent jobs (max)", settings.max_concurrent_jobs)
     try:
         from roop_3d.execution.worker_pools import _cpu_workers

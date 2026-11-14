@@ -111,7 +111,7 @@ export default function FacesetBuilder({ sourceId, onSaved, label = 'Build / Edi
     <button className="button primary" disabled={busy || running || !selected.length || !name.trim()} onClick={() => void save()}>Save &amp; Activate .fsz Faceset</button></>}
     {!!cluster && selected.length >= 1 && selected.length <= 3 && cluster.detections <= 3 && <section aria-label="Single photo 3D synthesis">
       <button className="button primary" disabled={busy || running || !name.trim()} onClick={() => void synthesize()}>Synthesize Full 36-Angle 3D Faceset (.fsz)</button>
-      <p>Creates 33 views at yaw −75° to +75° in 15° steps and pitch −30° / 0° / +30°, plus three frontal views at (yaw, pitch): (0°, −15°), (0°, +15°), (+7.5°, 0°). UltraMax enhances every angle; ArcFace scores and UV textures are stored. Extreme-angle identity confidence may be low. Hidden detail is generated and labelled synthetic.</p>
+      <p>Creates 33 views at yaw −75° to +75° in 15° steps and pitch −30° / 0° / +30°, plus three frontal views at (yaw, pitch): (0°, −15°), (0°, +15°), (+7.5°, 0°). ArcFace scores and UV textures are stored. Extreme-angle identity confidence may be low. Hidden detail is generated and labelled synthetic.</p>
     </section>}
   </DialogPanel></div>}</>;
 }

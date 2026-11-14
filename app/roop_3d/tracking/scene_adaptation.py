@@ -27,8 +27,8 @@ import numpy as np
 
 from roop_3d.core.errors import DomainError
 from roop_3d.core.pose import rotation_from_euler
-from roop_3d.reconstruction.expression_tps import layout_is_plausible
-from roop_3d.reconstruction.geometry_types import WeakPerspectiveCamera
+from roop_3d.reconstruction.landmark_layout import layout_is_plausible
+from roop_3d.reconstruction.geometry_types import PerspectiveCamera
 from roop_3d.reconstruction.multiview_fit import (
     SIGMA_OBS_M,
     SIGMA_PRIOR_XY_M,
@@ -123,7 +123,7 @@ class _Sample:
     fit: object = None              # ViewPoseFit against the anchors currently in use
 
 
-def _camera(fit) -> WeakPerspectiveCamera:
+def _camera(fit) -> PerspectiveCamera:
     return fit.camera()
 
 

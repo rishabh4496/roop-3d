@@ -1,7 +1,7 @@
 """19-Class Region Masking + DFL XSeg + Text-Prompted CLIPSeg Masking Engine.
 
 Composes four GPU-resident layers:
-1. Geometric 3D hull mask (derived from 3ddfa_v2 / 2d106det / 1k3d68 landmarks).
+1. Geometric 3D hull mask (derived from 2d106det / 1k3d68 landmarks).
 2. Semantic region selector (bisenet_resnet_34.onnx) for skin, eyebrows, eyes, nose, mouth/lips, eyeglasses.
 3. Neural foreground occluder (xseg_3.onnx) preserving hands, hair strands, microphones, and props.
 4. Text-prompted CLIPSeg mask (clipseg_rd64_refined.onnx) for user-prompted custom object protection.

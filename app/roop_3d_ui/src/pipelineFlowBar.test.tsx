@@ -5,11 +5,11 @@ import { expect, it, vi } from 'vitest';
 import PipelineNodeFlowBar from './components/workstation/PipelineNodeFlowBar';
 import { PIPELINE_ALT_NODES, PIPELINE_NODES, formatMs, nodeBuffer, pipelineNode, stageLatency } from './components/workstation/pipeline';
 
-const LATENCY = { detection_ms: 12.4, swap_ms: 31.2, retarget_ms: 4.5, projection_ms: 2.25, total_ms: 88.9 };
+const LATENCY = { detection_ms: 12.4, render_ms: 31.2, tracking_ms: 4.5, projection_ms: 2.25, total_ms: 88.9 };
 
 it('maps each stage to the measured latency fields, and reports unmeasured stages as null instead of inventing a number', () => {
   const timed = Object.fromEntries(PIPELINE_NODES.map(node => [node.id, stageLatency(node, LATENCY)]));
-  expect(timed).toEqual({ input: 12.4, pose: 4.5, uv: 2.25, lighting: null, swap: 31.2, restorer: null, matte: null, final: 88.9 });
+  expect(timed).toEqual({ input: 12.4, pose: 4.5, uv: 2.25, lighting: null, head: 31.2, matte: null, color: null, final: 88.9 });
   expect(stageLatency(PIPELINE_NODES[0], null)).toBeNull();
   expect(stageLatency(PIPELINE_NODES[0], { detection_ms: Number.NaN })).toBeNull();
   expect(stageLatency(PIPELINE_NODES[0], { detection_ms: -1 })).toBeNull();
@@ -20,7 +20,7 @@ it('maps each stage to the measured latency fields, and reports unmeasured stage
 
 it('resolves the Normals chip to the normal_map buffer without making it a ninth hotkey stage', () => {
   expect(PIPELINE_NODES).toHaveLength(8);
-  expect(PIPELINE_ALT_NODES.map(node => [node.id, node.parent, node.buffer])).toEqual([['expression', 'swap', 'expression'], ['normal', 'lighting', 'normal_map']]);
+  expect(PIPELINE_ALT_NODES.map(node => [node.id, node.parent, node.buffer])).toEqual([['expression', 'head', 'expression'], ['normal', 'lighting', 'normal_map']]);
   expect(nodeBuffer('expression')).toBe('expression');
   expect(nodeBuffer('normal')).toBe('normal_map');
   expect(pipelineNode('normal')?.label).toBe('3D Normal Map');
@@ -40,12 +40,12 @@ it('renders one single-click solo card per stage with its latency, the Normals c
     expect(host.querySelector('[data-node="lighting"]')?.classList.contains('solo')).toBe(true);     // soloing Normals highlights its parent stage
     expect(host.querySelector<HTMLButtonElement>('[aria-label="Solo 3D Normal Map"]')?.getAttribute('aria-pressed')).toBe('true');
     expect(host.querySelector('.pipeline-flow-status')?.textContent).toContain('Frame 42 · total 89 ms');
-    await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Solo UltraMax High-Res"]')!.click());
-    expect(onSolo).toHaveBeenCalledWith('restorer'); expect(onSelect).toHaveBeenCalledWith('restorer');
+    await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Solo Colour Match & Grade"]')!.click());
+    expect(onSolo).toHaveBeenCalledWith('color'); expect(onSelect).toHaveBeenCalledWith('color');
     await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Solo 3D Normal Map"]')!.click());
     expect(onSolo).toHaveBeenLastCalledWith('normal');
-    await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Bypass UltraMax High-Res"]')!.click());
-    expect(onBypass).toHaveBeenCalledWith('restorer');
+    await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Bypass Colour Match & Grade"]')!.click());
+    expect(onBypass).toHaveBeenCalledWith('color');
     expect(host.querySelectorAll('[aria-label^="Bypass"]')).toHaveLength(1);                         // only the optional stage can be bypassed
   } finally { await act(async () => root.unmount()); host.remove(); }
 });

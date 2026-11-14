@@ -26,7 +26,6 @@ from roop_3d.reconstruction.geometry_types import (
     rotation_matrix_to_rodrigues,
 )
 from roop_3d.reconstruction.tps_fallback import (
-    build_canonical_head_mesh,
     get_canonical_3d_landmarks,
     solve_pose_pnp,
 )
@@ -159,53 +158,6 @@ class FLAMEModel:
     def get_landmarks(self, vertices: np.ndarray) -> np.ndarray:
         """Extract (N_lm, 3) landmarks from mesh vertices."""
         return vertices[self.landmark_indices]
-
-
-class SyntheticFLAMEModel(FLAMEModel):
-    """Synthetic parametric head model for testing and fallback verification."""
-
-    def __init__(self, num_shape: int = 10, num_expr: int = 10):
-        base_mesh = build_canonical_head_mesh(landmark_count=68)
-        n_verts = len(base_mesh.vertices)
-        landmark_indices = np.arange(68, dtype=np.int32)
-
-        # Construct synthetic orthogonal shape components (width, height, nose, jaw)
-        shape_basis = np.zeros((n_verts, 3, num_shape), dtype=np.float32)
-        v = base_mesh.vertices
-
-        # Mode 0: Global face width/breadth scale
-        shape_basis[:, 0, 0] = v[:, 0] * 0.15
-        # Mode 1: Global face height scale
-        shape_basis[:, 1, 1] = v[:, 1] * 0.15
-        # Mode 2: Nose depth protrusion
-        nose_mask = (v[:, 1] > -0.03) & (v[:, 1] < 0.04) & (np.abs(v[:, 0]) < 0.03)
-        shape_basis[nose_mask, 2, 2] = 0.015
-        # Mode 3: Jaw width
-        jaw_mask = v[:, 1] > 0.04
-        shape_basis[jaw_mask, 0, 3] = np.sign(v[jaw_mask, 0]) * 0.010
-
-        # Construct synthetic expression components
-        expr_basis = np.zeros((n_verts, 3, num_expr), dtype=np.float32)
-        # Mode 0: Smile (mouth corners pull up and out)
-        corners = [48, 54]
-        for c in corners:
-            expr_basis[c, 0, 0] = np.sign(v[c, 0]) * 0.008
-            expr_basis[c, 1, 0] = -0.006
-        # Mode 1: Eyebrow raise (eyebrows move up)
-        brows = list(range(17, 27))
-        for b in brows:
-            expr_basis[b, 1, 1] = -0.010
-        # Mode 2: Mouth open (lower lip moves down)
-        lower_lip = [57, 58, 59, 65, 66, 67]
-        for lip in lower_lip:
-            expr_basis[lip, 1, 2] = 0.012
-
-        super().__init__(
-            base_mesh=base_mesh,
-            landmark_indices=landmark_indices,
-            shape_basis=shape_basis,
-            expr_basis=expr_basis,
-        )
 
 
 # ---------------------------------------------------------------------------

@@ -160,7 +160,7 @@ class HeadTrack:
         flip = np.diag([1.0, -1.0, 1.0])
         quats = _continuous([_matrix_to_xyzw(flip @ np.asarray(f.camera.rotation, np.float64) @ flip) for f in kept])
         extras = {
-            "source": "VideoHeadTracker3D weak-perspective camera",
+            "source": "VideoHeadTracker3D camera",
             "dof": "rotation (3) + in-plane translation (2) measured; depth not metric (translation z = 0)",
             "translation_origin": "first tracked frame",
             "scale_px_per_m": [round(float(f.camera.scale), 4) for f in kept],

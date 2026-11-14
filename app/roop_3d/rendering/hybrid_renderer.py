@@ -91,7 +91,7 @@ class MultiViewCanonicalAggregator:
                               visibility_backend: str = "cpu") -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """Project decoded ``FaceSetDocument`` photographs into separate UV layers.
 
-        ``cameras`` maps FaceView.index to its fitted WeakPerspectiveCamera.
+        ``cameras`` maps FaceView.index to its fitted PerspectiveCamera (K[R|t]).
         Profiles remain separate observations instead of being averaged into a
         frontal atlas before view-conditioned rendering.
         """
@@ -558,7 +558,7 @@ class FastUVFallbackRenderer:
                displacement_uv_m=None, vertex_normals=None, displacement_gain: float = 1.0,
                sampling_device: str = "cpu", perspective: bool = True):
         """Warp the canonical atlas through the posed mesh; relief displaces mesh vertices first."""
-        from roop_3d.reconstruction.pose_blend import rasterize
+        from roop_3d.rendering.cpu_perspective_raster import rasterize
         from roop_3d.reconstruction.uv_synthesizer import remap_points
 
         mesh_vertices = _numpy_value(vertices).astype(np.float32, copy=True)

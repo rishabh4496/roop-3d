@@ -46,14 +46,13 @@ it('edits and deletes timeline keys through undoable commands', async () => {
   await act(async () => useHistoryStore.getState().undo()); expect(host.querySelectorAll('circle')).toHaveLength(0);
 });
 
-it('labels and keys the actual 2.5D / 3D blend when mesh mode is selected', async () => {
-  await act(async () => root.render(<CurveEditorTrack frame={10} totalFrames={100} parameters={{ pose_mode: 'mesh_blend', pose_strength: .6 }}/>));
+it('offers only true-3D curve parameters: no 2.5D blend, pose-correction or restorer-fidelity curve', async () => {
+  await act(async () => root.render(<CurveEditorTrack frame={10} totalFrames={100} parameters={{ relight_strength: .6 }}/>));
   const select = host.querySelector<HTMLSelectElement>('[aria-label="Curve parameter"]')!;
-  await act(async () => { Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')!.set!.call(select, 'pose_correction_strength'); select.dispatchEvent(new Event('change', { bubbles: true })); });
-  expect(host.textContent).toContain('0 = TPS 2.5D warp'); expect(host.textContent).toContain('1 = perspective 3D mesh projection');
-  expect(host.textContent).not.toContain('requires a configured 3D projection adapter');
-  await click([...host.querySelectorAll('button')].find(button => button.textContent === 'Add key at playhead')!);
-  expect(useHistoryStore.getState().curves.pose_correction_strength[0]).toMatchObject({ frame: 10, value: .6 });
+  const labels = [...select.options].map(option => option.textContent!);
+  expect(labels.join(' | ')).not.toMatch(/TPS|2\.5D|pose correction|fidelity|restor|frontaliz/i);
+  expect(labels.join(' | ')).toContain('SH relighting intensity');
+  expect(host.textContent).not.toContain('0 = TPS 2.5D warp');
 });
 
 it('blocks assignments and automatic merges for exclusions and reverses the role change', () => {

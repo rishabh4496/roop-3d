@@ -13,11 +13,11 @@ from roop_3d.reconstruction.mesh_io import (
     export_mesh_obj,
     load_mesh_obj,
 )
-from roop_3d.reconstruction.tps_fallback import build_canonical_head_mesh
+from roop_3d.reconstruction.makehuman_template import makehuman_template
 
 
 def test_export_mesh_obj_round_trip(tmp_path: Path):
-    mesh = build_canonical_head_mesh(landmark_count=68)
+    mesh = makehuman_template()
     # Synthetic texture image (64x64 BGR)
     tex_img = np.full((64, 64, 3), 150, dtype=np.uint8)
 
@@ -45,7 +45,7 @@ def test_export_mesh_obj_round_trip(tmp_path: Path):
 
 
 def test_export_mesh_glb_structure(tmp_path: Path):
-    mesh = build_canonical_head_mesh(landmark_count=68)
+    mesh = makehuman_template()
     tex_img = np.full((64, 64, 3), 180, dtype=np.uint8)
 
     glb_path = export_mesh_glb(

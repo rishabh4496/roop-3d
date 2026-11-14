@@ -38,5 +38,5 @@ export function withSkullBlend(parameters: WorkstationParameters, blend: number)
 
 export const swapScopeTouched = (parameters: WorkstationParameters): boolean => parameters.swap_scope !== undefined || parameters.skull_blend !== undefined;
 
-/** The silhouette step belongs to the 3D head render modes; the plain 2D swap never produces a head silhouette to replace. */
-export const swapScopeApplies = (parameters: WorkstationParameters): boolean => !!parameters.render_mode && parameters.render_mode !== 'standard';
+/** The full-head render always produces a head silhouette, so the scope selector always applies. */
+export const swapScopeApplies = (_parameters: WorkstationParameters): boolean => true;

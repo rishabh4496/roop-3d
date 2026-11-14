@@ -204,43 +204,61 @@ describe('FrameNavigator', () => {
 
 describe('StudioInspector', () => {
   const base = { caps: null, sheet: null, sources: SOURCES, assignedId: '', onAssign: vi.fn(), coverage: null, mesh: null, reconstructionPicker: null, panelsRef: () => {}, processing: null };
-  it('3D render mode adds and removes its key; relighting gates the light probe; unselectable engines are disabled', async () => {
-    api.mockResolvedValue({ engines: [{ engine_id: 'reference_onnx', name: 'Reference', status: 'READY_FOR_INFERENCE', selectable: true, actual_inference_available: true, evidence: 'ok' },
-      { engine_id: 'x', name: 'X', status: 'NOT_INSTALLED', selectable: false, actual_inference_available: false, evidence: 'absent' }] });
+  const TRUE3D_OPTIONS = {
+    renderer: { wired: false, state: 'UNAVAILABLE', code: 'RENDERER_NOT_WIRED', message: '3D renderer not wired' },
+    head_topology_engines: [
+      { id: 'MakeHuman-CC0-Craniofacial-3D', label: 'MakeHuman', registry_id: 'makehuman_cc0', available: true, state: 'VERIFIED_LOCAL', reason: null },
+      { id: 'FLAME-FullHead-3D', label: 'FLAME', registry_id: 'flame2023_open', available: false, state: 'NOT_INSTALLED', reason: 'FLAME 2023 Open is not installed' }],
+    shader_modes: [
+      { id: '3D-PBR-Subsurface-Scattering + Neural-Deferred-UV', label: 'PBR', available: false, reason: '3D renderer not wired', default: true },
+      { id: '3D-Gaussian-Head-Avatar', label: 'Gaussian', available: false, reason: '3D renderer not wired', default: false }],
+    camera: { fov_range_deg: [5, 170], focal_range_px: [50, 100000], auto_prior_fov_deg: 55 },
+    defaults: {},
+  };
+  const answer = (engines: unknown[] = []) => async (path: string) => {
+    if (path === '/true3d/options') return TRUE3D_OPTIONS;
+    if (path === '/models') return [];
+    if (path === '/models/active') return { selected: { detector_model: 'scrfd' }, active: {} };
+    if (path === '/reconstruction/backbones') return { default: '3ddfa_v3_hrn', active: null, backbones: [] };
+    return { engines };
+  };
+
+  it('offers only true-3D controls: topology engines gate on the server, no render-mode radio, relighting gates the light probe, unselectable engines are disabled', async () => {
+    api.mockImplementation(answer([{ engine_id: 'reference_onnx', name: 'Reference', status: 'READY_FOR_INFERENCE', selectable: true, actual_inference_available: true, evidence: 'ok' },
+      { engine_id: 'x', name: 'X', status: 'NOT_INSTALLED', selectable: false, actual_inference_available: false, evidence: 'absent' }]));
     let parameters: WorkstationParameters = { ...DEFAULT_PARAMETERS };
     const setParameters = vi.fn((value: WorkstationParameters) => { parameters = value; });
     const mount = () => render(<StudioInspector {...base} track={TRACK('track_0000', 0, 9)} parameters={parameters} setParameters={setParameters} />);
     engineSelection.set({ engineId: 'reference_onnx' });
     await mount(); await flush();
-    const engine = host.querySelector('select[aria-label="Swap engine"]') as HTMLSelectElement;
+    const engine = host.querySelector('select[aria-label="Render engine"]') as HTMLSelectElement;
     expect((engine.querySelector('option[value="x"]') as HTMLOptionElement).disabled).toBe(true);
-    const radio = (label: string) => Array.from(host.querySelectorAll('[role="radiogroup"][aria-label="3D render mode"] [role="radio"]')).find(item => item.textContent === label) as HTMLButtonElement;
-    await act(async () => radio('3D Facial Warp').click());
-    expect(parameters.render_mode).toBe('pose_3d');
-    await mount();
-    expect(radio('3D Facial Warp').getAttribute('aria-checked')).toBe('true');
-    await act(async () => radio('Standard 2D Identity Swap').click());
-    expect('render_mode' in parameters).toBe(false);
-    expect(host.querySelector('[data-testid="light-probe"]')).toBeNull();
-    const relight = Array.from(host.querySelectorAll('.inspector-toggle')).find(item => item.textContent?.includes('3D relighting'))!.querySelector('input') as HTMLInputElement;
-    await act(async () => relight.click());
-    expect(parameters.relight).toBe(true);
+    expect(host.querySelector('[role="radiogroup"][aria-label="3D render mode"]')).toBeNull();         // the three 2D / 2.5D / 3D modes are gone
+    const topology = host.querySelector('select[aria-label="3D head topology engine"]') as HTMLSelectElement;
+    expect((topology.querySelector('option[value="FLAME-FullHead-3D"]') as HTMLOptionElement).disabled).toBe(true);   // not installed: listed, not selectable
+    expect(host.querySelector('[data-testid="true3d-topology-reason"]')).toBeTruthy();
+    expect(host.querySelector('[data-testid="renderer-status"]')!.textContent).toContain('3D renderer not wired');
+    await act(async () => { Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')!.set!.call(topology, 'MakeHuman-CC0-Craniofacial-3D'); topology.dispatchEvent(new Event('change', { bubbles: true })); });
+    expect(parameters.head_topology_engine).toBe('MakeHuman-CC0-Craniofacial-3D');
+    parameters = { ...parameters, relight: true, lighting_mode: 'manual', manual_light_yaw: -10, manual_light_pitch: 12 };
     await mount(); await flush();
     expect(host.querySelector('[data-testid="light-probe"]')).toBeTruthy();
     expect(host.textContent).toContain('-10° … 12°');
   });
 
-  it('lays the pipeline out as visible steps with Advanced Diagnostics and all nested groups open', async () => {
-    api.mockResolvedValue({ engines: [] });
+  it('lays the pipeline out as visible steps with Advanced Diagnostics and all nested groups open, with no enhancer step', async () => {
+    api.mockImplementation(answer());
     let parameters: WorkstationParameters = { ...DEFAULT_PARAMETERS };
     const setParameters = vi.fn((value: WorkstationParameters) => { parameters = value; });
     const mount = () => render(<StudioInspector {...base} track={null} parameters={parameters} setParameters={setParameters} footer={<div data-testid="footer-slot" />} />);
     await mount(); await flush();
-    for (const id of ['step-swap', 'step-mask', 'step-enhance']) expect(host.querySelector('[data-testid="' + id + '"]')).toBeTruthy();
+    for (const id of ['step-swap', 'step-mask', 'step-rack']) expect(host.querySelector('[data-testid="' + id + '"]')).toBeTruthy();
+    expect(host.querySelector('[data-testid="step-enhance"]')).toBeNull();
+    expect(host.querySelector('select[aria-label="Enhancer"]')).toBeNull();
     const drawer = host.querySelector('[data-testid="advanced-diagnostics"]') as HTMLDetailsElement;
     expect(drawer.open).toBe(true);
-    expect(drawer.querySelector('select[aria-label="Swap engine"]')).toBeTruthy();
-    expect(host.querySelector('[data-testid="step-swap"] select[aria-label="Swap engine"]')).toBeNull();
+    expect(drawer.querySelector('select[aria-label="Render engine"]')).toBeTruthy();
+    expect(host.querySelector('[data-testid="step-swap"] select[aria-label="Render engine"]')).toBeNull();
     expect([...drawer.querySelectorAll('.advanced-body > details')].every(item => (item as HTMLDetailsElement).open)).toBe(true);
     expect((host.querySelector('[data-testid="morph-section"]') as HTMLDetailsElement).open).toBe(true);
     expect(host.querySelector('[data-testid="footer-slot"]')).toBeTruthy();
@@ -248,42 +266,34 @@ describe('StudioInspector', () => {
     const toggle = host.querySelector('input[aria-label="XSeg mask and smart occluder"]') as HTMLInputElement;
     await act(async () => toggle.click());
     expect(parameters.occlusion_mode).toBe('robust');
-    // Step 3: choosing an enhancer turns restoration on at a sensible blend; None turns it off.
-    await mount();
-    const enhancer = host.querySelector('select[aria-label="Enhancer"]') as HTMLSelectElement;
-    await act(async () => { enhancer.value = 'ultramax'; enhancer.dispatchEvent(new Event('change', { bubbles: true })); });
-    expect(parameters.restorer_model).toBe('ultramax');
-    expect(parameters.restoration_blend).toBeCloseTo(0.7);
-    await mount();
-    expect((host.querySelector('select[aria-label="Enhancer"]') as HTMLSelectElement).value).toBe('ultramax');
-    const none = host.querySelector('select[aria-label="Enhancer"]') as HTMLSelectElement;
-    await act(async () => { none.value = 'none'; none.dispatchEvent(new Event('change', { bubbles: true })); });
-    expect(parameters.restoration_blend).toBe(0);
   });
 
-  it('a failed model hub shows the reason and retries on request (no endless skeleton)', async () => {
-    // The Engine & Model Rack also reads /models and /models/active; answer them by path so only the hub call fails once.
-    let hubCalls = 0;
-    api.mockImplementation(async (path: string) => { if (path === '/models') return []; if (path === '/models/active') return { selected: {}, active: {} }; if (path === '/reconstruction/backbones') return { default: '3ddfa_v3_hrn', active: null, backbones: [] }; hubCalls += 1; if (hubCalls === 1) throw new Error('offline'); return { engines: [] }; });
+  it('a failed 3D options request shows the reason and retries on request (no endless skeleton)', async () => {
+    let optionCalls = 0;
+    api.mockImplementation(async (path: string) => {
+      if (path === '/true3d/options') { optionCalls += 1; if (optionCalls === 1) throw new Error('offline'); return TRUE3D_OPTIONS; }
+      return answer()(path);
+    });
     await render(<StudioInspector {...base} track={null} parameters={{ ...DEFAULT_PARAMETERS }} setParameters={vi.fn()} />);
     await flush();
-    expect(host.textContent).toContain('Model hub unavailable: offline');
+    expect(host.textContent).toContain('3D options unavailable: offline');
     await act(async () => byText('Retry')!.click());
     await flush();
-    expect(host.querySelector('select[aria-label="Swap engine"]')).toBeTruthy();
-    expect(hubCalls).toBe(2);
+    expect(host.querySelector('select[aria-label="3D head topology engine"]')).toBeTruthy();
+    expect(optionCalls).toBeGreaterThan(1);                                  // the retry refetched
   });
 });
 
 describe('live preview payload (preview without a full render)', () => {
   const request = { target_path: 't.mp4', inspection_id: 'a'.repeat(32), face_mappings: [{ track_id: 'track_0000', faceset_id: 'alice' }], processing: 'local' as const, remote_consent: false as const, trim_start_seconds: null, trim_end_seconds: null };
   it('omits Stage 7 fields at their defaults and carries them when set', () => {
-    const plain = buildLivePayload({ request, time: 1, fps: 25, parameters: { ...DEFAULT_PARAMETERS }, restorerAvailable: false })!;
-    expect(JSON.parse(JSON.stringify(plain))).not.toHaveProperty('render_mode');
+    const plain = buildLivePayload({ request, time: 1, fps: 25, parameters: { ...DEFAULT_PARAMETERS } })!;
+    expect(JSON.parse(JSON.stringify(plain))).not.toHaveProperty('render_mode');          // the render-mode taxonomy no longer exists
     expect(JSON.parse(JSON.stringify(plain))).not.toHaveProperty('occlusion_mode');
     expect(JSON.parse(JSON.stringify(plain))).not.toHaveProperty('relight');
-    const set = buildLivePayload({ request, time: 1, fps: 25, restorerAvailable: false, parameters: { ...DEFAULT_PARAMETERS, render_mode: 'reenactment_3d', occlusion_mode: 'robust', relight: true, lighting_mode: 'manual', manual_light_yaw: 10 } })!;
-    expect(set).toMatchObject({ render_mode: 'reenactment_3d', occlusion_mode: 'robust', relight: true, lighting_mode: 'manual', manual_light_yaw: 10, relight_strength: 0.8 });
+    const set = buildLivePayload({ request, time: 1, fps: 25, parameters: { ...DEFAULT_PARAMETERS, occlusion_mode: 'robust', relight: true, lighting_mode: 'manual', manual_light_yaw: 10 } })!;
+    expect(set).toMatchObject({ occlusion_mode: 'robust', relight: true, lighting_mode: 'manual', manual_light_yaw: 10, relight_strength: 0.8 });
+    expect(set).not.toHaveProperty('render_mode');
   });
 });
 

@@ -70,7 +70,7 @@ full explanation.
 ### 03 · Preview
 * **Snapshots A–D** store parameter sets; **Left / Right** choose what to compare; **Split Comparison Wipe**, **Restore Slot Settings**.
 * The **pipeline bar** shows the eight stages (*Input, 3D Pose & TPS Grid, 3D Normal Map, 3D Relighting (SH), Raw Swap, Occlusion & Seam Mask,
-  Restorer, Final Output*). **Solo** shows a stage on its own; **Bypass** skips an optional stage.
+  Final Output*). **Solo** shows a stage on its own; **Bypass** skips an optional stage.
 * The **viewport toolbar**: *Fit / zoom (1:1, 2:1, 4:1)*, *Grid*, *Overlays*, *Landmarks*, *Pose*, *Compare*, *Live swap*, *PNG* (save the frame),
   *Snapshot*, *Float* (floating preview), *PiP* (picture in picture) and full screen.
 * Left pane: the source frame with face overlays. Right pane: the swapped frame, or the output of a finished render.
@@ -81,11 +81,10 @@ full explanation.
 
 ### 04 · Inspector
 * **Target identity**: facts about the selected track and its source/role.
-* **Models & engine**: the swap engine (with a recommendation and the reason, and why unavailable engines cannot be chosen), the hardware profile in
-  words, and the restoration model (GPEN or CodeFormer). See [Engine comparison](ENGINE_COMPARISON.md).
-* **3D settings**: *Render mode* (Standard identity swap · 2.5D Pose-Aware Swap · Full 3D Volumetric Re-enactment) and the 3D viewer, which shows your FaceSet as a textured 3D head you can orbit (see [3D viewport](STAGE04_3D_VIEWPORT.md)).
-* **Pose, expression, masking and restoration parameters**: sliders with the recommended range for each, such as *2.5D → 3D pose blend*, *Pose
-  frontalization*, *TPS expression weight*, *Swap weight*, *Mask erosion*, *Mask feather*, *Colour match*, *Restorer blend*, *CodeFormer fidelity*.
+* **Models & engine**: the head topology engine (FLAME full head or MakeHuman CC0 craniofacial), the shader mode, the hardware profile in
+  words, and why an unavailable engine cannot be chosen. See [Engine and render options](ENGINE_COMPARISON.md).
+* **3D settings**: the head topology engine, shader mode, perspective camera (auto or manual focal length) and the 3D viewer, which shows your FaceSet as a textured 3D head you can orbit (see [3D viewport](STAGE04_3D_VIEWPORT.md)).
+* **Pose, expression and masking parameters**: sliders with the recommended range for each, such as *Mask erosion*, *Mask feather* and *Colour match*.
 * **Colour & lighting**: colour transfer (LAB statistics or stabilised histograms) and 3D relighting with a light-probe sphere.
 * **Processing**: the same settings as Settings → Workstation Preferences.
 

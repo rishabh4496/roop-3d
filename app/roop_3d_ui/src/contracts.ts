@@ -11,10 +11,12 @@ export interface Capabilities {
     supports_3d_hybrid?: boolean; state: string; license_state: string; inference_state: string; sha256?: string | null;
     verified?: boolean; governance_approved?: boolean | null; blocked?: boolean; local_trust?: boolean;
     license_id?: string; commercial_use?: string; license_notice?: string; manual_acceptance_required?: boolean;
-    role?: string; family_hint?: string }[];
+    role?: string; family_hint?: string; adapter_supported?: boolean | null; adapter_unsupported_reason?: string | null }[];
   workstation: { features: Record<string, Feature>; controls: Record<string, Record<string, string | null>>;
     tensorrt_mixed_precision?: { available: boolean; active: boolean; configured?: boolean; tensorrt_available: boolean;
       cuda_fp16_available: boolean; active_provider?: string | null; diagnostic?: string | null };
+    /** True-3D render path readiness: `wired` is false ("3D renderer not wired") until a real renderer is connected. */
+    renderer?: { wired: boolean; state: string; code?: string; message?: string; detail?: string };
     active_hardware_profile?: string; resolved_hardware_profile?: string;
     read_only_parameters: Record<string, string>; disabled_parameters: Record<string, string>; job_states: string[];
     job_controls: Record<string, string[]>; upload_chunk_bytes: number; max_asset_bytes: number };
@@ -65,7 +67,7 @@ export interface ExportOptions {
   profile?: 'standard_mp4' | 'high_quality_mp4' | 'archival_hevc10' | 'mov_workflow' | 'lossless_intermediate' | 'image_sequence' | 'color_preserving' | null;
   hdr_policy?: 'tonemap_sdr' | 'reject'; subtitles?: 'copy' | 'require' | 'drop'; sequence_format?: 'png' | 'tiff' | 'dpx';
 }
-export interface JobRequest { engine_id?: string; swapper_model_id?: string | null; detector_model_id?: 'scrfd' | 'retinaface' | 'yoloface' | null; identity_lock_id?: string | null; identity_blend?: {method: 'slerp' | 'linear'; source_face_ids: string[]; weights?: number[]} | null; target_path: string; inspection_id: string; face_mappings: Mapping[]; processing: 'local'; remote_consent: false; trim_start_seconds: number | null; trim_end_seconds: number | null; mask_base64?: string | null; mask_keyframes?: { start_frame: number; end_frame: number | null; mask_base64: string }[] | null; workstation_parameters?: WorkstationParameters | null; parameter_curves?: { tracks: Record<string, {frame: number; value: number; easing: string}[]> } | null; export?: ExportOptions | null; face_segments?: {cluster_id: string; track_id: string; start_frame: number; end_frame: number | null; role: string; faceset_id: string | null; source_view_index: number | null}[] | null }
+export interface JobRequest { engine_id?: string; detector_model_id?: 'scrfd' | 'retinaface' | 'yoloface' | null; identity_lock_id?: string | null; identity_blend?: {method: 'slerp' | 'linear'; source_face_ids: string[]; weights?: number[]} | null; target_path: string; inspection_id: string; face_mappings: Mapping[]; processing: 'local'; remote_consent: false; trim_start_seconds: number | null; trim_end_seconds: number | null; mask_base64?: string | null; mask_keyframes?: { start_frame: number; end_frame: number | null; mask_base64: string }[] | null; workstation_parameters?: WorkstationParameters | null; parameter_curves?: { tracks: Record<string, {frame: number; value: number; easing: string}[]> } | null; export?: ExportOptions | null; face_segments?: {cluster_id: string; track_id: string; start_frame: number; end_frame: number | null; role: string; faceset_id: string | null; source_view_index: number | null}[] | null }
 export interface Job { project_id?: string | null; effective_settings?: Config | null; job_id: string; state: JobState; request: JobRequest; progress: { frame: number; total_frames: number | null; fps: number; stage: string; stage_latency_ms?: number; stage_timings_ms?: Record<string, number> }; output: { output_path: string; frames: number; passes?: Record<string, string>; pass_manifest_path?: string | null; baked_video?: boolean } | null; failure: { message: string; code?: string; recoverable?: boolean } | null }
 export interface Track { track_id: string; first_frame: number; last_frame: number; first_timestamp_seconds: number; last_timestamp_seconds: number; thumbnail_base64: string; thumbnail_mime: string; landmark_count: number; pose_range: { yaw_degrees: [number, number] | null; pitch_degrees: [number, number] | null; roll_degrees: [number, number] | null; method: string }; bounding_box?: { x1: number; y1: number; x2: number; y2: number }; sampled_detections?: number }
 export interface DetectedFace {
@@ -77,6 +79,10 @@ export interface DetectedFace {
   landmarks68?: [number, number][];
   embedding?: number[];
   clusterId: string;
+  selectable?: boolean;
+  identityState?: string;
+  uncertaintyReason?: string | null;
+  clusterMatch?: { score: number | null; margin: number | null; reason: string };
   /** Legacy frame (pitch + = looking down). Prefer `pose3d` for anything shown to the user. */
   pose: { yaw: number; pitch: number; roll: number };
   /** Standard frame (pitch + = looking up), when the server provided it. */
@@ -107,7 +113,7 @@ export interface FaceSelectionState {
   activeSelection: string | null;
   hoveredFaceId: string | null;
 }
-export interface Inspection { inspection_id: string; target_sha256: string; tracks: Track[]; warnings: string[]; truncated: boolean; tracking_method?: string; identity_report_sha256?: string | null; scene_cut_frames?: number[] }
+export interface Inspection { inspection_id: string; target_sha256: string; tracks: Track[]; warnings: string[]; truncated: boolean; decoded_frames?: number; sampled_frames?: number; tracking_method?: string; identity_report_sha256?: string | null; scene_cut_frames?: number[] }
 export interface IdentitySheetTrack { track_id: string; persistent_id: number; first_frame: number; last_frame: number; segments: [number, number, number, number][]; missing_ranges: [number, number][]; visible_frames: number; swappable_frames: number; withheld_frames: number; withheld_reasons: Record<string, number>; state_frames: Record<string, number>; confidence_mean: number; confidence_min: number; scene_ids: number[]; thumbnails: { frame: number; timestamp_seconds: number; jpeg_base64: string }[] }
 export interface IdentitySheet { inspection_id: string; target_sha256: string; truncated: boolean; scene_cut_frames: number[]; warnings: string[]; tracks: IdentitySheetTrack[] }
 export interface IdentityLock { lock_id: string; revision: number; digest: string; target_path: string; target_sha256: string; inspection_id: string; assignments: { track_id: string; faceset_id: string; faceset_sha256: string }[]; excluded_tracks: string[]; status: { valid: boolean; reasons: { code: string; detail: string; track_id?: string; faceset_id?: string }[] } }
@@ -140,7 +146,7 @@ export interface Coverage {
   status?: string; observed_views?: number; sphere_coverage_count?: number; sphere_coverage_total?: number; sphere_coverage_pct?: number;
   generated_views?: number; generated_pose_points?: GeneratedPosePoint[];
   live_pose?: { yaw: number; pitch: number; roll: number }; observed_pose_points?: ObservedPosePoint[];
-  mesh_2_5d?: ReconstructedMesh; mesh_full_3d?: ReconstructedMesh; uv_texture_data_url?: string;
+  mesh_full_3d?: ReconstructedMesh; uv_texture_data_url?: string;
 }
 /** `identity_asset` is the Stage 3 per-FaceSet asset served by `GET /facesets/{id}/identity-asset/mesh` (glTF frame). */
 /** State of the `POST /faceset/reconstruct-3d` request that feeds the 3D viewer. */
@@ -149,9 +155,9 @@ export interface ReconstructionStatus { state: 'idle' | 'loading' | 'ready' | 'e
   refresh?: () => void;
   /** Id of the source FaceSet the request is for ('' while none is loaded). */
   sourceId?: string }
-/** `mesh` is the backend mesh frame of the `mesh_2_5d` / `mesh_full_3d` payloads (+x image-right, +y down, +z toward the viewer). */
+/** `mesh` is the backend mesh frame of the `mesh_full_3d` payload (+x image-right, +y down, +z toward the viewer). */
 export type ReconstructionFrame = 'opencv' | 'opengl' | 'mesh';
-export interface Reconstruction { method: 'flame' | 'tps_2_5d' | 'identity_asset';coordinate_system: ReconstructionFrame; vertices: number[][]; faces: number[][]; uvs: number[][] | null; face_uvs?: number[][] | null; texture: string | null; provenance: string; normals?: number[][] | null }
+export interface Reconstruction { method: 'flame' | 'identity_asset';coordinate_system: ReconstructionFrame; vertices: number[][]; faces: number[][]; uvs: number[][] | null; face_uvs?: number[][] | null; texture: string | null; provenance: string; normals?: number[][] | null }
 export interface Project {
   project_id: string;
   name: string;
@@ -193,7 +199,7 @@ export interface Event { type: string; sequence?: number; hardware?: Telemetry }
 
 export interface DetectedFaceItem {
   id: string;
-  track_id: string;
+  track_id: string | null;
   frame_index: number;
   timestamp: number;
   bbox: [number, number, number, number];
@@ -203,6 +209,10 @@ export interface DetectedFaceItem {
   pose3d?: { yaw: number; pitch: number; roll: number };
   pose_cell?: string;
   thumbnail_base64: string;
+  selectable?: boolean;
+  identity_state?: string;
+  uncertainty_reason?: string | null;
+  cluster_match?: { score: number | null; margin: number | null; reason: string };
 }
 
 export interface FrameFaceDetectionResponse {

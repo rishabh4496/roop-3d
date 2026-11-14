@@ -31,7 +31,7 @@ from pydantic import Field, model_validator
 
 from roop_3d.audit.isolation import safe_path, sha256_file
 from roop_3d.core.errors import DomainError
-from roop_3d.core.pose import Pose3D, estimate_pose_5pt, pose_cell
+from roop_3d.core.pose import Pose3D, estimate_pose_pnp, pose_cell
 from roop_3d.core.settings import Contract, runtime_path
 from roop_3d.core.storage import atomic_json, owned
 from roop_3d.engine.volumetric.preprocess import aligned_crop, transform_points
@@ -170,7 +170,7 @@ class FaceExtractService:
 
         box, points = faces[matched_index]
         points = np.asarray(points, np.float64)
-        pose = estimate_pose_5pt(points)
+        pose = estimate_pose_pnp(points)
         crop = aligned_crop(image, points, CROP_SIZE)
         embedding = _unit(self._recognizer().embed(image, points.astype(np.float32)))
         ok_png, png = cv2.imencode(".png", crop.image)
@@ -401,7 +401,7 @@ def scan_missing_angles(service, value):
             sampled+=1
             detections, _ = service._detector().detect(image, .5)
             for index, (_, points) in enumerate(sorted(detections, key=lambda item: float(item[0][0]))):
-                cell = pose_cell(estimate_pose_5pt(points)).name
+                cell = pose_cell(estimate_pose_pnp(points)).name
                 if cell in occupied: continue
                 embedding = service._recognizer().embed(image, np.asarray(points,np.float32))
                 similarity = float(_unit(embedding) @ _unit(np.asarray(document.canonical_embedding)))
@@ -442,7 +442,7 @@ def _analyze_photo(value: AnalyzePhotoRequest, request: Request):
         crop=aligned_crop(image,points,CROP_SIZE)
         ok,png=cv2.imencode('.png',crop.image)
         if not ok: continue
-        yaw,pitch,roll=estimate_pose_5pt(points).legacy_tuple()
+        yaw,pitch,roll=estimate_pose_pnp(points).legacy_tuple()
         sharpness=float(min(1,cv2.Laplacian(cv2.cvtColor(crop.image,cv2.COLOR_BGR2GRAY),cv2.CV_64F).var()/500))
         faces.append({'id':'photo_'+uuid.uuid4().hex[:12], 'thumbnailUrl':'data:image/png;base64,'+base64.b64encode(png).decode(),
                       'embedding':_unit(service._recognizer().embed(image,np.asarray(points,np.float32))).tolist(),

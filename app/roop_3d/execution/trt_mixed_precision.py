@@ -69,14 +69,8 @@ def _family_shape(model_name: str, rank: int) -> tuple[int, ...]:
         channels, height, width = 3, 112, 112
     elif any(token in folded for token in ("3dmm", "smirk", "flame", "craniofacial")):
         channels, height, width = 3, 224, 224
-    elif "inswapper" in folded:
-        channels, height, width = 3, 128, 128
     elif any(token in folded for token in ("texture_prior", "textureprior", "3d_texture")):
         channels, height, width = 3, 256, 256
-    elif any(token in folded for token in ("gpen", "realistic")):
-        channels, height, width = 3, 512, 512
-    elif "ultramax" in folded:
-        channels, height, width = 3, 512, 512
     elif any(token in folded for token in ("inpaint", "background")):
         channels, height, width = 4 if "latent" in folded else 3, 512, 512
     else:

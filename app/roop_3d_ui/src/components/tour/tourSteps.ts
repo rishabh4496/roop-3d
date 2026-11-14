@@ -36,9 +36,9 @@ export const TOUR_STEPS: TourStep[] = [
     title: 'Live preview & buffer soloing',
     summary: 'Dial the look in before you render.',
     points: [
-      'Click a node in the Pipeline Node Flow Bar to solo that buffer, such as the Mask or the Restorer output.',
+      'Click a node in the Pipeline Node Flow Bar to solo that buffer, such as the Mask or the Colour Match output.',
       'Drag the Split Comparison slider to wipe between the original and the swap.',
-      'Run a 3×3 Parameter Sweep to compare nine real previews and pick TPS expression or CodeFormer fidelity values.',
+      'Run a 3×3 Parameter Sweep to compare nine real previews and pick mask, colour or camera field-of-view values.',
     ],
   },
   {
@@ -46,7 +46,7 @@ export const TOUR_STEPS: TourStep[] = [
     title: 'Hardware-accelerated render queue',
     summary: 'Render once the Pre-Flight Linter is happy.',
     points: [
-      'Queue Render runs the Pre-Flight Render Linter first: TensorRT models, pose over-correction, UltraMax and VRAM / thread checks, many with a one-click fix.',
+      'Queue Render runs the Pre-Flight Render Linter first: TensorRT models, renderer and head-topology readiness, and VRAM / thread checks, many with a one-click fix.',
       'Jobs go to the persistent backend queue, so the render keeps going if you close this tab, and projects resume from their checkpoint after a restart.',
       'Watch the 3-stage run pill: Pre-Scan, Range Lock, then Render & Mux. Open #/processing for the per-frame bottleneck flamegraph.',
     ],

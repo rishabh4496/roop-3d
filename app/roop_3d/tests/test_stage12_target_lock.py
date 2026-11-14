@@ -45,17 +45,19 @@ def test_profile_is_bridged_by_margin_when_only_weakly_similar():
     assert out[1].cluster_id == 2                                         # the other person starts their own cluster
 
 
-def test_weak_match_uses_global_assignment_above_strict_gate():
+def test_weak_tie_is_ambiguous_and_does_not_update_gallery():
     a = person(6)
     reg = ClusterRegistry()
     reg.associate([ref(a)], 0)
     c2 = reg.associate([ref(person(7))], 1)[0].cluster_id
-    # a face that is equally close to both clusters must not be assigned to either (fragment, don't merge)
     c = reg.clusters[c2].bank[0].embedding
     both = unit(0.45 * a + 0.45 * c + 0.77 * unit(np.random.default_rng(99).normal(size=512)))
     assert 0.40 <= float(both @ a) and 0.40 <= float(both @ c)
+    # A near-tie keeps a continuity candidate but must not become a learned identity match.
+    bank_sizes = {key: len(cluster.bank) for key, cluster in reg.clusters.items()}
     out = reg.associate([ref(both)], 2)[0]
-    assert out.reason == "pose_bridge" and out.cluster_id in (1, c2)
+    assert out.reason == "ambiguous" and out.cluster_id in (1, c2)
+    assert {key: len(cluster.bank) for key, cluster in reg.clusters.items()} == bank_sizes
 
 
 def test_bank_grows_by_chain_linking_and_skips_redundant_poses():

@@ -68,7 +68,17 @@ def annotate(request: Request, path: str, frame_index: int, analyzed: list, face
     associations = registry.associate([ref_of(f, image) for f in analyzed], frame_index, learn=True)
     by_cluster = {l.cluster_id: l for l in locks.locks_for(path)}
     for face, assoc in zip(faces, associations):
-        if assoc.cluster_id is None:
+        if assoc.cluster_id is None or assoc.reason == "ambiguous":
+            # Ambiguous or unembedded matches keep a visible reason but expose no stable identity and can never be the target.
+            face["cluster_id"] = None
+            face["track_id"] = None
+            face["cluster_match"] = {"score": round(assoc.score, 4), "margin": round(assoc.margin, 4), "reason": assoc.reason}
+            face["identity_state"] = "uncertain"
+            face["uncertainty_reason"] = assoc.reason
+            face["selectable"] = False
+            face["is_target"] = False
+            face["target_lock_id"] = None
+            face["target_number"] = None
             continue
         cluster = registry.clusters[assoc.cluster_id]
         face["face_id"] = f"face {cluster.face_id}"
@@ -170,7 +180,7 @@ def _scan_keyframes(request: Request, lock: TargetIdentityLock, sample_count: in
                 analyzed = frames.analyzed_faces(lock.media_path, result, threshold) or []
                 if analyzed:
                     associations = registry.associate([ref_of(f, result.image) for f in analyzed], result.frame_index, learn=True)
-                    matched += sum(a.cluster_id == lock.cluster_id for a in associations)
+                    matched += sum(a.cluster_id == lock.cluster_id and a.reason != "ambiguous" for a in associations)
             except DomainError as error:
                 skipped += 1
                 log.info("keyframe %s skipped: %s", index, error.code)
@@ -210,6 +220,10 @@ def lock_from_frame(value: LockFromFrame, request: Request) -> dict:
     locks = store(request)
     try:
         annotate(request, value.path, result.frame_index, analyzed, dicts, result.image)
+        if dicts[chosen]["cluster_id"] is None:
+            raise DomainError("TARGET_IDENTITY_AMBIGUOUS",
+                              f"The selected face cannot be bound to a stable identity ({dicts[chosen]['uncertainty_reason']}); "
+                              "choose a clearer frame", 409)
         lock = locks.create(value.path, result.frame_index, ref_of(face, result.image),
                             cluster_id=dicts[chosen]["cluster_id"])
     except ValueError as error:

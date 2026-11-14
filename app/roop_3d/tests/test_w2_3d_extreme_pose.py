@@ -12,7 +12,7 @@ from roop_3d.mesh_raycaster import MeshRaycaster
 from roop_3d.reconstruction import pose_bins
 from roop_3d.reconstruction.pose_solver import (
     _FLIP, default_intrinsics_matrix, rotation_angle_deg, rotation_from_standard, solve_head_pose_6dof)
-from roop_3d.reconstruction.tps_fallback import build_canonical_head_mesh, get_canonical_3d_landmarks
+from roop_3d.reconstruction.tps_fallback import get_canonical_3d_landmarks
 
 W, H = 1280, 960
 K = default_intrinsics_matrix(W, H)
@@ -97,13 +97,3 @@ def test_observation_pose_uses_pnp_when_dense_landmarks_exist_and_reports_fallba
     assert missing.source == POSE_SOURCE_GEOMETRIC and missing.fallback_reason == "no_dense_landmarks" and missing.pose6dof is None
     broken = observation_pose(five, landmarks68=np.full((68, 2), 5.0), image_size=(W, H))
     assert broken.source == POSE_SOURCE_GEOMETRIC and broken.fallback_reason.startswith("pnp_")
-
-
-@pytest.mark.parametrize("yaw", [-75, 75, -90, 90])
-def test_visibility_excludes_the_occluded_cheek_at_the_solved_pose(yaw):
-    pts, _ = project(CANON, yaw, 0.0, 0.0)
-    pose = solve_head_pose_6dof(pts, image_size=(W, H))
-    mesh = build_canonical_head_mesh(68)
-    visible = MeshRaycaster().compute_visibility_map(mesh, pose, resolution=(H, W)).vertex_visible
-    far_cheek, near_cheek = (15, 1) if yaw > 0 else (1, 15)
-    assert not visible[far_cheek] and visible[near_cheek]

@@ -4,7 +4,7 @@ import type { ExtractFromFrameResult } from '../../api';
 
 export type FaceDestination = ExtractFromFrameResult['destination'];
 /** Stage 12 target actions, shown when the host provides `onTargetAction`. */
-export type TargetAction = 'lock_primary' | 'add_angle' | 'bind_source' | 'exclude' | 'bind_specific' | 'toggle_ultramax' | 'toggle_pose_lock' | 'solo_mask';
+export type TargetAction = 'lock_primary' | 'add_angle' | 'bind_source' | 'exclude' | 'bind_specific' | 'toggle_pose_lock' | 'solo_mask';
 /** Extra detail for an action: the FaceSet a `bind_specific` action maps this person to. */
 export type TargetActionExtra = { facesetId?: string };
 export type FaceMenuTarget = {
@@ -39,7 +39,6 @@ type Props = {
   /** FaceSets this person can be bound to by name. */
   bindSources?: BindableSource[];
   /** Current state of the per-face toggles, shown as checkmarks. */
-  ultramaxOn?: boolean;
   poseLocked?: boolean;
   maskSolo?: boolean;
 };
@@ -47,7 +46,7 @@ type Props = {
 const sign = (value: number) => `${value >= 0 ? '+' : '-'}${Math.abs(value).toFixed(0)}°`;
 
 /** The three "Use Face From Frame" actions for one detected face. */
-export default function FaceContextMenu({ target, activeSourceName, busy = false, onChoose, onClose, onTargetAction, targetLabel = null, bindSources = [], ultramaxOn = false, poseLocked = false, maskSolo = false }: Props) {
+export default function FaceContextMenu({ target, activeSourceName, busy = false, onChoose, onClose, onTargetAction, targetLabel = null, bindSources = [], poseLocked = false, maskSolo = false }: Props) {
   const ref = useRef<HTMLDivElement>(null);
   const cell = target.pose ? poseCellName(target.pose) : null;
   const poseText = target.pose ? `Yaw ${sign(target.pose.yaw)}, Pitch ${sign(target.pose.pitch)}` : 'pose unknown';
@@ -118,10 +117,6 @@ export default function FaceContextMenu({ target, activeSourceName, busy = false
           ))}
         </>}
         <div className="face-menu-title" role="separator">This face on the canvas</div>
-        <button type="button" role="menuitemcheckbox" aria-checked={ultramaxOn} onClick={() => act('toggle_ultramax')}
-          title="The render engine applies one enhancer to every swapped face, so this turns UltraMax on (or off) for the whole swap">
-          <span aria-hidden="true">{ultramaxOn ? '✅' : '✨'}</span> UltraMax enhancer {ultramaxOn ? 'on' : 'off'}<small>applies to all swapped faces</small>
-        </button>
         <button type="button" role="menuitemcheckbox" aria-checked={poseLocked} disabled={!target.faceKey} onClick={() => act('toggle_pose_lock')}
           title="Hold this face's wireframe, gimbal and gaze at its current 6DoF pose; the canvas overlay only, the render is not affected">
           <span aria-hidden="true">{poseLocked ? '🔒' : '🔓'}</span> {poseLocked ? 'Unlock' : 'Lock'} 6DoF pose filter<small>canvas overlay</small>

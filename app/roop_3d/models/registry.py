@@ -15,10 +15,10 @@ from roop_3d.audit.project_paths import application_root
 from roop_3d.core.errors import DomainError
 from roop_3d.core.settings import Contract
 
-Role = Literal["detector", "recognizer", "identity_swapper", "liveportrait_appearance",
+Role = Literal["detector", "recognizer", "liveportrait_appearance",
                "liveportrait_motion", "liveportrait_warp", "liveportrait_stitch", "face_parser",
-               "occlusion_mask", "face_restorer", "flame_geometry", "lip_sync", "diffusion_base",
-               "diffusion_adapter", "embedding_converter", "age_modifier", "frame_upscaler",
+               "occlusion_mask", "flame_geometry", "lip_sync", "diffusion_base",
+               "diffusion_adapter", "frame_upscaler",
                "flame_encoder", "dense_mesh"]
 RESERVED = {"con", "prn", "aux", "nul", *(f"com{i}" for i in range(1, 10)),
             *(f"lpt{i}" for i in range(1, 10))}
@@ -170,7 +170,7 @@ def _with_supported_candidates(manifest: Manifest, root: Path) -> Manifest:
         raise DomainError("MODEL_CATALOG_INVALID", "Supported model catalog is invalid", 503) from None
     existing = {item.model_id for item in manifest.models}
     candidates = []
-    role_map = {"swapper": "identity_swapper", "enhancer": "face_restorer", "detector": "detector",
+    role_map = {"detector": "detector",
                 "occluder": "occlusion_mask", "upscaler": "frame_upscaler"}
     for spec in document["models"]:
         model_id = spec["id"]

@@ -11,7 +11,7 @@ from roop_3d.reconstruction.geometry_types import (
     Mesh3D,
     Pose3D,
 )
-from roop_3d.reconstruction.tps_fallback import build_canonical_head_mesh
+from roop_3d.reconstruction.makehuman_template import makehuman_template
 from roop_3d.reconstruction.uv_synthesizer import (
     UVSynthesizer,
     ViewObservation,
@@ -19,7 +19,7 @@ from roop_3d.reconstruction.uv_synthesizer import (
 
 
 def test_uv_synthesizer_single_view():
-    mesh = build_canonical_head_mesh(landmark_count=68)
+    mesh = makehuman_template()
     intrinsics = CameraIntrinsics.from_fov(fov_degrees=60.0, width=640, height=480)
 
     # Frontal camera view: looking directly at face at distance 1.0m
@@ -114,7 +114,7 @@ def test_unseen_back_of_head_never_blended():
 
 
 def test_uv_synthesizer_occlusion_mask():
-    mesh = build_canonical_head_mesh(landmark_count=68)
+    mesh = makehuman_template()
     intrinsics = CameraIntrinsics.from_fov(fov_degrees=60.0, width=640, height=480)
     pose = Pose3D(
         rvec=(0.0, 0.0, 0.0),

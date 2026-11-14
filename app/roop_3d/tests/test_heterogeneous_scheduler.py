@@ -29,7 +29,7 @@ from roop_3d.openvino_coprocessor import (
     OpenVINOCoprocessor,
     get_openvino_device_info,
 )
-from roop_3d.reconstruction.tps_fallback import build_canonical_head_mesh
+from roop_3d.reconstruction.makehuman_template import makehuman_template
 from roop_3d.server.app import create_app
 from roop_3d.server.engine_gate import EngineBusy, EngineGate
 from roop_3d.tests.test_workstation_preview import preview_fixture
@@ -232,7 +232,7 @@ def test_heterogeneous_scheduler_end_to_end_frame_execution():
     settings = Settings(heterogeneous_split_mode=True)
     gate = EngineGate()
     scheduler = HeterogeneousScheduler(settings=settings, engine_gate=gate)
-    mesh = build_canonical_head_mesh(68)
+    mesh = makehuman_template()
 
     dummy_frame = np.zeros((512, 512, 3), dtype=np.uint8)
 

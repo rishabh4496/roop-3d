@@ -1,16 +1,9 @@
-"""Restorer and Enhancer implementations (UltraMax, GPEN Realistic, Dynamic CodeFormer, RestoreFormer++)."""
-from roop_3d.enhancers.ultramax import UltraMaxRestorer, laplacian_pyramid_fusion
-from roop_3d.enhancers.gpen_realistic import GPENRealisticRestorer, luma_only_delta_recolour
-from roop_3d.enhancers.codeformer import (
-    DynamicCodeFormerRestorer,
-    RestoreFormerPlusPlusRestorer,
+"""UV-space texture detailers. 2D frame / face-crop restorers (UltraMax, GPEN, CodeFormer, GFPGAN) were removed."""
+from roop_3d.enhancers.uv_detailer import (
+    ALLOWED_UV_SIZES,
+    UVDetailerInputError,
+    UVTextureDetailer,
+    laplacian_pyramid_fusion,
 )
 
-__all__ = [
-    "UltraMaxRestorer",
-    "laplacian_pyramid_fusion",
-    "GPENRealisticRestorer",
-    "luma_only_delta_recolour",
-    "DynamicCodeFormerRestorer",
-    "RestoreFormerPlusPlusRestorer",
-]
+__all__ = ["ALLOWED_UV_SIZES", "UVDetailerInputError", "UVTextureDetailer", "laplacian_pyramid_fusion"]

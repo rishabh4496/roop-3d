@@ -77,14 +77,9 @@ def rasterize_vertex_attributes(pixels: np.ndarray, depth: np.ndarray, faces: np
     return RasterBuffers(zbuf.astype(np.float32), ids, out.astype(np.float32))
 
 
-def orthographic_pixels(vertices: np.ndarray, *, scale: float, center_px: tuple[float, float],
-                        rotation: np.ndarray | None = None) -> tuple[np.ndarray, np.ndarray]:
-    """Weak-perspective / orthographic projection of a +x right, +y down, +z toward-the-viewer mesh.
+def perspective_pixels(vertices: np.ndarray, camera) -> tuple[np.ndarray, np.ndarray]:
+    """Project a head-frame mesh through a ``PerspectiveCamera`` (K[R|t]).
 
-    Returns ((V, 2) canvas pixels, (V,) camera depth with smaller = closer).
+    Returns ((V, 2) canvas pixels, (V,) camera-space Z with smaller = closer).
     """
-    v = np.asarray(vertices, np.float64)
-    if rotation is not None:
-        v = v @ np.asarray(rotation, np.float64).T
-    pixels = np.column_stack((v[:, 0] * scale + center_px[0], v[:, 1] * scale + center_px[1]))
-    return pixels, -v[:, 2]
+    return camera.project(vertices), camera.depth(vertices)

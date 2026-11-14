@@ -40,7 +40,7 @@ The streaming backend reports all three; the reference backend skips steps 1 and
 
 | Tab | Setting (default) | What it does |
 |---|---|---|
-| Compute | *Hardware profile* (`auto`) · *Preferred provider* (`auto`) · *Precision policy* (`auto`) | See [Engine comparison §4](ENGINE_COMPARISON.md) |
+| Compute | *Hardware profile* (`auto`) · *Preferred provider* (`auto`) · *Precision policy* (`auto`) | See [Engine and render options](ENGINE_COMPARISON.md) |
 | Compute | *VRAM limit mb* (0 = none) · *Memory safety reserve mb* (768) | Caps GPU memory use; keeps a reserve free for the system |
 | Compute | *Execution threads* (1) · *Stream batch size* (4) · *Stream ring slots* (4) | CPU threads and how many frames are in flight in the streaming backend. Larger batches need more memory |
 | Pipeline | *Face restoration policy* (`off`) · *Restorer threads* (1) · *Restorer pool size* (2) | Restoration and how many restorers run in parallel |

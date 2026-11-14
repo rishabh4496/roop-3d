@@ -168,15 +168,13 @@ The framework defines 11 canonical benchmark scenarios covering the hardest real
 
 ## 4. Multi-Engine Comparative Benchmark Matrix
 
-Evaluating all 6 candidate engine profiles on the canonical golden dataset:
+Evaluating all candidate engine profiles on the canonical golden dataset:
 
 {comp_table}
 
 ### Key Engineering Insights:
-1. **Standard INSwapper** achieves the highest raw throughput (62.5 FPS) but lacks 3D geometric awareness and exhibits lower expression consistency and boundary seam artifacts.
-2. **3D-Aware Output** delivers superior pose and landmark fidelity (0.022 IOD RMSE) with minimal compute overhead (25.6 FPS).
-3. **LivePortrait-Enhanced Output** achieves the highest facial expression fidelity and natural eye/mouth dynamics (0.012 expression error).
-4. **Restored Output** provides the highest perceptual visual clarity (0.942 SSIM) via dual-restoration (GPEN + CodeFormer), but incurs a throughput penalty (15.2 FPS).
+1. **3D-Aware Output** delivers superior pose and landmark fidelity (0.022 IOD RMSE) with minimal compute overhead (25.6 FPS).
+2. **LivePortrait-Enhanced Output** achieves the highest facial expression fidelity and natural eye/mouth dynamics (0.012 expression error).
 
 ---
 
@@ -216,12 +214,9 @@ Every benchmark execution cryptographically binds the following models:
 
 | Model ID | File Name | SHA-256 Digest | Precision |
 | :--- | :--- | :--- | :---: |
-| `inswapper_128` | `inswapper_128.onnx` | `e4a3f08c207a385557372336423b1fa109497f087249932306...` | **FP32** |
 | `scrfd_10g` | `scrfd_10g_bnkps.onnx` | `a01292dc223bb3468903e1cfcf0007297e59ab4fc358a0a86...` | **FP16** |
 | `w600k_r50` | `w600k_r50.onnx` | `b6807d9b9a6b2c45f9494e0192518e9076bc19c8f2b236fa7...` | **FP16** |
 | `2d106det` | `2d106det.onnx` | `2a865db267232230a473216cf4b4369a4892c2a0bf282559b...` | **FP16** |
-| `gpen_bfr_512` | `gpen_bfr_512.onnx` | `26d03d3c8fa176df231c5055b4beab90848a609d648b2ff2b...` | **FP16** |
-| `CodeFormerv0.1` | `CodeFormerv0.1.onnx`| `819fef79ea818987b7a666e133dc3a0f7b06b9b1836cf9b16...` | **FP16** |
 | `bisenet_resnet18`| `bisenet_resnet18.onnx`| `075677ad1544a04d3e8e726b2b647f08b534b8686f027c62b...` | **FP16** |
 
 ---

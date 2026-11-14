@@ -260,8 +260,8 @@ class ResourceSampler:
 #: does not time that step on its own: the compositor reports Inpaint+Cage and LapBlend together as ``masking``, which
 #: the bar shows as ``Comp`` instead of splitting a measurement it does not have.
 STAGE_COLUMNS: tuple[tuple[str, str | None], ...] = (
-    ("Det", "detection"), ("3D-LBS", "pose_tps"), ("Inpaint+Cage", None), ("3DSwap+SH", "inswapper"),
-    ("Enhancer", "restorer"), ("LapBlend", None))
+    ("Det", "detection"), ("3D-Pose", "head_pose"), ("Inpaint+Cage", None), ("3DRender+SH", "head_render"),
+    ("Expr", "expression"), ("LapBlend", None))
 SWAP_MODE_LABEL = {"full_craniofacial": "FULL_CRANIOFACIAL_LOCK", "adaptive_skull": "ADAPTIVE_SKULL", "inner_face": "INNER_FACE"}
 
 

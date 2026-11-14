@@ -1,5 +1,8 @@
 # 03 — Cross-repo parity & 3D-superiority blueprint
 
+<!-- phase0-purge-notice -->
+> **Phase 0 purge notice (2026-11-14).** Roop 3D no longer contains 2D face swappers, 5-point crop-paste, 2.5D strip meshes, weak-perspective cameras or post-crop GAN restorers. Anything below that describes them is **historical** and no longer applies; the current architecture is a full 3D head under a perspective camera, see [Engine and render options](../../docs/ENGINE_COMPARISON.md).
+
 Inputs: report 01 (roop-ultimate `71ebb65`, 2118 files) and report 02 (roop-3d, 1224 files). Everything below is anchored to a file the auditors read. "Wave 2" items are what this mission implements; "Out of scope" items are stated honestly rather than faked.
 
 Execution note: the requested per-agent model/effort bindings (`gpt-6-luna`, `gpt-6.1-sol`) are not selectable from this harness; the swarm ran on the harness default model with the role split preserved (auditor / 3D / temporal+quality / ops+QA / orchestrator+UI).

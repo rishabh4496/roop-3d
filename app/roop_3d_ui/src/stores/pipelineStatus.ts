@@ -5,12 +5,12 @@ import { createAtomicStore, useStoreSelector } from './atomicStore';
 import { pushToast } from './toasts';
 import type { ActiveModel } from './activeModels';
 
-export type SwitchFailure = { id: number; stage: 'detector' | 'swapper' | 'enhancer'; model_id: string; code: string; reason: string; at: number };
+export type SwitchFailure = { id: number; stage: string; model_id: string; code: string; reason: string; at: number };
 /** `GET /api/pipeline/status`: what each stage has loaded, the precision those sessions really run, and failed switches. */
 export type PipelineStatus = {
   pipeline: { engine_state: string; engine_label: string | null; engine_model: string | null; engine_precision: string | null; engine_batch_profile?: number[] | null };
-  selected: { swapper_model: string; detector_model: string; enhancer_model: string };
-  active: { detector: ActiveModel; swapper: ActiveModel; enhancer: ActiveModel };
+  selected: { detector_model: string; head_topology_engine?: string; shader_mode?: string; camera_mode?: string };
+  active: Record<string, ActiveModel>;
   precision: { label: string | null; stage: string | null; stages: Record<string, string | null>; policy: string };
   failures: SwitchFailure[];
 };
@@ -22,12 +22,12 @@ const raised = new Set<string>();
 export const forgetRaisedFailures = () => raised.clear();
 export const usePipelineStatus = <S,>(selector: (state: State) => S) => useStoreSelector(pipelineStatusStore, selector);
 
-export const STAGE_LABEL: Record<SwitchFailure['stage'], string> = { detector: 'Detector', swapper: 'Swapper', enhancer: 'Enhancer' };
+export const STAGE_LABEL: Record<string, string> = { detector: 'Detector', head: 'Head model', shader: 'Shader' };
 
 /** Toast text for a failed switch: the backend's exact code and reason, and which model is still (or not) in use. */
 export function failureToast(failure: SwitchFailure, active: ActiveModel): { title: string; text: string } {
   const still = active ? `Still using ${active.model_id} (${active.filename}).` : 'No model of this stage is loaded.';
-  return { title: `${STAGE_LABEL[failure.stage]} did not switch to ${failure.model_id}`, text: `${failure.reason} [${failure.code}] ${still}` };
+  return { title: `${STAGE_LABEL[failure.stage] ?? failure.stage} did not switch to ${failure.model_id}`, text: `${failure.reason} [${failure.code}] ${still}` };
 }
 
 let inflight: Promise<void> | null = null;

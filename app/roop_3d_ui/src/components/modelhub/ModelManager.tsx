@@ -6,7 +6,7 @@ import {
 import { StatusPill } from './ModelSelect';
 import './modelRack.css';
 
-const CATEGORIES = ['swapper', 'enhancer', 'detector', 'occluder', 'upscaler', 'other'] as const;
+const CATEGORIES = ['head', 'detector', 'occluder', 'other'] as const;
 const NO_VRAM_API = 'The engine loads models on first use and releases them through the VRAM governor. There is no manual preload / unload API yet.';
 const sizeLabel = (bytes: number | null) => (bytes == null ? '—' : bytes >= 1024 ** 3 ? `${(bytes / 1024 ** 3).toFixed(2)} GiB` : `${(bytes / 1024 ** 2).toFixed(1)} MiB`);
 
@@ -15,7 +15,7 @@ type Verify = { status?: string; verified?: number; failed?: number; [key: strin
 /** Settings → Models & Engines Manager: rescan, offline import, integrity check, and per-model actions. Every registered model is listed. */
 export default function ModelManager() {
   const { models, loading, error, downloads } = useModelCatalog();
-  const [category, setCategory] = useState<(typeof CATEGORIES)[number] | 'all'>('swapper');
+  const [category, setCategory] = useState<(typeof CATEGORIES)[number] | 'all'>('all');
   const [search, setSearch] = useState('');
   const [path, setPath] = useState('');
   const [busy, setBusy] = useState('');

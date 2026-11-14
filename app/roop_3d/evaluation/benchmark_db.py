@@ -106,7 +106,6 @@ class BenchmarkDatabase:
 
         now = datetime.now(timezone.utc).isoformat()
         models_dict = dict(models) if models else {
-            "inswapper_128.onnx": ModelProvenance("inswapper_128.onnx", "e4a3f08c207a385557372336423b1fa109497f087249932306", "FP32"),
             "scrfd_10g_bnkps.onnx": ModelProvenance("scrfd_10g_bnkps.onnx", "a01292dc223bb3468903e1cfcf0007297e59ab4fc358a0a86", "FP16"),
         }
 

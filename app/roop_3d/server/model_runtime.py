@@ -7,8 +7,21 @@ from roop_3d.core.errors import DomainError
 from roop_3d.engine.runtime import RuntimeConfig
 
 
+def _load_local_session():
+    """The generic local ONNX session loader. It lived in the removed swapper engine; the neutral homes are tried first."""
+    import importlib
+    for module in ("roop_3d.core.local_session", "roop_3d.core.ort_session", "roop_3d.models.session"):
+        try:
+            loader = getattr(importlib.import_module(module), "load_local_session", None)
+        except ImportError:
+            continue
+        if loader is not None:
+            return loader
+    raise DomainError("TRT_BUILD_UNAVAILABLE", "No local ONNX session loader is available", 409)
+
+
 def compile_model(catalog, model_id: str, config: RuntimeConfig) -> dict:
-    from roop_3d.engine.volumetric.swapper_engine import load_local_session
+    load_local_session = _load_local_session()
     from roop_3d.core.ort_session import GpuIoBinding
     from roop_3d.models.dynamic_shapes import sample_inputs
     from roop_3d.trt_session_builder import auto_shape_profiles

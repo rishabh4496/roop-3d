@@ -40,7 +40,7 @@ REMEDIATION_TESTS = (
     "roop_3d/tests/test_remediation_stage7.py",   # Stage 27 linter, stage timings, NPZ checkpoint
 )
 LINT_IDS = {"3d_pose_coverage", "vram_headroom", "out_of_frame_seams", "output_encoder_storage",
-            "trt_dynamic_models", "frontalization_vs_pose_matrix", "ultramax_crop_bypass", "vram_threads"}
+            "trt_dynamic_models", "vram_threads"}
 
 
 class Report:
@@ -148,8 +148,12 @@ def check_three_stage_render_and_timings() -> str:
     from roop_3d.faceset.recognizer import ARCFACE_REFERENCE_5PTS
     from roop_3d.optimized_processor import StreamingProcessor
     from roop_3d.render_policy import RenderPolicy
-    from roop_3d.tools.verify_stream_integration import create_clip
-    from roop_3d.vectorized_pipeline import CpuBatchPipeline
+    from roop_3d.tools.synthetic_clip import create_clip
+
+    class IdentityPipeline:
+        """Passes frames through: this gate checks the decode -> stage -> encode plumbing, not a render."""
+        def process(self, frame, faces):
+            return frame
     root = scratch("render-")
     try:
         source = root / "input.mp4"
@@ -157,14 +161,14 @@ def check_three_stage_render_and_timings() -> str:
         points = ((ARCFACE_REFERENCE_5PTS + [8, 0]) * 0.4).astype(np.float32)
         events: list[dict] = []
         processor = StreamingProcessor(root, "e2e", source, detect=lambda _: [1],
-            track=lambda _: [(0, np.array([0, 0, 64, 64]), points)], pipeline=CpuBatchPipeline(lambda value, _: value),
+            track=lambda _: [(0, np.array([0, 0, 64, 64]), points)], pipeline=IdentityPipeline(),
             policy=RenderPolicy(hardware_profile="cpu", execution_threads=1, ring_slots=3, segment_frames=4), emit=events.append)
         result = processor.run(root / "output.mp4", audio=False)
         done = [event["stage"] for event in events if event["state"] == "DONE"]
         assert done == ["STAGE_1_SPARSE_PRESCAN", "STAGE_2_ACTIVE_PREPASS", "STAGE_3_MAIN_SWAP"], done
         assert result["frames"] == 10
         timings = processor.timings.take()
-        assert {"decode", "inswapper", "encode"} <= set(timings) <= set(STAGES), timings
+        assert {"decode", "head_render", "encode"} <= set(timings) <= set(STAGES), timings
         assert all(value >= 0 for value in timings.values())
         return f"stages {', '.join(s.split('_', 2)[2].title() for s in done)}; measured {sorted(timings)}"
     finally:
@@ -175,7 +179,7 @@ def check_npz_checkpoint() -> str:
     from roop_3d.engine.pipeline_runner import PipelineCheckpoint, checkpoint_npz_bytes, read_checkpoint_npz
     value = PipelineCheckpoint(job_id="a" * 32, input_sha256="b" * 64, request_sha256="c" * 64, completed_frame=7,
                                execution_provider="TensorrtExecutionProvider", pose_cache={"track_0000": [1.5, -2.0, 0.25]},
-                               inputs={"target_path": "t.mp4"}, pose_settings={"pose_frontalization": 0.4},
+                               inputs={"target_path": "t.mp4"}, pose_settings={},
                                hardware_state={"probe": "VERIFIED_LOCAL"})
     restored = read_checkpoint_npz(checkpoint_npz_bytes(value))
     assert restored.model_dump(exclude={"updated_at"}) == value.model_dump(exclude={"updated_at"})

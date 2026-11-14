@@ -108,9 +108,9 @@ class StreamingProcessor:
                     raise ValueError("Concurrent rendering requires independent worker pipeline/buffer ownership")
                 local.pipeline = factory() if callable(factory) else self.pipeline
             batch = getattr(local.pipeline, "process_batch", None)
-            # Swap, optional decoupled restore and host bridges are awaited together here, so this stage
+            # Head render and host bridges are awaited together here, so this stage
             # is reported as the whole batch time per frame rather than split into guessed shares.
-            with self.timings.measure("inswapper", count=max(1, len(frames))):
+            with self.timings.measure("head_render", count=max(1, len(frames))):
                 if callable(batch) and all(len(v) == 1 for v in faces_by_frame):
                     return batch(frames, faces_by_frame)
                 return [local.pipeline.process(frame, faces) if faces else frame for frame, faces in zip(frames, faces_by_frame)]
@@ -224,166 +224,19 @@ class StreamingProcessor:
 
 
 def make_stream_runner(root, catalog, media, settings_provider, *, pipeline_tracker=None):
+    """The default ``reference_onnx`` job runner.
+
+    The fused 2D crop-swap batch kernel (and its restorer / paste compositor) was removed. Until the true-3D full-head
+    renderer is wired (``roop_3d.pipeline.true3d_renderer.is_wired()``), every render job fails LOUDLY through
+    :func:`roop_3d.core.true3d_guard.require_true3d_renderer`; nothing falls back to a 2D path.
+    """
     from roop_3d.engine.pipeline_runner import MasterPipelineRunner
 
     class StreamDispatchRunner(MasterPipelineRunner):
         def run_prepared(self, record, admission, *, prepared, control, mark_running, report_progress):
-            settings = prepared.settings
-            requested = settings.render_backend
-            # The fused batch kernel currently encodes InSwapper's fixed 128px
-            # target/source contract. Alternate native-size architectures share
-            # the reference direct pipeline's dynamic crop compositor instead.
-            if (record.request.swapper_model_id or settings.swapper_model_id) != "inswapper_128":
-                return super().run_prepared(record, admission, prepared=prepared, control=control,
-                    mark_running=mark_running, report_progress=report_progress)
-            basic = (settings.execution_mode == "swap" and settings.lip_sync_mode == "off"
-                and record.request.export is None and record.request.trim_start_seconds is None
-                and record.request.trim_end_seconds is None and record.request.face_segments is None
-                and record.request.workstation_parameters is None and record.request.parameter_curves is None
-                and record.request.mask_base64 is None and not record.request.mask_keyframes and settings.audio_policy in ("copy", "drop")
-                and settings.face_restoration_policy in ("off", "auto", "gpen", "codeformer", "ultramax"))
-            if requested == "reference" or requested == "auto" and (admission.profile == "cpu" or not basic):
-                return super().run_prepared(record, admission, prepared=prepared, control=control,
-                    mark_running=mark_running, report_progress=report_progress)
-            if not basic:
-                raise DomainError("STREAM_FEATURE_UNAVAILABLE", "This job requires the preserved reference timeline/finishing path", 422)
-            from roop_3d.media.probe import probe
-            info = probe(prepared.target).videos[0]
-            if (info.vfr is not False or info.rotation % 360 or not (info.average_rate or info.nominal_rate)
-                    or info.start_time not in (None, 0)):
-                if requested == "auto":
-                    return super().run_prepared(record, admission, prepared=prepared, control=control,
-                        mark_running=mark_running, report_progress=report_progress)
-                raise DomainError("STREAM_TIMING_UNSUPPORTED", "Streaming requires verified CFR and upright frames", 422)
-            try:
-                # Full packet-grid/SAR/HDR validation happens before model activation.
-                NvdecFrameSource(prepared.target, hardware=admission.profile != "cpu", strict=False)
-            except ValueError:
-                if requested == "auto":
-                    return super().run_prepared(record, admission, prepared=prepared, control=control,
-                        mark_running=mark_running, report_progress=report_progress)
-                raise DomainError("STREAM_TIMING_UNSUPPORTED", "Input requires the reference timing/color pipeline", 422) from None
-            from roop_3d.engine.runtime import OrtModel, record_named, session_factory
-            from roop_3d.engine.detection.face_tracker import FaceTracker
-            from roop_3d.media.detector import Detector
-            from roop_3d.models.emap_cache import cached_emap
-            from roop_3d.engine.volumetric.identity_swapper import embedding_map, unit_embedding
-            from roop_3d.vectorized_pipeline import CpuBatchPipeline, GpuBatchPipeline
-            from roop_3d.render_policy import CudaWorkerContext
-            from roop_3d.core.hardware import probe_hardware, resolve_accelerator
-            hardware = probe_hardware(settings)
-            accelerator = resolve_accelerator(settings.preferred_provider, hardware.advertised_providers, bool(hardware.gpus))
-            if admission.profile == "cpu":
-                accelerator = "CPUExecutionProvider"
-            config = replace(self._runtime_config(admission, self.settings_for(record.request, settings)), provider=accelerator)
-            context = CudaWorkerContext(enabled=admission.profile != "cpu")
-            tracker = detector = model = restorer = None
-            def check():
-                signal = self._control_signal(control)
-                if signal:
-                    raise signal()
-            def emit(value):
-                if pipeline_tracker:
-                    pipeline_tracker.render_event(record.job_id, value)
-            try:
-                with context.activate():
-                    detector = Detector(catalog, session_factory(catalog, config), model_id=config.detector_model_id, provider=config.provider, precision=config.precision_policy)
-                    tracker = FaceTracker(catalog, config=config, stabilize=False)
-                    static = record_named(catalog, "inswapper_128.onnx")
-                    projection = cached_emap(catalog._path(static), embedding_map, source_sha256=static["sha256"])
-                    embeddings = {key: unit_embedding(unit_embedding(np.asarray(value.canonical_embedding)) @ projection)
-                                  for key, value in prepared.sources_by_track.items()}
-                    model = OrtModel(catalog, "inswapper_128.batch.onnx", config)
-                    if settings.face_restoration_policy != "off":
-                        from roop_3d.compositor.stream_restoration import DecoupledRestorer, OnnxFaceRestorer, gpen_spec, codeformer_spec, load_ultramax_spec
-                        if settings.face_restoration_policy == "ultramax":
-                            spec = load_ultramax_spec(self.root)
-                        elif settings.face_restoration_policy == "gfpgan":
-                            from roop_3d.compositor.stream_restoration import gfpgan_spec
-                            spec = gfpgan_spec()
-                        else:
-                            spec = codeformer_spec() if settings.face_restoration_policy == "codeformer" else gpen_spec()
-                        restorer = DecoupledRestorer(lambda: OnnxFaceRestorer(catalog, config, spec), spec,
-                            workers=settings.restorer_threads, pool_size=settings.restorer_pool_size,
-                            cuda=admission.profile != "cpu", ultramax_native_bypass=settings.ultramax_native_bypass,
-                            ultramax_min_pixels=settings.ultramax_min_pixels,
-                            enhancer_blend=settings.enhancer_blend, fidelity_weight=settings.restorer_fidelity,
-                            cuda_provider=accelerator if accelerator != 'CPUExecutionProvider' else 'CUDAExecutionProvider',
-                            hardware_profile=admission.profile if admission.profile != 'cpu' else '6gb')
-                    selected_session = model.session
-                    if admission.profile == "cpu":
-                        swap_output_name = model.record["graph"]["outputs"][0]["name"]
-                        pipeline = CpuBatchPipeline(lambda target, source: model.run({"target": target,
-                            "source": source})[swap_output_name], embeddings=embeddings, restorer=restorer)
-                    else:
-                        compositor_options = None
-                        try:
-                            import torch
-                            if torch.cuda.is_available():
-                                from roop_3d.gpu_compositor import CompositorOptions
-                                compositor_options = CompositorOptions()
-                            elif restorer is not None:
-                                raise DomainError("GPU_RESTORER_UNAVAILABLE",
-                                    "GPU face restoration requires a working PyTorch CUDA device", 503)
-                        except (ImportError, OSError):
-                            if restorer is not None:
-                                raise DomainError("GPU_RESTORER_UNAVAILABLE",
-                                    "GPU face restoration requires the installed CUDA compositor extra", 503) from None
-                        pipeline = GpuBatchPipeline(selected_session, embeddings, max_batch=settings.stream_batch_size,
-                            hardware_profile=admission.profile, restorer=restorer,
-                            execution_threads=settings.execution_threads, compositor_options=compositor_options)
-                timings = StageTimings()
-                def detect(image):
-                    with context.activate(), timings.measure("detection"):
-                        return detector.detect(image, 0.5)[0]
-                def track(image):
-                    with context.activate(), timings.measure("detection"):
-                        return [(v.track_id, v.observation.box, v.observation.landmarks5) for v in tracker.process(image)
-                                if v.track_id in embeddings]
-                mark_running()
-                policy = RenderPolicy.from_env(temporal_min_cutoff=settings.temporal_min_cutoff,
-                    temporal_beta=settings.temporal_beta, temporal_d_cutoff=settings.temporal_d_cutoff,
-                    batch_size=settings.stream_batch_size,
-                    execution_threads=settings.execution_threads, ring_slots=settings.stream_ring_slots,
-                    hardware_profile=admission.profile, sparse_interval=settings.sparse_interval,
-                    range_padding=settings.sparse_interval, segment_frames=settings.stream_segment_frames)
-                destination = owned(self.root, f"{settings.output_root}/roop3d_{record.job_id}_{time.time_ns()}.mp4")
-                processor = StreamingProcessor(self.root, record.job_id, prepared.target, detect=detect, track=track,
-                    pipeline=pipeline, policy=policy, emit=emit, check=check, timings=timings, execution_provider=accelerator,
-                    live_hub=getattr(self, "live_hub", None),
-                    identity={"request": self._request_digest(record), "settings": settings.model_dump(),
-                              "model_sha256": model.record["sha256"]},
-                    progress=lambda frame, total, fps: report_progress(__import__("roop_3d.jobs.schema", fromlist=["JobProgress"]).JobProgress(
-                        frame=frame, total_frames=total, fps=fps, stage="render", stage_timings_ms=timings.take())))
-                metadata = processor.run(destination, audio=settings.audio_policy == "copy")
-                relative = destination.relative_to(self.root).as_posix()
-                manifest_path = relative + ".manifest.json"
-                execution_backend = getattr(pipeline, "backend", "unknown")
-                gpu_resident_compositor = execution_backend == "CUDA_RESIDENT_TRIPLE_BUFFER"
-                metadata.update(output_path=relative, manifest_path=manifest_path, audio_policy=settings.audio_policy,
-                    model_hashes={"identity_swapper": model.record["sha256"]}, verified_frames=metadata["frames"],
-                    sparse_absence_evidence="SPARSE_ESTIMATE", render_backend="stream",
-                    render_execution_backend=execution_backend,
-                    gpu_resident_compositor=gpu_resident_compositor,
-                    restorer=settings.face_restoration_policy,
-                    restorer_host_bridge=restorer is not None and not gpu_resident_compositor)
-                if restorer:
-                    metadata["restorer_providers"] = sorted({v.model.provider for v in restorer.instances if v.model})
-                    metadata["restorer_model_hashes"] = sorted({v.model.record["sha256"] for v in restorer.instances if v.model})
-                    metadata["restoration"] = {**restorer.telemetry_report(), "spec": restorer.spec.name,
-                                               "weights": restorer.spec.model_name}
-                atomic_json(self.root, manifest_path, metadata)
-                from roop_3d.jobs.schema import JobOutput
-                return JobOutput(output_path=relative, manifest_path=manifest_path,
-                    output_sha256=metadata["output_sha256"], frames=metadata["frames"], audio_policy=settings.audio_policy)
-            finally:
-                if restorer:
-                    restorer.close()
-                with context.activate():
-                    if tracker:
-                        tracker.release()
-                    if detector:
-                        detector.release_for_build()
-                    if model:
-                        model.release()
+            from roop_3d.core.true3d_guard import require_true3d_renderer
+            require_true3d_renderer("render job")
+            return super().run_prepared(record, admission, prepared=prepared, control=control,
+                                        mark_running=mark_running, report_progress=report_progress)
+
     return StreamDispatchRunner(root, catalog, media, settings_provider)

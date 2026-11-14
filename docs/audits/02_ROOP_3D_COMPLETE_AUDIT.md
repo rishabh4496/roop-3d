@@ -1,5 +1,8 @@
 # 02 — roop-3d complete audit
 
+<!-- phase0-purge-notice -->
+> **Phase 0 purge notice (2026-11-14).** Roop 3D no longer contains 2D face swappers, 5-point crop-paste, 2.5D strip meshes, weak-perspective cameras or post-crop GAN restorers. Anything below that describes them is **historical** and no longer applies; the current architecture is a full 3D head under a perspective camera, see [Engine and render options](../../docs/ENGINE_COMPARISON.md).
+
 Repo: `rishabh4496/roop-3d` (local checkout `G:/pinokio/api/roop-3d`, origin `roop-3d.git`). Audited tracked-file inventory: **1224 files** (`_inventory/roop3d_files.tsv`).
 Method: three parallel auditors each owned a disjoint slice, read every file (or, for homogeneous sets such as tests, header + test names), and emitted one table row per file with status/evidence (`file:line`). Items not read line-by-line are marked `[INFERENCE]`.
 Slices: **R3_1** core 3D (reconstruction/rendering/engine/identity/faceset/tracking/swappers + pose/temporal top-level modules, 172 files) · **R3_2** pipeline/server/runtime (335) · **R3_3** UI/tests/audit tools/docs/root (754). Slice totals exceed 1224 because slices overlap on `app/roop_3d/*.py` helpers and root files; union coverage verified by script: 1222/1224 paths appear by full path or basename; the 2 remaining are the `*.npz.json` sidecars of `makehuman_head_v1.npz` and `stage10_cc0_probes.npz` (documented with their `.npz`). Untracked: `.agents/`, `.claude/`, `docs/agents/`, `concepts_brief_face_swap_quality.md`, `skills-lock.json` (tooling, not product).

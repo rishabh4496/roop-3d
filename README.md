@@ -1,9 +1,15 @@
 # Roop 3D
 
-The live 3D swap path now uses face-only dense correspondence conditioning followed
-by the selected neural swapper and UltraMax. It requires compatible local model
-assets; native checkpoint exporters are included, while FLAME and registered mappings still need preparation. See
-[dense facial backbone setup and current limits](docs/dense-face-backbone.md).
+Roop 3D is a true 3D head workstation. A complete head (cranium, forehead dome, temples, cheekbones, mandible,
+submental neck, eyeballs and oral cavity) is reconstructed as a watertight mesh, posed with a rigid SE(3) pose
+under a perspective pin-hole camera K[R|t], and rendered with a Z-buffered rasterizer using PBR with subsurface
+scattering or 3D Gaussian head shading. There is **no** 2D face swapper, no 5-point crop-and-paste, no 2.5D frontal
+strip mesh, no weak-perspective/orthographic camera and no screen-space face restorer: these were removed in the
+Phase 0 purge and `roop_3d.core.true3d_guard.True3DArchitectureGuard` rejects them at runtime.
+
+**Current status:** the live render path is intentionally unwired (`RENDERER_NOT_WIRED`, "3D renderer not wired")
+until the full-head renderer is integrated; no endpoint fabricates a swapped frame. Local model assets are still required;
+see [dense facial backbone setup and current limits](docs/dense-face-backbone.md) and [engine and render options](docs/ENGINE_COMPARISON.md).
 
 **New to Roop 3D?** Start with the [installation guide](docs/INSTALLATION_GUIDE.md) and the [user manual](docs/USER_MANUAL.md); in the app, press **Guide**. All guides are indexed in [docs/README.md](docs/README.md); problems: [common problems and solutions](docs/COMMON_PROBLEMS.md).
 
@@ -149,12 +155,11 @@ endpoints. Secrets remain in environment/OS secret stores, never project manifes
 ### Photoreal 3D video pipeline (Stage 17)
 
 Engine `photoreal_3d_ffmpeg` (choose it in the Engine rack, or send `engine_id` with `POST /api/v1/jobs`). The face is always
-photographic: the neural swap (`inswapper`) plus the FaceSet's own photograph plus a restorer; geometry only decides *where* those pixels
-land and a smooth spherical-harmonics ratio matches the scene light. Per face: (1) the source skull/jaw outline is projected into the
-target, the old overhang is filled with background and hair/ears/neck are warped onto the new outline; (2) the swap and the FaceSet
-photograph are warped onto that outline; (3) `R_sh = Render_SH(L_target) / (Render_SH(L_source) + 1e-4)` is multiplied on in linear
-light with a bounded skin-tone gain; (4) UltraMax/CodeFormer/GPEN restoration, camera focus and grain matching, occluder-aware alpha and
-a 4-band Laplacian composite. Frames stream through FFmpeg (`h264_nvenc`, automatic `libx264` CRF 16 fallback); the source audio is
+(historical description, superseded by the Phase 0 purge): this engine used to paste a 2D neural swap and a restorer onto a
+projected outline. That path was removed; the engine id is kept for job compatibility and renders a full 3D head once the renderer is wired.
+The parts that remain are the geometry-independent finishing stages: a smooth spherical-harmonics ratio
+`R_sh = Render_SH(L_target) / (Render_SH(L_source) + 1e-4)` multiplied on in linear light with a bounded skin-tone gain, camera focus and grain
+matching, occluder-aware alpha and a 4-band Laplacian composite. Frames stream through FFmpeg (`h264_nvenc`, automatic `libx264` CRF 16 fallback); the source audio is
 stream-copied. The result is `roop_3d/.runtime/outputs/<job_id>/result.mp4` plus `manifest.json`, which records what actually ran.
 When a job finishes the web UI opens a Before/After player with a **Download MP4** button.
 
@@ -319,24 +324,24 @@ reference inference paths; GPU performance and production-model parity require
 separate hardware runs.
 
 Stage 3 streaming, numeric prepass checkpoints, the zero-pickle frame ring,
-CUDA I/O binding, NVDEC/NVENC, restorer contracts and thread benchmark routes are
+CUDA I/O binding, NVDEC/NVENC and thread benchmark routes are
 documented in [docs/STREAM_STAGE3.md](docs/STREAM_STAGE3.md).
 
 Stage 4 live swap preview (`POST /api/preview`, `GET /api/target/preview{,_grid,_seq}`), the cache-first /
 HTTP 503 busy contract and the preview-vs-Start model mutex are documented in
 [docs/LIVE_PREVIEW_STAGE4.md](docs/LIVE_PREVIEW_STAGE4.md).
 
-Stage 5 (unified `Pose3D` and 5-point estimator, the Stage 0 3x3 pose matrix and identity guard, 3D pose
-frontalization, TPS expression warping and `POST /api/faces/extract_from_frame`) is documented in
+Stage 5 (unified `Pose3D`, the Stage 0 3x3 pose matrix and identity guard and `POST /api/faces/extract_from_frame`; its 2.5D
+frontalization and TPS expression warping were removed in Phase 0) is documented in
 [docs/POSE_STAGE5.md](docs/POSE_STAGE5.md).
 
 Stage 6 (nine deep-linked routes, the 3-step run-bar pill, full-bleed comparison canvas, pose HUD, on-canvas
 "Use Face From Frame" menu, six-node buffer soloing, self-documenting settings and the 3×3 sweep) is documented in
 [docs/WORKSTATION_STAGE6.md](docs/WORKSTATION_STAGE6.md).
 
-Stage 8 (Stage 25 parameter curves, timestamped One-Euro stabilization, CodeFormer fidelity, animated Slerp, durable person banks and the 3x3 archive studio) is documented in [docs/REMEDIATION_STAGE8.md](docs/REMEDIATION_STAGE8.md).
+Stage 8 (Stage 25 parameter curves, timestamped One-Euro stabilization, animated Slerp, durable person banks and the 3x3 archive studio) is documented in [docs/REMEDIATION_STAGE8.md](docs/REMEDIATION_STAGE8.md).
 
-Stage 9 (Unified Adaptive CPU/GPU Runtime, RTX 4070 Desktop 12 GB vs RTX 3060 Laptop 6 GB profiles, INSwapper FP32 precision contract, warm session residency, sequential VRAM eviction, and 10-category benchmarks) is documented in [app/roop_3d/docs/STAGE09_OPTIMIZATION.md](app/roop_3d/docs/STAGE09_OPTIMIZATION.md). Benchmark metrics vs Stage 2 baseline are recorded in [app/roop_3d/audit/STAGE09_BENCHMARKS.json](app/roop_3d/audit/STAGE09_BENCHMARKS.json).
+Stage 9 (Unified Adaptive CPU/GPU Runtime, RTX 4070 Desktop 12 GB vs RTX 3060 Laptop 6 GB profiles, FP32 precision contracts, warm session residency, sequential VRAM eviction, and 10-category benchmarks) is documented in [app/roop_3d/docs/STAGE09_OPTIMIZATION.md](app/roop_3d/docs/STAGE09_OPTIMIZATION.md). Benchmark metrics vs Stage 2 baseline are recorded in [app/roop_3d/audit/STAGE09_BENCHMARKS.json](app/roop_3d/audit/STAGE09_BENCHMARKS.json).
 
 Stage 14 optional NVIDIA codec/CV-CUDA adapters, temporal flow propagation and
 explicit FP8 admission are documented in [docs/REMEDIATION_STAGE14.md](docs/REMEDIATION_STAGE14.md).

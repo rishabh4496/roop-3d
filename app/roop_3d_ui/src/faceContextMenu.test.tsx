@@ -43,7 +43,7 @@ describe('"Use Face From Frame" on-canvas context menu', () => {
   const menuItems = () => [...host.ownerDocument.querySelectorAll<HTMLButtonElement>('.face-context-menu [role="menuitem"]')];
   const mount = async (props: Record<string, unknown> = {}) => {
     await act(async () => root.render(<VideoViewport target="roop_3d/.runtime/media/t.mp4" output="" time={0.2} setTime={() => {}} duration={4} enabled keys={[]}
-      previewRequest={REQUEST} parameters={DEFAULT_PARAMETERS} restorerAvailable={false} {...props}/>));
+      previewRequest={REQUEST} parameters={DEFAULT_PARAMETERS} {...props}/>));
     await act(async () => { await vi.advanceTimersByTimeAsync(250); });
   };
   const rightClickFace = () => act(async () => { host.querySelector('[data-testid="face"]')!.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true })); });
@@ -88,11 +88,10 @@ describe('"Use Face From Frame" on-canvas context menu', () => {
   const toggles = () => [...host.ownerDocument.querySelectorAll<HTMLButtonElement>('.face-context-menu [role="menuitemcheckbox"]')];
   const toggle = (text: string) => act(async () => { toggles().find(item => item.textContent!.includes(text))!.click(); await vi.advanceTimersByTimeAsync(0); });
 
-  it('offers per-face canvas toggles (UltraMax, 6DoF pose filter lock, solo mask) as checkable items with their current state', async () => {
+  it('offers per-face canvas toggles (6DoF pose filter lock, solo mask; no enhancer toggle) as checkable items with their current state', async () => {
     await mount({ activeSourceId: 'alice', sources: [{ faceset_id: 'alice', name: 'Alice', item_count: 3 }] });
     await rightClickFace();
     expect(toggles().map(item => [item.textContent!.replace(/\s+/g, ' ').replace(/^\S+ /, '').trim(), item.getAttribute('aria-checked')])).toEqual([
-      ['UltraMax enhancer offapplies to all swapped faces', 'false'],
       ['Lock 6DoF pose filtercanvas overlay', 'false'],
       ['Solo this face mask', 'false'],
     ]);
@@ -105,8 +104,8 @@ describe('"Use Face From Frame" on-canvas context menu', () => {
     expect(faceFlags.get().locks).toEqual({ 'rank:0': { yaw: 28, pitch: -16, roll: 0 } });
     expect(menuItems()).toHaveLength(0);                                          // the menu closes
     await rightClickFace();
-    expect(toggles()[1].getAttribute('aria-checked')).toBe('true');
-    expect(toggles()[1].textContent).toContain('Unlock 6DoF pose filter');
+    expect(toggles()[0].getAttribute('aria-checked')).toBe('true');
+    expect(toggles()[0].textContent).toContain('Unlock 6DoF pose filter');
     await toggle('Unlock 6DoF pose filter');
     expect(faceFlags.get().locks).toEqual({});
   });
@@ -119,20 +118,6 @@ describe('"Use Face From Frame" on-canvas context menu', () => {
     await act(async () => { await vi.advanceTimersByTimeAsync(300); });
     const bodies = fetchMock.mock.calls.filter(([url]) => url === '/api/preview').map(([, init]) => JSON.parse(init.body));
     expect(bodies.at(-1)).toMatchObject({ solo_node: 'matte' });                  // the compare canvas asks the server for the matte buffer
-  });
-
-  it('turns UltraMax on for the swap through the one global enhancer, and off again', async () => {
-    const setParameters = vi.fn();
-    await mount({ setParameters });
-    await rightClickFace();
-    await toggle('UltraMax enhancer off');
-    expect(setParameters).toHaveBeenLastCalledWith(expect.objectContaining({ restorer_model: 'ultramax', restoration_blend: 0.7 }));
-    setParameters.mockClear();
-    await mount({ setParameters, parameters: { ...DEFAULT_PARAMETERS, restorer_model: 'ultramax', restoration_blend: 0.5 } });
-    await rightClickFace();
-    expect(toggles()[0].getAttribute('aria-checked')).toBe('true');
-    await toggle('UltraMax enhancer on');
-    expect(setParameters).toHaveBeenLastCalledWith(expect.objectContaining({ restoration_blend: 0 }));
   });
 
   it('"Use as Active Source Face" dispatches the POST, updates the source gallery and refreshes the swapped preview', async () => {

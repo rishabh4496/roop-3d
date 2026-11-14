@@ -1,5 +1,8 @@
 # Workstation UI stages 7 and 8
 
+<!-- phase0-purge-notice -->
+> **Phase 0 purge notice (2026-11-14).** Roop 3D no longer contains 2D face swappers, 5-point crop-paste, 2.5D strip meshes, weak-perspective cameras or post-crop GAN restorers. Anything below that describes them is **historical** and no longer applies; the current architecture is a full 3D head under a perspective camera, see [Engine and render options](../docs/ENGINE_COMPARISON.md).
+
 Status: core UI implemented with passing automated checks; neither stage has full
 acceptance sign-off. Outstanding work includes visual/Pinokio-tab/multi-monitor
 acceptance, real-model acceptance of the new preview/sweep path, aligned UV
@@ -46,7 +49,7 @@ unrestored replacement, actual grayscale matte, restored replacement, color matc
 replacement, or final composite. Optional capture hooks do not change reference
 compositor output. The available matte is BiSeNet with its existing landmark-hull
 fallback. At the original Stage 07/08 checkpoint, pose was estimated 2.5D.
-The later `POSE_MESH_BLEND.md` implementation adds a perspective projection of an
+The later 2.5D pose-blend implementation (removed in Phase 0) added a perspective projection of an
 estimated canonical 3D proxy, a geometric 2.5D/3D blend, and its projected mesh
 overlay. Multi-view UV synthesis remains separate. The configured local restorer
 is GPEN. XSeg, UltraMax, CodeFormer, and grain adapters

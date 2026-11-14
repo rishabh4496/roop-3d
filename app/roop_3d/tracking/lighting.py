@@ -20,7 +20,7 @@ from functools import lru_cache
 import cv2
 import numpy as np
 
-from roop_3d.reconstruction.geometry_types import WeakPerspectiveCamera
+from roop_3d.reconstruction.geometry_types import PerspectiveCamera
 from roop_3d.reconstruction.multiview_fit import identity_template
 from roop_3d.reconstruction.photometry import fit_sh, linearize
 from roop_3d.relighting_3d import SphericalHarmonicsLighting
@@ -45,7 +45,7 @@ def _skin_template(subdivisions: int = 2):
     mesh = identity_template(subdivisions)
     normals = np.asarray(mesh.normals, np.float64)
     vertices = np.asarray(mesh.vertices, np.float64)
-    excluded = vertices[list(SKIN_EXCLUDE_LANDMARKS)]
+    excluded = vertices[np.asarray(mesh.landmark_vertices["68pt"], np.int64)[list(SKIN_EXCLUDE_LANDMARKS)]]
     distance = np.linalg.norm(vertices[:, None, :] - excluded[None], axis=2).min(axis=1)
     return vertices, normals, distance > SKIN_EXCLUDE_RADIUS_M
 
@@ -56,7 +56,7 @@ class MeshSHLightingEstimator:
         self.min_samples = int(min_samples)
         self._sh = SphericalHarmonicsLighting()
 
-    def estimate(self, image_bgr: np.ndarray, camera: WeakPerspectiveCamera) -> LightingEstimate | None:
+    def estimate(self, image_bgr: np.ndarray, camera: PerspectiveCamera) -> LightingEstimate | None:
         """None when too few skin vertices face the camera inside the frame (an extreme profile, a face at the border)."""
         image = np.asarray(image_bgr)
         if image.ndim != 3 or image.shape[2] != 3 or image.dtype != np.uint8:
@@ -64,7 +64,7 @@ class MeshSHLightingEstimator:
         height, width = image.shape[:2]
         pixels = camera.project(self.vertices)
         normals = camera.rotate_normals(self.normals)
-        usable = (self.skin & (normals[:, 2] > MIN_FACING_Z) & (pixels[:, 0] >= 1) & (pixels[:, 0] <= width - 2)
+        usable = (self.skin & (camera.view_cosine(self.vertices, self.normals) > MIN_FACING_Z) & (pixels[:, 0] >= 1) & (pixels[:, 0] <= width - 2)
                   & (pixels[:, 1] >= 1) & (pixels[:, 1] <= height - 2))
         if int(usable.sum()) < self.min_samples:
             return None

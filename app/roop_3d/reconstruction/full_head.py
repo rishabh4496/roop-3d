@@ -128,7 +128,12 @@ class GPUHeadRasterizer:
         import moderngl
         if (projected_pixels is None) != (camera_vertices_override is None):
             raise ValueError("projected_pixels and camera_vertices_override must be supplied together")
+        # True-3D architecture guard: a perspective K[R|t] pose only (no orthographic / affine projector).
+        from roop_3d.core.true3d_guard import CameraModelError, validate_camera
+        if getattr(pose, "perspective", True) is False:
+            raise CameraModelError("The Z-buffered head rasterizer only accepts a perspective pose")
         if projected_pixels is None:
+            validate_camera(pose.camera, pose.rotation, pose.translation)
             camera = pose.camera_vertices(vertices)
             pixels = pose.project(vertices)
         else:
@@ -139,10 +144,8 @@ class GPUHeadRasterizer:
         local = cv2.transform(pixels[None].astype(np.float32), cv2.invertAffineTransform(inverse))[0]
         z = camera[:, 2]
         near, far = .001, max(10., float(z.max()) * 2)
-        perspective = getattr(pose, "perspective", True)
-        weight = z if perspective else np.ones_like(z)
-        depth_clip = ((far + near) / (far - near) * z - 2 * far * near / (far - near)
-                      if perspective else 2 * (z - near) / (far - near) - 1)
+        weight = z
+        depth_clip = (far + near) / (far - near) * z - 2 * far * near / (far - near)
         clip = np.column_stack(((2 * (local[:, 0] + .5) / side - 1) * weight,
                                 (1 - 2 * (local[:, 1] + .5) / side) * weight, depth_clip, weight))
         # UV data is uploaded in image row order, so flip OBJ v for sampling.
@@ -275,9 +278,21 @@ class FullHeadEngine:
         self.photometry = None
         self.detail = None
         self._albedo = None
+        self.mesh_report = None
+
+    def validate_architecture(self):
+        """True-3D guard on the rig mesh: open loops (neck base, mouth, sockets) are capped, then the surface must be a complete
+        watertight head (cranium .. submental neck). Eyeballs / oral cavity are separate parts and are checked by the caller
+        that assembles them (``require_parts``). Raises a ``True3DArchitectureError`` subclass; cached on success."""
+        if self.mesh_report is None:
+            from roop_3d.core.true3d_guard import close_open_boundaries, validate_head_mesh
+            vertices, faces = close_open_boundaries(self.rig.V0, self.rig.faces)
+            self.mesh_report = validate_head_mesh(vertices, faces, face_direction=(0.0, 0.0, 1.0), require_parts=False)
+        return self.mesh_report
 
     def process(self, image, face, landmarks68, timestamp, *, scene_cut=False, animate=True,
                 camera_matrix=None, landmark_indices=None, landmark_confidence=None):
+        self.validate_architecture()
         points = np.asarray(landmarks68, np.float64)
         if points.ndim != 2 or len(points) < 6 or points.shape[1] not in (2, 3) or not np.isfinite(points).all():
             raise DomainError("DENSE_HEAD_LANDMARKS_REQUIRED", "Full-head synthesis requires measured dense landmarks", 422)

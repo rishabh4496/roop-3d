@@ -8,7 +8,7 @@
 | [Offline model installation](OFFLINE_MODELS.md) | Putting the model files on a computer without internet; what the safety checks mean |
 | [User manual](USER_MANUAL.md) | Every screen and control, the workflow, shortcuts, accessibility |
 | [FaceSet creation guide](FACESET_GUIDE.md) | Choosing photos, covering head angles, reading the coverage grid |
-| [Engine comparison guide](ENGINE_COMPARISON.md) | Engines, render modes, restoration, hardware and provider choices |
+| [Engine and render options](ENGINE_COMPARISON.md) | Head topology engines, shader modes, the perspective camera, the architecture guard, hardware and provider choices |
 | [GPU troubleshooting guide](GPU_TROUBLESHOOTING.md) | The GPU is not used, out-of-memory errors, hardware profiles |
 | [Performance guide](PERFORMANCE_GUIDE.md) | Making renders faster; what costs time; how to measure |
 | [Export guide](EXPORT_GUIDE.md) | Render presets, HDR and subtitles, passes, finishing, provenance |

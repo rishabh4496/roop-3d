@@ -123,7 +123,7 @@ export default function FaceOverlayCanvas({
   // track boxes, which only know where a track first appeared. A detection that overlaps a stored face IS that face.
   const frameMode = Array.isArray(frameFaces) && !!frameMeta;
   const overlayFaces = useMemo(() => (frameMode ? frameFaces.map(match => toOverlayFace(match, frameMeta)) : []), [frameMode, frameFaces, frameMeta]);
-  const interactiveFaces = frameMode ? overlayFaces : visibleFaces;
+  const interactiveFaces = frameMode ? overlayFaces : visibleFaces.filter(face => face.selectable !== false && !!face.clusterId);
 
   // Close popover when active face is not in current frame
   useEffect(() => {

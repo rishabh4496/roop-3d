@@ -10,8 +10,7 @@ import { PreviewBusyError } from './api';
 
 describe('settings registry', () => {
   it('documents every setting with sane bounds, a recommended range inside them, and three distinct sweep values', () => {
-    expect(SETTINGS.map(spec => spec.id).sort()).toEqual(['color_strength', 'erosion_px', 'feather_px', 'fidelity_weight', 'pose_frontalization', 'pose_strength',
-      'pyramid_levels', 'restoration_blend', 'swap_weight', 'tps_expression_weight', 'xseg_occlusion_strength']);
+    expect(SETTINGS.map(spec => spec.id).sort()).toEqual(['color_strength', 'erosion_px', 'feather_px', 'pyramid_levels', 'swap_weight', 'xseg_occlusion_strength']);
     for (const spec of SETTINGS) {
       expect(spec.min, spec.id).toBeLessThan(spec.max);
       expect(spec.default, spec.id).toBeGreaterThanOrEqual(spec.min);
@@ -27,20 +26,19 @@ describe('settings registry', () => {
   });
 
   it('agrees with the application\'s real defaults, so "reset" restores what a fresh session has', () => {
-    for (const id of ['pose_strength', 'swap_weight', 'erosion_px', 'feather_px', 'color_strength', 'restoration_blend'] as const) {
+    for (const id of ['swap_weight', 'erosion_px', 'feather_px', 'color_strength'] as const) {
       expect(SETTING_BY_ID[id].default, id).toBe((DEFAULT_PARAMETERS as any)[id]);
     }
-    expect(settingValue(SETTING_BY_ID.tps_expression_weight, DEFAULT_PARAMETERS)).toBe(0);                  // omitted until touched
-    expect(settingValue(SETTING_BY_ID.tps_expression_weight, { ...DEFAULT_PARAMETERS, tps_expression_weight: .4 })).toBe(.4);
+    expect(settingValue(SETTING_BY_ID.xseg_occlusion_strength, DEFAULT_PARAMETERS)).toBe(1);                // omitted until touched
+    expect(settingValue(SETTING_BY_ID.xseg_occlusion_strength, { ...DEFAULT_PARAMETERS, xseg_occlusion_strength: .4 })).toBe(.4);
   });
 
-  it('groups settings into the 3D Geometry, Masking and Restorer panels', () => {
-    expect(Object.values(PANELS).map(panel => panel.title)).toEqual(['3D Geometry', 'Masking', 'Restorer']);
-    expect(settingsOf('geometry').map(spec => spec.id)).toEqual(['pose_strength', 'pose_frontalization', 'tps_expression_weight']);
+  it('groups settings into the Masking and Colour panels: no geometry-warp or restorer panel exists any more', () => {
+    expect(Object.values(PANELS).map(panel => panel.title)).toEqual(['Masking', 'Colour']);
     expect(settingsOf('masking').map(spec => spec.id)).toEqual(['swap_weight', 'erosion_px', 'feather_px', 'xseg_occlusion_strength', 'pyramid_levels']);
-    expect(settingsOf('restorer').map(spec => spec.id)).toEqual(['color_strength', 'restoration_blend', 'fidelity_weight']);
+    expect(settingsOf('color').map(spec => spec.id)).toEqual(['color_strength']);
     expect(recommendedText(SETTING_BY_ID.feather_px)).toBe('3–12 px');
-    expect(recommendedText(SETTING_BY_ID.tps_expression_weight)).toBe('0.30–0.80');
+    expect(recommendedText(SETTING_BY_ID.color_strength)).toBe('0.40–0.80');
   });
 
   it('agrees with the engine bounds of the compositor fusion controls', () => {
@@ -49,11 +47,7 @@ describe('settings registry', () => {
   });
 
   it('says a control has no effect from the current selection, not from a fixed claim', () => {
-    const fidelity = SETTING_BY_ID.fidelity_weight, xseg = SETTING_BY_ID.xseg_occlusion_strength, bands = SETTING_BY_ID.pyramid_levels;
-    expect(inactiveReason(fidelity, DEFAULT_PARAMETERS)).toMatch(/GPEN and GFPGAN have none/);
-    expect(inactiveReason(fidelity, { ...DEFAULT_PARAMETERS, restorer_model: 'ultramax', restoration_blend: 0 })).toMatch(/restorer is off/);
-    expect(inactiveReason(fidelity, { ...DEFAULT_PARAMETERS, restorer_model: 'ultramax', restoration_blend: .5, bypass: ['restorer'] })).toMatch(/restorer is off/);
-    expect(inactiveReason(fidelity, { ...DEFAULT_PARAMETERS, restorer_model: 'codeformer', restoration_blend: .5 })).toBeNull();
+    const xseg = SETTING_BY_ID.xseg_occlusion_strength, bands = SETTING_BY_ID.pyramid_levels;
     expect(inactiveReason(xseg, DEFAULT_PARAMETERS)).toMatch(/Robust occlusion/);
     expect(inactiveReason(xseg, { ...DEFAULT_PARAMETERS, occlusion_mode: 'robust' })).toBeNull();
     expect(inactiveReason(bands, DEFAULT_PARAMETERS)).toBeNull();
@@ -94,12 +88,12 @@ describe('SettingControl', () => {
     expect([slider.min, slider.max, slider.step]).toEqual(['0', '1', '0.01']);
     await setInput(slider, '0.4');
     expect(value()).toBe(0.4);
-    expect(host.querySelector<HTMLInputElement>('input[aria-label="Swap weight"]')!.value).toBe('0.4');
+    expect(host.querySelector<HTMLInputElement>('input[aria-label="Identity weight"]')!.value).toBe('0.4');
   });
 
   it('accepts inline expression math in the numeric field', async () => {
-    await act(async () => root.render(<Harness id="tps_expression_weight" start={0}/>));
-    const field = host.querySelector<HTMLInputElement>('input[aria-label="TPS expression weight"]')!;
+    await act(async () => root.render(<Harness id="color_strength" start={0}/>));
+    const field = host.querySelector<HTMLInputElement>('input[aria-label="Colour match"]')!;
     await setInput(field, '0.5 + 0.25');
     await act(async () => { field.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); });
     expect(value()).toBe(0.75);
@@ -122,26 +116,25 @@ describe('SettingControl', () => {
   });
 
   it('explains itself on hover/focus: the visible effect, the recommended range, the default and the bounds', async () => {
-    await act(async () => root.render(<Harness id="tps_expression_weight" start={0.3}/>));
+    await act(async () => root.render(<Harness id="color_strength" start={0.3}/>));
     const badge = host.querySelector('.help-badge')!;
     const tip = host.querySelector('[role="tooltip"]')!;
     expect(badge.getAttribute('aria-describedby')).toBe(tip.id);
-    expect(tip.textContent).toContain('mouth, eyebrows and eyelids');
-    expect(tip.textContent).toContain('face outline is pinned');
-    expect(tip.textContent).toContain('Recommended: 0.30–0.80');
-    expect(tip.textContent).toContain('Default: 0');
+    expect(tip.textContent).toContain('skin tone and lighting');
+    expect(tip.textContent).toContain('Recommended: 0.40–0.80');
+    expect(tip.textContent).toContain('Default: 0.65');
     expect(tip.textContent).toContain('Range: 0–1');
   });
 
   it('disables an inert control and says why, in the control and in its help', async () => {
-    const reason = inactiveReason(SETTING_BY_ID.fidelity_weight, DEFAULT_PARAMETERS)!;
-    await act(async () => root.render(<Harness id="fidelity_weight" start={0.5} disabled reason={reason}/>));
-    expect(host.querySelector<HTMLInputElement>('input[aria-label="CodeFormer fidelity"]')!.disabled).toBe(true);
+    const reason = inactiveReason(SETTING_BY_ID.xseg_occlusion_strength, DEFAULT_PARAMETERS)!;
+    await act(async () => root.render(<Harness id="xseg_occlusion_strength" start={0.5} disabled reason={reason}/>));
+    expect(host.querySelector<HTMLInputElement>('input[aria-label="XSeg occlusion strength"]')!.disabled).toBe(true);
     expect(host.querySelector<HTMLInputElement>('input[type="range"]')!.disabled).toBe(true);
     expect(host.querySelector<HTMLButtonElement>('.reset-setting')!.disabled).toBe(true);
-    expect(host.querySelector('.tip-warning')!.textContent).toMatch(/GPEN and GFPGAN have none/);
-    await act(async () => root.render(<Harness id="restoration_blend" start={0.5} disabled reason="GPEN weights are unavailable"/>));
-    expect(host.querySelector('.tip-warning')!.textContent).toBe('GPEN weights are unavailable');
+    expect(host.querySelector('.tip-warning')!.textContent).toMatch(/Robust occlusion/);
+    await act(async () => root.render(<Harness id="color_strength" start={0.5} disabled reason="The colour model is unavailable"/>));
+    expect(host.querySelector('.tip-warning')!.textContent).toBe('The colour model is unavailable');
   });
 });
 
@@ -153,7 +146,7 @@ describe('3×3 contact sheet', () => {
   const open = (props: Record<string, unknown> = {}) => {
     const onApply = vi.fn(), onClose = vi.fn(), render = vi.fn(async () => tileResult());
     const payloadFor = vi.fn((patch: Patch) => ({ patch, frame_index: 7 }));
-    act(() => { root.render(<ContactSheetModal panel="geometry" parameters={DEFAULT_PARAMETERS} frameLabel="Frame 7 · 0.280 s" payloadFor={payloadFor as any}
+    act(() => { root.render(<ContactSheetModal panel="masking" parameters={DEFAULT_PARAMETERS} frameLabel="Frame 7 · 0.280 s" payloadFor={payloadFor as any}
       onApply={onApply} onClose={onClose} render={render as any} {...props}/>); });
     return { onApply, onClose, render, payloadFor };
   };
@@ -164,42 +157,41 @@ describe('3×3 contact sheet', () => {
   });
 
   it('starts from the panel that opened it', () => {
-    expect(defaultAxes('geometry')).toEqual(['pose_strength', 'pose_frontalization']);
     expect(defaultAxes('masking')).toEqual(['swap_weight', 'erosion_px']);
-    expect(defaultAxes('restorer')).toEqual(['color_strength', 'restoration_blend']);   // fidelity_weight is inactive, so never pre-selected
+    expect(defaultAxes('color')).toEqual(['color_strength', 'swap_weight']);            // xseg_occlusion_strength is inactive under standard occlusion, so never pre-selected
     expect(defaultAxes(undefined)).toHaveLength(2);
   });
 
   it('renders nine real previews across Low / Medium / High in row-major order', async () => {
     const { render, payloadFor } = open();
-    await select('X axis setting', 'tps_expression_weight');
-    await select('Y axis setting', 'pose_frontalization');
+    await select('X axis setting', 'color_strength');
+    await select('Y axis setting', 'feather_px');
     await generate();
     expect(render).toHaveBeenCalledTimes(9);
-    const combos = payloadFor.mock.calls.map(([patch]) => [patch.tps_expression_weight, patch.pose_frontalization]);
-    expect(combos).toEqual([[0, 0], [.5, 0], [1, 0], [0, .5], [.5, .5], [1, .5], [0, 1], [.5, 1], [1, 1]]);
+    const combos = payloadFor.mock.calls.map(([patch]) => [patch.color_strength, patch.feather_px]);
+    expect(combos).toEqual([[.2, 0], [.55, 0], [.9, 0], [.2, 6], [.55, 6], [.9, 6], [.2, 20], [.55, 20], [.9, 20]]);
     const tiles = [...document.querySelectorAll<HTMLButtonElement>('.sweep-cell')];
     expect(tiles).toHaveLength(9);
     expect(tiles.every(tile => tile.querySelector('img') && !tile.disabled)).toBe(true);
-    expect(tiles[5].querySelector('img')!.getAttribute('alt')).toBe('High TPS expression weight, Medium Pose frontalization');
-    expect(tiles[5].textContent).toContain('High TPS expression weight 1 · Medium Pose frontalization 0.5');
+    expect(tiles[5].querySelector('img')!.getAttribute('alt')).toBe('High Colour match, Medium Mask feather');
+    expect(tiles[5].textContent).toContain('High Colour match 0.9 · Medium Mask feather 6');
     expect(LEVELS).toEqual(['Low', 'Medium', 'High']);
   });
 
   it('clicking a tile applies both of its values and closes', async () => {
     const { onApply, onClose } = open();
-    await generate();                                                        // default axes: pose_strength (X) x pose_frontalization (Y)
+    await generate();                                                        // default axes: swap_weight (X) x erosion_px (Y)
     await act(async () => document.querySelectorAll<HTMLButtonElement>('.sweep-cell')[7].click());   // Medium X, High Y
-    expect(onApply).toHaveBeenCalledWith({ pose_strength: .5, pose_frontalization: 1 });
+    expect(onApply).toHaveBeenCalledWith({ swap_weight: .65, erosion_px: 6 });
     expect(onClose).toHaveBeenCalled();
   });
 
   it('cannot pick an inactive setting or the same setting twice', async () => {
     open();
     const options = [...document.querySelectorAll<HTMLOptionElement>('select[aria-label="X axis setting"] option')];
-    expect(options.find(option => option.value === 'fidelity_weight')!.disabled).toBe(true);
-    expect(options.find(option => option.value === 'fidelity_weight')!.textContent).toContain('(inactive)');
-    expect(options.find(option => option.value === 'pose_frontalization')!.disabled).toBe(true);   // already the Y axis
+    expect(options.find(option => option.value === 'xseg_occlusion_strength')!.disabled).toBe(true);
+    expect(options.find(option => option.value === 'xseg_occlusion_strength')!.textContent).toContain('(inactive)');
+    expect(options.find(option => option.value === 'erosion_px')!.disabled).toBe(true);            // already the Y axis
   });
 
   it('retries a busy tile after retry_after_ms instead of failing the sheet', async () => {

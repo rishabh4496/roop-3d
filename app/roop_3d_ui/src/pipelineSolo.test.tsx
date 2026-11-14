@@ -45,13 +45,13 @@ it('solos a pipeline node through POST /api/preview solo_node, returns to the co
     await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Solo XSeg + Hair Occlusion Matte"]')!.click());
     expect(host.querySelector('.solo-viewport')).toBeNull();
     await act(async () => root.render(<VideoViewport {...props} time={2}/>));
-    await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Solo Base 3D Swap"]')!.click());
+    await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Solo 6DoF Head Pose & Mesh"]')!.click());
     await act(async () => { await vi.advanceTimersByTimeAsync(200); });
     const stale = replies.at(-1)!;
-    expect(previewBodies(fetch).at(-1)).toMatchObject({ solo_node: 'swapper' });
+    expect(previewBodies(fetch).at(-1)).toMatchObject({ solo_node: 'pose' });
     await act(async () => root.render(<VideoViewport {...props} time={3}/>));
     expect(stale.signal.aborted).toBe(true);
-    await act(async () => { stale.resolve(previewReply(50, 'swapper')); await vi.advanceTimersByTimeAsync(0); });
+    await act(async () => { stale.resolve(previewReply(50, 'pose')); await vi.advanceTimersByTimeAsync(0); });
     expect(host.querySelector('.solo-viewport img')).toBeNull();            // the aborted frame's late answer is never shown
   } finally { await act(async () => root.unmount()); host.remove(); vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks(); }
 });
@@ -63,9 +63,9 @@ it('offers exactly the eight pipeline stages and maps each to its server buffer'
   try {
     await act(async () => root.render(<VideoViewport target="" output="" time={0} setTime={() => {}} duration={0} enabled={false} keys={[]} previewRequest={REQUEST}/>));
     const names = [...host.querySelectorAll('.pipeline-node .node-select')].map(node => node.getAttribute('aria-label'));
-    expect(names).toEqual(['Solo Raw Target', 'Solo 6DoF 3D Mesh & Pose', 'Solo Canonical UV Projection', 'Solo SH 3D Relighting & Normals', 'Solo Base 3D Swap', 'Solo Restorer off', 'Solo XSeg + Hair Occlusion Matte', 'Solo Final Composite']);   // the restorer card follows the selected enhancer (blend 0 = off)
+    expect(names).toEqual(['Solo Raw Target', 'Solo 6DoF Head Pose & Mesh', 'Solo Head UV Atlas', 'Solo SH 3D Relighting & Normals', 'Solo 3D Head Render', 'Solo XSeg + Hair Occlusion Matte', 'Solo Colour Match & Grade', 'Solo Final Composite']);
     expect([...host.querySelectorAll('.pipeline-node .node-index')].map(node => node.textContent)).toEqual(['1', '2', '3', '4', '5', '6', '7', '8']);
-    expect(PIPELINE_NODES.map(node => node.buffer)).toEqual(['detector', 'pose', 'source', 'sh_lighting', 'swapper', 'restorer', 'matte', 'final']);
+    expect(PIPELINE_NODES.map(node => node.buffer)).toEqual(['detector', 'pose', 'source', 'sh_lighting', 'final', 'matte', 'color', 'final']);
   } finally { await act(async () => root.unmount()); host.remove(); vi.unstubAllGlobals(); }
 });
 
@@ -86,21 +86,6 @@ it('captures a rendered final composite and full settings into a snapshot slot',
     expect(useHistoryStore.getState().slots.A).toMatchObject({ frame: 25, workspace });
     expect(useHistoryStore.getState().slots.A!.image).toMatch(/^data:/);     // self-contained: survives the preview URL being revoked
     expect(host.querySelector('[aria-label="Snapshot A"]')).toBeTruthy();
-  } finally { await act(async () => root.unmount()); host.remove(); vi.unstubAllGlobals(); vi.restoreAllMocks(); }
-});
-
-it('offers mesh blending and an explicitly separate reference retarget mode', async () => {
-  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true }); useHistoryStore.getState().reset();
-  vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
-  vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(() => {});
-  function Workstation() { const [parameters, setParameters] = useState(DEFAULT_PARAMETERS); return <VideoViewport target="" output="" time={0} setTime={() => {}} duration={0} enabled={false} keys={[]} parameters={parameters} setParameters={setParameters}/>; }
-  const host = document.createElement('div'); document.body.append(host); const root = createRoot(host);
-  try {
-    await act(async () => root.render(<Workstation/>));
-    expect(host.querySelector('[aria-label="2.5D → 3D pose blend"]')).toBeTruthy();
-    const select = host.querySelector<HTMLSelectElement>('[aria-label="Pose correction method"]')!;
-    await act(async () => { Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')!.set!.call(select, 'retarget'); select.dispatchEvent(new Event('change', { bubbles: true })); });
-    expect(host.querySelector('[aria-label="Reference retarget strength"]')).toBeTruthy();
   } finally { await act(async () => root.unmount()); host.remove(); vi.unstubAllGlobals(); vi.restoreAllMocks(); }
 });
 

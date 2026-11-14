@@ -12,7 +12,7 @@ const SOURCE_LABEL: Record<string, string> = {
   pnp_dense: 'Dense-landmark PnP',
   pnp_5pt: '5-point PnP',
   geometric_5pt: '5-point geometric estimate',
-  weak_perspective: 'Weak-perspective mesh fit',
+  perspective_mesh: 'Perspective mesh fit',
 };
 
 function position(sample: TrackingSample): { value: string; title: string } {

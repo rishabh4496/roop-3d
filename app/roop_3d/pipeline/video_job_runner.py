@@ -55,17 +55,6 @@ HDR_TRANSFERS = {"smpte2084", "arib-std-b67"}
 _MATRIX = {"bt709": "bt709", "bt470bg": "bt601", "smpte170m": "bt601", "bt2020nc": "bt2020", "bt2020c": "bt2020"}
 
 
-def _restoration_status(bypassed: bool, name: str, capability: dict) -> dict:
-    """``bypassed`` = the job explicitly switched the restorer off; ``applied`` only when the engine observed a successful
-    inference (UltraMax counts them; other adapters report their own ``inference`` verification)."""
-    if bypassed:
-        return {"status": "bypassed", "reason": "restorer listed in the job's parameter bypass", "architecture": name}
-    telemetry = capability.get("telemetry")
-    applied = telemetry["applied"] > 0 if telemetry else capability.get("inference") == "VERIFIED_THIS_SESSION"
-    return {"status": "applied" if applied else "not_applied", "architecture": name,
-            "model": capability.get("model"), "telemetry": telemetry}
-
-
 # ================================================================================================================ probing
 @dataclass(frozen=True)
 class VideoInfo:
@@ -368,7 +357,9 @@ def stream_video(target: Path | str, output: Path | str, frame_fn: Callable[[np.
 
 # ============================================================================================================ job adapter
 class EndToEndVideoJobRunner(MasterPipelineRunner):
-    """Job engine ``photoreal_3d_ffmpeg``: real detection + inswapper + the photorealistic swap core, FFmpeg in and out."""
+    """Job engine ``photoreal_3d_ffmpeg``: detection + true-3D head render + the photorealistic head compositor, FFmpeg in and out.
+
+    The render path is not wired yet: ``run_prepared`` raises ``True3DRendererUnavailable`` before any work."""
 
     ENGINE_ID = ENGINE_ID
 
@@ -377,44 +368,19 @@ class EndToEndVideoJobRunner(MasterPipelineRunner):
         from roop_3d.reliability import disk
         disk.require(self.root, disk.estimate(0, 0, 0, target.stat().st_size))
 
-    # ---- restorer / options -----------------------------------------------------------------------------------------
-    def _restorer(self, record: JobRecord, settings, runtime_config):
-        """(callable | None, display name, engine | None).
-
-        Restoration is part of this engine's contract (step 4), so ``auto`` means UltraMax. The saved global policy only overrides
-        that when it names a concrete architecture: its default ``off`` is the reference engine's opt-in switch, not a request to
-        skip this engine's restorer. Switching it off here is explicit: put ``restorer`` in the parameters' ``bypass`` list."""
-        parameters = record.request.parameters_at(0)
-        architecture = parameters.restorer_model
-        if architecture == "auto":
-            policy = settings.face_restoration_policy
-            architecture = policy if policy in ("gpen", "codeformer", "gfpgan", "ultramax") else "ultramax"
-        if "restorer" in parameters.bypass:
-            return None, "off", None
-        from roop_3d.compositor import restoration as r
-        if architecture == "ultramax":
-            engine = r.UltraMaxPipelineRestorer(self.catalog, runtime_config)
-        elif architecture == "codeformer":
-            engine = r.CodeFormerRestorer(self.catalog, runtime_config)
-        elif architecture == "gfpgan":
-            engine = r.GfpganRestorer(self.catalog, runtime_config)
-        elif architecture == "gpen":
-            engine = r.GpenRestorer(self.catalog, runtime_config)
-        else:
-            raise DomainError("RESTORER_UNAVAILABLE", "The selected restoration architecture has no verified local adapter", 503)
-        return (lambda crop, landmarks5: engine.restore_hires(crop, landmarks5)), architecture, engine
-
+    # ---- options ----
     def _core_options(self, record: JobRecord):
         from roop_3d.pipeline.photorealistic_swap_core import SwapCoreOptions
         parameters = record.request.parameters_at(0)
         composite = parameters.composite_options()
         return SwapCoreOptions(swap_scope=parameters.swap_scope, skull_blend=parameters.skull_blend,
                                relight_strength=parameters.relight_strength,
-                               restoration_blend=parameters.restoration_blend if parameters.restoration_blend > 0 else 0.85,
                                pyramid_levels=max(4, min(6, composite.pyramid_levels)))
 
     # ---- the render loop --------------------------------------------------------------------------------------------
     def run_prepared(self, record: JobRecord, admission, *, prepared: PreparedPipeline, control, mark_running, report_progress) -> JobOutput:
+        from roop_3d.core.true3d_guard import require_true3d_renderer
+        require_true3d_renderer("photoreal_3d_ffmpeg render job")
         from roop_3d.pipeline.photorealistic_swap_core import Photorealistic3DSwapCore
         from roop_3d.pipeline.session_adapter import SessionFrameProcessor
         settings, request = prepared.settings, record.request
@@ -425,8 +391,6 @@ class EndToEndVideoJobRunner(MasterPipelineRunner):
             total = max(1, int(np.ceil(info.duration * float(info.rate))))
         runtime_config = self._runtime_config(admission, self.settings_for(request, settings))
         session = self.pipeline_factory(self.catalog, runtime_config)
-        if callable(getattr(session, "select_swapper", None)):
-            session.select_swapper(request.swapper_model_id or settings.swapper_model_id)
         numeric_ids = set(prepared.labels_to_ids.values())
         base_source = next(iter(prepared.sources_by_track.values()))
         parameters = request.parameters_at(0)
@@ -435,13 +399,12 @@ class EndToEndVideoJobRunner(MasterPipelineRunner):
         final = owned(self.root, relative)                  # ownership is checked here, before anything is written
         last: dict = {}
         processor: SessionFrameProcessor | None = None
-        restorer_engine = None
         try:
             signal = self._control_signal(control)
             if signal is not None:
                 raise signal()
             session.prepare_session(base_source, track_ids=numeric_ids, sources_by_track=prepared.sources_by_track,
-                                    retarget="off" if parameters.uses_mesh_projection() else "auto",
+                                    retarget="auto",
                                     **parameters.session_options(), **(prepared.tracking or {}))
             if hasattr(session, "set_target_registry") and hasattr(self.media, "target_locks"):
                 session.set_target_registry(self.media.target_locks.registry(request.target_path))
@@ -449,12 +412,11 @@ class EndToEndVideoJobRunner(MasterPipelineRunner):
                 session.set_identity_guard(prepared.identity_guard)
             if hasattr(session, "configure_temporal"):
                 session.configure_temporal(settings)
-            restore_fn, restorer_name, restorer_engine = self._restorer(record, settings, runtime_config)
-            core = Photorealistic3DSwapCore(self._core_options(record), restorer=restore_fn, restorer_name=restorer_name)
+            core = Photorealistic3DSwapCore(self._core_options(record))
             processor = SessionFrameProcessor(session, core)
             mark_running()
             HUD.milestone("PIPE", "ffmpeg stream started", job=record.job_id[:8], size=f"{info.width}x{info.height}",
-                          fps=f"{float(info.rate):.3f}", restorer=restorer_name, scope=core.options.swap_scope)
+                          fps=f"{float(info.rate):.3f}", scope=core.options.swap_scope)
 
             def frame_fn(frame: np.ndarray, index: int) -> np.ndarray:
                 swapped, report = processor.process(frame, index)
@@ -476,7 +438,7 @@ class EndToEndVideoJobRunner(MasterPipelineRunner):
                     eta_last_at, eta_last_done = now, done
                 report = last.get("report")
                 timings = {name: value for name, value in (report.stage_ms if report else {}).items()
-                           if name in ("detection", "inswapper", "pose_tps", "masking", "restorer")}
+                           if name in ("detection", "head_render", "head_pose", "masking", "expression")}
                 timings["decode"], timings["encode"] = round(decode_ms, 3), round(encode_ms, 3)
                 advisory = None
                 if processor.faces_skipped or processor.faces_withheld:
@@ -501,8 +463,6 @@ class EndToEndVideoJobRunner(MasterPipelineRunner):
                 raise DomainError("TRACK_NOT_DETECTED", "No mapped face could be swapped in any frame", 422)
             report_progress(JobProgress(frame=result.frames, total_frames=max(total or 0, result.frames), stage="mux"))
             capability = session.capability()
-            # The restorer THIS engine used (the session's compositor restorer is a different, unused object here).
-            restorer_capability = restorer_engine.capability() if restorer_engine is not None and hasattr(restorer_engine, "capability") else {}
         except BaseException as error:
             final.unlink(missing_ok=True)
             if is_cuda_oom(error):
@@ -512,11 +472,6 @@ class EndToEndVideoJobRunner(MasterPipelineRunner):
                 raise DomainError("PIPELINE_OOM", "Pipeline exhausted the available memory profiles", 503) from None
             raise
         finally:
-            if restorer_engine is not None and hasattr(restorer_engine, "release"):
-                try:
-                    restorer_engine.release()
-                except Exception:
-                    log.debug("restorer release failed", exc_info=True)
             session.release_session()
 
         digest = sha256_file(final)[1]
@@ -531,16 +486,19 @@ class EndToEndVideoJobRunner(MasterPipelineRunner):
             "source_audio_codec": info.audio_codec, "metadata_stripped": False,
             "audio_streams_out": result.remux.audio_streams, "subtitle_policy": result.remux.subtitles,
             "subtitle_streams_out": result.remux.subtitle_streams, "metadata_and_chapters": "copied_from_source",
-            "restorer": restorer_name, "restorer_capability": restorer_capability,
-            "restoration": _restoration_status(restorer_engine is None, restorer_name, restorer_capability),
             "swap_scope": core.options.swap_scope, "skull_blend": core.options.skull_blend,
             "per_frame_mean_ms": processor.mean_stage_ms(), "decode_ms": round(result.decode_ms, 3), "encode_ms": round(result.encode_ms, 3),
             "faces": {"swapped": processor.faces_swapped, "skipped": processor.faces_skipped, "withheld": processor.faces_withheld},
             "fallbacks": dict(sorted(processor.fallbacks.items())),
-            "identity_swapper": capability.get("identity_swapper", {}), "face_mappings": [
+            "geometry_modes": dict(sorted(processor.geometry_modes.items())),
+            "mask_tiers": dict(sorted(processor.mask_tiers.items())),
+            "renderer": capability.get("renderer", {}), "face_mappings": [
                 {"track_id": label, "faceset_id": source} for label, source in zip(prepared.labels_to_ids, prepared.faceset_ids)],
             "limits": {"resumable": False, "vfr_source": info.vfr, "padded_to_even": result.padded_to_even,
-                       "skull": "faceset_view_106_similarity_aligned", "sh_normals": "silhouette_ellipsoid unless mesh normals supplied"},
+                       "skull": "upstream rasterized coverage of the rendered head layer",
+                       "sh_normals": "silhouette_ellipsoid unless mesh normals supplied",
+                       "makehuman_native_projection": "UNSUPPORTED_TOPOLOGY: native bundles require bfm35709 or flame2023open",
+                       "semantic_models": "parser and all configured visible-face networks required; trust tiers are reported"},
             "request_sha256": self._request_digest(record),
         }
         atomic_json(self.root, manifest_relative, manifest)

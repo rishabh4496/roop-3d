@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Annotated, Any
 from fastapi import APIRouter, Body, Header, Request, Response
-from pydantic import Field
+from pydantic import Field, model_validator
 
 from roop_3d.queue.batch_matrix import (
     BUILTIN_RECIPES,
@@ -15,6 +15,7 @@ from roop_3d.queue.batch_matrix import (
 from roop_3d.queue.lifecycle import LIFECYCLE_ORDER
 from roop_3d.core.errors import DomainError
 from roop_3d.core.settings import Contract
+from roop_3d.server.true3d import migrate_legacy
 from roop_3d.queue_manager import CanonicalJobState, QueueJob, QueueSlice, SegmentSlice
 from roop_3d.segment_dispatcher import concat_lossless, split_video_gop
 
@@ -52,9 +53,17 @@ class BatchGenerateRequest(Contract):
     groups: list[dict[str, Any]] | None = None
     recipes: list[dict[str, Any]] | None = None
     output_template: str | None = None
-    restorer: str = "auto"
     active_cells: list[Any] | None = None
     workstation_parameters: dict[str, Any] | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def drop_removed_fields(cls, data: Any) -> Any:
+        """Old batch requests carried a per-batch `restorer` and 2D parameters; they are dropped, not rejected."""
+        clean, _ = migrate_legacy(data)
+        if isinstance(clean, dict) and isinstance(clean.get("workstation_parameters"), dict):
+            clean = {**clean, "workstation_parameters": migrate_legacy(clean["workstation_parameters"])[0]}
+        return clean
 
 
 class BatchSubmitRequest(BatchGenerateRequest):

@@ -371,7 +371,7 @@ def analyze_faceset(
         duplicate_groups=[sorted(g) for g in groups.values()], expression_spread=expression_spread,
         capabilities={
             "landmarks": "68pt" if any(v.landmarks_68 is not None for v in views) else "5pt (SCRFD)",
-            "pose": "5-point scaled-orthographic estimate, typical error a few degrees (not metric)",
+            "pose": "5-point perspective PnP estimate (size-free nominal camera), typical error a few degrees (not metric)",
             "occlusion": "border truncation + optional supplied mask; semantic occluder model: unavailable",
             "identity_embedding": "stored ArcFace embeddings",
         },

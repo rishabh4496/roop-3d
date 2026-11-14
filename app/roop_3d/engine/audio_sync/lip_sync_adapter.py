@@ -123,7 +123,7 @@ class LipSyncAdapter:
         if mode not in ("wav2lip", "wav2lip_gan_fp16"):
             raise DomainError("LIPSYNC_ARCHITECTURE_UNSUPPORTED",
                               "MuseTalk requires Whisper/VAE conditioning; EDTalk requires its pose/emotion encoder bundle", 422)
-        from roop_3d.engine.volumetric.swapper_engine import load_local_session
+        from roop_3d.core.local_session import load_local_session
         candidates = [row for row in self.catalog.public()
                       if row.get("installed") and "wav2lip" in row["name"].casefold()
                       and row.get("local_format") == "onnx"

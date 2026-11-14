@@ -1,5 +1,8 @@
 # Native dense facial backbone
 
+<!-- phase0-purge-notice -->
+> **Phase 0 purge notice (2026-11-14).** Roop 3D no longer contains 2D face swappers, 5-point crop-paste, 2.5D strip meshes, weak-perspective cameras or post-crop GAN restorers. Anything below that describes them is **historical** and no longer applies; the current architecture is a full 3D head under a perspective camera, see [Engine and render options](../docs/ENGINE_COMPARISON.md).
+
 `NativeMorphableBackbone` decodes the actual upstream networks, without requiring a custom all-in-one differentiable renderer ONNX export. `MorphableBackbone.load` selects it when `bundle.json` declares `roop3d.native_dense_face.v1`. The original custom export schema remains supported.
 
 ## Current readiness

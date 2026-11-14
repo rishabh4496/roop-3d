@@ -4,7 +4,7 @@ import { DEFAULT_PARAMETERS } from './components/workstation/pipeline';
 import type { JobRequest } from './contracts';
 
 const REQUEST = { target_path: 'local.mp4', inspection_id: 'a'.repeat(32), face_mappings: [{ track_id: 'track_0000', faceset_id: 'alice' }], processing: 'local', remote_consent: false, trim_start_seconds: null, trim_end_seconds: null } as unknown as JobRequest;
-const build = (parameters = DEFAULT_PARAMETERS) => buildLivePayload({ request: REQUEST, time: 1, fps: 25, parameters, maskBase64: null, restorerAvailable: false, solo: null })!;
+const build = (parameters = DEFAULT_PARAMETERS) => buildLivePayload({ request: REQUEST, time: 1, fps: 25, parameters, maskBase64: null, solo: null })!;
 
 describe('opt-in 3D workstation controls in the live preview payload', () => {
   it('omits the hairline offset and ambient fill until they are touched, so earlier previews keep their cache keys', () => {

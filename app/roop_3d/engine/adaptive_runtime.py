@@ -2,7 +2,7 @@
 
 Provides adaptive hardware profiles for RTX 4070 Desktop (12 GB) and RTX 3060 Laptop (6 GB),
 thread-safe model session caching, CUDA I/O binding, sequential memory eviction,
-and strict FP32 precision contract enforcement for INSwapper.
+and strict FP32 precision contract enforcement for FP32-locked graphs.
 """
 from __future__ import annotations
 
@@ -30,14 +30,6 @@ QualityTier = Literal["high", "conservative", "basic"]
 
 # Models classified as heavy requiring sequential eviction on 6GB profiles
 HEAVY_MODELS = {
-    "inswapper_128.onnx",
-    "inswapper_128.batch.onnx",
-    "inswapper_128_dynamic.onnx",
-    "gpen_bfr_512.onnx",
-    "GPEN-BFR-512.onnx",
-    "gpen_bfr_1024.onnx",
-    "CodeFormerv0.1.onnx",
-    "codeformer.fp16.onnx",
     "liveportrait_warping_spade.onnx",
 }
 
@@ -69,8 +61,8 @@ class AdaptiveHardwareProfile:
     description: str = ""
 
     def validate_swap_precision(self, model_name: str, requested_precision: str | None = None) -> str:
-        """Strict Precision Rule: INSwapper must retain its verified FP32 precision contract."""
-        if "inswapper" in model_name.lower():
+        """Strict Precision Rule: FP32-locked graphs (the LivePortrait motion extractor) keep their verified FP32 contract."""
+        if "motion_extractor" in model_name.lower():
             if requested_precision and requested_precision.upper() not in ("FP32", "FLOAT32"):
                 raise DomainError(
                     "PRECISION_CONTRACT_VIOLATION",
@@ -163,7 +155,7 @@ class AdaptiveModelPool:
 
     On 12GB profiles, models remain GPU resident across frames and requests.
     On 6GB profiles, heavy models are executed sequentially with eager eviction.
-    Precision contracts (such as INSwapper FP32) are strictly enforced.
+    Precision contracts (such as the motion-extractor FP32 lock) are strictly enforced.
     """
 
     _instance: "AdaptiveModelPool | None" = None

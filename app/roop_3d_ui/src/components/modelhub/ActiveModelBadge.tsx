@@ -1,33 +1,21 @@
 import { useActiveModelPolling, useActiveModels, type ActiveModel } from '../../stores/activeModels';
-import { RESTORER_LABELS, restorerFileMatches, restorerWeights, type RestorerModel } from '../workstation/pipeline';
 
-type Stage = 'detector' | 'swapper' | 'enhancer';
-const STAGES: { stage: Stage; label: string }[] = [
-  { stage: 'detector', label: 'Detector' }, { stage: 'swapper', label: 'Swapper' }, { stage: 'enhancer', label: 'Enhancer' },
-];
-
-const isRestorer = (value: string | undefined): value is RestorerModel => value !== undefined && Object.hasOwn(RESTORER_LABELS, value);
-
-/** What the user selected, as it reads next to the loaded weight: a restorer by name and file, any other stage by its model id. */
-function selectedText(stage: Stage, selected: string | undefined): string | null {
-  if (!selected || selected === 'off' || selected === 'auto') return null;
-  return stage === 'enhancer' && isRestorer(selected) ? `${RESTORER_LABELS[selected]} (${restorerWeights(selected)})` : selected;
-}
+/** Stage names the engine reports: the detector plus whatever the true-3D renderer loads (head regressor, shader networks ...). */
+const STAGE_LABELS: Record<string, string> = { detector: 'Detector', head: 'Head model', shader: 'Shader' };
+const labelOf = (stage: string) => STAGE_LABELS[stage] ?? stage.replaceAll('_', ' ');
 
 /**
- * A loaded session of another model means the new choice has not been used yet; it loads on the next preview / render. Detector and swapper
- * sessions are read back under the stable catalog id. Enhancers are read back under their registry hash id, so the loaded weight file decides
- * (CodeFormer and UltraMax load different artifacts).
+ * A loaded session of another model means the new choice has not been used yet; it loads on the next preview / render.
+ * Sessions are read back under the stable catalog id.
  */
-function isPending(stage: Stage, active: ActiveModel, selected: string | undefined): boolean {
+function isPending(active: ActiveModel, selected: string | undefined): boolean {
   if (!active || !selected || selected === 'off' || selected === 'auto') return false;
-  if (stage === 'enhancer') return isRestorer(selected) && !restorerFileMatches(active.filename, selected);
   return active.model_id !== selected;
 }
 
-function Row({ label, stage, active, selected }: { label: string; stage: Stage; active: ActiveModel; selected: string | undefined }) {
-  const wanted = selectedText(stage, selected);
-  const pending = isPending(stage, active, selected);
+function Row({ label, stage, active, selected }: { label: string; stage: string; active: ActiveModel; selected: string | undefined }) {
+  const wanted = selected && selected !== 'off' && selected !== 'auto' ? selected : null;
+  const pending = isPending(active, selected);
   return (
     <li className={`active-model-row ${active ? 'loaded' : 'idle'}`} data-testid={`active-model-${stage}`} data-stage={stage}>
       <span className="active-model-stage">{label}</span>
@@ -45,16 +33,18 @@ function Row({ label, stage, active, selected }: { label: string; stage: Stage; 
 }
 
 /** Live read-back of the exact weight file each stage currently has in VRAM (`GET /models/active`). */
-export default function ActiveModelBadge({ selected }: { selected?: Partial<Record<Stage, string>> }) {
+export default function ActiveModelBadge({ selected }: { selected?: Partial<Record<string, string>> }) {
   useActiveModelPolling();
   const value = useActiveModels(state => state.value);
   const error = useActiveModels(state => state.error);
+  // The detector row is always shown; other stages appear as the renderer reports them.
+  const stages = ['detector', ...Object.keys(value?.active ?? {}).filter(stage => stage !== 'detector')];
   return (
     <section className="rack-section active-models" aria-label="Loaded models" data-testid="active-models">
       <h4>Loaded in VRAM</h4>
       <ul className="active-model-list">
-        {STAGES.map(({ stage, label }) => (
-          <Row key={stage} label={label} stage={stage} active={value?.active?.[stage] ?? null} selected={selected?.[stage] ?? value?.selected?.[`${stage}_model` as const]} />
+        {stages.map(stage => (
+          <Row key={stage} label={labelOf(stage)} stage={stage} active={value?.active?.[stage] ?? null} selected={selected?.[stage] ?? (value?.selected as Record<string, string | undefined> | undefined)?.[`${stage}_model`]} />
         ))}
       </ul>
       {error && !value && <small className="muted">{error}</small>}

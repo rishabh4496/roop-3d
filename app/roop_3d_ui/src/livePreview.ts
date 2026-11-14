@@ -17,45 +17,38 @@ export const RENDER_FRAME_EVENT = 'roop3d:render-frame';
 
 export type LivePayload = Record<string, unknown>;
 
-export function buildLivePayload({ request, time, fps, parameters, maskBase64, restorerAvailable, solo, timestampSelection = false }: {
+export function buildLivePayload({ request, time, fps, parameters, maskBase64, solo, timestampSelection = false }: {
   request: JobRequest | null; time: number; fps: number; parameters: WorkstationParameters;
-  maskBase64?: string | null; restorerAvailable: boolean;
+  maskBase64?: string | null;
   /** `solo_node` buffer to return instead of the final composite (see PIPELINE_NODES[].buffer). */
   solo?: string | null;
   timestampSelection?: boolean;
 }): LivePayload | null {
   if (!request || !request.face_mappings.length) return null;
-  const restoring = restorerAvailable && (parameters.restoration_blend > 0 || request.parameter_curves?.tracks.restorer_opacity?.some(key=>key.value>0)) && !parameters.bypass.includes('restorer');
-  // Controls the current selection cannot act on (fidelity for GPEN, the XSeg vote outside Robust occlusion, bands for Feather) are not sent.
+  // Controls the current selection cannot act on (the XSeg vote outside Robust occlusion, bands for Feather) are not sent.
   const wire = wireParameters(parameters);
   return {
     engine_id: request.engine_id ?? 'reference_onnx',
-    swapper_model_id: request.swapper_model_id ?? undefined,
     detector_model_id: request.detector_model_id ?? undefined,
     target_path: request.target_path,
     inspection_id: request.inspection_id,
     ...(timestampSelection ? { timestamp: Math.max(0, time) } : { frame_index: Math.max(0, Math.round(time * fps)) }),
     identity_lock_id: request.identity_lock_id ?? undefined,
     face_mappings: request.face_mappings,
-    frontalization_weight: parameters.pose_mode === 'mesh_blend' ? parameters.pose_strength : undefined,
-    pose_frontalization: parameters.pose_frontalization || undefined,
-    tps_expression_weight: parameters.tps_expression_weight || undefined,
+    // True-3D controls: omitted until chosen, so the server defaults (and earlier preview cache keys) apply.
+    head_topology_engine: parameters.head_topology_engine,
+    shader_mode: parameters.shader_mode,
+    camera: parameters.camera,
     expression_restore_factor: parameters.expression_restore_factor,
     face_expression_overrides: parameters.face_expression_overrides,
-    pose_strength: parameters.pose_strength,
     solo_node: solo || undefined,
     occlusion: { erosion_px: parameters.erosion_px ?? 0, feather_px: parameters.feather_px },
     // A painted frame range overrides the whole-clip mask on the frames it covers, exactly as the render does.
     mask_base64: maskAtFrame(maskBase64 || request.mask_base64, request.mask_keyframes, Math.max(0, Math.round(time * fps))) || undefined,
-    restorer: restoring ? parameters.restorer_model ?? 'gpen' : 'off',
     identity_blend: request.identity_blend ?? undefined,
     identity_blend_t: parameters.identity_blend_t,
-    fidelity_weight: restoring ? wire.fidelity_weight : undefined,
-    restoration_blend: restoring ? parameters.restoration_blend : undefined,
     color_strength: parameters.color_strength,
     color_method: parameters.color_method ?? 'lab',
-    ultramax_small_face_mode: parameters.ultramax_small_face_mode,
-    ultramax_min_native_pixels: parameters.ultramax_min_native_pixels,
     swap_weight: parameters.swap_weight ?? 1,
     // Opt-in controls: only sent once touched, so earlier previews keep their cache keys.
     hairline_offset_px: parameters.hairline_offset_px || undefined,
@@ -71,8 +64,7 @@ export function buildLivePayload({ request, time, fps, parameters, maskBase64, r
     grain_match_strength: parameters.grain_match_strength,
     occlusion_threshold: parameters.occlusion_threshold,
     bypass: parameters.bypass,
-    // Stage 7: preview what Start would render. Omitted at their defaults so earlier preview cache keys are unchanged.
-    render_mode: parameters.render_mode && parameters.render_mode !== 'standard' ? parameters.render_mode : undefined,
+    // Preview what Start would render. Omitted at their defaults so earlier preview cache keys are unchanged.
     occlusion_mode: parameters.occlusion_mode && parameters.occlusion_mode !== 'standard' ? parameters.occlusion_mode : undefined,
     // Compositor fusion: omitted at the engine defaults, so earlier preview cache keys are unchanged.
     xseg_occlusion_strength: wire.xseg_occlusion_strength === XSEG_STRENGTH_DEFAULT ? undefined : wire.xseg_occlusion_strength,

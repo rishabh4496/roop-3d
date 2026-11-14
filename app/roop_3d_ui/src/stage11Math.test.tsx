@@ -40,13 +40,13 @@ describe('evaluateExpression', () => {
 });
 
 describe('inline math across the scrub inputs', () => {
-  it('SettingControl: TPS expression weight and mask feather radius', async () => {
+  it('SettingControl: colour match and mask feather radius', async () => {
     function Panel() {
       const [tps, setTps] = useState(0.4), [feather, setFeather] = useState(5);
-      return <><SettingControl spec={spec('tps_expression_weight')} value={tps} onChange={setTps}/><SettingControl spec={spec('feather_px')} value={feather} onChange={setFeather}/></>;
+      return <><SettingControl spec={spec('color_strength')} value={tps} onChange={setTps}/><SettingControl spec={spec('feather_px')} value={feather} onChange={setFeather}/></>;
     }
     await act(async () => root.render(<Panel/>));
-    const tps = field('TPS expression weight'), feather = field('Mask feather');
+    const tps = field('Colour match'), feather = field('Mask feather');
     expect(tps.value).toBe('0.4');
 
     await type(tps, '0.4 * 1.5');

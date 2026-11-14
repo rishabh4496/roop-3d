@@ -18,7 +18,6 @@ from roop_3d.engine.resources import guarded, inference, register
 
 FACEFUSION_REPOSITORIES = tuple(f"facefusion/models-{v}" for v in ("3.0.0", "3.1.0", "3.2.0", "3.3.0"))
 STAGE16_IDS = (
-    "hififace_unofficial_256", "arcface_converter_hififace", "styleganex_age",
     "bisenet_resnet_18", "xseg_1", "xseg_2", "swin2_sr_x4", "real_web_photo_x4",
     "stage16_liveportrait_appearance", "stage16_liveportrait_motion", "stage16_liveportrait_generator",
     "stage16_liveportrait_stitch", "stage16_liveportrait_eye", "stage16_liveportrait_lip",
@@ -101,8 +100,7 @@ def readiness_report(root: Path | None = None) -> list[dict]:
     for record in registry.records():
         if record.model_id not in STAGE16_IDS:
             continue
-        category = {"identity_swapper": "swapper", "embedding_converter": "detector_embedder",
-                    "age_modifier": "enhancer", "frame_upscaler": "enhancer", "face_parser": "occlusion_masking",
+        category = {"frame_upscaler": "enhancer", "face_parser": "occlusion_masking",
                     "occlusion_mask": "occlusion_masking"}.get(record.role, "3d_geometry")
         report.append({"model_id": record.model_id, "name": record.name, "category": category,
                        "readiness_state": "MISSING", "hash_valid": False,

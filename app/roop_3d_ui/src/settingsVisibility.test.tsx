@@ -15,7 +15,7 @@ const mockCaps: Capabilities = {
       execution_threads: { type: 'integer', minimum: 1, maximum: 8 },
       execution_mode: { type: 'string', enum: ['swap', 'volumetric'] },
       temporal_beta: { type: 'number', minimum: 0, maximum: 10 },
-      face_restoration_policy: { type: 'string', enum: ['off', 'gpen', 'codeformer'] },
+      detector_model_id: { type: 'string', enum: ['scrfd', 'retinaface', 'yoloface'] },
       video_timing_policy: { type: 'string', enum: ['preserve', 'cfr'] },
       diagnostics_level: { type: 'string', enum: ['info', 'debug'] },
       port: { type: 'integer', minimum: 1024, maximum: 65535 },
@@ -24,14 +24,14 @@ const mockCaps: Capabilities = {
   inspection_parameter_bounds: {},
   job_parameter_bounds: {},
   models: [
-    { model_id: 'm1', name: 'gpen_bfr_512.onnx', state: 'VERIFIED_LOCAL', license_state: 'academic', inference_state: 'VERIFIED_LOCAL', sha256: 'a'.repeat(64) },
-    { model_id: 'm2', name: 'CodeFormerv0.1.onnx', state: 'VERIFIED_LOCAL', license_state: 'academic', inference_state: 'VERIFIED_LOCAL', sha256: 'b'.repeat(64) },
+    { model_id: 'm1', name: 'scrfd_10g_bnkps.onnx', state: 'VERIFIED_LOCAL', license_state: 'academic', inference_state: 'VERIFIED_LOCAL', sha256: 'a'.repeat(64) },
+    { model_id: 'm2', name: 'xseg.onnx', state: 'VERIFIED_LOCAL', license_state: 'academic', inference_state: 'VERIFIED_LOCAL', sha256: 'b'.repeat(64) },
   ],
   workstation: {
     features: {},
     controls: {
       hardware_profile: { auto: null, cpu: null, '6gb': null, '12gb': null },
-      face_restoration_policy: { off: null, gpen: null, codeformer: null },
+      detector_model_id: { scrfd: null, retinaface: null, yoloface: null },
     },
     active_hardware_profile: '6gb',
     resolved_hardware_profile: '6gb',
@@ -49,7 +49,7 @@ const mockConfig: Config = {
   execution_threads: 4,
   execution_mode: 'swap',
   temporal_beta: 0.04,
-  face_restoration_policy: 'gpen',
+  detector_model_id: 'scrfd',
   video_timing_policy: 'preserve',
   diagnostics_level: 'info',
   port: 8030,
@@ -89,7 +89,7 @@ describe('SettingsInspector all-visible domains & validation', () => {
       expect(panel.hidden).toBe(false);
       expect(getComputedStyle(panel).display).not.toBe('none');
     }
-    for (const name of ['hardware_profile', 'execution_mode', 'temporal_beta', 'face_restoration_policy', 'video_timing_policy', 'diagnostics_level', 'port']) {
+    for (const name of ['hardware_profile', 'execution_mode', 'temporal_beta', 'detector_model_id', 'video_timing_policy', 'diagnostics_level', 'port']) {
       expect(host.querySelector(`#setting-${name}`)).toBeTruthy();
     }
   });
@@ -146,8 +146,8 @@ describe('SettingsInspector all-visible domains & validation', () => {
 
     const modelList = host.querySelector('.model-list')!;
     expect(modelList.textContent).toContain('Recorded model artifacts 2');
-    expect(modelList.textContent).toContain('gpen_bfr_512.onnx');
-    expect(modelList.textContent).toContain('CodeFormerv0.1.onnx');
+    expect(modelList.textContent).toContain('scrfd_10g_bnkps.onnx');
+    expect(modelList.textContent).toContain('xseg.onnx');
 
     const badges = [...modelList.querySelectorAll('.model-badge')];
     expect(badges.length).toBe(2);

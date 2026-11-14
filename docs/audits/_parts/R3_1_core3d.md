@@ -1,3 +1,6 @@
+<!-- phase0-purge-notice -->
+> **Phase 0 purge notice (2026-11-14).** Roop 3D no longer contains 2D face swappers, 5-point crop-paste, 2.5D strip meshes, weak-perspective cameras or post-crop GAN restorers. Anything below that describes them is **historical** and no longer applies; the current architecture is a full 3D head under a perspective camera, see [Engine and render options](../../../docs/ENGINE_COMPARISON.md).
+
 ﻿# R3_1 â€” roop-3d core 3D slice (reconstruction / rendering / engine / identity / faceset / tracking / swappers / top-level pose+temporal+faceset modules)
 
 Paths are relative to `app/roop_3d/`. Status: **REAL** = implemented algorithm; **HEUR** = heuristic/approximation labelled as such in code; **BASE** = baseline/fallback/stub; **INFRA** = non-3D plumbing (listed for coverage). Evidence = file:line where I read it; everything else is from module docstring + public symbol list (AST scan) and flagged [INFERENCE] if it describes behaviour I did not read.

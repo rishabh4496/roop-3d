@@ -28,7 +28,7 @@ from typing import Literal
 
 import numpy as np
 
-from roop_3d.reconstruction.expression_tps import group
+from roop_3d.reconstruction.landmark_layout import group
 
 LockState = Literal["collecting", "provisional", "locked"]
 KIND_FLAME, KIND_106, KIND_5 = "flame_beta", "landmark_proportions_106", "landmark_proportions_5"

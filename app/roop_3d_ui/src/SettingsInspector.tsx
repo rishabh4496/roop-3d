@@ -35,19 +35,12 @@ const SETTING_DOMAINS: Record<string, DomainId> = {
   temporal_beta: 'spatial',
   temporal_d_cutoff: 'spatial',
 
-  face_restoration_policy: 'pipeline',
-  swapper_model_id: 'pipeline',
   detector_model_id: 'pipeline',
   lip_sync_mode: 'pipeline',
   lip_sync_audio_path: 'pipeline',
   lip_sync_audio_stream: 'pipeline',
-  dfm_morph_factor: 'pipeline',
   sparse_interval: 'pipeline',
   stream_segment_frames: 'pipeline',
-  restorer_threads: 'pipeline',
-  restorer_pool_size: 'pipeline',
-  ultramax_native_bypass: 'pipeline',
-  ultramax_min_pixels: 'pipeline',
 
   video_timing_policy: 'finishing',
   audio_policy: 'finishing',
@@ -99,12 +92,6 @@ export function SettingsInspector({
 
   const visibleTabs = DOMAIN_TABS.filter(tab => categorized[tab.id].length > 0);
 
-  // Model lookup helper for pipeline models
-  const modelState = (name: string) => {
-    const found = caps?.models.find(m => m.name.toLowerCase().includes(name.toLowerCase()));
-    return found ? found.state : null;
-  };
-
   return (
     <section className="settings-panel">
       <div className="section-title">
@@ -154,7 +141,7 @@ export function SettingsInspector({
               {items.map(([name, schema]) => {
                 const reason = optionReason(caps, name);
                 const value = draft[name];
-                const label = name === 'swapper_model_id' ? 'Swapper engine' : name.replaceAll('_', ' ');
+                const label = name.replaceAll('_', ' ');
                 const common = {
                   id: `${namespace}-${name}`,
                   disabled: !!reason || busy,
@@ -166,15 +153,6 @@ export function SettingsInspector({
                     {schema.type !== 'integer' && schema.type !== 'number' && (
                       <label htmlFor={common.id}>
                         {label}
-                        {name === 'face_restoration_policy' && (
-                          <span style={{ marginLeft: 6, fontSize: 9, opacity: 0.8 }}>
-                            {modelState('gpen') === 'VERIFIED_LOCAL' && modelState('codeformer') === 'VERIFIED_LOCAL'
-                              ? '(GPEN & CodeFormer verified)'
-                              : modelState('gpen') === 'VERIFIED_LOCAL'
-                              ? '(GPEN verified)'
-                              : ''}
-                          </span>
-                        )}
                       </label>
                     )}
 

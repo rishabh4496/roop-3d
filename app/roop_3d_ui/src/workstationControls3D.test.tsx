@@ -104,7 +104,7 @@ describe('controls the render pipeline has no stage for', () => {
     expect(localStorage.length).toBe(0);
     expect(latest.parameters).toEqual(DEFAULT_PARAMETERS);
     const request = { engine_id: 'x', target_path: 't', inspection_id: 'i', face_mappings: [{ track_id: 'track_0001', faceset_id: 'fs1' }] } as unknown as JobRequest;
-    const payload = buildLivePayload({ request, time: 0, fps: 30, parameters: latest.parameters, restorerAvailable: false })!;
+    const payload = buildLivePayload({ request, time: 0, fps: 30, parameters: latest.parameters })!;
     expect(JSON.stringify(payload)).not.toMatch(/lip|spectre|spark|adapt/i);
   });
 });

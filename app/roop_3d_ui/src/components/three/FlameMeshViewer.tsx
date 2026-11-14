@@ -45,7 +45,7 @@ function FlameScene({
         const v = mesh.vertices[vertexIdx];
         if (!v) return;
 
-        // Dual-endpoint blend: flat camera projection (z=0) vs full 3D depth
+        // Depth scale: 1 is the full 3D depth of the mesh
         const x = v[0];
         const y = isOpencv ? -v[1] : v[1];
         const z3d = isOpencv ? -v[2] : v[2];
@@ -136,7 +136,8 @@ export default function FlameMeshViewer({
   const [wireframe, setWireframe] = useState(initialWireframe);
   const [solid, setSolid] = useState(true);
   const [showTexture, setShowTexture] = useState(true);
-  const [blend, setBlend] = useState(poseStrength);
+  // The mesh is always drawn at full depth: the flat-projection blend of the removed 2.5D path is gone.
+  const blend = poseStrength;
 
   const vertexCount = mesh?.vertices?.length ?? 0;
   const faceCount = mesh?.faces?.length ?? 0;
@@ -147,7 +148,7 @@ export default function FlameMeshViewer({
       <div className="flame-viewer-toolbar">
         <div className="flame-status-badges">
           <span className={`mesh-type-badge ${isFlame ? 'flame' : 'standard'}`}>
-            {isFlame ? 'FLAME 3D Topology' : mesh ? '2.5D Surface Mesh' : 'Canonical Sphere Proxy'}
+            {isFlame ? 'FLAME 3D Topology' : mesh ? '3D Surface Mesh' : 'No mesh loaded'}
           </span>
           <span className="mesh-stat-pill">
             {vertexCount} Verts · {faceCount} Faces
@@ -205,18 +206,6 @@ export default function FlameMeshViewer({
       </div>
 
       <div className="flame-blend-slider">
-        <label className="flame-slider-label">
-          <span>Dual-Endpoint Blend ({Math.round(blend * 100)}% 3D)</span>
-          <input
-            type="range"
-            min="0"
-            max="1"
-            step="0.01"
-            value={blend}
-            onChange={e => setBlend(parseFloat(e.target.value))}
-            aria-label="3D Mesh Projection Blend (0% Flat to 100% 3D)"
-          />
-        </label>
         <span className="flame-provenance">
           {mesh?.provenance ? `Provenance: ${mesh.provenance}` : 'Zero-copy local topology'}
         </span>

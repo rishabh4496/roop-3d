@@ -5,7 +5,7 @@ import { createAtomicStore, useStoreSelector } from './atomicStore';
 /** One row of `GET /api/models`: every registered artifact, installed or not. The UI never filters this list by `installed`/`state`. */
 export type CatalogModel = {
   id: string; model_id: string; name: string;
-  category: 'swapper' | 'enhancer' | 'detector' | 'occluder' | 'upscaler' | 'other' | string;
+  category: 'head' | 'detector' | 'occluder' | 'other' | string;
   native_resolution: number | null;
   installed: boolean; selectable: boolean; vram_loaded: boolean; trt_cached: boolean;
   tensorrt_mixed_precision?: { available: boolean; active: boolean; configured?: boolean };
@@ -42,12 +42,7 @@ export function modelStatus(model: CatalogModel): ModelStatus {
 
 /** Display names in the shape the workstation uses; resolution is shown as a separate badge. */
 const DISPLAY_NAMES: Record<string, string> = {
-  inswapper_128: 'InSwapper 128', inswapper_128_fp16: 'InSwapper FP16',
-  hyperswap_1a_256: 'HyperSwap 1A', hyperswap_1b_256: 'HyperSwap 1B', hyperswap_1c_256: 'HyperSwap 1C',
-  realswap_256: 'RealSwap', realswap_512: 'RealSwap', simswap_256: 'SimSwap', simswap_512_unofficial: 'SimSwap (unofficial)',
-  ghost_256_unet_1: 'Ghost v1', ghost_256_unet_2: 'Ghost v2', ghost_256_unet_3: 'Ghost v3',
-  blendswap_256: 'BlendSwap', uniface_256: 'Uniface',
-  gpen_bfr_512: 'GPEN Realistic', gpen_bfr_1024: 'GPEN Realistic', gfpgan_v14: 'GFPGAN v1.4', restoreformer_pp: 'RestoreFormer++', ultramax: 'UltraMax', codeformer: 'CodeFormer',
+  makehuman_cc0: 'MakeHuman CC0 head', flame2023_open: 'FLAME 2023 Open',
   scrfd: 'SCRFD 10G', retinaface: 'RetinaFace', yoloface: 'YOLOv8-Face', xseg: 'XSeg Occluder', bisenet: 'BiSeNet Parser',
   realesrgan_x2plus: 'Real-ESRGAN x2plus', realesrgan_x4plus: 'Real-ESRGAN x4plus', '4x_ultrasharp': '4x-UltraSharp',
 };

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-HEAVY_RESTORERS = frozenset(("gpen-bfr-1024", "ultramax_bfr", "restoreformer_plus_plus", "swin2_sr_x4"))
+HEAVY_RESTORERS = frozenset(("swin2_sr_x4",))   # frame-level FP8 candidates; the 2D face restorers were removed
 
 
 def model_name(path):
@@ -18,33 +18,10 @@ def model_name(path):
     return name
 
 
-def validate_swapper_fp32(model):
-    """Reject pre-quantized or cast-down swapper graphs, including subgraphs."""
-    import onnx
-    low = {onnx.TensorProto.FLOAT16, onnx.TensorProto.BFLOAT16,
-           onnx.TensorProto.FLOAT8E4M3FN, onnx.TensorProto.FLOAT8E4M3FNUZ,
-           onnx.TensorProto.FLOAT8E5M2, onnx.TensorProto.FLOAT8E5M2FNUZ}
-    def check(graph):
-        if any(t.data_type in low for t in graph.initializer) or any(
-                v.type.tensor_type.elem_type in low for v in (*graph.input, *graph.output, *graph.value_info)):
-            raise ValueError("inswapper_128 must remain FP32")
-        for node in graph.node:
-            if node.op_type in ("QuantizeLinear", "DequantizeLinear"):
-                raise ValueError("inswapper_128 must remain FP32")
-            for attr in node.attribute:
-                if (attr.name == "to" and attr.i in low) or (attr.type == onnx.AttributeProto.TENSOR and attr.t.data_type in low):
-                    raise ValueError("inswapper_128 must remain FP32")
-                if attr.type == onnx.AttributeProto.GRAPH:
-                    check(attr.g)
-                for graph in attr.graphs:
-                    check(graph)
-    check(model.graph)
-
-
 def validate_fp8_graph(model, original_name, compute_capability, tensorrt_version):
     import onnx
     if model_name(original_name) not in HEAVY_RESTORERS:
-        raise ValueError("FP8 is restricted to the four heavy restorers; inswapper is FP32 only")
+        raise ValueError("FP8 is restricted to the registered heavy upscaler models")
     if tuple(compute_capability) < (8, 9) or int(tensorrt_version.split(".")[0]) != 10:
         raise ValueError("FP8 requires observed SM 8.9+ and TensorRT 10")
     onnx.checker.check_model(model)

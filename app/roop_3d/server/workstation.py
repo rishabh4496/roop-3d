@@ -85,7 +85,7 @@ async def upload_chunk(upload_id: str, request: Request, offset: int = Query(ge=
 def coverage(document):
     return {"faceset_id": document.faceset_id, "name": document.name, "source_sha256": document.source_sha256,
             "views": [{"yaw": view.yaw, "pitch": view.pitch, "roll": view.roll, "pose_bin": view.pose_bin} for view in document.views],
-            "bins": {key: value.support for key, value in document.pose_bins.items()}, "pose_state": "ESTIMATED_2_5D"}
+            "bins": {key: value.support for key, value in document.pose_bins.items()}, "pose_state": "OBSERVED_VIEWS"}
 
 
 def finish_upload(request: Request, upload_id: str):
@@ -362,7 +362,7 @@ def build_faceset(value: FaceSetBuildRequest, request: Request):
         import cv2
         from roop_3d.core.image_bytes import decode_face_image
         from roop_3d.server.face_extract import _unit
-        from roop_3d.core.pose import estimate_pose_5pt
+        from roop_3d.core.pose import estimate_pose_pnp
         image=decode_face_image(image_bytes)
         points=v.landmarks
         bbox=v.bbox
@@ -375,7 +375,7 @@ def build_faceset(value: FaceSetBuildRequest, request: Request):
                 detected_box,points=detections[0]
                 embedding=service._recognizer().embed(image,np.asarray(points,np.float32))
             bbox=tuple(float(x) for x in detected_box)
-            yaw,pitch,roll=estimate_pose_5pt(points).legacy_tuple()
+            yaw,pitch,roll=estimate_pose_pnp(points).legacy_tuple()
         else:
             embedding=v.embedding
             yaw,pitch,roll=v.yaw,v.pitch,v.roll
@@ -677,7 +677,7 @@ def reconstruction(reconstruction_id: str, request: Request, target_path: str = 
         raise DomainError("RECONSTRUCTION_NOT_FOUND", "A bounded reconstruction receipt is required", 404)
     try:
         data = json.loads(receipt.read_text("utf-8"))
-        if data["method"] not in {"flame", "tps_2_5d"} or data["coordinate_system"] not in {"opencv", "opengl"}:
+        if data["method"] not in {"flame", "identity_asset"} or data["coordinate_system"] not in {"opencv", "opengl"}:
             raise ValueError()
         if sha256_file(request.app.state.media.path(target_path))[1] != data["source_sha256"]:
             raise DomainError("RECONSTRUCTION_SOURCE_CHANGED", "Reconstruction does not match this target", 409)

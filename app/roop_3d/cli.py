@@ -52,6 +52,10 @@ def build_parser() -> argparse.ArgumentParser:
     render.add_argument("--source", required=True, help="source FaceSet: path to a .fsz file or an existing faceset id")
     render.add_argument("-o", "--output", required=True, type=Path, help="result .mp4 path")
     render.add_argument("--track", type=int, default=0, help="index of the detected face track to replace (default 0)")
+    render.add_argument("--track-id", default=None, metavar="track_NNNN",
+                        help="stable track id from the inspection (overrides --track); the same id the UI gallery shows")
+    render.add_argument("--full-scan", action="store_true",
+                        help="inspect every frame (15 min budget). Default is the bounded scan, which reports truncation")
     render.add_argument("--cpu", action="store_true", help="force the CPU provider")
     render.add_argument("--timeout", type=float, default=0.0, help="seconds before giving up on the job (0 = no limit)")
     diagnostics = sub.add_parser("diagnostics", parents=[_common(True)], help="14-section runtime report + model/asset integrity")
@@ -183,15 +187,31 @@ def run_render(arguments: argparse.Namespace, out: Output, root: Path) -> int:
                                headers={"Content-Type": "application/octet-stream"})
         if uploaded.status_code != 201:
             return fail("MEDIA_UPLOAD_FAILED", uploaded.text[:300])
-        inspection = client.post("/api/v1/media/inspect-faces", json={"path": uploaded.json()["path"]})
+        scan = {"path": uploaded.json()["path"], "identity_lock": True}
+        if arguments.full_scan:
+            scan.update(full_video=True, time_budget_seconds=900)
+        inspection = client.post("/api/v1/media/inspect-faces", json=scan)
         if inspection.status_code != 200:
             return fail("INSPECTION_FAILED", inspection.text[:300])
-        tracks = inspection.json()["tracks"]
-        if not 0 <= arguments.track < len(tracks):
+        inspected = inspection.json()
+        tracks = inspected["tracks"]
+        out.event("render.inspected", f"{len(tracks)} track(s) in {inspected['decoded_frames']} decoded frame(s)"
+                  + (" [bounded scan: truncated]" if inspected["truncated"] else ""),
+                  tracks=[t["track_id"] for t in tracks], decoded_frames=inspected["decoded_frames"], truncated=inspected["truncated"])
+        if inspected["truncated"]:
+            out.event("render.scan_truncated", "warning: scan stopped early; use --full-scan to traverse the whole video", "warning",
+                      warnings=inspected["warnings"])
+        if arguments.track_id is not None:
+            chosen = next((t for t in tracks if t["track_id"] == arguments.track_id), None)
+            if chosen is None:
+                return fail("TRACK_NOT_FOUND", f"--track-id {arguments.track_id}: found {[t['track_id'] for t in tracks]}", 2)
+        elif 0 <= arguments.track < len(tracks):
+            chosen = tracks[arguments.track]
+        else:
             return fail("TRACK_NOT_FOUND", f"--track {arguments.track}: the detector found {len(tracks)} track(s)", 2)
         created = client.post("/api/v1/jobs", headers={"Idempotency-Key": f"cli-{int(began)}-{uploaded.json()['sha256'][:12]}"}, json={
-            "engine_id": ENGINE_ID, "target_path": uploaded.json()["path"], "inspection_id": inspection.json()["inspection_id"],
-            "face_mappings": [{"track_id": tracks[arguments.track]["track_id"], "faceset_id": faceset_id}]})
+            "engine_id": ENGINE_ID, "target_path": uploaded.json()["path"], "inspection_id": inspected["inspection_id"],
+            "face_mappings": [{"track_id": chosen["track_id"], "faceset_id": faceset_id}]})
         if created.status_code != 201:
             return fail("JOB_REJECTED", created.text[:300])
         job_id = created.json()["job_id"]

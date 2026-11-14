@@ -10,7 +10,7 @@ from pydantic import Field
 from roop_3d.core.settings import Contract
 from roop_3d.core.errors import DomainError
 from roop_3d.core.storage import atomic_json, exclusive, owned
-from roop_3d.core.pose import estimate_pose_5pt
+from roop_3d.core.pose import estimate_pose_pnp
 from roop_3d.media.schema import FaceInspection
 from roop_3d.media.detector import iou
 from roop_3d.engine.volumetric.preprocess import aligned_crop
@@ -140,7 +140,7 @@ class FaceBank:
                     sharpness=float(min(1,cv2.Laplacian(cv2.cvtColor(crop,cv2.COLOR_BGR2GRAY),cv2.CV_64F).var()/500))
                     ok,thumbnail=cv2.imencode('.jpg',cv2.resize(crop,(128,128)))
                     if not ok: continue
-                    yaw,pitch,roll=estimate_pose_5pt(points).legacy_tuple()
+                    yaw,pitch,roll=estimate_pose_pnp(points).legacy_tuple()
                     observations.append((embedding,{'id':f'{track.track_id}_{frame}','trackId':track.track_id,'frame':frame,
                         'yaw':yaw,'pitch':pitch,'roll':roll,'sharpness':sharpness,'quality':sharpness,
                         'thumbnailUrl':'data:image/jpeg;base64,'+base64.b64encode(thumbnail).decode()}))

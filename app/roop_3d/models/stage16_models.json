@@ -297,55 +297,6 @@
       "base_model_attribution_requirements": "UNKNOWN"
     },
     {
-      "model_id": "arcface_converter_hififace",
-      "name": "arcface_converter_hififace.onnx",
-      "role": "embedding_converter",
-      "role_evidence": "Role from upstream FaceFusion processor; execution is separate evidence",
-      "upstream_url": "https://huggingface.co/facefusion/models-3.1.0/resolve/c9e3a503d8e84e91c5cd89ee2d510fe5e793e570/arcface_converter_hififace.onnx",
-      "filenames": [
-        "arcface_converter_hififace.onnx"
-      ],
-      "expected_sha256": "34255826c8da689858a7d3c1615cde2df0e115674a0136e05296a1291b31cf66",
-      "byte_size": 20993559,
-      "input_output_contract": {
-        "state": "UNKNOWN",
-        "evidence": "LFS artifact identity verified remotely; graph has not been inspected"
-      },
-      "status": "verified_remote",
-      "evidence": "Observed official HuggingFace LFS metadata: https://huggingface.co/api/models/facefusion/models-3.1.0/tree/c9e3a503d8e84e91c5cd89ee2d510fe5e793e570?recursive=true&expand=false",
-      "provenance_state": "VERIFIED_REMOTE",
-      "license_notice": "Weight rights unreviewed. Upstream code licenses do not establish converted checkpoint rights. Automatic download and commercial use remain gated.",
-      "license_id": "UNKNOWN",
-      "commercial_use": "unknown",
-      "family_hint": "arcface_converter_hififace",
-      "verified_at": "2026-11-02",
-      "weight_filenames": [
-        "arcface_converter_hififace.onnx"
-      ],
-      "original_repository": "https://huggingface.co/facefusion/models-3.1.0",
-      "source_revision": "c9e3a503d8e84e91c5cd89ee2d510fe5e793e570",
-      "version_family": "UNKNOWN",
-      "architecture": "UNKNOWN",
-      "required_base_model": "UNKNOWN",
-      "redistribution_permission": "unknown",
-      "attribution_requirements": "UNKNOWN",
-      "hardware_requirements": {
-        "state": "UNKNOWN"
-      },
-      "precision_requirements": [],
-      "dependency_compatibility": {
-        "state": "UNKNOWN",
-        "requirements": []
-      },
-      "serialization_format": "ONNX",
-      "security_status": "UNKNOWN",
-      "base_model_license_id": "UNKNOWN",
-      "base_model_license_url": null,
-      "base_model_commercial_use": "unknown",
-      "base_model_redistribution_permission": "unknown",
-      "base_model_attribution_requirements": "UNKNOWN"
-    },
-    {
       "model_id": "bisenet_resnet_18",
       "name": "bisenet_resnet_18.onnx",
       "role": "face_parser",
@@ -395,55 +346,6 @@
       "base_model_attribution_requirements": "UNKNOWN"
     },
     {
-      "model_id": "hififace_unofficial_256",
-      "name": "hififace_unofficial_256.onnx",
-      "role": "identity_swapper",
-      "role_evidence": "Role from upstream FaceFusion processor; execution is separate evidence",
-      "upstream_url": "https://huggingface.co/facefusion/models-3.1.0/resolve/c9e3a503d8e84e91c5cd89ee2d510fe5e793e570/hififace_unofficial_256.onnx",
-      "filenames": [
-        "hififace_unofficial_256.onnx"
-      ],
-      "expected_sha256": "9de9751617976195114d7f067b9b6cf933748363355cf473cab2da57a739c2ef",
-      "byte_size": 203784742,
-      "input_output_contract": {
-        "state": "UNKNOWN",
-        "evidence": "LFS artifact identity verified remotely; graph has not been inspected"
-      },
-      "status": "verified_remote",
-      "evidence": "Observed official HuggingFace LFS metadata: https://huggingface.co/api/models/facefusion/models-3.1.0/tree/c9e3a503d8e84e91c5cd89ee2d510fe5e793e570?recursive=true&expand=false",
-      "provenance_state": "VERIFIED_REMOTE",
-      "license_notice": "Weight rights unreviewed. Upstream code licenses do not establish converted checkpoint rights. Automatic download and commercial use remain gated.",
-      "license_id": "UNKNOWN",
-      "commercial_use": "unknown",
-      "family_hint": "hififace_unofficial_256",
-      "verified_at": "2026-11-02",
-      "weight_filenames": [
-        "hififace_unofficial_256.onnx"
-      ],
-      "original_repository": "https://huggingface.co/facefusion/models-3.1.0",
-      "source_revision": "c9e3a503d8e84e91c5cd89ee2d510fe5e793e570",
-      "version_family": "UNKNOWN",
-      "architecture": "UNKNOWN",
-      "required_base_model": "UNKNOWN",
-      "redistribution_permission": "unknown",
-      "attribution_requirements": "UNKNOWN",
-      "hardware_requirements": {
-        "state": "UNKNOWN"
-      },
-      "precision_requirements": [],
-      "dependency_compatibility": {
-        "state": "UNKNOWN",
-        "requirements": []
-      },
-      "serialization_format": "ONNX",
-      "security_status": "UNKNOWN",
-      "base_model_license_id": "UNKNOWN",
-      "base_model_license_url": null,
-      "base_model_commercial_use": "unknown",
-      "base_model_redistribution_permission": "unknown",
-      "base_model_attribution_requirements": "UNKNOWN"
-    },
-    {
       "model_id": "real_web_photo_x4",
       "name": "real_web_photo_x4.onnx",
       "role": "frame_upscaler",
@@ -468,55 +370,6 @@
       "verified_at": "2026-11-02",
       "weight_filenames": [
         "real_web_photo_x4.onnx"
-      ],
-      "original_repository": "https://huggingface.co/facefusion/models-3.1.0",
-      "source_revision": "c9e3a503d8e84e91c5cd89ee2d510fe5e793e570",
-      "version_family": "UNKNOWN",
-      "architecture": "UNKNOWN",
-      "required_base_model": "UNKNOWN",
-      "redistribution_permission": "unknown",
-      "attribution_requirements": "UNKNOWN",
-      "hardware_requirements": {
-        "state": "UNKNOWN"
-      },
-      "precision_requirements": [],
-      "dependency_compatibility": {
-        "state": "UNKNOWN",
-        "requirements": []
-      },
-      "serialization_format": "ONNX",
-      "security_status": "UNKNOWN",
-      "base_model_license_id": "UNKNOWN",
-      "base_model_license_url": null,
-      "base_model_commercial_use": "unknown",
-      "base_model_redistribution_permission": "unknown",
-      "base_model_attribution_requirements": "UNKNOWN"
-    },
-    {
-      "model_id": "styleganex_age",
-      "name": "styleganex_age.onnx",
-      "role": "age_modifier",
-      "role_evidence": "Role from upstream FaceFusion processor; execution is separate evidence",
-      "upstream_url": "https://huggingface.co/facefusion/models-3.1.0/resolve/c9e3a503d8e84e91c5cd89ee2d510fe5e793e570/styleganex_age.onnx",
-      "filenames": [
-        "styleganex_age.onnx"
-      ],
-      "expected_sha256": "212cdf55a9b66c382016119f7d642a227ca16c833348dd78d1e129ae5cf9ec7c",
-      "byte_size": 1340360455,
-      "input_output_contract": {
-        "state": "UNKNOWN",
-        "evidence": "LFS artifact identity verified remotely; graph has not been inspected"
-      },
-      "status": "verified_remote",
-      "evidence": "Observed official HuggingFace LFS metadata: https://huggingface.co/api/models/facefusion/models-3.1.0/tree/c9e3a503d8e84e91c5cd89ee2d510fe5e793e570?recursive=true&expand=false",
-      "provenance_state": "VERIFIED_REMOTE",
-      "license_notice": "Weight rights unreviewed. Upstream code licenses do not establish converted checkpoint rights. Automatic download and commercial use remain gated.",
-      "license_id": "UNKNOWN",
-      "commercial_use": "unknown",
-      "family_hint": "styleganex_age",
-      "verified_at": "2026-11-02",
-      "weight_filenames": [
-        "styleganex_age.onnx"
       ],
       "original_repository": "https://huggingface.co/facefusion/models-3.1.0",
       "source_revision": "c9e3a503d8e84e91c5cd89ee2d510fe5e793e570",

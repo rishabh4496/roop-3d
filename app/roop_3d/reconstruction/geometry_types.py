@@ -429,40 +429,110 @@ def pixel_to_uv(
 
 
 # ---------------------------------------------------------------------------
-# Scaled-orthographic (weak-perspective) camera for multi-view identity fitting
+# Perspective camera K[R|t] for multi-view identity fitting, texture baking and tracking
 # ---------------------------------------------------------------------------
 
-class WeakPerspectiveCamera(Contract):
-    """Scaled-orthographic camera in the project's mesh frame (x right, y down, z toward the viewer).
+_FLIP_Z = np.diag([1.0, 1.0, -1.0])
+DEFAULT_FOCAL_FRAME = (1920, 1080)
+DEFAULT_FOCAL_FACTOR = 1.2          # fx = 1.2 * frame width (~44 deg horizontal FOV) when a fit carries no calibration
 
-    This is the same projection family as ``core.pose.estimate_pose_5pt``: image = scale * (R @ X)[:2] + t.
-    ``depth`` is the rotated z, so a LARGER value is CLOSER to the viewer (the frame is left-handed on
-    purpose: it matches stored FaceSet poses and the canonical mesh, whose outward normals point +z).
+
+class PerspectiveCamera(Contract):
+    """Full pin-hole camera: 3x3 intrinsics K and a rigid SE(3) pose [R|t] (camera = R * X_head + t, +Z away from the camera).
+
+    The stored head / identity mesh frame has +z TOWARD the viewer (x right, y down, left-handed); ``mesh_z_toward_viewer``
+    applies the same axis reflection ``full_head.HeadPose.camera_vertices`` uses before the rigid pose, so ``rotation`` is a
+    proper rotation (det +1) and the extrinsics are a true SE(3) transform.
+
+    ``depth`` is the camera-space Z: positive, and SMALLER is CLOSER (a real perspective depth, not a toward-viewer height).
+    ``rotate_normals`` returns normals in the camera frame re-expressed with +z toward the viewer, so ``n_z > 0`` still
+    reads "facing the camera" only for a head at the optical axis; use ``view_cosine`` for the per-point perspective test.
     """
+    intrinsics: CameraIntrinsics
     rotation: tuple[tuple[float, float, float], tuple[float, float, float], tuple[float, float, float]]
-    scale: float = Field(gt=0.0, description="Pixels per metre")
-    tx: float
-    ty: float
+    translation: tuple[float, float, float]
+    mesh_z_toward_viewer: bool = True
 
     @field_validator("rotation")
     @classmethod
     def _orthonormal(cls, value):
         r = np.asarray(value, dtype=np.float64)
         if not np.allclose(r @ r.T, np.eye(3), atol=1e-4) or abs(np.linalg.det(r) - 1.0) > 1e-3:
-            raise ValueError("rotation must be a proper orthonormal matrix")
+            raise ValueError("rotation must be a proper orthonormal matrix (SE(3))")
         return value
+
+    @classmethod
+    def from_scaled_pose(cls, rotation: np.ndarray, scale: float, tx: float, ty: float, *,
+                         intrinsics: CameraIntrinsics | None = None,
+                         frame_size: tuple[int, int] | None = None) -> "PerspectiveCamera":
+        """Express an in-plane similarity pose (R in the mesh frame, pixels-per-metre ``scale``, image offset) as K[R|t].
+
+        The camera is placed at Z0 = fx / scale so the head centre lands at the same pixel size and offset; unlike the
+        scaled-orthographic model the result carries real perspective foreshortening and positive depth for every vertex.
+        """
+        if not np.isfinite(scale) or scale <= 0:
+            raise DomainError("INVALID_SCALE", "scale must be positive", 422)
+        if intrinsics is not None:
+            k = intrinsics
+        elif frame_size is not None:
+            # Real frame: principal point at the image centre, so an off-centre head is seen obliquely (true parallax).
+            k = CameraIntrinsics(fx=DEFAULT_FOCAL_FACTOR * frame_size[0], fy=DEFAULT_FOCAL_FACTOR * frame_size[0],
+                                 cx=frame_size[0] / 2.0, cy=frame_size[1] / 2.0, width=int(frame_size[0]), height=int(frame_size[1]))
+        else:
+            # Landmark-only fit with no image size: a head-centred camera (principal point on the head), nominal 1920-wide focal.
+            cx, cy = max(float(tx), 0.0), max(float(ty), 0.0)
+            focal = DEFAULT_FOCAL_FACTOR * DEFAULT_FOCAL_FRAME[0]
+            k = CameraIntrinsics(fx=focal, fy=focal, cx=cx, cy=cy, width=int(2 * cx) + 1, height=int(2 * cy) + 1)
+        r_mesh = np.asarray(rotation, dtype=np.float64)
+        r_cam = _FLIP_Z @ r_mesh @ _FLIP_Z
+        z0 = k.fx / float(scale)
+        t = ((float(tx) - k.cx) / float(scale), (float(ty) - k.cy) / float(scale) * (k.fx / k.fy), z0)
+        return cls(intrinsics=k, rotation=tuple(tuple(float(x) for x in row) for row in r_cam),
+                   translation=tuple(float(x) for x in t))
 
     def rotation_matrix(self) -> np.ndarray:
         return np.asarray(self.rotation, dtype=np.float64)
 
+    def translation_vector(self) -> np.ndarray:
+        return np.asarray(self.translation, dtype=np.float64)
+
+    def camera_points(self, points: np.ndarray) -> np.ndarray:
+        """(N, 3) head-frame points -> (N, 3) camera-frame points."""
+        p = np.asarray(points, dtype=np.float64).reshape(-1, 3)
+        if self.mesh_z_toward_viewer:
+            p = p * np.array([1.0, 1.0, -1.0])
+        return p @ self.rotation_matrix().T + self.translation_vector()
+
     def project(self, points: np.ndarray) -> np.ndarray:
-        """(N, 3) model points -> (N, 2) pixel coordinates."""
-        rotated = np.asarray(points, dtype=np.float64).reshape(-1, 3) @ self.rotation_matrix().T
-        return np.column_stack((self.scale * rotated[:, 0] + self.tx, self.scale * rotated[:, 1] + self.ty))
+        """(N, 3) model points -> (N, 2) pixel coordinates through K[R|t] (true perspective divide)."""
+        cam = self.camera_points(points)
+        z = np.maximum(cam[:, 2], 1e-6)
+        k = self.intrinsics
+        return np.column_stack((k.fx * cam[:, 0] / z + k.cx, k.fy * cam[:, 1] / z + k.cy))
 
     def depth(self, points: np.ndarray) -> np.ndarray:
-        """(N,) toward-the-viewer depth of model points (larger = closer)."""
-        return (np.asarray(points, dtype=np.float64).reshape(-1, 3) @ self.rotation_matrix().T)[:, 2]
+        """(N,) camera-space Z (positive in front of the camera; smaller = closer)."""
+        return self.camera_points(points)[:, 2]
 
     def rotate_normals(self, normals: np.ndarray) -> np.ndarray:
-        return np.asarray(normals, dtype=np.float64).reshape(-1, 3) @ self.rotation_matrix().T
+        n = np.asarray(normals, dtype=np.float64).reshape(-1, 3)
+        if self.mesh_z_toward_viewer:
+            n = n * np.array([1.0, 1.0, -1.0])
+        out = n @ self.rotation_matrix().T
+        return out * np.array([1.0, 1.0, -1.0]) if self.mesh_z_toward_viewer else out
+
+    def view_cosine(self, points: np.ndarray, normals: np.ndarray) -> np.ndarray:
+        """Cosine between each surface normal and the direction to the camera centre (> 0 = facing the camera)."""
+        cam = self.camera_points(points)
+        n = np.asarray(normals, dtype=np.float64).reshape(-1, 3)
+        if self.mesh_z_toward_viewer:
+            n = n * np.array([1.0, 1.0, -1.0])
+        n = n @ self.rotation_matrix().T
+        to_camera = -cam / np.maximum(np.linalg.norm(cam, axis=1, keepdims=True), 1e-9)
+        return np.einsum("ij,ij->i", n, to_camera)
+
+    def head_pose(self):
+        """The same camera as a ``full_head.HeadPose`` (K[R|t]) for the perspective Z-buffer rasterizer."""
+        from roop_3d.reconstruction.full_head import HeadPose
+        return HeadPose(rotation=self.rotation_matrix(), translation=self.translation_vector(),
+                        camera=self.intrinsics.matrix())

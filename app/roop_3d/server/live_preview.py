@@ -1,9 +1,14 @@
 """Production live-preview endpoints: cache-first, non-blocking, mutex-protected.
 
-    POST /api/preview               full swap payload -> one swapped frame (PNG) + face metadata
-    GET  /api/target/preview        one swapped frame for a previously-registered configuration
-    GET  /api/target/preview_grid   contact sheet of swapped frames spread across the clip
-    GET  /api/target/preview_seq    consecutive swapped frames (JSON manifest of per-frame URLs)
+    POST /api/preview               full true-3D head payload -> one rendered frame (PNG) + face metadata
+    GET  /api/target/preview        one rendered frame for a previously-registered configuration
+    GET  /api/target/preview_grid   contact sheet of rendered frames spread across the clip
+    GET  /api/target/preview_seq    consecutive rendered frames (JSON manifest of per-frame URLs)
+
+Every frame comes from the true-3D full-head renderer (see ``server/true3d.py``). While that renderer is not wired an uncached
+frame answers HTTP 503 ``RENDERER_NOT_WIRED`` ("3D renderer not wired"); nothing is faked. Requests that still carry the removed
+2D / 2.5D fields (swapper, restorer, frontalization, TPS, render_mode ...) are accepted, the fields are dropped and listed in
+``legacy_dropped``.
 
 (`/api/<x>` is served from `/api/v1/<x>` by the alias middleware.)
 
@@ -51,13 +56,14 @@ from roop_3d.media.finishing import ExportOptions
 from roop_3d.media.schema import FaceInspection, TrackToFaceSetMap
 from roop_3d.server.engine_gate import REBIND, EngineBusy
 from roop_3d.server.pipeline_status import STAGE_ORDER
+from roop_3d.server.true3d import (CameraIntrinsicsSpec, HeadTopologyEngine, NOT_WIRED_CODE, NOT_WIRED_MESSAGE, ShaderMode,
+                                   True3DSettings, forward_to, migrate_legacy, renderer_module)
 from roop_3d.server.workstation_preview import PreviewRequest
 
 router = APIRouter(prefix="/api/v1")
 
 RETRY_AFTER_MS = 1000
-SoloNode = Literal["final", "detector", "pose", "swapper", "expression", "matte", "restorer", "color", "source", "normal_map", "sh_lighting"]
-RestorerName = Literal["off", "gpen", "codeformer", "gfpgan", "ultramax"]
+SoloNode = Literal["final", "detector", "pose", "expression", "matte", "color", "source", "normal_map", "sh_lighting"]
 _FACESET = r"^[A-Za-z0-9_-]{1,64}$"
 _TRACK = r"^track_[0-9]{4}$"
 _COMPILE_STAGES = {"COMPILING_TRT": "TENSORRT_COMPILATION", "RUNNING_CANARY": "TENSORRT_CANARY"}
@@ -87,10 +93,15 @@ class OcclusionSettings(Contract):
 
 
 class LivePreviewPayload(Contract):
+    # Removed 2D / 2.5D request fields that a legacy client sent; recorded by the before-validator, never acted on.
+    legacy_dropped: tuple[str, ...] = Field(default=(), max_length=64)
+    # True-3D controls (None = the renderer / server default). See server/true3d.py.
+    head_topology_engine: HeadTopologyEngine | None = None
+    shader_mode: ShaderMode | None = None
+    camera: CameraIntrinsicsSpec | None = None
     expression_restore_factor: float | None = Field(default=None, ge=0, le=1)
     face_expression_overrides: FaceExpressionOverrides = Field(default_factory=dict, max_length=64)
     engine_id: str = Field(default="reference_onnx", pattern=r"^[a-z0-9][a-z0-9_]{0,95}$")
-    swapper_model_id: str | None = Field(default=None, pattern=r'^[a-z0-9][a-z0-9_]{0,95}$')
     detector_model_id: Literal['scrfd', 'retinaface', 'yoloface'] | None = None
     # media + frame
     target_path: str = Field(min_length=1, max_length=1024)
@@ -107,35 +118,24 @@ class LivePreviewPayload(Contract):
     all_faces: bool = False
     cluster_index: int | None = Field(default=None, ge=0, le=63)
     identity_blend: IdentityBlendSpec | None = None
-    # geometry
-    frontalization_weight: float | None = Field(default=None, ge=0, le=1)   # 2.5D -> 3D mesh blend (post-swap projection)
-    pose_frontalization: float | None = Field(default=None, ge=0, le=1)     # pre-swap 3D pose normalisation (Stage 5)
-    tps_expression_weight: float | None = Field(default=None, ge=0, le=1)   # TPS expression warp (Stage 5)
-    pose_strength: float | None = Field(default=None, ge=0, le=1)
     # mask
     occlusion: OcclusionSettings = OcclusionSettings()
     mask_base64: str | None = Field(default=None, max_length=12_000_000)
     mask_strokes: tuple[MaskStroke, ...] = Field(default=(), max_length=256)
-    # enhancer + grading
-    restorer: RestorerName = "off"
-    restoration_blend: float | None = Field(default=None, ge=0, le=1)
+    # grading
     identity_blend_t: float | None = Field(default=None, ge=0, le=1)
-    fidelity_weight: float = Field(default=0.5, ge=0, le=1)
     color_method: Literal['lab', 'reinhard_lab', 'histogram'] = 'lab'
     color_strength: float = Field(default=0.65, ge=0, le=1)
     swap_weight: float = Field(default=1, ge=0, le=1)
-    bypass: tuple[Literal["restorer", "color"], ...] = Field(default=(), max_length=2)
+    bypass: tuple[Literal["color"], ...] = Field(default=(), max_length=1)
     solo_node: SoloNode = "final"
-    # Stage 7: the 3D render mode (Stage 4) and compositor occlusion strategy (Stage 5) reach the live preview too, so
-    # the workstation previews exactly what Start would render. Omitted = the existing defaults (standard / standard).
-    render_mode: Literal['standard', 'pose_3d', 'reenactment_3d'] | None = None
+    # The compositor occlusion strategy reaches the live preview too, so the workstation previews exactly what Start would
+    # render. Omitted = the existing default (standard).
     occlusion_mode: Literal['standard', 'robust'] | None = None
     relight: bool | None = None
     relight_strength: float | None = Field(default=None, ge=0, le=1)
     specular_sheen: float | None = Field(default=None, ge=0, le=1)
     shadow_preservation: float | None = Field(default=None, ge=0, le=1)
-    ultramax_small_face_mode: Literal['bypass', 'adaptive', 'off'] | None = None
-    ultramax_min_native_pixels: int | None = Field(default=None, ge=64, le=1024)
     lighting_mode: Literal['auto', 'manual'] | None = None
     manual_light_yaw: float | None = Field(default=None, ge=-180, le=180)
     manual_light_pitch: float | None = Field(default=None, ge=-90, le=90)
@@ -160,6 +160,14 @@ class LivePreviewPayload(Contract):
     face_segments: tuple[FaceSegment, ...] | None = Field(default=None, max_length=256)
     parameter_curves: ParameterCurves | None = None
     export: ExportOptions | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def drop_removed_fields(cls, data: Any) -> Any:
+        clean, dropped = migrate_legacy(data)
+        if dropped:
+            clean = {**clean, "legacy_dropped": tuple(dropped)}
+        return clean
 
     @model_validator(mode="after")
     def coherent(self) -> "LivePreviewPayload":
@@ -201,15 +209,17 @@ class LivePreviewPayload(Contract):
         ids += [s.faceset_id for s in self.face_segments or () if s.faceset_id]
         return tuple(dict.fromkeys(ids))
 
-    def validate_restorer(self) -> None:
-        # gpen, codeformer, gfpgan and ultramax each have their own adapter (and ONNX engine) in the preview compositor.
-        return None
+    def true3d(self) -> True3DSettings:
+        """The True3D settings of this request with the server defaults filled in."""
+        values: dict[str, Any] = {}
+        for name in ("head_topology_engine", "shader_mode", "camera"):
+            if getattr(self, name) is not None:
+                values[name] = getattr(self, name)
+        return True3DSettings(**values)
 
     def unsupported(self) -> list[str]:
         """Accepted-but-inert fields: the engine has no corresponding control. Never silently dropped."""
-        items = []
-        if "fidelity_weight" in self.model_fields_set and self.restorer not in ("codeformer", "ultramax"):
-            items.append("fidelity_weight")  # only the CodeFormer-based engines expose a fidelity input
+        items = [f"legacy:{name}" for name in self.legacy_dropped]
         if self.xseg_occlusion_strength is not None and self.occlusion_mode != "robust":
             items.append("xseg_occlusion_strength")  # the visible-face networks only run in the robust occlusion mode
         if self.pyramid_levels is not None and (self.blend_mode or "multi_band") not in ("multi_band", "frequency_separated"):
@@ -218,8 +228,8 @@ class LivePreviewPayload(Contract):
 
     def config_digest(self) -> dict[str, Any]:
         """Everything that changes the pixels, nothing that selects the frame."""
-        value = self.model_dump(mode="json", exclude={"frame_index", "timestamp"})
-        for key in ("identity_lock_id", "pose_strength", "ambient_fill", "hairline_offset_px", "occlusion_threshold", *PROTECTION_FIELDS, *SCOPE_FIELDS, *FUSION_FIELDS):
+        value = self.model_dump(mode="json", exclude={"frame_index", "timestamp", "legacy_dropped"})
+        for key in ("identity_lock_id", "ambient_fill", "hairline_offset_px", "occlusion_threshold", *PROTECTION_FIELDS, *SCOPE_FIELDS, *FUSION_FIELDS):
             if value[key] is None:
                 value.pop(key)
         if value.get("mask_base64"):
@@ -365,6 +375,7 @@ class LivePreviewService:
         self.configs = ConfigRegistry()
         self._media: dict[str, _MediaInfo] = {}
         self._slot = threading.Lock()  # one live render at a time (inside the thread pool, cancel-aware)
+        self._pending: list[str] = []  # contract fields the shared parameters do not declare yet (set by _build under _slot)
 
     # -- identity of a configuration ------------------------------------------------
     def environment_stamp(self, payload: LivePreviewPayload) -> dict[str, Any]:
@@ -443,6 +454,9 @@ class LivePreviewService:
             if hit is not None:
                 outcomes[index] = FrameOutcome(index, "ready", hit, cached=True)
         missing = [index for index in indices if index not in outcomes]
+        if missing and renderer_module() is None:
+            # Honest readiness: with no connected true-3D renderer an uncached frame cannot exist. Say so (503) instead of queueing.
+            raise DomainError(NOT_WIRED_CODE, NOT_WIRED_MESSAGE, 503)
         if missing:
             stage = self.busy_stage()  # in-memory reads only: answers without loading a model or decoding media
             if stage:
@@ -503,7 +517,6 @@ class LivePreviewService:
 
     # -- building the engine request ---------------------------------------------------
     def _build(self, payload: LivePreviewPayload) -> PreviewRequest:
-        payload.validate_restorer()
         root = self.state.root
         inspection_path = safe_path(root, f"roop_3d/.runtime/inspections/{payload.inspection_id}.json")
         if not inspection_path.is_file():
@@ -531,35 +544,14 @@ class LivePreviewService:
         if any(item.track_id not in track_ids for item in mappings):
             raise DomainError("TRACK_NOT_FOUND", "Selected target face is absent from this inspection", 422)
 
-        restoring = payload.restorer in ("gpen", "codeformer", "gfpgan", "ultramax")
-        blend_amount = (payload.restoration_blend if payload.restoration_blend is not None else 0.7) if restoring else 0.0
-        values: dict[str, Any] = {"restoration_blend": blend_amount, "feather_px": payload.occlusion.feather_px,
+        values: dict[str, Any] = {"feather_px": payload.occlusion.feather_px,
                                   "erosion_px": payload.occlusion.erosion_px, "color_strength": payload.color_strength,
                                   "swap_weight": payload.swap_weight, "bypass": payload.bypass,
-                                  "color_method": payload.color_method,
-                                  "pose_mode": "mesh_blend" if payload.frontalization_weight is not None else "retarget"}
-        if payload.frontalization_weight is not None:
-            values["pose_strength"] = payload.frontalization_weight
-        elif payload.pose_strength is not None:
-            values["pose_strength"] = payload.pose_strength
-        if payload.pose_frontalization is not None:
-            values["pose_frontalization"] = payload.pose_frontalization
-        if payload.tps_expression_weight is not None:
-            values["tps_expression_weight"] = payload.tps_expression_weight
+                                  "color_method": payload.color_method}
         if payload.expression_restore_factor is not None:
             values['expression_restore_factor'] = payload.expression_restore_factor
         if payload.face_expression_overrides:
             values['face_expression_overrides'] = payload.face_expression_overrides
-        if payload.restorer == 'codeformer':
-            values.update(restorer_model='codeformer', fidelity_weight=payload.fidelity_weight)
-        elif payload.restorer == 'ultramax':
-            values.update(restorer_model='ultramax', fidelity_weight=payload.fidelity_weight)
-        elif payload.restorer == 'gfpgan':
-            values.update(restorer_model='gfpgan')
-        if payload.ultramax_small_face_mode is not None:
-            values['ultramax_small_face_mode'] = payload.ultramax_small_face_mode
-        if payload.ultramax_min_native_pixels is not None:
-            values['ultramax_min_native_pixels'] = payload.ultramax_min_native_pixels
         if payload.identity_blend_t is not None:
             values['identity_blend_t'] = payload.identity_blend_t
         if payload.relight is not None:
@@ -587,23 +579,28 @@ class LivePreviewService:
         for name in (*PROTECTION_FIELDS, *SCOPE_FIELDS, *FUSION_FIELDS):
             if getattr(payload, name) is not None:
                 values[name] = getattr(payload, name)
-        if payload.render_mode is not None:
-            values['render_mode'] = payload.render_mode
         if payload.occlusion_mode is not None:
             values['occlusion_mode'] = payload.occlusion_mode
+        # True-3D settings travel in the workstation parameters when the shared contract declares them (core/workstation.py is
+        # Owner A); a field it does not declare yet is reported in `unsupported`, never dropped silently.
+        pending = forward_to(WorkstationParameters, values, payload.true3d())
+        declared = WorkstationParameters.model_fields
+        unknown = sorted(name for name in values if name not in declared)
+        values = {name: value for name, value in values.items() if name in declared}
         parameters = WorkstationParameters.model_validate(values)
+        self._pending = [f"contract:{name}" for name in (*pending, *unknown)]
 
         mask = payload.mask_base64
         if payload.mask_strokes:
             info = self.media_info(payload.target_path)
             mask = rasterize_strokes(payload.mask_strokes, info.width, info.height, mask)
         job = JobRequest(engine_id=payload.engine_id, target_path=payload.target_path, inspection_id=payload.inspection_id, face_mappings=mappings,
-                         swapper_model_id=payload.swapper_model_id, detector_model_id=payload.detector_model_id,
+                         detector_model_id=payload.detector_model_id,
                          identity_lock_id=payload.identity_lock_id,
                          processing="local", mask_base64=mask, workstation_parameters=parameters,
                          parameter_curves=payload.parameter_curves, identity_blend=blend, face_segments=payload.face_segments,
                          export=payload.export)
-        return PreviewRequest(request=job, timestamp=0, parameters=parameters)
+        return PreviewRequest(request=job, timestamp=0, parameters=parameters, true3d=payload.true3d())
 
     def _render_one(self, payload: LivePreviewPayload, base: PreviewRequest, info: _MediaInfo, index: int,
                     digest: str, cancel: Event) -> CacheEntry:
@@ -624,20 +621,18 @@ class LivePreviewService:
         try:   # a live preview used to leave the terminal silent for its whole 10-60 s
             from roop_3d.telemetry.pinokio_terminal import HUD
             latency = raw.get("latency", {}) or {}
-            path = "dense-3D" if latency.get("projection_ms", 0) > latency.get("swap_ms", 0) else "2D-swap"
-            HUD.milestone("PREVIEW", "frame rendered", frame=raw["frame_index"], path=path,
+            HUD.milestone("PREVIEW", "frame rendered", frame=raw["frame_index"], path="3D-head",
                           total=f"{latency.get('total_ms', 0) / 1000:.1f}s", detect=f"{latency.get('detection_ms', 0):.0f}ms",
-                          swap=f"{latency.get('swap_ms', 0):.0f}ms", projection=f"{latency.get('projection_ms', 0):.0f}ms",
+                          render=f"{latency.get('render_ms', 0):.0f}ms",
                           provider=str(raw.get("provider")).replace("ExecutionProvider", ""))
         except Exception:
             pass
         meta = {"media_id": payload.inspection_id, "frame_index": raw["frame_index"], "swap_config_hash": digest,
                 "solo_node": payload.solo_node, "width": int(image.shape[1]), "height": int(image.shape[0]),
                 "decoded_frame_index": raw["frame_index"], "timestamp": raw["timestamp"], "faces": raw.get("faces", []),
-                "applied": self._applied(payload), "unsupported": payload.unsupported(), "notes": raw.get("notes", []),
-                "latency": raw.get("latency", {}), "provider": raw.get("provider"), "profile": str(raw.get("profile")),
-                # Observed outcomes of this frame's restorer (UltraMax keeps an applied / bypassed / failed ledger); null for the others.
-                "restoration": raw.get("restoration")}
+                "applied": self._applied(payload), "unsupported": [*payload.unsupported(), *self._pending],
+                "notes": raw.get("notes", []), "true3d": payload.true3d().model_dump(mode="json"),
+                "latency": raw.get("latency", {}), "provider": raw.get("provider"), "profile": str(raw.get("profile"))}
         # No encoder runs here: this thread holds the render slot. The entry keeps its own copy of the pixels and is
         # encoded (PNG for HTTP, JPEG for the binary stream) by whoever consumes it, after the slot is released.
         return CacheEntry.from_raw(np.ascontiguousarray(image).copy(), meta)
@@ -645,20 +640,11 @@ class LivePreviewService:
     @staticmethod
     def _applied(payload: LivePreviewPayload) -> list[str]:
         applied = ["swap_weight", "color_strength", "mask_erosion_px", "mask_feather_px"]
-        if payload.frontalization_weight is not None:
-            applied.append("frontalization_weight")
-        if payload.pose_frontalization:
-            applied.append("pose_frontalization")
-        if payload.tps_expression_weight:
-            applied.append("tps_expression_weight")
+        applied += [name for name in ("head_topology_engine", "shader_mode", "camera") if getattr(payload, name) is not None]
         if payload.expression_restore_factor:
             applied.append('expression_restore_factor')
         if payload.face_expression_overrides:
             applied.append('face_expression_overrides')
-        if payload.restorer in ("gpen", "codeformer", "gfpgan", "ultramax"):
-            applied.append("restorer:" + payload.restorer)
-        if payload.restorer in ("codeformer", "ultramax"):
-            applied.append("fidelity_weight")
         if payload.mask_base64 or payload.mask_strokes:
             applied.append("custom_mask")
         if payload.relight_strength is not None:

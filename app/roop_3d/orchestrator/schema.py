@@ -20,22 +20,21 @@ ADAPTIVE_PROFILE = "adaptive"
 
 # Categories in pipeline order. The order is also the deterministic iteration order everywhere.
 Category = Literal["video_decoding", "face_detection", "face_recognition", "dense_landmarks",
-                   "identity_swapping", "reconstruction_3d", "expression_transfer",
-                   "restoration", "occlusion_segmentation", "video_encoding"]
+                   "head_rendering", "reconstruction_3d", "expression_transfer",
+                   "occlusion_segmentation", "video_encoding"]
 CATEGORY_ORDER: tuple[str, ...] = ("video_decoding", "face_detection", "face_recognition", "dense_landmarks",
-                                   "identity_swapping", "reconstruction_3d", "expression_transfer",
-                                   "restoration", "occlusion_segmentation", "video_encoding")
+                                   "head_rendering", "reconstruction_3d", "expression_transfer",
+                                   "occlusion_segmentation", "video_encoding")
 NON_IMAGE_CATEGORIES = frozenset({"video_decoding", "video_encoding"})
 
 DataKind = Literal["video_file", "identity_source", "frame", "face_detections", "face_embedding",
-                   "landmarks_106", "landmarks_203", "swapped_crop", "identity_asset_3d",
-                   "visible_face_map", "restored_crop", "composited_frame", "encoded_video"]
+                   "landmarks_106", "landmarks_203", "rendered_head_layer", "identity_asset_3d",
+                   "visible_face_map", "composited_frame", "encoded_video"]
 # Kinds the surrounding pipeline provides without an Engine: the source media, the FaceSet, and the
-# built-in compositor that turns a (possibly restored) crop plus the frame into a composited frame.
+# built-in compositor that turns a rendered head layer plus the frame into a composited frame.
 SOURCE_KINDS = frozenset({"video_file", "identity_source"})
 PIPELINE_DERIVATIONS: tuple[tuple[frozenset[str], str], ...] = (
-    (frozenset({"swapped_crop", "frame"}), "composited_frame"),
-    (frozenset({"restored_crop", "frame"}), "composited_frame"),
+    (frozenset({"rendered_head_layer", "frame"}), "composited_frame"),
 )
 
 Tier = Literal["cpu", "6gb", "12gb"]

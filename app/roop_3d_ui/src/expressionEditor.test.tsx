@@ -65,7 +65,7 @@ it('edits gaze and jaw per face, and the blink pair moves together until split',
 it('sends the same global restore factor and per-face edits to the debounced live endpoint', () => {
   const parameters = { ...DEFAULT_PARAMETERS, expression_restore_factor: .8, face_expression_overrides: { track_0002: { head_pitch: -4, gaze_x: .4 } } };
   const request = { target_path: 'media/target.mp4', inspection_id: 'a'.repeat(32), face_mappings: [{ track_id: 'track_0002', faceset_id: 'source' }] } as JobRequest;
-  const payload = buildLivePayload({ request, parameters, time: 0, fps: 30, restorerAvailable: false });
+  const payload = buildLivePayload({ request, parameters, time: 0, fps: 30 });
   expect(payload?.expression_restore_factor).toBe(.8);
   expect(payload?.face_expression_overrides).toEqual(parameters.face_expression_overrides);
 });

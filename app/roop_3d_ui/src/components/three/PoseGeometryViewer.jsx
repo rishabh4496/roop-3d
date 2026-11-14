@@ -152,12 +152,12 @@ const CAMERA_DISTANCE = 3.8;
 const FRONTAL_CAMERA = new THREE.Vector3(0, 0, CAMERA_DISTANCE);
 const WORLD_UP = new THREE.Vector3(0, 1, 0);
 const CYAN = '#22d3ee';
-/** Landmark vertices of the canonical template: indices 0..67 of every `mesh_2_5d` (see multiview_fit.identity_template). */
+/** Landmark vertex count of the legacy canonical landmark layout (kept for the landmark overlay helpers). */
 export const TEMPLATE_LANDMARK_COUNT = 68;
 
 /**
  * Per coordinate frame: the sign applied to (x, y, z) to reach three.js (+x right, +y up, +z toward the viewer).
- *  - `mesh`   : the backend mesh frame of `mesh_2_5d` / `mesh_full_3d` (+x image-right, +y DOWN, +z toward the viewer);
+ *  - `mesh`   : the backend mesh frame of `mesh_full_3d` (+x image-right, +y DOWN, +z toward the viewer);
  *  - `opencv` : a camera frame (+y down, +z away from the viewer);
  *  - `opengl` : glTF / three.js, used as is.
  */
@@ -255,9 +255,9 @@ export function buildMeshAssets(mesh, { landmarkCount = 0 } = {}) {
 }
 
 /**
- * A `mesh_2_5d` / `mesh_full_3d` payload as a viewer reconstruction (backend mesh frame).
+ * A `mesh_full_3d` payload as a viewer reconstruction (backend mesh frame).
  * @param {import('../../contracts').ReconstructedMesh | null | undefined} value
- * @param {'tps_2_5d' | 'identity_asset'} method
+ * @param {'flame' | 'identity_asset'} method
  * @param {string} [fallbackTexture] a `data:image/png` URL used when the mesh carries no texture of its own
  * @returns {import('../../contracts').Reconstruction | null}
  */
@@ -336,8 +336,8 @@ export function lightingRig(lighting) {
 }
 
 /**
- * How the geometry morph controls show in the viewer: `blend` is the source-mesh weight 0..1 (0 = the target-like estimated 2.5D proxy,
- * 1 = the source's 3D mesh) and the target proxy ghost fades out as it rises; `hairline` (-1..1 of the head height) moves the
+ * How the geometry morph controls show in the viewer: `blend` is the source-mesh weight 0..1 (1 = the source identity's full mesh;
+ * and the target ghost is never drawn; `hairline` (-1..1 of the head height) moves the
  * forehead / hairline boundary ring (as a fraction of 8% of the head height).
  * @param {{ blend?: number; hairline?: number } | null | undefined} morph
  */
@@ -734,7 +734,7 @@ function FaceCameraFocus({ resetCamera }) {
 /**
  * Main WebGL Pose & Geometry Viewer Component.
  *
- * `coverage` is the `POST /faceset/reconstruct-3d` payload (`mesh_2_5d`, `mesh_full_3d`, `observed_pose_points`, the
+ * `coverage` is the `POST /faceset/reconstruct-3d` payload (`mesh_full_3d`, `observed_pose_points`, the
  * telemetry counts). `mesh` is an explicitly chosen reconstruction (a built identity asset, an imported artifact) and
  * overrides `coverage.mesh_full_3d`. `renderMode` is the workstation render mode: it selects the tab showing the
  * geometry that mode works from. `reconstruction` is the request state (idle | loading | ready | error).
@@ -762,17 +762,15 @@ export default function PoseGeometryViewer({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- the four scalars are the whole input
     [lightSource?.yaw, lightSource?.pitch, lightSource?.strength, lightSource?.ambient]);
   const controlsRef = useRef(null);
-  const [viewMode, setViewMode] = useState('estimated_2_5d'); // 'estimated_2_5d' | 'reconstruction'
+  const viewMode = 'reconstruction'; // the single-view 2.5D estimate tab was removed: the viewer shows the full 3D head only
   const viewSetter = useRef(null);
   const registerView = useCallback(setter => { viewSetter.current = setter; }, []);
   const reportView = useCallback(pose => viewSetter.current?.(pose), []);
 
   const [resetSignal, setResetSignal] = useState(0);
-  // A subtle topology overlay on the single-view estimate; off by default on the textured head so the albedo reads clearly.
-  const [wireframeByTab, setWireframeByTab] = useState({ estimated_2_5d: true, reconstruction: false });
-  const wireframe = wireframeByTab[viewMode];
-  const toggleWireframe = () => setWireframeByTab(value => ({ ...value, [viewMode]: !value[viewMode] }));
-  const [showLandmarks, setShowLandmarks] = useState(true);
+  // A topology overlay; off by default on the textured head so the albedo reads clearly.
+  const [wireframe, setWireframe] = useState(false);
+  const toggleWireframe = () => setWireframe(value => !value);
   const [showRings, setShowRings] = useState(true);
 
   // Studio lighting (five CC0 probes) and the physical-camera lens: both are previews in this viewport only.
@@ -800,32 +798,20 @@ export default function PoseGeometryViewer({
     return targetClusters.length > 0 ? legacyPoseToStandard(targetClusters[0].avgPose) : null;
   }, [activeSelection, detectedFaces, track, targetClusters]);
 
-  // The two reconstructions of the payload, in the backend mesh frame.
-  const estimatedMesh = useMemo(() => payloadToReconstruction(coverage?.mesh_2_5d, 'tps_2_5d'), [coverage]);
+  // The full-head reconstruction of the payload, in the backend mesh frame.
   const payloadFullMesh = useMemo(() => payloadToReconstruction(coverage?.mesh_full_3d, 'identity_asset', coverage?.uv_texture_data_url), [coverage]);
   const fullMesh = mesh ?? payloadFullMesh;
   const denseFace = fullMesh?.provenance === 'three_tier_facial_surface';
-  const displayedMesh = viewMode === 'estimated_2_5d' ? (estimatedMesh ?? fullMesh) : fullMesh;
-  const volumetric = viewMode === 'reconstruction' && !!fullMesh;
+  const displayedMesh = fullMesh;
+  const volumetric = !!fullMesh;
 
-  const assets = useMemo(() => buildMeshAssets(displayedMesh, { landmarkCount: viewMode === 'estimated_2_5d' && displayedMesh === estimatedMesh ? TEMPLATE_LANDMARK_COUNT : 0 }),
-    [displayedMesh, viewMode, estimatedMesh]);
+  const assets = useMemo(() => buildMeshAssets(displayedMesh, { landmarkCount: 0 }), [displayedMesh]);
   useDisposable(assets?.geometry);
   // Live relighting preview: key light direction, ambient fill and specular sheen drive the viewer's lights and skin material.
   const lightRig = useMemo(() => (lighting ? lightingRig(lighting) : null), [lighting]);
-  // The target-like (estimated 2.5D) proxy, shown as a ghost while the geometry blend is below 100% source mesh.
-  const targetAssets = useMemo(() => (morph && estimatedMesh ? buildMeshAssets(estimatedMesh) : null), [morph, estimatedMesh]);
-  useDisposable(targetAssets?.geometry);
   const texture = useDataTexture(assets && typeof displayedMesh?.texture === 'string' && assets.geometry.getAttribute('uv') ? displayedMesh.texture : null);
 
-  // Render mode picks the tab (and so does a newly supplied explicit mesh, or a new source arriving).
   const modeInfo = useMemo(() => renderModeInfo(renderMode), [renderMode]);
-  const intent = mesh || denseFace ? 'reconstruction' : renderMode === undefined ? 'estimated_2_5d' : modeInfo.preview;
-  const hasFullMesh = !!fullMesh;
-  const sourceKey = coverage?.faceset_id;
-  useEffect(() => {
-    setViewMode(intent === 'reconstruction' && hasFullMesh ? 'reconstruction' : 'estimated_2_5d');
-  }, [intent, hasFullMesh, sourceKey, mesh]);
 
   // Observed pose points -> counts per cell of the exact backend 12x8 grid.
   const baseLattice = useMemo(() => generatePoseGrid(SPHERE_RADIUS), []);
@@ -853,7 +839,7 @@ export default function PoseGeometryViewer({
     return { totalNodes, observedNodes, coveragePct, totalSamples };
   }, [lattice, coverage]);
 
-  const state = reconstruction?.state ?? (estimatedMesh || fullMesh ? 'ready' : 'idle');
+  const state = reconstruction?.state ?? (fullMesh ? 'ready' : 'idle');
   const hasGeometry = !!assets;
   // A source face / FaceSet is active (its reconstruction is loading, failed or done) or a mesh was supplied explicitly.
   const sourceLoaded = state !== 'idle' || !!coverage || !!mesh;
@@ -863,14 +849,14 @@ export default function PoseGeometryViewer({
     : !hasGeometry ? { kind: 'idle', text: IDLE_MESSAGE } : null;
 
   const resetCamera = useCallback(() => setResetSignal(value => value + 1), []);
-  const info = displayedMesh?.provenance ? `${volumetric ? (denseFace ? 'Facial surface' : 'Full 3D') : 'Estimated 2.5D'} · ${String(displayedMesh.provenance).replaceAll('_', ' ')}` : '';
-  const limitation = (viewMode === 'reconstruction' ? coverage?.mesh_full_3d : coverage?.mesh_2_5d)?.limitations?.[0] ?? '';
+  const info = displayedMesh?.provenance ? `${denseFace ? 'Facial surface' : 'Full 3D'} · ${String(displayedMesh.provenance).replaceAll('_', ' ')}` : '';
+  const limitation = coverage?.mesh_full_3d?.limitations?.[0] ?? '';
 
   const tab = (id, label, disabled, title) => (
     <button
       type="button"
       className={`viewer-mode-btn ${viewMode === id ? 'active' : ''}`}
-      onClick={() => setViewMode(id)}
+      onClick={() => undefined}
       disabled={disabled}
       title={title}
       aria-pressed={viewMode === id}
@@ -886,15 +872,12 @@ export default function PoseGeometryViewer({
       {/* Top Controls Overlay */}
       <div className="pose-viewer-toolbar">
         <div className="pose-mode-toggle">
-          {tab('estimated_2_5d', 'Estimated 2.5D', false, 'Single-view estimate: the FaceSet\'s best frontal photo draped over a depth-prior face mesh')}
           {tab('reconstruction', denseFace ? 'Fitted facial surface' : 'Full 3D Reconstructed', !fullMesh,
             fullMesh ? (denseFace ? 'Anatomical face fitted from observed photographs' : `Legacy preview: ${fullMesh.provenance ?? fullMesh.method}`) : 'Load a FaceSet to reconstruct its facial surface')}
         </div>
       </div>
       <div className="pose-viewer-options" role="group" aria-label="3D viewer overlays">
         <button type="button" className="viewer-toggle" aria-pressed={wireframe} onClick={toggleWireframe} disabled={!hasGeometry}>Wireframe</button>
-        <button type="button" className="viewer-toggle" aria-pressed={showLandmarks} onClick={() => setShowLandmarks(value => !value)} disabled={!hasGeometry || viewMode !== 'estimated_2_5d'}
-          title="68 landmark points of the estimated face mesh">Landmarks</button>
         <button type="button" className="viewer-toggle" aria-pressed={showRings} onClick={() => setShowRings(value => !value)}
           title="Orbital rings and the pose coverage sphere">Coverage rings</button>
         <button
@@ -1013,8 +996,8 @@ export default function PoseGeometryViewer({
           {assets ? (
             <ReconstructedHead pose={targetPose} assets={assets} texture={texture} volumetric={volumetric}
               bufferView={bufferView} shLight={shLight} shCoefficients={environmentSH} tools={tools} gizmos={gizmos}
-              wireframe={wireframe} landmarks={showLandmarks && viewMode === 'estimated_2_5d'}
-              lighting={lighting} morph={morph} targetAssets={morph && displayedMesh !== estimatedMesh ? targetAssets : null} />
+              wireframe={wireframe} landmarks={false}
+              lighting={lighting} morph={morph} targetAssets={null} />
           ) : !sourceLoaded ? (
             // Empty-state hint only: once a source exists (loading, error or ready) the crystal is never drawn.
             <ReferenceHead />

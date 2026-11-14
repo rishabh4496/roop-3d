@@ -1,6 +1,7 @@
 """Read-only presentation of registered models and compatible engine adapters."""
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -23,8 +24,6 @@ CORE_INFERENCE_EVIDENCE = {
                              "tests/test_identity_real_inference.py"),
     "w600k_r50.onnx": ("4c06341c33c2ca1f86781dab0e829f88ad5b64be9fba56e56bc9ebdefc619e43",
                        "tests/test_identity_real_inference.py"),
-    "inswapper_128.onnx": ("e4a3f08c753cb72d04e10aa0f7dbe3deebbf39567d4ead6dce08e98aa49e16af",
-                           "tests/test_stage15_e2e_golden.py"),
 }
 
 
@@ -52,15 +51,6 @@ class ModelHubService:
                                     "SCRFD face detection" if name == "detector" else "ArcFace identity embedding")
         except DomainError:
             pass
-        try:
-            # Match the production runtime's first verified-local record selection.
-            from roop_3d.engine.runtime import record_named
-            swapper_summary = record_named(self.catalog, "inswapper_128.onnx")
-            swapper = self.catalog.registry.get(swapper_summary["model_id"])
-        except DomainError:
-            pass
-        else:
-            self._core["identity_swapper"] = (swapper, "Face identity transfer")
 
     def _is_core(self, record: ModelRecord) -> bool:
         return any(item.model_id == record.model_id for item, _ in self._core.values())
@@ -121,6 +111,8 @@ class ModelHubService:
         artifact_installed: bool | None = None
         integrity_verified: bool | None = None
         compatibility = "NO_REGISTERED_ADAPTER"
+        adapter_spec = None      # the 2D swapper adapters were removed: no artifact has a registered face-swap adapter
+        inference_note = "No verified inference path for this model in Roop 3D."
         if record.status == "blocked":
             state, inference, evidence = "LICENSE_RESTRICTED", False, record.license_notice
         elif record.status == "candidate":
@@ -145,8 +137,8 @@ class ModelHubService:
                 evidence = "The configured local model paths could not be fully verified."
             inference = False
             compatibility = "NOT_INTEGRATED"
-        elif record.status == "verified_remote" or (record.upstream_url
-                                                    and record.provenance_state == "VERIFIED_REMOTE"):
+        elif record.status == "verified_remote" or adapter_spec is not None or (
+                record.upstream_url and record.provenance_state == "VERIFIED_REMOTE"):
             local_state, filename = self._local_artifact_state(record)
             artifact_installed, integrity_verified = local_state == "AVAILABLE", local_state == "AVAILABLE"
             if local_state == "BROKEN":
@@ -161,9 +153,10 @@ class ModelHubService:
                          else "NOT_INSTALLED")
                 inference = False
                 compatibility = "NO_REGISTERED_ADAPTER"
-                evidence = (f"Artifact hash-verified at {filename}; no compatible inference adapter is registered."
-                            if local_state == "AVAILABLE" else
-                            "Reviewed artifact identity is registered; it has not been installed in the cache or configured local paths.")
+                if local_state == "AVAILABLE":
+                    evidence = f"Artifact hash-verified at {filename}; no compatible inference adapter is registered."
+                else:
+                    evidence = "Reviewed artifact identity is registered; it has not been installed in the cache or configured local paths."
         elif record.license_id == "UNKNOWN":
             state, inference, evidence = "LICENSE_RESTRICTED", False, record.license_notice
         else:
@@ -251,8 +244,7 @@ class ModelHubService:
             "benchmark_status": record.benchmark_status,
             "actual_inference_available": inference,
             "engine_compatibility": compatibility,
-            "inference_evidence": (evidence if inference
-                                    else "No verified inference path for this model in Roop 3D."),
+            "inference_evidence": (evidence if inference else inference_note),
             "download_allowed": download_eligible and state == "NOT_INSTALLED",
             "download_blocker": (DOWNLOAD_BLOCKERS.get(blocker or "", "Download is not available for this model.")
                                  if not download_eligible else
@@ -274,7 +266,7 @@ class ModelHubService:
     def engines(self) -> list[dict[str, Any]]:
         required = [record for record, _ in self._core.values()]
         checks = [self._core_status(record) for record in required]
-        ready = bool(required) and len(required) == 3 and all(state == "READY_FOR_INFERENCE" for state, _, _ in checks)
+        ready = bool(required) and len(required) == 2 and all(state == "READY_FOR_INFERENCE" for state, _, _ in checks)
         states = {state for state, _, _ in checks}
         reference_state = ("READY_FOR_INFERENCE" if ready else "BROKEN" if "BROKEN" in states else
                            "LICENSE_RESTRICTED" if "LICENSE_RESTRICTED" in states else
@@ -283,18 +275,18 @@ class ModelHubService:
             {
                 "engine_id": "reference_onnx",
                 "name": "Roop 3D Reference ONNX",
-                "family": "InsightFace-compatible detector, ArcFace recognizer and INSwapper",
+                "family": "InsightFace-compatible detector and ArcFace recognizer (tracking / identity gate; rendering needs the true-3D head renderer)",
                 "engine_type": "ONNX Runtime",
-                "purpose": "Local still-image and video face swap with existing tracking, compositing and audio-preserving mux path.",
+                "purpose": "Local tracking, identity gate and compositing path. Head rendering requires the true-3D renderer, which is not wired.",
                 "model_ids": [record.model_id for record in required],
                 "minimum_vram_gib": None,
                 "recommended_vram_gib": None,
-                "dependencies": ["Registered detector, recognizer and identity-swapper artifacts", "ONNX Runtime execution provider"],
+                "dependencies": ["Registered detector and recognizer artifacts", "ONNX Runtime execution provider", "True-3D head renderer (not wired)"],
                 "supported_precision": ["FP32 graph contract; provider-specific reduced precision is unverified"],
                 "supported_execution_providers": sorted({provider for record in required for provider in record.supported_providers}),
                 "status": reference_state,
                 "benchmark_status": "NOT_RUN",
-                "actual_inference_available": ready,
+                "actual_inference_available": False,
                 "selectable": self.engines_registry.selectable("reference_onnx"),
                 "selected": True,
                 "evidence": ("Existing production ReferencePipeline adapter; all three model files are hash checked on hub refresh."
@@ -303,7 +295,7 @@ class ModelHubService:
             {
                 "engine_id": "photoreal_3d_ffmpeg",
                 "name": "Photoreal 3D (FFmpeg stream)",
-                "family": "Same detector, ArcFace and INSwapper; then craniofacial warp, quotient-image relight, restorer and Laplacian composite",
+                "family": "Same detector and ArcFace; then true-3D head render layer, quotient-image relight and Laplacian composite",
                 "engine_type": "ONNX Runtime + FFmpeg decode/encode pipes",
                 "purpose": ("Video swap whose pixels are always photographic (swap + FaceSet photograph + restorer): the source jaw/skull outline "
                             "is projected into the target, the old overhang is filled with background, and a smooth spherical-harmonics ratio "
@@ -312,12 +304,12 @@ class ModelHubService:
                 "minimum_vram_gib": None,
                 "recommended_vram_gib": None,
                 "dependencies": ["The reference engine's three models", "FFmpeg", "BiSeNet / XSeg / occluder (hair, skin and occlusion masks)",
-                                 "A restorer (UltraMax / CodeFormer / GPEN) for the restoration step"],
-                "supported_precision": ["Follows the saved precision policy; the restorer may run on TensorRT when an engine is cached"],
+                                 "True-3D head renderer (not wired)"],
+                "supported_precision": ["Follows the saved precision policy"],
                 "supported_execution_providers": sorted({provider for record in required for provider in record.supported_providers}),
                 "status": reference_state,
                 "benchmark_status": "NOT_RUN",
-                "actual_inference_available": ready,
+                "actual_inference_available": False,
                 "selectable": self.engines_registry.selectable("photoreal_3d_ffmpeg"),
                 "selected": False,
                 "evidence": ("Not resumable (a paused job restarts at frame 0); SDR sources only; the skull outline is the FaceSet photograph's 106 "

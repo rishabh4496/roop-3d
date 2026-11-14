@@ -22,8 +22,6 @@ class RenderPolicy:
     segment_frames: int = 250
     strict_nvdec: bool = False
     strict_nvenc: bool = False
-    ultramax_native_bypass: bool = False
-    ultramax_min_pixels: int = 320
     hardware_profile: str = "6gb"
 
     def __post_init__(self):
@@ -31,7 +29,7 @@ class RenderPolicy:
         OneEuroFilter(self.temporal_min_cutoff,self.temporal_beta,self.temporal_d_cutoff)
         if (not 1 <= self.batch_size <= 8 or not 1 <= self.execution_threads <= 8
                 or not 2 <= self.ring_slots <= 32 or self.sparse_interval < 1 or self.range_padding < 0
-                or not 1 <= self.segment_frames <= 10000 or self.ultramax_min_pixels < 1
+                or not 1 <= self.segment_frames <= 10000
                 or self.hardware_profile not in ("cpu", "6gb", "12gb")):
             raise ValueError("Invalid stream render policy")
 

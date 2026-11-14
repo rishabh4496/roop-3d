@@ -113,12 +113,10 @@ describe('pose maths', () => {
 });
 
 describe('render modes', () => {
-  it('names the three modes plainly and maps each to the viewer tab it works from', () => {
-    expect(RENDER_MODES.map(mode => [mode.id, mode.label])).toEqual([
-      ['standard', 'Standard 2D Identity Swap'], ['pose_3d', '3D Facial Warp'], ['reenactment_3d', '3D Expression Transfer'],
-    ]);
-    expect(RENDER_MODES.map(mode => mode.preview)).toEqual(['estimated_2_5d', 'reconstruction', 'reconstruction']);
-    expect(renderModeInfo('unknown').id).toBe('standard');
+  it('has exactly one mode, the full 3D head, and maps legacy ids onto it (no 2D or 2.5D mode survives)', () => {
+    expect(RENDER_MODES.map(mode => [mode.id, mode.label])).toEqual([['full_3d_head', 'Full 3D Head Reconstruction']]);
+    expect(RENDER_MODES.map(mode => mode.preview)).toEqual(['reconstruction']);
+    for (const legacy of ['standard', 'pose_3d', 'reenactment_3d', 'estimated_2_5d', 'unknown']) expect(renderModeInfo(legacy).id).toBe('full_3d_head');
   });
 });
 
@@ -143,7 +141,7 @@ describe('PoseGeometryViewer with a FaceSet reconstruction payload', () => {
     expect(readout()).toContain('Observed Views 0');
     expect(readout()).toContain('0 / 96 (0%)');
     expect(readout()).toContain('+0.0° Y · +0.0° P');
-    expect(tabs()[1].disabled).toBe(true);
+    expect(tabs()[0].disabled).toBe(true);
   });
 
   it('reports the loading and error states, and offers a retry', async () => {
@@ -174,30 +172,14 @@ describe('PoseGeometryViewer with a FaceSet reconstruction payload', () => {
     expect(live.getAttribute('data-source')).toBe('target');
   });
 
-  it('opens the fitted reconstruction tab for both 3D render modes', async () => {
-    await render({ coverage: payload(), track: null, mesh: null, renderMode: 'standard' });
-    expect(activeTab()).toContain('Estimated 2.5D');
-    expect(tabs()[1].disabled).toBe(false);
-    await render({ coverage: payload(), track: null, mesh: null, renderMode: 'reenactment_3d' });
+  it('opens the one fitted reconstruction tab, marks it as the render geometry, and offers no 2.5D tab', async () => {
+    await render({ coverage: payload(), track: null, mesh: null, renderMode: 'full_3d_head' });
+    expect(tabs()).toHaveLength(1);
     expect(activeTab()).toContain('Full 3D Reconstructed');
-    expect(tabs()[1].dataset.pipeline).toBe('true');
-    expect(tabs()[1].textContent).toContain('render');
-    await render({ coverage: payload(), track: null, mesh: null, renderMode: 'pose_3d' });
-    expect(activeTab()).toContain('Full 3D Reconstructed');
-    expect(tabs()[1].dataset.pipeline).toBe('true');
-    // The standard mode has no 3D render step: the tab is labelled as a preview only.
-    await render({ coverage: payload(), track: null, mesh: null, renderMode: 'standard' });
-    expect(tabs()[0].textContent).toContain('preview');
-  });
-
-  it('keeps a manual tab choice until the render mode or source changes', async () => {
-    await render({ coverage: payload(), track: null, mesh: null, renderMode: 'pose_3d' });
-    await act(async () => { tabs()[0].dispatchEvent(new MouseEvent('click', { bubbles: true })); });
-    expect(activeTab()).toContain('Estimated 2.5D');
-    await render({ coverage: payload(), track: null, mesh: null, renderMode: 'pose_3d' });
-    expect(activeTab()).toContain('Estimated 2.5D');
-    await render({ coverage: payload({ faceset_id: 'bob' }), track: null, mesh: null, renderMode: 'pose_3d' });
-    expect(activeTab()).toContain('Full 3D Reconstructed');
+    expect(tabs()[0].disabled).toBe(false);
+    expect(tabs()[0].dataset.pipeline).toBe('true');
+    expect(tabs()[0].textContent).toContain('render');
+    expect(host.textContent).not.toMatch(/2\.5D/);
   });
 
   it('selects a fitted anatomical surface over the canonical proxy when one is available', async () => {
@@ -205,7 +187,7 @@ describe('PoseGeometryViewer with a FaceSet reconstruction payload', () => {
     fitted.mesh_full_3d!.reconstruction_level = 'three_tier_facial_surface';
     await render({ coverage: fitted, track: null, mesh: null });
     expect(activeTab()).toContain('Fitted facial surface');
-    expect(tabs()[1].title).toContain('Anatomical face');
+    expect(tabs()[0].title).toContain('Anatomical face');
   });
 
   it('shows an explicitly chosen identity asset on the Full 3D tab at once', async () => {

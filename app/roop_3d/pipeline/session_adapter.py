@@ -1,9 +1,9 @@
 """Per-frame glue between a prepared ``ReferencePipeline`` session and :class:`Photorealistic3DSwapCore`.
 
-The session does the real work it always did: SCRFD detection + 106 landmarks + tracking, the identity gate, and the
-neural swap (``inswapper``). This adapter turns each ``Replacement`` into a :class:`FacePacket` (picking the FaceSet
-photograph nearest in pose, running the parser / occluder networks on a full-head crop) and lets the core do geometry,
-rectification, relighting, restoration and the Laplacian composite. Nothing here composites a mesh.
+The session does detection + 106 landmarks + tracking and the identity gate, and (once the true-3D renderer is wired)
+produces a rendered head layer per face. This adapter turns each ``Replacement`` into a :class:`FacePacket` (running the
+parser / occluder networks on a full-head crop) and lets the core do layer placement, relighting, optics matching and the
+Laplacian composite. With no wired renderer ``session.infer_frame`` raises ``True3DRendererUnavailable`` for any face.
 """
 from __future__ import annotations
 
@@ -20,15 +20,15 @@ from roop_3d.core.errors import DomainError
 from roop_3d.engine.volumetric.preprocess import landmark_crop
 from roop_3d.pipeline import image_ops as ops
 from roop_3d.pipeline.photorealistic_swap_core import FacePacket, FaceReport, Photorealistic3DSwapCore
-from roop_3d.reconstruction.expression_tps import layout_is_plausible
+from roop_3d.reconstruction.landmark_layout import layout_is_plausible
 from roop_3d.rendering.silhouette_replacement import DonorHistory
 
 log = logging.getLogger("roop3d.pipeline")
 
 # Pipeline stage names the job contract / HUD already know (core.stage_timing.STAGES). The core's five steps map onto them
-# the way the HUD columns are labelled: geometry+rectify -> pose_tps ("3D-LBS"), relight+blend -> masking, restore -> restorer.
+# the way the HUD columns are labelled: geometry+rectify -> head_pose, relight+blend -> masking, optics -> expression.
 OCCLUSION_THRESHOLD = 0.55          # the compositor's own default semantic-confidence gate
-STEP_TO_STAGE = {"geometry": "pose_tps", "rectify": "pose_tps", "relight": "masking", "blend": "masking", "restore": "restorer"}
+STEP_TO_STAGE = {"geometry": "head_pose", "rectify": "head_pose", "relight": "masking", "blend": "masking", "restore": "expression"}
 
 
 @dataclass
@@ -93,6 +93,8 @@ class SessionFrameProcessor:
         self.faces_swapped = 0
         self.faces_skipped = 0
         self.faces_withheld = 0
+        self.geometry_modes: dict[str, int] = {}
+        self.mask_tiers: dict[str, int] = {}
 
     # -------------------------------------------------------------------------------------------------- per frame
     def process(self, frame: np.ndarray, frame_index: int) -> tuple[np.ndarray, FrameReport]:
@@ -104,7 +106,7 @@ class SessionFrameProcessor:
         if report.scene_cut:
             self.history.clear()
         report.stage_ms["detection"] = float(result.latency.detection_ms)
-        report.stage_ms["inswapper"] = float(result.latency.swap_ms + result.latency.retarget_ms)
+        report.stage_ms["head_render"] = float(result.latency.swap_ms + result.latency.retarget_ms)
         report.withheld = [{"track_id": item.track_id, "reason": item.reason} for item in result.withheld]
         observations = {item.track_id: item.observation for item in result.observations}
         out = frame
@@ -119,8 +121,17 @@ class SessionFrameProcessor:
                 donors = self.history.donors(replacement.track_id, frame.shape[:2], frame_index, max_gap=4)
                 out, face = self.core.process_face(out, packet, donors=donors, frame_index=frame_index)
             except DomainError as error:
+                if error.code not in {"SWAP_CORE_LANDMARKS_INVALID", "SWAP_CORE_ROI_EMPTY"}:
+                    raise
                 report.skipped.append({"track_id": replacement.track_id, "reason": error.code})
                 continue
+            if replacement.fallback_reason:
+                face.fallbacks.append(f"session:{replacement.fallback_reason}")
+            face.fallbacks.extend(f"mask:{reason}" for reason in packet.mask_diagnostics["reasons"])
+            mode = face.geometry["mode"]
+            tier = packet.mask_diagnostics["tier"]
+            self.geometry_modes[mode] = self.geometry_modes.get(mode, 0) + 1
+            self.mask_tiers[tier] = self.mask_tiers.get(tier, 0) + 1
             report.faces.append(face)
             swapped_tracks.add(replacement.track_id)
             for step, milliseconds in face.steps_ms.items():
@@ -157,38 +168,53 @@ class SessionFrameProcessor:
         landmarks = np.asarray(observation.landmarks106, np.float64)
         image = np.asarray(replacement.image)
         if image.ndim != 3 or image.shape[0] != image.shape[1]:
-            raise DomainError("SWAP_CORE_CROP_INVALID", "The neural swap must be a square crop", 422)
-        document = self.session._document_for(replacement.track_id)
-        view = view_landmarks = None
-        if document is not None:
-            view, view_landmarks, _ = self.views.pick(document, observation.pose)
+            raise DomainError("SWAP_CORE_CROP_INVALID", "The rendered head layer must be a square canvas", 422)
+        if replacement.coverage is None:
+            raise DomainError("SWAP_CORE_COVERAGE_REQUIRED", "A rendered head layer must carry rasterized coverage", 422)
+        # A rendered true-3D layer owns geometry and coverage: no source-photograph patch, no landmark warp.
+        projected = True
         began = time.perf_counter()
-        structure = skin = occluder = protect = None
         try:
-            structure, skin, occluder, protect = self._parse(frame, landmarks, replacement)
+            structure, skin, occluder, protect, diagnostics = self._parse(frame, landmarks, replacement)
         except DomainError:
             raise
-        except Exception:                                           # a parser failure degrades the masks, never the render
-            log.warning("semantic parsing failed for a face; continuing without hair/skin/occluder masks", exc_info=True)
+        except Exception as error:
+            raise DomainError("SWAP_CORE_PARSING_FAILED",
+                              f"Semantic analysis failed for track {replacement.track_id}: {type(error).__name__}", 503) from error
+        diagnostics["source_view"] = "UPSTREAM_RENDER"
         parse_ms = (time.perf_counter() - began) * 1000
         packet = FacePacket(
-            track_id=replacement.track_id, swapped_crop=image, crop_to_frame=np.asarray(replacement.inverse, np.float64),
+            track_id=replacement.track_id, rendered_crop=image, crop_to_frame=np.asarray(replacement.inverse, np.float64),
             target_landmarks=landmarks,
-            crop_landmarks5=None if replacement.landmarks5 is None else np.asarray(replacement.landmarks5, np.float32),
-            crop_coverage=None if replacement.coverage is None else np.asarray(replacement.coverage, np.float32),
-            source_landmarks=view_landmarks, source_view=view if view_landmarks is not None else None,
-            structure_mask=structure, skin_mask=skin, occluder=occluder, protect=protect)
+            crop_coverage=np.asarray(replacement.coverage, np.float32),
+            structure_mask=structure, skin_mask=skin, occluder=occluder,
+            projected=projected, presence=replacement.presence,
+            mask_diagnostics=diagnostics)
         return packet, parse_ms
 
     def _parse(self, frame: np.ndarray, landmarks: np.ndarray, replacement):
         """Hair / ears / neck, skin and front occluders from the parser + XSeg + occluder networks, in FRAME space."""
         if not layout_is_plausible(landmarks):
-            return None, None, None, None
+            raise DomainError("SWAP_CORE_LANDMARKS_INVALID", "Target 106-point layout is not plausible", 422)
         crop = landmark_crop(frame, landmarks, self.analysis_size, expansion=2.3, vertical_shift=-0.15)
         points = (landmarks @ np.asarray(crop.matrix, np.float64)[:, :2].T) + np.asarray(crop.matrix, np.float64)[:, 2]
         analyzer = self.session.compositor.analyzer
+        support = ops.polygon_mask(ops.head_polygon(points, self.core.options.forehead_lift), crop.image.shape[:2])
+        if replacement.coverage is not None:
+            to_analysis = ops.compose_affine(crop.matrix, replacement.inverse)
+            projected_support = cv2.warpAffine(np.asarray(replacement.coverage, np.float32), to_analysis,
+                                               (crop.image.shape[1], crop.image.shape[0]),
+                                               flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=0)
+            support = np.maximum(support, projected_support)
         analysis = analyzer.analyze(crop.image, points, feather_px=3.0, confidence_threshold=OCCLUSION_THRESHOLD,
-                                    track_id=replacement.track_id)
+                                    track_id=replacement.track_id, mesh_support=support)
+        expected_nets = {net.model_name for net in analyzer.nets}
+        missing_nets = sorted(expected_nets - set(analysis.nets_used))
+        if (any(reason.startswith("PARSER_UNAVAILABLE:") for reason in analysis.reasons)
+                or missing_nets or not expected_nets or analysis.tier == "geometric"):
+            raise DomainError("SWAP_CORE_PARSING_UNAVAILABLE",
+                              f"Track {replacement.track_id}: semantic/visible-face analysis is incomplete; "
+                              f"missing networks={missing_nets}, reasons={list(analysis.reasons)}", 503)
         h, w = frame.shape[:2]
         inverse = np.asarray(crop.inverse, np.float32)
 
@@ -203,4 +229,13 @@ class SessionFrameProcessor:
             skin = np.clip(to_frame(analysis.skin), 0, 1)
         occluder = None if analysis.occluder is None else np.clip(to_frame(analysis.occluder), 0, 1)
         protect = None
-        return structure, skin, occluder, protect
+        if analysis.protect is not None:
+            # Analysis crop -> frame -> the replacement's own aligned crop (not necessarily the neural model's native size).
+            to_replacement = ops.compose_affine(cv2.invertAffineTransform(np.asarray(replacement.inverse, np.float64)), inverse)
+            protect = cv2.warpAffine(np.asarray(analysis.protect, np.float32), to_replacement,
+                                     (replacement.image.shape[1], replacement.image.shape[0]),
+                                     flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=0)
+        diagnostics = {"tier": analysis.tier, "confidence": float(analysis.confidence),
+                       "parser_trusted": bool(analysis.parser_trusted), "nets_used": list(analysis.nets_used),
+                       "reasons": list(analysis.reasons)}
+        return structure, skin, occluder, protect, diagnostics

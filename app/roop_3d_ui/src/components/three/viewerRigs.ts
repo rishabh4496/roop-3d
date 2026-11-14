@@ -18,8 +18,8 @@ export function viewerLighting(parameters: WorkstationParameters | undefined): V
   };
 }
 
-/** The morph preview: `blend` is the source-mesh weight the engine really applies (`pose_strength` in mesh-blend mode), `hairline` is -1..1 of the offset range. */
+/** The morph preview: `blend` is the source-mesh weight (always 1: the head is the source identity's full mesh), `hairline` is -1..1 of the offset range. */
 export function viewerMorph(parameters: WorkstationParameters | undefined, enabled: boolean): ViewerMorph | null {
   if (!parameters || !enabled) return null;
-  return { blend: parameters.pose_mode === 'retarget' ? 1 : parameters.pose_strength ?? 0.35, hairline: (parameters.hairline_offset_px ?? 0) / HAIRLINE_RANGE_PX };
+  return { blend: 1, hairline: (parameters.hairline_offset_px ?? 0) / HAIRLINE_RANGE_PX };
 }

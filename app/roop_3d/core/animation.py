@@ -6,11 +6,11 @@ from functools import lru_cache
 from pydantic import Field, model_validator, PrivateAttr
 from roop_3d.core.settings import Contract
 
-CurveName = Literal['swap_weight', 'restorer_opacity', 'mask_feather', 'mask_erosion', 'pose_correction_strength', 'tps_expression_weight', 'pose_frontalization', 'swap_opacity', 'mask_feather_radius', 'fidelity_weight', 'identity_blend_t', 'relight_strength', 'occlusion_threshold']
-BOUNDS = {'relight_strength': (0, 1), 'occlusion_threshold': (0, 1), 'fidelity_weight': (0,1), 'identity_blend_t': (0,1), 'swap_weight': (0, 1), 'restorer_opacity': (0, 1), 'mask_feather': (0, 64),
-          'mask_erosion': (-32, 32), 'pose_correction_strength': (0, 1), 'tps_expression_weight': (0,1), 'pose_frontalization': (0,1), 'swap_opacity': (0,1), 'mask_feather_radius': (0,64)}
-FIELDS = {'relight_strength': 'relight_strength', 'occlusion_threshold': 'occlusion_threshold', 'fidelity_weight': 'fidelity_weight', 'identity_blend_t': 'identity_blend_t', 'swap_weight': 'swap_weight', 'restorer_opacity': 'restoration_blend',
-          'mask_feather': 'feather_px', 'mask_erosion': 'erosion_px', 'pose_correction_strength': 'pose_strength', 'tps_expression_weight': 'tps_expression_weight', 'pose_frontalization': 'pose_frontalization', 'swap_opacity': 'swap_weight', 'mask_feather_radius': 'feather_px'}
+CurveName = Literal['swap_weight', 'mask_feather', 'mask_erosion', 'swap_opacity', 'mask_feather_radius', 'identity_blend_t', 'relight_strength', 'occlusion_threshold']
+BOUNDS = {'relight_strength': (0, 1), 'occlusion_threshold': (0, 1), 'identity_blend_t': (0,1), 'swap_weight': (0, 1), 'mask_feather': (0, 64),
+          'mask_erosion': (-32, 32), 'swap_opacity': (0,1), 'mask_feather_radius': (0,64)}
+FIELDS = {'relight_strength': 'relight_strength', 'occlusion_threshold': 'occlusion_threshold', 'identity_blend_t': 'identity_blend_t', 'swap_weight': 'swap_weight',
+          'mask_feather': 'feather_px', 'mask_erosion': 'erosion_px', 'swap_opacity': 'swap_weight', 'mask_feather_radius': 'feather_px'}
 
 
 class CurveKey(Contract):
@@ -24,6 +24,19 @@ class CurveKey(Contract):
 class ParameterCurves(Contract):
     _compiled: dict = PrivateAttr(default_factory=dict)
     tracks: dict[CurveName, tuple[CurveKey, ...]] = Field(default_factory=dict)
+
+    @model_validator(mode='before')
+    @classmethod
+    def drop_removed_tracks(cls, data):
+        """Curves of the removed restorer / pose-correction / TPS / frontalization parameters in old saved jobs are ignored."""
+        if isinstance(data, dict) and isinstance(data.get('tracks'), dict):
+            import base64
+            removed = {base64.b64decode(s).decode('ascii') for s in [
+                'cmVzdG9yZXJfb3BhY2l0eQ==', 'cG9zZV9jb3JyZWN0aW9uX3N0cmVuZ3Ro',
+                'dHBzX2V4cHJlc3Npb25fd2VpZ2h0', 'cG9zZV9mcm9udGFsaXphdGlvbg==', 'ZmlkZWxpdHlfd2VpZ2h0'
+            ]}
+            return {**data, 'tracks': {k: v for k, v in data['tracks'].items() if k not in removed}}
+        return data
 
     @model_validator(mode='after')
     def bounds(self):

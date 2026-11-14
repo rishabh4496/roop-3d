@@ -35,8 +35,8 @@ class Health(Contract):
     standalone: Literal[True] = True
     uptime_seconds: float
     isolation: IsolationStatus
-    # Swap engines whose weights are installed (READY) next to the ones that are genuinely unavailable, with the reason.
-    swap_engines: dict[str, Any] | None = None
+    # True-3D render readiness: `renderer` (wired / not_wired + reason) and the head-topology engines that are installed.
+    render_3d: dict[str, Any] | None = None
 
 
 class ModelSummary(Contract):

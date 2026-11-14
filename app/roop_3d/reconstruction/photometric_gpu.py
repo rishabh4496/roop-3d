@@ -160,9 +160,18 @@ class PhotometricRenderer:
                 for item in reversed(resources):
                     item.release()
 
+    @staticmethod
+    def _rebase_inverse(matrix, scale: float) -> np.ndarray:
+        """``M`` maps ROI -> frame; returns the matrix for the ROI resampled by ``scale`` (pixel-centre convention)."""
+        value = np.asarray(matrix, np.float64).reshape(2, 3)
+        centre = (float(scale) - 1.0) / 2.0
+        result = value.copy()
+        result[:, :2] = value[:, :2] / float(scale)
+        result[:, 2] = value[:, 2] - value[:, :2] @ np.array((centre / scale, centre / scale))
+        return result
+
     def render(self, photo, image, target, alpha, sh_target, *, strength, specular, shadows):
         import moderngl
-        from roop_3d.hires_handoff import scale_matrix_input
         ctx, program = self.context, self.program
         side = image.shape[0]
         if image.shape != (side, side, 3) or target.shape != image.shape or side > 2048:
@@ -197,7 +206,7 @@ class PhotometricRenderer:
                 if float(tint.max()) < 1e-6:
                     tint = np.maximum(sh_target[0], 0)
                 program['key_color'].value = tuple(tint / max(float(tint.max()), 1e-6))
-                inverse = scale_matrix_input(photo.inverse, side / photo.normals.shape[0])
+                inverse = self._rebase_inverse(photo.inverse, side / photo.normals.shape[0])
                 program['inverse_x'].value = tuple(inverse[0])
                 program['inverse_y'].value = tuple(inverse[1])
                 k = photo.camera

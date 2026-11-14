@@ -95,15 +95,23 @@ def create_app(settings: Settings | None = None, *, repo_root: Path | None = Non
     universal_models = _universal_model_manager(root, events, catalog)
     media = MediaService(root, catalog, lambda: app.state.settings)
     if worker_enabled and pipeline_runner is None:
-        from roop_3d.optimized_processor import make_stream_runner
-        pipeline_runner = make_stream_runner(root, catalog, media, lambda: app.state.settings, pipeline_tracker=pipeline)
+        try:   # the stream runner belonged to the removed 2D path; when it is gone the worker builds the reference runner itself
+            from roop_3d.optimized_processor import make_stream_runner
+        except ImportError:
+            make_stream_runner = None
+        if make_stream_runner is not None:
+            pipeline_runner = make_stream_runner(root, catalog, media, lambda: app.state.settings, pipeline_tracker=pipeline)
     worker = (JobWorker(root, jobs, lambda: app.state.settings, catalog, media,
                         pipeline_runner=pipeline_runner, engine_gate=engine_gate) if worker_enabled else None)
     if worker is not None:
         model_hub.engines_registry = worker.engines
         # Stage 17: FFmpeg-piped photorealistic engine. Opt-in per job (`engine_id`); the default engine is unchanged.
-        from roop_3d.pipeline.video_job_runner import ENGINE_ID as PHOTOREAL_ENGINE, EndToEndVideoJobRunner
-        worker.engines.register(PHOTOREAL_ENGINE, EndToEndVideoJobRunner(root, catalog, media, lambda: app.state.settings))
+        try:
+            from roop_3d.pipeline.video_job_runner import ENGINE_ID as PHOTOREAL_ENGINE, EndToEndVideoJobRunner
+        except ImportError:
+            PHOTOREAL_ENGINE = EndToEndVideoJobRunner = None
+        if EndToEndVideoJobRunner is not None:
+            worker.engines.register(PHOTOREAL_ENGINE, EndToEndVideoJobRunner(root, catalog, media, lambda: app.state.settings))
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -113,8 +121,6 @@ def create_app(settings: Settings | None = None, *, repo_root: Path | None = Non
         await run_in_threadpool(register_native_libraries)
         # Keep the local model catalog current before serving requests or starting jobs.
         app.state.model_scan = await run_in_threadpool(catalog.rescan_local)
-        from roop_3d.models.engine_readiness import swap_engine_summary
-        swap_engine_summary(catalog)  # starts the first (hashing) readiness scan in the background so /health has engines
         await run_in_threadpool(jobs.recover_interrupted)
         await run_in_threadpool(queue.recover_on_startup)
         # Stage 18: crash-consistency. Nothing is running yet, so every temp file, half-published output and orphan
@@ -251,11 +257,12 @@ def create_app(settings: Settings | None = None, *, repo_root: Path | None = Non
 
     @app.get("/api/v1/health", response_model=Health)
     def health() -> dict[str, Any]:
-        from roop_3d.models.engine_readiness import swap_engine_summary
+        from roop_3d.server.true3d import readiness
+        # `render_3d` is the honest render-path readiness: renderer.wired is False ("3D renderer not wired") until a real one is connected.
         return {"status": "ok", "application": "roop_3d", "version": __version__,
                 "pinokio_app_id": "roop-3d", "standalone": True,
                 "uptime_seconds": max(0.0, time.monotonic() - started), "isolation": isolation_status(root),
-                "swap_engines": swap_engine_summary(app.state.models)}
+                "render_3d": readiness()}
 
     @app.get("/api/v1/hardware", response_model=Hardware)
     @app.get("/api/v1/system/hardware", response_model=Hardware)
@@ -323,6 +330,8 @@ def create_app(settings: Settings | None = None, *, repo_root: Path | None = Non
     from roop_3d.server.unified_state import router as unified_state_router, state as unified_state
     app.state.unified_state = unified_state
     app.include_router(unified_state_router)
+    from roop_3d.server.true3d import router as true3d_router
+    app.include_router(true3d_router)
     app.add_api_websocket_route("/ws/telemetry", event_stream)
     app.add_api_websocket_route("/ws/events", event_stream)
     app.add_api_websocket_route("/ws/queue", event_stream)

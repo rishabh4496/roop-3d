@@ -36,7 +36,7 @@ vi.mock('./components/controls/SettingControl', async () => {
   return { default: (props: any) => <Profiler id="SettingControl" onRender={(id, phase) => profiled.push({ id, phase })}><actual.default {...props}/></Profiler> };
 });
 vi.mock('./api', async importOriginal => ({
-  ...(await importOriginal<typeof import('./api')>()), post: vi.fn(), upload: vi.fn(),
+  ...(await importOriginal<typeof import('./api')>()), post: vi.fn(async () => ({})), upload: vi.fn(),
   api: async (path: string) => path === '/system/capabilities' ? { models: [], job_parameter_bounds: {}, legal_parameter_bounds: {}, workstation: { features: {}, read_only_parameters: {}, disabled_parameters: {}, controls: {}, job_controls: {} } } : path === '/config' ? {} : [],
 }));
 

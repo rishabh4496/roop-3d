@@ -67,8 +67,7 @@ def ffprobe_json(path: Path) -> dict:
 
 
 def _save_qc_sheet(before: Path, after: Path, directory: Path) -> None:
-    """Keep what the run produced for a human to look at (pytest's own temp dir is wiped by the next session): the result MP4 and a
-    sheet with the original on top, the render below, at three moments. Lives in the gitignored runtime folder."""
+    """Write the QC sheet under the caller-selected pytest temporary root."""
     directory.mkdir(parents=True, exist_ok=True)
     originals, results = frames_of(before), frames_of(after)
     indices = [3, FRAMES // 2, FRAMES - 3]
@@ -166,7 +165,7 @@ def pipeline_run(tmp_path_factory):
             path.write_bytes(download.content)
             result["output"] = path
             result["manifest"] = json.loads((tmp_path / "app" / record["output"]["manifest_path"]).read_text("utf-8"))
-            _save_qc_sheet(clip, path, Path(__file__).resolve().parents[1] / ".runtime/e2e/photoreal")
+            _save_qc_sheet(clip, path, tmp_path / "photoreal_qc")
     finally:
         for module, original in saved:
             module.HUD = original

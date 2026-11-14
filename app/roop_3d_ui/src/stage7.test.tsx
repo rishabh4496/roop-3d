@@ -175,6 +175,6 @@ describe('Workspace layouts and HUD flamegraph', () => {
     const html = renderToStaticMarkup(<PipelinePill telemetry={null} activeJob={{ job_id: 'abcdef12', state: 'running', progress: { frame: 3, fps: 20, stage: 'render', stage_timings_ms: { decode: 2, inswapper: 9 } } }} defaultExpanded />);
     expect(html).toContain('data-testid="hud-flamegraph"');
     expect(html).toContain('job abcdef12');
-    expect(html).toContain('Inswapper');
+    expect(html).toContain('3D Head Render');
   });
 });

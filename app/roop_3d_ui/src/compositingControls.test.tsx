@@ -4,9 +4,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import CompositingControls from './components/studio/CompositingControls';
 import { occlusionModePatch, pyramidInactiveReason, xsegInactiveReason } from './components/studio/compositing';
-import { describeRestoration } from './components/workstation/LiveSwapStatus';
 import { selectEngine } from './stores/engineSelection';
-import type { RestorationReport } from './api';
 import type { WorkstationParameters } from './components/workstation/pipeline';
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
@@ -78,17 +76,5 @@ describe('seam blending', () => {
     selectEngine('photoreal_3d_ffmpeg');
     await mount({});
     expect(host.querySelector('[data-testid="photoreal-blend-note"]')!.textContent).toContain('ignores the seam blending mode');
-  });
-});
-
-describe('restoration readout', () => {
-  const report = (patch: Partial<RestorationReport> = {}): RestorationReport => ({
-    model: 'codeformer.fp16.onnx', applied: 2, bypassed: 0, failed: 0, bypass_reasons: {}, mean_latency_ms: 143.2, mean_inference_ms: 98.4, last: null, ...patch,
-  });
-  it('reports observed outcomes only: applied with measured times, user-selected skips with the reason, failures', () => {
-    expect(describeRestoration(report())).toBe('Restorer codeformer.fp16.onnx: 2 applied (143 ms, model 98 ms)');
-    expect(describeRestoration(report({ applied: 0, mean_latency_ms: null, mean_inference_ms: null, bypassed: 1, bypass_reasons: { small_face_bypass: 1 } })))
-      .toBe('Restorer codeformer.fp16.onnx: 0 applied · 1 bypassed (small face)');
-    expect(describeRestoration(report({ failed: 1 }))).toContain('1 failed');
   });
 });

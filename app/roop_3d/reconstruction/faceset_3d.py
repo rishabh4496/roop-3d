@@ -257,7 +257,6 @@ def reconstruct_faceset(document: FaceSetDocument, *, live_pose: dict[str, float
             "observed_pose_points": [point for point in observations if not point.get('is_synthetic')],
             **({'generated_views': sum(v.is_synthetic for v in document.views),
                 'generated_pose_points': [point for point in observations if point.get('is_synthetic')]} if any(v.is_synthetic for v in document.views) else {}),
-            "mesh_2_5d": _serialize_mesh(estimated, face_texture, level=estimated_level, limitations=estimated_limits),
             "mesh_full_3d": _serialize_mesh(full, full_texture, level=full_level, limitations=full_limits, extra=full_extra),
             "uv_texture_data_url": "data:image/png;base64," + _png_base64(full_texture),
             "texture_size": [int(full_texture.shape[1]), int(full_texture.shape[0])],

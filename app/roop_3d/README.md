@@ -11,10 +11,11 @@ From this project app/ directory:
 External model source locations are read-only and separately hashed. No legacy
 application code or environment is imported.
 
-The live 3D swap branch uses [dense facial correspondence and neural synthesis](../../docs/dense-face-backbone.md).
-It requires a compatible reconstruction bundle. Native 3DDFA/SMIRK/HRN checkpoint
-exporters and public-asset fetching are included; FLAME Open and validated surface/expression
-mappings still need preparation. Geometry never supplies a raw CG replacement image.
+The package renders a complete, watertight 3D head through a perspective K[R|t] camera and a Z-buffered PBR/Gaussian
+rasterizer (`core/true3d_guard.py` enforces this at runtime; `server/true3d.py` is the typed API). There is no 2D swapper,
+crop-paste, 2.5D strip mesh, weak-perspective camera or screen-space restorer. The render path is unwired until the
+full-head renderer module `roop_3d.pipeline.true3d_renderer` exists; see [dense facial backbone](../../docs/dense-face-backbone.md)
+for the reconstruction bundle (FLAME Open and validated mappings still need preparation).
 
 The earlier full-head SH renderer and its offline utilities are documented in
 [Photometric head synthesis](../../docs/photometric-head.md). They are retained for

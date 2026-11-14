@@ -42,7 +42,6 @@ from roop_3d.reconstruction.multiview_fit import (
     ViewLandmarks,
     deform_template,
     fit_identity_landmarks,
-    identity_template,
     kernel_support,
     solve_view_pose,
 )
@@ -50,8 +49,7 @@ from roop_3d.reconstruction.uv_synthesizer import UVSynthesizer, ViewObservation
 
 SCHEMA = "roop.identity_asset.v1"
 ALGORITHM_VERSION = "identity-mv-5"          # v5: pose UV layers + metric relief for hybrid rendering
-TEMPLATE_VERSION = "canonical68-delaunay+midpoint-subdiv"
-TEMPLATES = ("canonical", "makehuman")
+TEMPLATES = ("makehuman",)
 FRAME_DESCRIPTION = ("mesh frame (metres): +x image-right, +y down, +z toward the viewer; a frontal head has "
                      "yaw = pitch = roll = 0 (core.pose standard frame, pitch + = up)")
 OBSERVED_VERTEX_CONFIDENCE = 0.6
@@ -62,10 +60,10 @@ class IdentityAssetSettings(Contract):
     subdivisions: int = Field(default=2, ge=0, le=3)
     max_views: int = Field(default=12, ge=1, le=32)
     holdout_validation: bool = True
-    # Which head template the landmarks are carried onto. 'canonical' is the original 68-point facial mesh (the only one the
-    # expression rig / pose blend understand); 'makehuman' is the open CC0 head+neck (5-point landmarks only; `subdivisions`
-    # does not apply). It must be built first: python -m roop_3d.reconstruction.makehuman_build
-    template: Literal["canonical", "makehuman"] = "canonical"
+    # The head template the landmarks are carried onto: the open CC0 MakeHuman head + neck (full cranium; `subdivisions` does
+    # not apply). It must be built first: python -m roop_3d.reconstruction.makehuman_build. The canonical frontal-strip
+    # template was removed.
+    template: Literal["makehuman"] = "makehuman"
     intrinsic_texture_decomposition: bool = Field(
         default=False,
         description="Remove broad baked illumination and extract four UV detail bands during atlas synthesis",
@@ -183,24 +181,15 @@ def flame_status() -> dict[str, Any]:
             "expected_sha256": record.expected_sha256, "available": False, "used": False, "reason": reason}
 
 
-def _template_hash(subdivisions: int) -> str:
-    mesh = identity_template(subdivisions)
-    return hash_array(mesh.vertices) + hash_array(mesh.faces)
-
-
 def template_for(settings: IdentityAssetSettings) -> Mesh3D:
-    """The template mesh the settings select (a fresh copy)."""
-    if settings.template == "makehuman":
-        from roop_3d.reconstruction.makehuman_template import makehuman_template
-        return makehuman_template()
-    return identity_template(settings.subdivisions)
+    """The template mesh the settings select (a fresh copy): the full-head MakeHuman CC0 model."""
+    from roop_3d.reconstruction.makehuman_template import makehuman_template
+    return makehuman_template()
 
 
 def _settings_template_hash(settings: IdentityAssetSettings) -> str:
-    if settings.template == "makehuman":
-        from roop_3d.reconstruction.makehuman_template import template_hash
-        return template_hash()
-    return _template_hash(settings.subdivisions)
+    from roop_3d.reconstruction.makehuman_template import template_hash
+    return template_hash()
 
 
 def _template_supports_dense(template: Mesh3D) -> bool:
@@ -210,18 +199,13 @@ def _template_supports_dense(template: Mesh3D) -> bool:
 
 
 def _key_settings(settings: IdentityAssetSettings) -> dict[str, Any]:
-    """Settings that enter the build key. The default template is omitted so canonical keys (and stored assets) are unchanged."""
-    dumped = settings.model_dump()
-    if dumped.get("template") == "canonical":
-        dumped.pop("template", None)
-    return dumped
+    """Settings that enter the build key."""
+    return settings.model_dump()
 
 
 def _template_version(settings: IdentityAssetSettings) -> str:
-    if settings.template == "makehuman":
-        from roop_3d.reconstruction.makehuman_template import TEMPLATE_VERSION as MH_VERSION
-        return MH_VERSION
-    return TEMPLATE_VERSION
+    from roop_3d.reconstruction.makehuman_template import TEMPLATE_VERSION as MH_VERSION
+    return MH_VERSION
 
 
 def compute_build_key(document: FaceSetDocument, settings: IdentityAssetSettings,
@@ -484,7 +468,7 @@ def build_identity_asset(
         coverage_limit,
         "Geometry is the template deformed to fitted landmarks; surface detail between landmarks is not measured (see per-vertex confidence).",
         "Metric head size is a prior: a scale cannot be recovered from images without a known reference length.",
-        "Pose comes from a 5-point scaled-orthographic estimate refined during the fit; typical error a few degrees.",
+        "Pose comes from a 5-point perspective PnP estimate refined during landmark fitting; typical error a few degrees.",
         "Expression is stored as image-space measurements, not FLAME coefficients.",
     ]
     if settings.intrinsic_texture_decomposition:
@@ -571,7 +555,7 @@ def build_identity_asset(
                 "texture_from_observations_only": not bool(generated_ids)},
         missing_information=missing, limitations=limitations, sources=sources, settings=settings.model_dump(),
         model_version={"asset_schema": SCHEMA, "algorithm": ALGORITHM_VERSION, "template": _template_version(settings),
-                       "landmark_fit": "weak-perspective MAP bundle adjustment", "texture": "z-buffer visibility-weighted blend",
+                       "landmark_fit": "bundle adjustment", "texture": "z-buffer visibility-weighted blend",
                        "mesh_frame": FRAME_DESCRIPTION},
         model_hashes={"template_geometry_sha256": _settings_template_hash(settings),
                       "flame_weights_sha256": None, **settings.model_hashes},
@@ -648,7 +632,7 @@ def parametric_block(asset: IdentityAsset) -> dict[str, Any]:
                 "euler_deg": {"yaw": yaw, "pitch": pitch, "roll": roll},
                 "frame": "head-to-camera rotation Rz(roll)Rx(pitch)Ry(yaw) of the reference view (core.pose standard frame)",
                 "reference_view": m.canonical_head_pose.get("reference_view"),
-                "reason": "t is null: the landmark fit is weak-perspective, no metric camera translation is estimated"}
+                "reason": "t is null: no metric camera translation is estimated"}
     state = np.asarray(asset.texel_state)
     observed = state == int(ConfidenceState.OBSERVED)
     count = int(observed.sum())

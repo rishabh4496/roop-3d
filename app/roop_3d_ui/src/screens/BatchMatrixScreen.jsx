@@ -8,56 +8,45 @@ import NumericInput from '../components/controls/NumericInput';
 import { SKIP_KEY, describeLint, lintBatch } from '../components/diagnostics/batchLint';
 import { DragItems } from '../components/ui-layouts/DragItems';
 
-// Every recipe parameter is a real `WorkstationParameters` field: the job schema rejects unknown names, and the restorer is named explicitly
-// so a recipe never depends on the saved global policy.
+// Every recipe parameter is a real `WorkstationParameters` field: the job schema rejects unknown names. Recipes are true-3D only: they name a head
+// topology engine, a shader mode and (optionally) a perspective camera, plus the mask / colour controls of the 3D head composite.
+const PBR = '3D-PBR-Subsurface-Scattering + Neural-Deferred-UV';
 export const BUILTIN_RECIPES = [
   {
     id: 'photoreal_natural',
     name: 'Natural Photoreal',
-    description: 'GPEN 512 enhancement (blend 0.35), retarget pose, 2 px mask feather.',
-    parameters: { pose_mode: 'retarget', restorer_model: 'gpen', restoration_blend: 0.35, feather_px: 2, erosion_px: 2, swap_weight: 1.0 }
+    description: 'MakeHuman CC0 head, PBR subsurface scattering, auto camera, 2 px mask feather.',
+    parameters: { head_topology_engine: 'MakeHuman-CC0-Craniofacial-3D', shader_mode: PBR, camera: { mode: 'auto', projection: 'perspective', focal_unit: 'fov_deg' }, feather_px: 2, erosion_px: 2, swap_weight: 1.0 }
   },
   {
-    id: 'high_fidelity',
-    name: 'High-Fidelity Ultra',
-    description: 'Strong GPEN restoration (0.80), retarget pose, 3 px mask feather and erosion.',
-    parameters: { pose_mode: 'retarget', restorer_model: 'gpen', restoration_blend: 0.80, feather_px: 3, erosion_px: 3, swap_weight: 1.0 }
+    id: 'flame_full_head',
+    name: 'FLAME Full Head',
+    description: 'FLAME full-head topology with PBR subsurface scattering, 3 px mask feather and erosion.',
+    parameters: { head_topology_engine: 'FLAME-FullHead-3D', shader_mode: PBR, feather_px: 3, erosion_px: 3, swap_weight: 1.0 }
   },
   {
-    id: 'mesh_geometry_3d',
-    name: '3D Mesh Blend & Geometry',
-    description: 'Mesh blend pose mode (canonical 3D head proxy projection), GPEN restoration 0.40, swap weight 0.90.',
-    parameters: { pose_mode: 'mesh_blend', restorer_model: 'gpen', restoration_blend: 0.40, feather_px: 4, erosion_px: 2, swap_weight: 0.9 }
+    id: 'gaussian_avatar',
+    name: 'Gaussian Head Avatar',
+    description: 'MakeHuman CC0 head shaded as a 3D Gaussian head avatar, swap weight 0.95.',
+    parameters: { head_topology_engine: 'MakeHuman-CC0-Craniofacial-3D', shader_mode: '3D-Gaussian-Head-Avatar', feather_px: 4, erosion_px: 2, swap_weight: 0.95 }
   },
   {
     id: 'cinematic_soft',
-    name: 'Cinematic Soft Swap',
-    description: 'Subtle restoration (0.20), wide 5 px mask feather, partial swap weight 0.85.',
-    parameters: { pose_mode: 'retarget', restorer_model: 'gpen', restoration_blend: 0.20, feather_px: 5, erosion_px: 1, swap_weight: 0.85 }
+    name: 'Cinematic Soft Blend',
+    description: 'Wide 5 px mask feather, partial identity weight 0.85.',
+    parameters: { head_topology_engine: 'MakeHuman-CC0-Craniofacial-3D', shader_mode: PBR, feather_px: 5, erosion_px: 1, swap_weight: 0.85 }
   },
   {
-    id: 'action_smoothing',
-    name: 'Action / Motion Smoothing',
-    description: 'Retarget pose, GPEN restoration 0.30, swap weight 0.95.',
-    parameters: { pose_mode: 'retarget', restorer_model: 'gpen', restoration_blend: 0.30, feather_px: 3, erosion_px: 2, swap_weight: 0.95 }
+    id: 'wide_angle_selfie',
+    name: 'Wide-Angle Selfie Camera',
+    description: 'Manual perspective camera, 85 degree horizontal field of view, for close-up phone footage.',
+    parameters: { head_topology_engine: 'MakeHuman-CC0-Craniofacial-3D', shader_mode: PBR, camera: { mode: 'manual', projection: 'perspective', focal_unit: 'fov_deg', fov_deg: 85 }, feather_px: 3, erosion_px: 2, swap_weight: 1.0 }
   },
   {
-    id: 'codeformer_fidelity',
-    name: 'CodeFormer Fidelity Sweep',
-    description: 'CodeFormer at blend 0.70 with its fidelity input (w) set to 0.85.',
-    parameters: { pose_mode: 'retarget', restorer_model: 'codeformer', restoration_blend: 0.70, fidelity_weight: 0.85, feather_px: 3, erosion_px: 2, swap_weight: 1.0 }
-  },
-  {
-    id: 'ultramax_restoration',
-    name: 'UltraMax Deep Dynamic',
-    description: 'UltraMax (the registered codeformer.fp16 weights plus Laplacian detail fusion) at blend 0.65.',
-    parameters: { pose_mode: 'retarget', restorer_model: 'ultramax', restoration_blend: 0.65, feather_px: 2, erosion_px: 2, swap_weight: 1.0 }
-  },
-  {
-    id: 'frontalization_tps_sweep',
-    name: 'TPS Frontalization Sweep',
-    description: 'Pre-swap frontalization (0.75) and TPS expression transfer (0.80), GPEN restoration 0.40.',
-    parameters: { pose_mode: 'retarget', restorer_model: 'gpen', pose_frontalization: 0.75, tps_expression_weight: 0.80, restoration_blend: 0.40, swap_weight: 1.0 }
+    id: 'telephoto_portrait',
+    name: 'Telephoto Portrait Camera',
+    description: 'Manual perspective camera, 20 degree horizontal field of view, for long-lens footage.',
+    parameters: { head_topology_engine: 'MakeHuman-CC0-Craniofacial-3D', shader_mode: PBR, camera: { mode: 'manual', projection: 'perspective', focal_unit: 'fov_deg', fov_deg: 20 }, feather_px: 3, erosion_px: 2, swap_weight: 1.0 }
   }
 ];
 
@@ -97,7 +86,7 @@ export default function BatchMatrixScreen({
 
   // Strategy 3: Per-File Matrix (M Sources × N Targets)
   const [matrixSelection, setMatrixSelection] = useState([]);
-  const [outputNamingTemplate, setOutputNamingTemplate] = useState('{target}_{source}_{restorer}_{timestamp}.mp4');
+  const [outputNamingTemplate, setOutputNamingTemplate] = useState('{target}_{source}_{timestamp}.mp4');
 
   // Strategy 4: Recipe Matrix
   const [recipes, setRecipes] = useState(BUILTIN_RECIPES);
@@ -105,8 +94,8 @@ export default function BatchMatrixScreen({
   const [recipeSourceId, setRecipeSourceId] = useState(sources[0]?.faceset_id || '');
   const [showNewRecipeModal, setShowNewRecipeModal] = useState(false);
   const [newRecipeName, setNewRecipeName] = useState('');
-  const [newRecipeRestoration, setNewRecipeRestoration] = useState(0.4);
-  const [newRecipePoseMode, setNewRecipePoseMode] = useState('retarget');
+  const [newRecipeTopology, setNewRecipeTopology] = useState('MakeHuman-CC0-Craniofacial-3D');
+  const [newRecipeShader, setNewRecipeShader] = useState(PBR);
 
   // Unified available targets pool
   const targetPool = useMemo(() => {
@@ -181,7 +170,7 @@ export default function BatchMatrixScreen({
       // Pre-flight the distinct targets once: a FAIL (e.g. not enough disk for the estimated render) stops the whole batch before any job
       // is created; warnings are reported with the result. The same session opt-out as the single-job linter applies.
       const rack0 = rackStore.get();
-      const lint = await lintBatch(post, jobPayloads, { rackParameters: rack0.batchParameters, swapperId: rack0.swapper });
+      const lint = await lintBatch(post, jobPayloads, { rackParameters: rack0.batchParameters, headTopologyEngine: rack0.batchParameters.head_topology_engine ?? null });
       const verdict = describeLint(lint);
       if (lint.failures.length && sessionStorage.getItem(SKIP_KEY) !== 'true') { setErrorMessage(verdict.block); return; }
       lintNote = verdict.note;
@@ -193,9 +182,8 @@ export default function BatchMatrixScreen({
         for (const sub of subRequests) {
           const idemKey = `matrix-${crypto.randomUUID()}`;
           const cleanRequest = { engine_id: engineSelection.get().engineId, ...sub };
-          // Engine & Model Rack: the chosen swapper and any touched enhancer / 3D / mask fields apply to every queued job.
+          // Engine & Model Rack: any touched 3D head / camera / mask fields apply to every queued job.
           const rack = rackStore.get();
-          if (rack.swapper) cleanRequest.swapper_model_id = rack.swapper;
           if (batchDetector) cleanRequest.detector_model_id = batchDetector;
           if (Object.keys(rack.batchParameters).length) cleanRequest.workstation_parameters = { ...(cleanRequest.workstation_parameters || {}), ...rack.batchParameters };
           const segIdx = cleanRequest._segment_index;
@@ -457,11 +445,10 @@ export default function BatchMatrixScreen({
     const custom = {
       id: `custom_${Date.now()}`,
       name: newRecipeName.trim(),
-      description: `Custom preset: GPEN ${newRecipeRestoration}, ${newRecipePoseMode} pose.`,
+      description: `Custom preset: ${newRecipeTopology}, ${newRecipeShader}.`,
       parameters: {
-        pose_mode: newRecipePoseMode,
-        restorer_model: 'gpen',
-        restoration_blend: Number(newRecipeRestoration) || 0.35,
+        head_topology_engine: newRecipeTopology,
+        shader_mode: newRecipeShader,
         feather_px: 2,
         erosion_px: 2,
         swap_weight: 1.0,
@@ -759,11 +746,11 @@ export default function BatchMatrixScreen({
                 value={outputNamingTemplate}
                 onChange={(e) => setOutputNamingTemplate(e.target.value)}
                 style={{ flex: 1, fontFamily: 'monospace', fontSize: '12px' }}
-                placeholder="{target}_{source}_{restorer}_{timestamp}.mp4"
+                placeholder="{target}_{source}_{timestamp}.mp4"
               />
             </label>
             <p className="muted" style={{ fontSize: '11px', marginTop: '4px' }}>
-              Supported tokens: <code>{'{target}'}</code>, <code>{'{source}'}</code>, <code>{'{restorer}'}</code>, <code>{'{timestamp}'}</code>
+              Supported tokens: <code>{'{target}'}</code>, <code>{'{source}'}</code>, <code>{'{timestamp}'}</code>
             </p>
           </div>
 
@@ -928,17 +915,18 @@ export default function BatchMatrixScreen({
                       placeholder="e.g. Extreme Sharpening"
                     />
                   </label>
-                  <NumericInput label="Restoration Blend (0.0 to 1.0)" step={0.05} min={0} max={1} value={newRecipeRestoration}
-                    onChange={value => setNewRecipeRestoration(value ?? 0)} />
                   <label>
-                    <span>Pose Mode:</span>
-                    <select
-                      style={{ width: '100%', marginTop: '4px' }}
-                      value={newRecipePoseMode}
-                      onChange={e => setNewRecipePoseMode(e.target.value)}
-                    >
-                      <option value="retarget">Retarget (3D Pose Tracking)</option>
-                      <option value="mesh_blend">Mesh Blend (Full 3D Geometry)</option>
+                    <span>3D Head Topology Engine:</span>
+                    <select style={{ width: '100%', marginTop: '4px' }} value={newRecipeTopology} onChange={e => setNewRecipeTopology(e.target.value)}>
+                      <option value="MakeHuman-CC0-Craniofacial-3D">MakeHuman CC0 craniofacial (3D)</option>
+                      <option value="FLAME-FullHead-3D">FLAME full head (3D)</option>
+                    </select>
+                  </label>
+                  <label>
+                    <span>3D Photorealistic Shader Mode:</span>
+                    <select style={{ width: '100%', marginTop: '4px' }} value={newRecipeShader} onChange={e => setNewRecipeShader(e.target.value)}>
+                      <option value={PBR}>PBR subsurface scattering + neural deferred UV</option>
+                      <option value="3D-Gaussian-Head-Avatar">3D Gaussian head avatar</option>
                     </select>
                   </label>
                 </div>

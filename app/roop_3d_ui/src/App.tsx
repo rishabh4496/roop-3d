@@ -10,7 +10,6 @@ import { EventConnection } from './events';
 import { publishHardware } from './stores/telemetryStore';
 import { setPlayhead } from './stores/playheadStore';
 import { selectEngine, useSelectedEngine } from './stores/engineSelection';
-import { setRack, useRack } from './stores/rackSelection';
 import { activeJobToResume, clearSession, readSession, writeSession, type SessionSnapshot } from './sessionSnapshot';
 import { useModelCatalog } from './stores/modelCatalog';
 import { RUNTIME_SETTINGS_CHANGED } from './runtimeSettings';
@@ -30,7 +29,9 @@ import ShellDrawers from './shell/ShellDrawers';
 import CommandPalette, { type Command } from './shell/CommandPalette';
 import { useShortcutActions } from './components/controls/Hotkeys';
 import NumericInput from './components/controls/NumericInput';
-import { DEFAULT_PARAMETERS, restorerAvailable, wireParameters, type RestorerModel, type WorkstationParameters } from './components/workstation/pipeline';
+import { migrateCurves } from './stores/parameterCurves';
+import { DEFAULT_PARAMETERS, migrateParameters, wireParameters, type WorkstationParameters } from './components/workstation/pipeline';
+import { NOT_WIRED_MESSAGE } from './true3d';
 import RenderFooter from './components/studio/RenderFooter';
 import FaceMapping from './components/studio/FaceMapping';
 import ActorPanel from './components/studio/ActorPanel';
@@ -64,7 +65,6 @@ import { isOfflineError } from './components/guide/errorGuide';
 import DialogFrame from './components/guide/DialogFrame';
 import ExportPresetBar from './components/export/ExportPresetBar';
 import { normalizeExport } from './components/export/exportOptions';
-import { SWEEP_ENHANCER_BLEND } from './components/workstation/sweepPatch';
 import { markOnboardingSeen, onboardingSeen, workflowProgress } from './components/guide/workflowState';
 import type { WorkflowStepId } from './components/guide/helpContent';
 import { applyMotionPref, watchSystemMotion } from './utils/motionPrefs';
@@ -84,11 +84,8 @@ const FaceManager = lazy(() => import('./components/facemgr/FaceManager'));
 export default function App() {
   const modelCatalog = useModelCatalog();
   const selectedEngine = useSelectedEngine();
-  // The Engine & Model Rack's swapper choice. null = follow the saved global setting.
-  const rackSwapper = useRack(state => state.swapper);
   renderProbe('App');
   const [caps, setCaps] = useState<Capabilities | null>(null), [config, setConfig] = useState<Config | null>(null);
-  const swapperModelId = rackSwapper ?? (typeof config?.swapper_model_id === 'string' ? config.swapper_model_id : undefined);
   const configDetector = config?.detector_model_id;
   const detectorModelId = configDetector === 'scrfd' || configDetector === 'retinaface' || configDetector === 'yoloface' ? configDetector : undefined;
   const [sources, setSources] = useState<FaceSet[]>([]), [jobs, setJobs] = useState<Job[]>([]), [jobsLoaded, setJobsLoaded] = useState(false);
@@ -235,7 +232,6 @@ export default function App() {
   const currentTrack: Track | null = inspection?.tracks.find(track => track.track_id === selectedTrack) ?? null;
   const projectDirty = !project || project.name !== projectName || project.request.target_path !== target
     || (project.request.engine_id ?? 'reference_onnx') !== selectedEngine
-    || (project.request.swapper_model_id ?? undefined) !== swapperModelId
     || (project.request.detector_model_id ?? detectorModelId) !== detectorModelId
     || JSON.stringify(project.preview ?? { timestamp: 0, selected_track: '', source_faceset_id: '', viewport: DEFAULT_VIEWPORT }) !== JSON.stringify({ timestamp: time, selected_track: selectedTrack, source_faceset_id: sourceId, viewport: previewView })
     || project.request.inspection_id !== inspection?.inspection_id || (project.request.trim_start_seconds ?? 0) !== trimStart
@@ -243,7 +239,7 @@ export default function App() {
     || (project.request.identity_blend?.source_face_ids[1] ?? '') !== identitySourceB
     || JSON.stringify(project.request.face_mappings) !== JSON.stringify(renderMappings())
     || JSON.stringify(project.effective_settings) !== JSON.stringify(config)
-    || JSON.stringify(wireParameters({ ...DEFAULT_PARAMETERS, ...project.request.workstation_parameters, pose_mode: project.request.workstation_parameters?.pose_mode ?? 'retarget' })) !== JSON.stringify(wireParameters(parameters))
+    || JSON.stringify(wireParameters(migrateParameters(project.request.workstation_parameters))) !== JSON.stringify(wireParameters(parameters))
     || JSON.stringify(project.request.parameter_curves?.tracks ?? {}) !== JSON.stringify(curves)
     || JSON.stringify(normalizeExport(project.request.export ?? DEFAULT_EXPORT)) !== JSON.stringify(normalizeExport(exportOptions))
     || (project.request.mask_base64 ?? null) !== maskBase64
@@ -489,6 +485,7 @@ export default function App() {
     setInspection(result); setIdentityLock(null); setAssigned({}); setSelectedTrack(result.tracks[0]?.track_id ?? '');
     useFaceSelectionStore.getState().populateFromInspection(result, probe, {});
     if (!result.tracks.length) setNotice('No faces were detected. Try a clearer target frame or another clip.');
+    else if (result.truncated) setNotice('Inspection stopped early (bounded scan): faces that appear later in the video may be missing from the Target panel.');
   });
   const request = (isLivePreview = false): JobRequest => {
     const selected = renderMappings();
@@ -499,7 +496,7 @@ export default function App() {
       const lockIssue = lockProblem(identityLock, Object.fromEntries(selected.map(item => [item.track_id, item.faceset_id])));
       if (lockIssue) throw new Error(`${lockIssue} Re-lock or release the identity lock before rendering.`);
     }
-    return { engine_id: selectedEngine, swapper_model_id: swapperModelId, detector_model_id: detectorModelId, identity_lock_id: identityLock?.lock_id, identity_blend: identitySourceB && sourceId ? {method: 'slerp',source_face_ids: [sourceId, identitySourceB],weights:[1,0]} : undefined, target_path: target, inspection_id: inspection.inspection_id, face_mappings: selected, processing: 'local', remote_consent: false, trim_start_seconds: trimStart || null, trim_end_seconds: trimEnd, mask_base64: maskBase64 || undefined, mask_keyframes: maskKeyframes.length ? maskKeyframes : undefined, workstation_parameters: wireParameters(parameters), parameter_curves: { tracks: curves }, face_segments: segments, export: exportOptions };
+    return { engine_id: selectedEngine, detector_model_id: detectorModelId, identity_lock_id: identityLock?.lock_id, identity_blend: identitySourceB && sourceId ? {method: 'slerp',source_face_ids: [sourceId, identitySourceB],weights:[1,0]} : undefined, target_path: target, inspection_id: inspection.inspection_id, face_mappings: selected, processing: 'local', remote_consent: false, trim_start_seconds: trimStart || null, trim_end_seconds: trimEnd, mask_base64: maskBase64 || undefined, mask_keyframes: maskKeyframes.length ? maskKeyframes : undefined, workstation_parameters: wireParameters(parameters), parameter_curves: { tracks: curves }, face_segments: segments, export: exportOptions };
   };
   const executeQueue = () => void run('Queueing local render', async () => {
     const saved = await persistProject(), fingerprint = JSON.stringify({ project: saved.project_id, request: saved.request });
@@ -520,15 +517,10 @@ export default function App() {
     }
     // Verify required models are downloaded
     const catalog = modelCatalog.models;
-    const selectedSwapper = swapperModelId || 'inswapper_128';
-    const swapperRecord = catalog.find(m => m.id === selectedSwapper || m.model_id === selectedSwapper);
-    if (swapperRecord && !swapperRecord.installed) {
-      pushToast({
-        kind: 'error',
-        title: 'Model Not Installed',
-        text: `The selected swapper model "${swapperRecord.name || selectedSwapper}" is not downloaded. Opening Model Hub to download.`,
-      });
-      setModelHubOpen(true);
+    // Honest readiness: a render cannot start while no true-3D renderer is connected.
+    if (caps?.workstation.renderer && !caps.workstation.renderer.wired) {
+      pushToast({ kind: 'error', title: NOT_WIRED_MESSAGE, text: caps.workstation.renderer.detail ?? 'No true 3D head renderer is connected, so a render cannot start.' });
+      setNotice(NOT_WIRED_MESSAGE);
       return;
     }
     if (detectorModelId) {
@@ -578,11 +570,10 @@ export default function App() {
     }
   }, [currentJob]);
 
+  // The shared UI state mirrors the chosen 3D head settings (topology engine, shader mode, camera).
   useEffect(() => {
-    if (parameters.render_mode) {
-      void post('/render-mode', { render_mode: parameters.render_mode }).catch(() => {});
-    }
-  }, [parameters.render_mode]);
+    void post('/state', { render_mode: 'full_3d_head', true3d: { head_topology_engine: parameters.head_topology_engine, shader_mode: parameters.shader_mode, camera: parameters.camera } }).catch(() => {});
+  }, [parameters.head_topology_engine, parameters.shader_mode, parameters.camera]);
   const saveSettings = (value: Config) => void run('Applying settings', async () => { const saved = await api<Config>('/config', { method: 'PUT', body: JSON.stringify(value) }); setConfig(saved); window.dispatchEvent(new Event(RUNTIME_SETTINGS_CHANGED)); await connect(); setNotice('Effective settings saved. Existing paused jobs retain their original settings identity.'); });
   const persistProject = async (copy = false) => {
     const checkpoint = includeCheckpoint && currentJob && jobActions(caps, currentJob.state).includes('resume') ? currentJob.job_id : null;
@@ -609,7 +600,6 @@ export default function App() {
     const restoredLock = saved.request.identity_lock_id ? await api<IdentityLock>(`/identity/locks/${saved.request.identity_lock_id}?verify=true`) : null;
     const restoredMappings = Object.fromEntries(saved.request.face_mappings.map(item => [item.track_id, item.faceset_id]));
     selectEngine(saved.request.engine_id ?? 'reference_onnx');
-    setRack({ swapper: saved.request.swapper_model_id ?? null });
     setConfig(settings); setInspection(loaded); setAssigned(restoredMappings); setSelectedTrack(loaded.tracks[0]?.track_id ?? '');
     setIdentityLock(restoredLock);
     setSelectedTrack(saved.preview?.selected_track || loaded.tracks[0]?.track_id || '');
@@ -619,10 +609,10 @@ export default function App() {
     // The probe gives the overlay real pixel → frame mapping; without it every face box falls back to one default rectangle.
     useFaceSelectionStore.getState().populateFromInspection(loaded, savedProbe, restoredMappings);
     if (saved.request.face_segments) hydrateFaceSegments(saved.request.face_segments);
-    replaceCurves(saved.request.parameter_curves?.tracks ?? {}); setMaskRaw(saved.request.mask_base64 ?? null); setMaskKeyframes(readMaskKeyframes(saved.request.mask_keyframes));
+    replaceCurves(migrateCurves(saved.request.parameter_curves?.tracks)); setMaskRaw(saved.request.mask_base64 ?? null); setMaskKeyframes(readMaskKeyframes(saved.request.mask_keyframes));
     setExportOptions(saved.request.export ?? DEFAULT_EXPORT);
     setIdentitySourceB(saved.request.identity_blend?.source_face_ids[1] ?? '');
-    setParametersRaw({ ...DEFAULT_PARAMETERS, ...saved.request.workstation_parameters, pose_mode: saved.request.workstation_parameters?.pose_mode ?? 'retarget' });
+    setParametersRaw(migrateParameters(saved.request.workstation_parameters));
     location.hash = '#/faceswap';
     setTrimStart(saved.request.trim_start_seconds ?? 0); setTrimEnd(saved.request.trim_end_seconds); setProject(saved); setProjectName(saved.name); setSelectedJob(saved.checkpoint_job_id ?? saved.output_history?.at(-1)?.job_id ?? ''); setIncludeCheckpoint(!!saved.checkpoint_job_id); setProjectsOpen(false); setNotice('Project input and model hashes verified. Saved settings restored.');
   });
@@ -633,7 +623,6 @@ export default function App() {
   });
   const showJob = (job: Job) => {
     selectEngine(job.request.engine_id ?? 'reference_onnx');
-    setRack({ swapper: job.request.swapper_model_id ?? null });
     void run('Opening job target', async () => {
       const jobProbe = job.request.target_path === target && probe ? probe : await loadTarget(job.request.target_path);
       const loaded = await api<Inspection>(`/media/inspections/${job.request.inspection_id}?${new URLSearchParams({ path: job.request.target_path })}`);
@@ -650,10 +639,10 @@ export default function App() {
       setSourceId(job.request.face_mappings[0]?.faceset_id ?? '');
       setIdentityLock(job.request.identity_lock_id ? await api<IdentityLock>(`/identity/locks/${job.request.identity_lock_id}?verify=true`) : null);
       if (job.request.face_segments) hydrateFaceSegments(job.request.face_segments);
-      replaceCurves(job.request.parameter_curves?.tracks ?? {}); setMaskRaw(job.request.mask_base64 ?? null); setMaskKeyframes(readMaskKeyframes(job.request.mask_keyframes));
+      replaceCurves(migrateCurves(job.request.parameter_curves?.tracks)); setMaskRaw(job.request.mask_base64 ?? null); setMaskKeyframes(readMaskKeyframes(job.request.mask_keyframes));
       setExportOptions(job.request.export ?? DEFAULT_EXPORT);
       setIdentitySourceB(job.request.identity_blend?.source_face_ids[1] ?? '');
-      setParametersRaw({ ...DEFAULT_PARAMETERS, ...job.request.workstation_parameters, pose_mode: job.request.workstation_parameters?.pose_mode ?? 'retarget' });
+      setParametersRaw(migrateParameters(job.request.workstation_parameters));
       setTrimStart(job.request.trim_start_seconds ?? 0); setTrimEnd(job.request.trim_end_seconds);
     });
   };
@@ -666,9 +655,9 @@ export default function App() {
     const info = await loadTarget(snap.target);                      // re-probes the file; throws when it is gone
     // Settings first: they cannot fail, so a problem rebuilding the faces below never costs the person their sliders or playhead.
     if (snap.engineId) selectEngine(snap.engineId);
-    setParametersRaw({ ...DEFAULT_PARAMETERS, ...snap.parameters } as WorkstationParameters);
+    setParametersRaw(migrateParameters(snap.parameters));
     if (snap.exportOptions) setExportOptions(snap.exportOptions as ExportOptions);
-    replaceCurves(snap.curves);
+    replaceCurves(migrateCurves(snap.curves));
     setSourceId(snap.sourceId); setIdentitySourceB(snap.identitySourceB);
     setTrimStart(snap.trimStart); setTrimEnd(snap.trimEnd);
     setTime(Math.min(snap.time, info.duration_seconds ?? snap.time));
@@ -736,7 +725,7 @@ export default function App() {
     await refreshSources();
   };
   const reconstructionPicker = <><FacesetBuilder sourceId={sourceId} onSaved={async id => { await refreshSources(); setSourceId(id); setReconstructAttempt(v => v + 1); }} /><label className="reconstruction-choice">Reconstructed artifact<select value="" disabled={!target || !reconstructions.length || !!reason('reconstruction_viewer')} onChange={event => { const id = event.target.value; if (!id) { setMesh(null); return; } void run('Verifying reconstruction', async () => { setIdentityMesh(null); setMesh(await api<Reconstruction>(`/reconstructions/${id}?${new URLSearchParams({ target_path: target })}`)); }); }}><option value="">{mesh ? 'Choose another artifact' : reconstructions.length ? 'No reconstruction loaded' : 'No reconstruction artifacts'}</option>{reconstructions.map(item => <option key={item.reconstruction_id} value={item.reconstruction_id}>{item.reconstruction_id.slice(0, 12)}</option>)}</select></label>{(mesh || identityMesh) && <button className="button small" onClick={() => { setMesh(null); setIdentityMesh(null); }}>Show pose coverage</button>}</>;
-  const viewport = <VideoViewport previewView={previewView} onPreviewViewChange={setPreviewView} studio={layoutMode === 'studio' ? { panels: panelsSlot, timeline: timelineSlot, tray: traySlot } : null} activeSourceId={sourceId} faceCoverage={coverage} onSourceExtracted={faceset => { setSources(previous => previous.some(item => item.faceset_id === faceset.faceset_id) ? previous : [...previous, faceset]); setSourceId(faceset.faceset_id); void refreshSources(); }} maskBase64={maskBase64} maskKeyframes={maskKeyframes} onMaskKeyframesChange={setMaskKeyframes} captureWorkspace={captureWorkspace} restoreWorkspace={restoreWorkspace} active={route === "#/faceswap"} parameters={parameters} setParameters={setParameters} previewRequest={previewRequest} restorerAvailable={restorerAvailable(modelCatalog.loaded ? modelCatalog.models : caps?.models, parameters.restorer_model)} onPreviewLatency={setPreviewLatency} inspector={<SettingsInspector namespace="workstation-setting" caps={caps} config={config} save={saveSettings} busy={!!busy}/>} posePanel={<><FacesetBuilder sourceId={sourceId} onSaved={async id => { await refreshSources(); setSourceId(id); setReconstructAttempt(v => v + 1); }} /><Suspense fallback={<p className="muted empty-note">Loading pose inspection…</p>}><PoseCoverageInspector coverage={coverage} track={currentTrack} mesh={mesh} reconstruction={reconstruction} parameters={parameters} setParameters={setParameters}/></Suspense><label className="reconstruction-choice">Reconstructed artifact<select value="" disabled={!target || !reconstructions.length || !!reason('reconstruction_viewer')} onChange={event => { const id = event.target.value; if (!id) { setMesh(null); return; } void run('Verifying reconstruction', async () => setMesh(await api<Reconstruction>(`/reconstructions/${id}?${new URLSearchParams({ target_path: target })}`))); }}><option value="">{mesh ? 'Choose another artifact' : 'No reconstruction loaded'}</option>{reconstructions.map(item => <option key={item.reconstruction_id} value={item.reconstruction_id}>{item.reconstruction_id.slice(0, 12)}</option>)}</select></label>{mesh && <button className="button small" onClick={() => setMesh(null)}>Show pose coverage</button>}</>} target={target} output={output} time={time} setTime={setTime} duration={probe?.duration_seconds ?? 0} enabled={!reason('frame_preview')} keys={keys} probe={probe} sources={sources} onInspectionUpdate={setInspection} onMaskChange={setMaskBase64} trimStart={trimStart} trimEnd={trimEnd} onTrimChange={(start, end) => { setTrimStart(start); setTrimEnd(end); }} onAssignSource={(clusterId, facesetId) => assignTrack(clusterId, facesetId)}/>;
+  const viewport = <VideoViewport previewView={previewView} onPreviewViewChange={setPreviewView} studio={layoutMode === 'studio' ? { panels: panelsSlot, timeline: timelineSlot, tray: traySlot } : null} activeSourceId={sourceId} faceCoverage={coverage} onSourceExtracted={faceset => { setSources(previous => previous.some(item => item.faceset_id === faceset.faceset_id) ? previous : [...previous, faceset]); setSourceId(faceset.faceset_id); void refreshSources(); }} maskBase64={maskBase64} maskKeyframes={maskKeyframes} onMaskKeyframesChange={setMaskKeyframes} captureWorkspace={captureWorkspace} restoreWorkspace={restoreWorkspace} active={route === "#/faceswap"} parameters={parameters} setParameters={setParameters} previewRequest={previewRequest} onPreviewLatency={setPreviewLatency} inspector={<SettingsInspector namespace="workstation-setting" caps={caps} config={config} save={saveSettings} busy={!!busy}/>} posePanel={<><FacesetBuilder sourceId={sourceId} onSaved={async id => { await refreshSources(); setSourceId(id); setReconstructAttempt(v => v + 1); }} /><Suspense fallback={<p className="muted empty-note">Loading pose inspection…</p>}><PoseCoverageInspector coverage={coverage} track={currentTrack} mesh={mesh} reconstruction={reconstruction} parameters={parameters} setParameters={setParameters}/></Suspense><label className="reconstruction-choice">Reconstructed artifact<select value="" disabled={!target || !reconstructions.length || !!reason('reconstruction_viewer')} onChange={event => { const id = event.target.value; if (!id) { setMesh(null); return; } void run('Verifying reconstruction', async () => setMesh(await api<Reconstruction>(`/reconstructions/${id}?${new URLSearchParams({ target_path: target })}`))); }}><option value="">{mesh ? 'Choose another artifact' : 'No reconstruction loaded'}</option>{reconstructions.map(item => <option key={item.reconstruction_id} value={item.reconstruction_id}>{item.reconstruction_id.slice(0, 12)}</option>)}</select></label>{mesh && <button className="button small" onClick={() => setMesh(null)}>Show pose coverage</button>}</>} target={target} output={output} time={time} setTime={setTime} duration={probe?.duration_seconds ?? 0} enabled={!reason('frame_preview')} keys={keys} probe={probe} sources={sources} onInspectionUpdate={setInspection} onMaskChange={setMaskBase64} trimStart={trimStart} trimEnd={trimEnd} onTrimChange={(start, end) => { setTrimStart(start); setTrimEnd(end); }} onAssignSource={(clusterId, facesetId) => assignTrack(clusterId, facesetId)}/>;
   const trimBar = <><div className="trim-bar">
         <span className="eyebrow">EXPORT RANGE</span>
         <button
@@ -1067,7 +1056,6 @@ export default function App() {
     <main className="main-workspace"><div className="workspace-heading"><div><span className="eyebrow">EDIT / INSPECT / RENDER</span><h1>Your scene. A new identity.</h1></div><button className="button accent" disabled={!!reason('queue') || !inspection || !renderMappings().length || !!busy} title={reason('queue') ?? 'Render mapped face tracks locally'} onClick={queue}>Queue render <span>↗</span></button></div>
       <label>Identity B for animated Slerp<select aria-label="Identity B for animated Slerp" value={identitySourceB} onChange={event=>setIdentitySourceB(event.target.value)}><option value="">No identity morph</option>{sources.filter(source=>source.faceset_id!==sourceId).map(source=><option key={source.faceset_id} value={source.faceset_id}>{source.name}</option>)}</select></label>
       <label>Colour transfer<select aria-label="Colour transfer" value={parameters.color_method ?? 'lab'} onChange={event=>setParameters({...parameters,color_method:event.target.value as 'lab' | 'histogram'})}><option value="lab">LAB statistics</option><option value="histogram">Stabilized histograms</option></select></label>
-      <label>Restoration model<select aria-label="Restoration model" value={parameters.restorer_model ?? 'gpen'} onChange={event=>setParameters({...parameters,restorer_model:event.target.value as RestorerModel})}><option value="gpen">GPEN</option><option value="ultramax">UltraMax</option><option value="codeformer">CodeFormer</option></select></label>
       {viewport}
       {trimBar}
       <section className="face-inspector" data-tour="tracks"><div className="panel-heading"><div><span className="eyebrow">TARGET FACE INSPECTOR</span><h2>Assign an identity</h2></div><button className="button" disabled={!target || !!reason('face_inspection') || !!busy} title={reason('face_inspection') ?? ''} onClick={inspect}>{inspection ? 'Reinspect faces' : 'Inspect target faces'}</button></div>
@@ -1077,7 +1065,7 @@ export default function App() {
       </section>
       {queuePanel}
     </main></div></>}</AppRouter>
-    <WorkstationScreens route={route} caps={caps} config={config} sources={sources} jobs={jobs} projects={projects} busy={!!busy} connection={connection} openProject={openProject} showJob={showJob} controlJob={controlJob} saveSettings={saveSettings} refreshJobs={refreshJobs} openLibrary={() => { setProjectsOpen(true); void refreshProjects(); }} latency={previewLatency} target={target} probe={probe} inspection={inspection} refreshProjects={refreshProjects} exportOptions={exportOptions} onExportChange={setExportOptions} meshBlend={parameters.pose_mode === 'mesh_blend'} relight={!!parameters.relight} onQueue={queue} canQueue={!reason('queue') && !!inspection && !!renderMappings().length && !busy} previewRequest={inspection && renderMappings().length ? previewRequest : null} timestamp={time} onSeek={(value: number) => setTime(Math.max(0, Math.min(probe?.duration_seconds ?? 0, value)))} trimStart={trimStart} trimEnd={trimEnd} onTrimChange={(start: number, end: number | null) => { setTrimStart(start); setTrimEnd(end); }} themeName={themeName} onThemeChange={setThemeName} onStartTour={() => setTourOpen(true)} workflow={workflow} onWorkflowAction={guideAction} onOpenGuide={() => openGuide()} projectsLoading={projectsLoading}/>
+    <WorkstationScreens route={route} caps={caps} config={config} sources={sources} jobs={jobs} projects={projects} busy={!!busy} connection={connection} openProject={openProject} showJob={showJob} controlJob={controlJob} saveSettings={saveSettings} refreshJobs={refreshJobs} openLibrary={() => { setProjectsOpen(true); void refreshProjects(); }} latency={previewLatency} target={target} probe={probe} inspection={inspection} refreshProjects={refreshProjects} exportOptions={exportOptions} onExportChange={setExportOptions} meshBlend relight={!!parameters.relight} onQueue={queue} canQueue={!reason('queue') && !!inspection && !!renderMappings().length && !busy} previewRequest={inspection && renderMappings().length ? previewRequest : null} timestamp={time} onSeek={(value: number) => setTime(Math.max(0, Math.min(probe?.duration_seconds ?? 0, value)))} trimStart={trimStart} trimEnd={trimEnd} onTrimChange={(start: number, end: number | null) => { setTrimStart(start); setTrimEnd(end); }} themeName={themeName} onThemeChange={setThemeName} onStartTour={() => setTourOpen(true)} workflow={workflow} onWorkflowAction={guideAction} onOpenGuide={() => openGuide()} projectsLoading={projectsLoading}/>
     </div>
     <footer className="app-footer"><span>ROOP 3D / LOCAL WORKSTATION</span><span>Observed identities. Explicit processing. Synthetic media.</span><span>API :{config?.port ?? '—'}</span></footer>
     </div>
@@ -1096,13 +1084,12 @@ export default function App() {
       inspectionId={inspection?.inspection_id || ''}
       faceMappings={renderMappings()}
       workstationParameters={wireParameters(parameters)}
-      swapperModelId={swapperModelId}
+      headTopologyEngine={parameters.head_topology_engine}
       exportPasses={exportOptions.passes}
       maskBase64={maskBase64}
       hardware={caps}
       onApplySettings={(values: Config) => { if (config) saveSettings({ ...config, ...values }); }}
-      // Choosing a restorer at a blend of 0 would change nothing, so the one-click fix also gives it a visible blend.
-      onApplyParameter={(name: string, value: number | string) => setParameters({ ...parameters, [name]: value, ...(name === 'restorer_model' && parameters.restoration_blend <= 0 ? { restoration_blend: SWEEP_ENHANCER_BLEND } : {}) })}
+      onApplyParameter={(name: string, value: number | string) => setParameters({ ...parameters, [name]: value })}
     />
     {modelHubOpen && <ModelManagerModal onClose={() => setModelHubOpen(false)} />}
     <MagneticDock route={route} drawer={drawer} onPalette={() => setPaletteOpen(true)} />

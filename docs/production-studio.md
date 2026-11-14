@@ -1,5 +1,8 @@
 # Production studio integration
 
+<!-- phase0-purge-notice -->
+> **Phase 0 purge notice (2026-11-14).** Roop 3D no longer contains 2D face swappers, 5-point crop-paste, 2.5D strip meshes, weak-perspective cameras or post-crop GAN restorers. Anything below that describes them is **historical** and no longer applies; the current architecture is a full 3D head under a perspective camera, see [Engine and render options](../docs/ENGINE_COMPARISON.md).
+
 This change adds local DFM inference, Wav2Lip inference before restoration, and a
 host-frame live studio. It does **not** establish 100% phoneme accuracy, a 3D
 viseme solver, native CUDA/DirectX zero-copy egress, or sub-35 ms end-to-end latency.

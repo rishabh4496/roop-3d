@@ -22,9 +22,9 @@ import numpy as np
 
 STAGE_BARS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("Decode", ("decode",)),
-    ("3D Track/Detect", ("detection", "pose_tps")),
-    ("3D Mesh/Swap", ("inswapper",)),
-    ("Restore/Blend", ("masking", "restorer")),
+    ("3D Track/Detect", ("detection", "head_pose")),
+    ("3D Head Render", ("head_render",)),
+    ("Expression/Blend", ("masking", "expression")),
     ("Encode", ("encode",)),
 )
 

@@ -11,10 +11,10 @@ import time
 from typing import Iterator, Mapping
 
 # Canonical order shown in the flamegraph.
-STAGES: tuple[str, ...] = ("decode", "detection", "pose_tps", "inswapper", "masking", "restorer", "encode")
+STAGES: tuple[str, ...] = ("decode", "detection", "head_pose", "head_render", "masking", "expression", "encode")
 STAGE_LABELS: dict[str, str] = {
-    "decode": "Decode", "detection": "Detection", "pose_tps": "3D Pose / TPS", "inswapper": "Inswapper",
-    "masking": "Masking", "restorer": "Restorer", "encode": "Encode",
+    "decode": "Decode", "detection": "Detection", "head_pose": "3D Head Pose", "head_render": "3D Head Render",
+    "masking": "Masking", "expression": "Expression", "encode": "Encode",
 }
 
 

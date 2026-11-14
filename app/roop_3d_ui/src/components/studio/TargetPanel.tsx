@@ -106,7 +106,7 @@ export default function TargetPanel(props: TargetPanelProps) {
           <p className="muted">{target ? 'Next: press “Inspect target faces”. Roop 3D finds every face and follows each person through the video.' : 'Start here: press “Import target video” and choose a video file. It stays on this computer.'}</p>
           {target && <p className="muted">Afterwards, drag a FaceSet onto a face track (or click a face in the video) to choose who becomes whom.</p>}
         </div> : <>
-          {inspection.truncated && <p className="inline-warning">Bounded sample: inspection was truncated.</p>}
+          {inspection.truncated && <p className="inline-warning">Bounded scan: inspection stopped early{inspection.decoded_frames ? ` after ${inspection.decoded_frames} decoded frames` : ''}; faces that appear later may be missing from this list.</p>}
           {inspection.warnings.map(warning => <p key={warning} className="inline-warning">{warning}</p>)}
           {!inspection.tracks.length && <p className="muted studio-hint">No faces were detected. Try another clip or a clearer frame.</p>}
           {/* Virtualized against the panel's own scroll box: long clips can carry many tracks. */}

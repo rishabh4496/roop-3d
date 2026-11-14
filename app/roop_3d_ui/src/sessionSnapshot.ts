@@ -8,6 +8,8 @@
  * backend after the reload. The backend stays the source of truth: the restore re-fetches the probe, inspection and job
  * and drops anything that no longer exists.
  */
+import { stripRemovedParameters } from './true3d';
+import { migrateCurves } from './stores/parameterCurves';
 export const SESSION_KEY = 'roop3d-last-session';
 const VERSION = 1;
 const MAX_BYTES = 256 * 1024;                       // a snapshot is ids + sliders; anything bigger is not worth keeping
@@ -56,8 +58,8 @@ export function parseSession(raw: string | null | undefined): SessionSnapshot | 
     time: Math.max(0, finite(value.time)), sourceId: text(value.sourceId), identitySourceB: text(value.identitySourceB),
     selectedTrack: text(value.selectedTrack), trimStart: Math.max(0, finite(value.trimStart)),
     trimEnd: typeof value.trimEnd === 'number' && Number.isFinite(value.trimEnd) ? Math.max(0, value.trimEnd) : null,
-    parameters: isRecord(value.parameters) ? value.parameters : {}, exportOptions: value.exportOptions ?? null,
-    curves: isRecord(value.curves) ? value.curves : {}, assigned,
+    parameters: isRecord(value.parameters) ? stripRemovedParameters(value.parameters) : {}, exportOptions: value.exportOptions ?? null,
+    curves: isRecord(value.curves) ? migrateCurves(value.curves) : {}, assigned,
     faceSegments: Array.isArray(value.faceSegments) ? value.faceSegments : [],
   };
 }

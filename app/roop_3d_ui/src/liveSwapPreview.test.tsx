@@ -53,15 +53,14 @@ const flush = (ms: number) => act(async () => { await vi.advanceTimersByTimeAsyn
 
 describe('payload + filenames', () => {
   it('builds frame-accurate payloads from the job request and parameters', () => {
-    expect(buildLivePayload({ request: null, time: 1, fps: 25, parameters: DEFAULT_PARAMETERS, restorerAvailable: true })).toBeNull();
-    const payload = buildLivePayload({ request: REQUEST, time: 0.2, fps: 25, parameters: { ...DEFAULT_PARAMETERS, pose_strength: .8, restoration_blend: .5 }, maskBase64: 'data:image/png;base64,AA', restorerAvailable: true })!;
-    expect(payload).toMatchObject({ frame_index: 5, face_mappings: REQUEST.face_mappings, frontalization_weight: .8, restorer: 'gpen', restoration_blend: .5,
+    expect(buildLivePayload({ request: null, time: 1, fps: 25, parameters: DEFAULT_PARAMETERS })).toBeNull();
+    const payload = buildLivePayload({ request: REQUEST, time: 0.2, fps: 25, parameters: { ...DEFAULT_PARAMETERS }, maskBase64: 'data:image/png;base64,AA' })!;
+    expect(payload).toMatchObject({ frame_index: 5, face_mappings: REQUEST.face_mappings,
       mask_base64: 'data:image/png;base64,AA', occlusion: { erosion_px: 0, feather_px: 5 }, bypass: [] });
-    const retarget = buildLivePayload({ request: REQUEST, time: 0, fps: 25, parameters: { ...DEFAULT_PARAMETERS, pose_mode: 'retarget', restoration_blend: .5 }, restorerAvailable: false })!;
-    expect(retarget.frontalization_weight).toBeUndefined();
-    expect(retarget.restorer).toBe('off'); // GPEN weights unavailable -> never request it
-    const bypassed = buildLivePayload({ request: REQUEST, time: 0, fps: 25, parameters: { ...DEFAULT_PARAMETERS, restoration_blend: .5, bypass: ['restorer'] }, restorerAvailable: true })!;
-    expect(bypassed.restorer).toBe('off');
+    // None of the removed 2D / 2.5D controls can be put on the wire any more.
+    expect(Object.keys(payload).join(' ')).not.toMatch(/restorer|restoration|frontalization|fidelity|pose_strength|swapper/);
+    const bypassed = buildLivePayload({ request: REQUEST, time: 0, fps: 25, parameters: { ...DEFAULT_PARAMETERS, bypass: ['color'] } })!;
+    expect(bypassed.bypass).toEqual(['color']);
   });
 
   it('names downloads roop3d_preview_<ISO timestamp>.png without filesystem-hostile characters', () => {
@@ -225,7 +224,7 @@ const routed = (preview: () => Promise<Response>) => async (url: string) =>
 
 describe('VideoViewport live swap', () => {
   const props = { target: 'roop_3d/.runtime/media/t.mp4', output: '', time: 0.2, setTime: () => {}, duration: 4, enabled: true, keys: [] as number[],
-    previewRequest: REQUEST, restorerAvailable: false };
+    previewRequest: REQUEST };
 
   it('shows the swapped frame in the output pane, a busy indicator on 503, and downloads PNG via blob', async () => {
     fetchMock.mockImplementation(routed(async () => swapped()));
@@ -236,7 +235,7 @@ describe('VideoViewport live swap', () => {
 
     const previewCalls = fetchMock.mock.calls.filter(([url]) => url === '/api/preview');
     expect(previewCalls).toHaveLength(1);
-    expect(JSON.parse(previewCalls[0][1].body)).toMatchObject({ timestamp: .2, face_mappings: REQUEST.face_mappings, restorer: 'off' });
+    expect(JSON.parse(previewCalls[0][1].body)).toMatchObject({ timestamp: .2, face_mappings: REQUEST.face_mappings });
     const image = host.querySelector('.processed img.live-swap-preview') as HTMLImageElement;
     expect(image.src).toBe('blob:mock-1');
     expect(host.querySelector('.processed .pane-label')!.textContent).toContain('LIVE SWAP');

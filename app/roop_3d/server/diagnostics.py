@@ -32,7 +32,7 @@ class PreFlightLintRequest(Contract):
     workstation_parameters: dict[str, Any] | None = None
     mask_base64: str | None = None
     # Optional context that sharpens the readiness estimates; omitted = the check says what it could not know.
-    swapper_model_id: str | None = Field(default=None, max_length=96)
+    head_topology_engine: str | None = Field(default=None, max_length=64)
     export_passes: list[str] = Field(default_factory=list, max_length=6)
 
 
@@ -44,7 +44,8 @@ class BenchmarkRequest(Contract):
 
 TRT = "TensorrtExecutionProvider"
 POSE_MATRIX_POPULATED_MIN = 5       # of 9 cells with real support => "already populated"
-FRONTALIZATION_OVERCORRECT = 0.5    # strictly above this with a populated matrix over-corrects angles
+#: Registry roles whose ONNX graphs the true-3D pipeline compiles with dynamic shapes. The removed swapper / restorer roles are gone.
+TRT_DYNAMIC_ROLES = frozenset({"head_regressor", "landmark", "detector"})
 HIGH_RES_MIN_EDGE = 1080            # shortest edge, pixels, treated as "high-resolution" video
 LOW_VRAM_MIB = 4096
 HIGH_THREADS = 4
@@ -236,6 +237,16 @@ def _check(check_id: str, name: str, message: str) -> dict[str, Any]:
     return {"id": check_id, "name": name, "status": "PASS", "message": message, "details": []}
 
 
+def _topologies() -> list[dict[str, Any]]:
+    from roop_3d.server.true3d import topology_options
+    return topology_options()
+
+
+def _renderer() -> dict[str, Any]:
+    from roop_3d.server.true3d import renderer_status
+    return renderer_status()
+
+
 def trt_selected(settings, hw) -> bool:
     """TensorRT is selected explicitly, or `auto` would resolve to it on a verified NVIDIA GPU."""
     if not hw.gpus:
@@ -245,7 +256,8 @@ def trt_selected(settings, hw) -> bool:
 
 
 def missing_dynamic_models(state) -> list[dict[str, str]]:
-    """Registry swapper models that have neither a `<stem>_dynamic.onnx` build nor a verified `.batch.onnx` export."""
+    """Registry models (head / detector networks run through ONNX) with neither a `<stem>_dynamic.onnx` build nor a verified
+    `.batch.onnx` export, restricted to the roles the true-3D pipeline loads through TensorRT."""
     from roop_3d.models.dynamic_shapes import static_batch_reason
     from roop_3d.audit.project_paths import project_root
     try:
@@ -257,7 +269,7 @@ def missing_dynamic_models(state) -> list[dict[str, str]]:
     missing = []
     for record in records:
         name = record["name"]
-        if record.get("role") != "swapper" and not name.startswith("inswapper_128"):
+        if record.get("role") not in TRT_DYNAMIC_ROLES:
             continue
         if not name.endswith(".onnx") or name.endswith("_dynamic.onnx") or name.endswith(".batch.onnx"):
             continue
@@ -334,43 +346,30 @@ def _configuration_checks(root: Path, state, payload: PreFlightLintRequest, hw) 
         trt["message"] = "TensorRT is not the selected provider on a verified NVIDIA GPU; dynamic-shape conversion is not required."
     out.append(trt)
 
-    # b. Frontalization over-correcting an already-populated 3x3 pose matrix.
-    front = _check("frontalization_vs_pose_matrix", "Pose Frontalization vs 3x3 Pose Matrix",
-                   "Frontalization strength is compatible with the loaded pose matrices.")
-    try:
-        strength = float(params.get("pose_frontalization", 0) or 0)
-    except (TypeError, ValueError):
-        strength = 0.0
-    if strength > FRONTALIZATION_OVERCORRECT:
-        populated = _populated_pose_matrices(state, payload.face_mappings)
-        if populated:
-            front["status"] = "WARN"
-            front["message"] = (f"Pose frontalization {strength:.2f} exceeds {FRONTALIZATION_OVERCORRECT:.1f} while a populated 3x3 pose matrix "
-                                "already supplies a pose-matched reference; the angle can be corrected twice and look over-rotated.")
-            front["details"] = [f"FaceSet '{item['faceset_id']}': {item['populated']}/9 cells populated" for item in populated]
-            front["action"] = {"id": "set_parameter", "label": f"Lower frontalization to {FRONTALIZATION_OVERCORRECT:.1f}",
-                               "parameter": "pose_frontalization", "value": FRONTALIZATION_OVERCORRECT}
-    out.append(front)
+    # b. True-3D renderer readiness: the configuration cannot render until a renderer is connected. Reported, never faked.
+    from roop_3d.server.true3d import renderer_status, topology_options
+    renderer = renderer_status()
+    render = _check("renderer_wired", "3D Renderer Connected", "A true-3D full-head renderer is connected.")
+    if not renderer["wired"]:
+        render["status"] = "FAIL"
+        render["message"] = f"{renderer['message']}: a render started now would be refused (RENDERER_NOT_WIRED)."
+        render["details"] = [renderer["detail"]]
+    out.append(render)
 
-    # c. UltraMax small-face bypass. It is an explicit opt-in: when enabled, every face whose destination bounding box
-    #    in the target frame is <= ultramax_min_pixels is NOT restored and keeps the swapper's low-resolution output.
-    ultra = _check("ultramax_crop_bypass", "UltraMax Crop Bypass", "UltraMax restores every face.")
-    if settings.face_restoration_policy == "ultramax":
-        if settings.ultramax_native_bypass:
-            ultra["status"] = "WARN"
-            ultra["message"] = (f"UltraMax is configured to skip faces whose box in the target frame is <= {settings.ultramax_min_pixels}px; "
-                                "those faces keep the swapper's low-resolution output instead of the enhanced result.")
-            ultra["details"] = [f"ultramax_native_bypass=True, ultramax_min_pixels={settings.ultramax_min_pixels}"]
-            ultra["action"] = {"id": "set_setting", "label": "Restore every face with UltraMax",
-                               "settings": {"ultramax_native_bypass": False}}
-        else:
-            edge, faces = _target_geometry(state, payload)
-            if edge >= HIGH_RES_MIN_EDGE and faces > 1:
-                ultra["details"] = [f"UltraMax restores all {faces} faces on {edge}p video; restorer cost scales with the face count. "
-                                    "The optional small-face bypass (ultramax_native_bypass) trades quality for speed."]
-    else:
-        ultra["message"] = "UltraMax restoration is not enabled."
-    out.append(ultra)
+    # c. Head topology engine: the chosen engine's artifact must be installed and hash-verified.
+    topology = _check("head_topology_available", "Head Topology Engine", "The selected head topology engine is installed.")
+    wanted = payload.head_topology_engine or params.get("head_topology_engine")
+    options = {row["id"]: row for row in topology_options()}
+    if wanted is not None and wanted not in options:
+        topology["status"], topology["message"] = "FAIL", f"Unknown head topology engine '{wanted}'."
+    elif wanted is not None and not options[wanted]["available"]:
+        topology["status"] = "FAIL"
+        topology["message"] = f"{options[wanted]['label']} is not available: {options[wanted]['reason']}"
+    elif wanted is None and not any(row["available"] for row in options.values()):
+        topology["status"] = "WARN"
+        topology["message"] = "No head topology engine is installed; build the MakeHuman CC0 asset or supply FLAME 2023 Open."
+        topology["details"] = [f"{row['label']}: {row['reason']}" for row in options.values()]
+    out.append(topology)
 
     # d. Low VRAM with many execution threads.
     threads = _check("vram_threads", "VRAM vs Execution Threads", "Execution threads fit the available VRAM.")
@@ -401,7 +400,7 @@ def _recommended_threads(state, free_vram_mib: int) -> tuple[int, str]:
 
 
 def optimize_models(state, models: list[str] | None = None) -> dict[str, Any]:
-    """Convert registry swapper models to verified `_dynamic.onnx` builds (the lint's one-click fix)."""
+    """Convert registry head / detector models to verified `_dynamic.onnx` builds (the lint's one-click fix)."""
     from roop_3d.models import dynamic_shapes
     wanted = {item["model"] for item in missing_dynamic_models(state)}
     if models:
@@ -498,11 +497,7 @@ def _fsz_extreme_yaw_check(root: Path, state, payload: PreFlightLintRequest) -> 
 
 def _trt_engine_status(state, payload: PreFlightLintRequest, hw) -> dict[str, list[str]]:
     """Models this render will load, split by whether a TensorRT engine is already cached for them."""
-    params = payload.workstation_parameters or {}
-    wanted = [payload.swapper_model_id or state.settings.swapper_model_id]
-    restorer = _effective_restorer(state.settings, params)
-    if restorer in ("gpen", "gfpgan", "codeformer", "ultramax"):
-        wanted.append({"gpen": "gpen_bfr_512", "gfpgan": "gfpgan_v14"}.get(restorer, restorer))
+    wanted = [state.settings.detector_model_id]
     rows = {row["id"]: row for row in (state.models.public() if hasattr(state, "models") and state.models else []) if isinstance(row, dict) and "id" in row}
     built, unbuilt = [], []
     for model_id in dict.fromkeys(wanted):
@@ -528,35 +523,6 @@ def _trt_engines_check(state, payload: PreFlightLintRequest, hw) -> dict[str, An
         check["message"] = f"TensorRT engines are cached for {', '.join(status['built'])}."
     else:
         check["message"] = "No installed model for this render could be matched to a TensorRT engine."
-    return check
-
-
-def _effective_restorer(settings, params: dict[str, Any]) -> str:
-    """The restorer that will actually run: an explicit choice with a non-zero blend, else the settings policy."""
-    model = params.get("restorer_model", "auto")
-    if model != "auto":
-        return model if float(params.get("restoration_blend", 0) or 0) > 0 else "off"
-    return settings.face_restoration_policy
-
-
-def _ultramax_4k_check(state, payload: PreFlightLintRequest) -> dict[str, Any]:
-    check = _check("ultramax_on_4k", "UltraMax on 4K Targets", "UltraMax is enabled, or the target is below 4K.")
-    edge, _faces = _target_geometry(state, payload)
-    if edge <= 0:
-        check["message"] = "The target resolution could not be probed, so the 4K restorer check was skipped."
-        return check
-    restorer = _effective_restorer(state.settings, payload.workstation_parameters or {})
-    if edge < UHD_MIN_EDGE:
-        check["message"] = f"Target is {edge}p on its short edge (below 4K), so UltraMax is optional."
-    elif restorer == "ultramax":
-        check["message"] = f"UltraMax is enabled for the {edge}p target."
-    else:
-        label = "no restorer" if restorer == "off" else restorer
-        check["status"] = "WARN"
-        check["message"] = (f"The target is 4K ({edge}p short edge) but UltraMax is off (effective restorer: {label}). The swap model runs at "
-                            "128-256 px, so faces stay soft at this resolution.")
-        check["details"] = ["Enable UltraMax and give it a non-zero restoration blend for native high-resolution detail."]
-        check["action"] = {"id": "set_parameter", "label": "Use UltraMax", "parameter": "restorer_model", "value": "ultramax"}
     return check
 
 
@@ -681,13 +647,8 @@ def run_preflight_lint(root: Path, state, payload: PreFlightLintRequest) -> dict
     vram_check["available_vram_mib"] = available_vram
 
     # Estimate peak VRAM
-    base_vram = 2048 # Base insightface + inswapper
-    params = payload.workstation_parameters or {}
-    blend = float(params.get("restoration_blend", 0.35))
-    if blend > 0:
-        base_vram += 1536 # GPEN 512 restorer
-    if params.get("pose_mode") == "mesh_blend":
-        base_vram += 1024 # 3D LivePortrait / Mesh blend
+    # Planning estimate (not a measurement): detector + landmark nets, the full-head mesh / UV atlas, the shader's deferred buffers.
+    base_vram = 2048 + 1024
     base_vram += 512 # Temporal buffer & composite canvas
     vram_check["estimated_vram_mib"] = base_vram
 
@@ -770,7 +731,6 @@ def run_preflight_lint(root: Path, state, payload: PreFlightLintRequest) -> dict
     checks.extend(_configuration_checks(root, state, payload, hw))
     checks.append(_fsz_extreme_yaw_check(root, state, payload))
     checks.append(_trt_engines_check(state, payload, hw))
-    checks.append(_ultramax_4k_check(state, payload))
 
     # ── Check: Source Face / FaceSet Loaded ───────────────────────────────────
     has_source = False
@@ -1012,7 +972,7 @@ def generate_14_section_report(root: Path, state) -> dict[str, Any]:
         "cached_engines": trt_count,
         "engine_cache_validity": engine_cache_status,
         "precision_support": ["FP32", "FP16"],
-        "liveportrait_plan_cached": bool(trt_count > 0),
+        "head_plan_cached": bool(trt_count > 0),
         "status": "VERIFIED_LOCAL" if trt_count > 0 else "PASS",
     }
 
@@ -1059,28 +1019,28 @@ def generate_14_section_report(root: Path, state) -> dict[str, Any]:
         "status": "PASS",
     }
 
-    # Section 8: 3D Volumetric Mesh & LivePortrait Retargeting
+    # Section 8: 3D Full-Head Reconstruction & Perspective Camera
     populated_matrices = _populated_pose_matrices(state, []) if hasattr(state, "models") else []
     s8 = {
         "section": 8,
-        "title": "3D Volumetric Mesh & LivePortrait Retargeting",
+        "title": "3D Full-Head Reconstruction & Perspective Camera",
         "stage0_matrix_status": "POPULATED" if populated_matrices else "NOMINAL",
         "populated_matrices_count": len(populated_matrices),
-        "pose_mode": "retarget / mesh_blend",
-        "appearance_extractor": "liveportrait_appearance_feature_extractor.onnx",
-        "motion_extractor": "liveportrait_motion_extractor.onnx",
-        "warping_spade": "liveportrait_warping_spade.onnx",
-        "status": "PASS",
+        "head_topology_engines": [{"id": row["id"], "available": row["available"], "reason": row["reason"]} for row in _topologies()],
+        "camera_projection": "perspective (dynamic focal-length solver or manual intrinsics)",
+        "status": "PASS" if any(row["available"] for row in _topologies()) else "WARN",
     }
 
-    # Section 9: Identity Transfer & Inswapper 128 Graph
+    # Section 9: 3D Renderer Readiness (the former 2D identity-transfer graph was removed)
+    renderer = _renderer()
     s9 = {
         "section": 9,
-        "title": "Identity Transfer & Inswapper 128 Graph",
-        "model_name": "inswapper_128.onnx",
-        "embedding_dimensions": 512,
-        "precision_policy": "FP32 graph contract preserved",
-        "status": "PASS",
+        "title": "3D Renderer Readiness",
+        "renderer_wired": bool(renderer["wired"]),
+        "renderer_state": renderer["state"],
+        "shader_modes": ["3D-PBR-Subsurface-Scattering + Neural-Deferred-UV", "3D-Gaussian-Head-Avatar"],
+        "message": renderer.get("message", "ready"),
+        "status": "PASS" if renderer["wired"] else "WARN",
     }
 
     # Section 10: Compositor, XSeg Occlusion & Alpha Seam Blending
@@ -1096,14 +1056,13 @@ def generate_14_section_report(root: Path, state) -> dict[str, Any]:
         "status": "PASS",
     }
 
-    # Section 11: Face Restoration Adapters
+    # Section 11: Photometric / PBR Shading
     s11 = {
         "section": 11,
-        "title": "Face Restoration Adapters (GPEN-512 / CodeFormer)",
-        "restoration_policy": settings.face_restoration_policy,
-        "active_adapter": "gpen_bfr_512.onnx",
-        "resolution": 512,
-        "status": "PASS",
+        "title": "Photometric & PBR Shading (screen-space face restoration removed)",
+        "shader_modes": ["3D-PBR-Subsurface-Scattering + Neural-Deferred-UV", "3D-Gaussian-Head-Avatar"],
+        "renderer_wired": bool(renderer["wired"]),
+        "status": "PASS" if renderer["wired"] else "WARN",
     }
 
     # Section 12: VRAM Governor, Reservation & Profile Admission
@@ -1129,12 +1088,11 @@ def generate_14_section_report(root: Path, state) -> dict[str, Any]:
         "per_node_latency_breakdown": {
             "decode_ms": 2.5,
             "detection_ms": 6.5,
-            "pose_tps_ms": 5.0,
-            "inswapper_ms": 9.8,
+            "head_render_ms": None,
             "masking_ms": 4.0,
-            "restorer_ms": 15.2,
             "encode_ms": 3.5,
         },
+        "latency_note": "Static planning figures; per-node render latency is reported by the 3D renderer once it is wired.",
         "status": "PASS",
     }
 

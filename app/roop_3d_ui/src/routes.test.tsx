@@ -13,7 +13,7 @@ vi.mock('./components/hud/PipelinePill', () => ({ default: () => null }));
 vi.mock('./components/queue/QueueDrawer', () => ({ default: () => null }));
 vi.mock('./components/facemgr/FaceManager', () => ({ default: function Manager() { const [draft, setDraft] = useState(''); return <input aria-label="Identity draft" value={draft} onChange={e => setDraft(e.target.value)}/>; } }));
 vi.mock('./VideoViewport', () => ({ formatTime: (value: number) => String(value), VideoViewport: function Canvas(props: any) { const [count, setCount] = useState(0); return <><button onClick={() => setCount(count + 1)}>Canvas draft {count}</button><button onClick={() => props.setParameters({ ...props.parameters, swap_weight: .2 })}>Change parameter</button><button onClick={() => props.onMaskChange('data:image/png;base64,AQ==')}>Mask stroke</button><output data-workspace>{JSON.stringify(props.captureWorkspace())}</output></>; } }));
-vi.mock('./api', () => ({ post: vi.fn(), upload: vi.fn(), api: async (path: string) => path === '/system/capabilities' ? { models: [], job_parameter_bounds: {}, legal_parameter_bounds: {}, workstation: { features: {}, read_only_parameters: {}, disabled_parameters: {}, controls: {}, job_controls: {} } } : path === '/config' ? {} : [] }));
+vi.mock('./api', () => ({ post: vi.fn(async () => ({})), upload: vi.fn(), api: async (path: string) => path === '/system/capabilities' ? { models: [], job_parameter_bounds: {}, legal_parameter_bounds: {}, workstation: { features: {}, read_only_parameters: {}, disabled_parameters: {}, controls: {}, job_controls: {} } } : path === '/config' ? {} : [] }));
 
 import { SCREENS, normalizeRoute } from './router/AppRouter';
 

@@ -2,10 +2,9 @@
 export const FLAME_STAGES = [
   { id: 'decode', label: 'Decode', hw: 'NVDEC / software decoder', color: '#38bdf8' },
   { id: 'detection', label: 'Detection', hw: 'Face detector + tracker', color: '#818cf8' },
-  { id: 'pose_tps', label: '3D Pose / TPS', hw: 'LivePortrait retarget, mesh blend, TPS warp', color: '#a78bfa' },
-  { id: 'inswapper', label: 'Inswapper', hw: 'inswapper_128 identity swap', color: '#f43f5e' },
+  { id: 'head_pose', label: '3D Pose & Mesh', hw: 'Head pose solve, perspective camera, full-head mesh fit', color: '#a78bfa' },
+  { id: 'head_render', label: '3D Head Render', hw: 'PBR subsurface scattering / Gaussian head avatar', color: '#f43f5e' },
   { id: 'masking', label: 'Masking', hw: 'Face parser, matte, occluders, colour fusion', color: '#fb923c' },
-  { id: 'restorer', label: 'Restorer', hw: 'GPEN / CodeFormer', color: '#f59e0b' },
   { id: 'encode', label: 'Encode', hw: 'Frame write / video encoder', color: '#06b6d4' },
 ];
 
@@ -16,12 +15,12 @@ function fromPreviewLatency(latency) {
   if (!latency || typeof latency !== 'object') return {};
   const out = {};
   const detection = finite(latency.detection_ms ?? latency.detection);
-  const swap = finite(latency.swap_ms ?? latency.inswapper);
-  const retarget = finite(latency.retarget_ms);
+  const render = finite(latency.render_ms ?? latency.head_render_ms);
+  const tracking = finite(latency.tracking_ms);
   const projection = finite(latency.projection_ms);
   if (detection !== null) out.detection = detection;
-  if (swap !== null) out.inswapper = swap;
-  if (retarget !== null || projection !== null) out.pose_tps = (retarget ?? 0) + (projection ?? 0);
+  if (render !== null) out.head_render = render;
+  if (tracking !== null || projection !== null) out.head_pose = (tracking ?? 0) + (projection ?? 0);
   for (const stage of FLAME_STAGES) {
     const direct = finite(latency[stage.id]);
     if (direct !== null && out[stage.id] === undefined) out[stage.id] = direct;

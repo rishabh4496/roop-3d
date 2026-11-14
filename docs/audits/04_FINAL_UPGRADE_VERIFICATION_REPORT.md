@@ -1,5 +1,8 @@
 # 04 — Final upgrade verification report
 
+<!-- phase0-purge-notice -->
+> **Phase 0 purge notice (2026-11-14).** Roop 3D no longer contains 2D face swappers, 5-point crop-paste, 2.5D strip meshes, weak-perspective cameras or post-crop GAN restorers. Anything below that describes them is **historical** and no longer applies; the current architecture is a full 3D head under a perspective camera, see [Engine and render options](../../docs/ENGINE_COMPARISON.md).
+
 Scope: what changed in `roop-3d` after the audits (reports 01-03), what was verified, and what was not. Every number below was observed in this session; nothing is estimated. No throughput or quality benchmark was run, so **this report makes no measured speed or fidelity claim versus roop-ultimate**; where an improvement is architectural it is labelled so.
 
 Execution note: the requested model/effort bindings (`gpt-6-luna`, `gpt-6.1-sol`) were not selectable. Workers ran on whatever the harness offered, and the first Wave 2 workers failed on a provider rate limit; the orchestrator reviewed their partial edits, fixed a regression one of them introduced (dropped `expression_energy`/`expression_held` in `video_tracker._frame`), and completed the rest directly.

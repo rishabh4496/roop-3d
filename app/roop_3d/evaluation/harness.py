@@ -2,11 +2,10 @@
 
 Compares:
 1. Original Target (Performer baseline reference)
-2. Standard INSwapper (2D latent projection + feather blend)
-3. 3D-Aware Output (Canonical mesh fitting + Z-buffer raster + TPS)
-4. LivePortrait-Enhanced Output (Motion transfer + SPADE 4D volumetric warping)
-5. Alternative Local Engine (Dynamic shape / CPU fallback / alternative profile)
-6. Restored Output (GPEN-BFR-512 / CodeFormer + 4-level Laplacian pyramid fusion)
+2. 3D-Aware Output (full-head mesh fitting + perspective Z-buffer raster)
+3. LivePortrait-Enhanced Output (Motion transfer + SPADE 4D volumetric warping)
+4. Alternative Local Engine (Dynamic shape / CPU fallback / alternative profile)
+(The simulated 2D swapper and 2D restorer baselines were removed.)
 """
 from __future__ import annotations
 
@@ -30,11 +29,9 @@ from roop_3d.evaluation.metrics import (
 
 class EngineProfile(str, Enum):
     ORIGINAL_TARGET = "original_target"
-    STANDARD_INSWAPPER = "standard_inswapper"
     THREE_D_AWARE = "3d_aware"
     LIVEPORTRAIT_ENHANCED = "liveportrait_enhanced"
     ALTERNATIVE_LOCAL = "alternative_local_engine"
-    RESTORED_OUTPUT = "restored_output"
 
 
 @dataclass
@@ -97,29 +94,6 @@ class EvaluationHarness:
                 metadata={"profile": profile.value, "type": "ground_truth"},
             )
 
-        # 2. Standard INSwapper (Simulates pure 2D INSwapper with feather)
-        elif profile == EngineProfile.STANDARD_INSWAPPER:
-            out = target_img.copy()
-            # Shifts facial tone toward source
-            if frame.face_mask is not None:
-                mask = frame.face_mask[..., None]
-                swapped = (out.astype(np.float32) * (1.0 - mask * 0.7) + np.array([170, 190, 220], np.float32) * (mask * 0.7)).astype(np.uint8)
-                softened = cv2.GaussianBlur(swapped, (3, 3), 0.8)
-                out = np.where(mask > 0.05, softened, target_img)
-            else:
-                out[h // 4 : 3 * h // 4, w // 4 : 3 * w // 4] = cv2.addWeighted(
-                    out[h // 4 : 3 * h // 4, w // 4 : 3 * w // 4], 0.4, np.full_like(out[h // 4 : 3 * h // 4, w // 4 : 3 * w // 4], (170, 190, 220)), 0.6, 0
-                )
-            time.sleep(0.005)  # Nominal 2D INSwapper runtime (~5ms)
-            elapsed = (time.perf_counter() - start) * 1000.0
-            return EngineOutput(
-                frame_index=frame.index,
-                image=out,
-                latency_ms=elapsed,
-                predicted_landmarks=frame.landmarks5,
-                metadata={"profile": profile.value, "precision": "FP32"},
-            )
-
         # 3. 3D-Aware Output (3D Canonical Mesh + Z-Buffer Pose Blending)
         elif profile == EngineProfile.THREE_D_AWARE:
             out = target_img.copy()
@@ -170,27 +144,6 @@ class EvaluationHarness:
                 latency_ms=elapsed,
                 predicted_landmarks=frame.landmarks5,
                 metadata={"profile": profile.value, "provider": "CPUExecutionProvider"},
-            )
-
-        # 6. Restored Output (GPEN / CodeFormer + Laplacian Pyramid Fusion)
-        elif profile == EngineProfile.RESTORED_OUTPUT:
-            out = target_img.copy()
-            # Enhanced high-frequency detail + edge preservation
-            if frame.face_mask is not None:
-                mask = frame.face_mask[..., None]
-                face_clean = np.array([180, 210, 240], np.float32)
-                swapped = (out.astype(np.float32) * (1.0 - mask * 0.9) + face_clean * (mask * 0.9)).astype(np.uint8)
-                blurred = cv2.GaussianBlur(swapped, (3, 3), 0)
-                sharpened = np.clip(cv2.addWeighted(swapped, 1.3, blurred, -0.3, 0), 0, 255).astype(np.uint8)
-                out = np.where(mask > 0.05, sharpened, target_img)
-            time.sleep(0.035)  # Nominal dual restoration runtime (~35ms)
-            elapsed = (time.perf_counter() - start) * 1000.0
-            return EngineOutput(
-                frame_index=frame.index,
-                image=out,
-                latency_ms=elapsed,
-                predicted_landmarks=frame.landmarks5,
-                metadata={"profile": profile.value, "restorer": "GPEN_CodeFormer_Laplacian"},
             )
 
         raise DomainError("UNKNOWN_PROFILE", f"Profile {profile} is not supported")
@@ -245,10 +198,8 @@ class EvaluationHarness:
         scene: GoldenScene,
         profiles: Sequence[EngineProfile] = (
             EngineProfile.ORIGINAL_TARGET,
-            EngineProfile.STANDARD_INSWAPPER,
             EngineProfile.THREE_D_AWARE,
             EngineProfile.LIVEPORTRAIT_ENHANCED,
-            EngineProfile.RESTORED_OUTPUT,
         ),
     ) -> dict[EngineProfile, HarnessRunResult]:
         """Run all candidate profiles side-by-side on the same golden scene."""

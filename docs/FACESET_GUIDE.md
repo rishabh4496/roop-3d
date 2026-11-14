@@ -96,6 +96,6 @@ score of at least 0.5 (and a detection confidence of at least 0.5) to count towa
 | `FACESET_ARCHIVE_INVALID` / `…_SECURITY_VIOLATION` | The `.fsz` is damaged or unsafe. Rebuild from photos |
 | Coverage says *blocked: more than one person* | Remove the other person's photos |
 | The swap looks wrong when the person turns | The FaceSet lacks that angle: check the grid and add it |
-| Eyes or teeth look wrong | Add a neutral and an open-mouth photo; try the restoration model ([Engine comparison](ENGINE_COMPARISON.md)) |
+| Eyes or teeth look wrong | Add a neutral and an open-mouth photo so the UV atlas observes the eyes and teeth ([Engine and render options](ENGINE_COMPARISON.md)) |
 
 See also: [User manual](USER_MANUAL.md) · [Common problems](COMMON_PROBLEMS.md#facesets)

@@ -31,10 +31,9 @@ from typing import Sequence
 import numpy as np
 
 from roop_3d.core.errors import DomainError
-from roop_3d.core.pose import estimate_pose_5pt
+from roop_3d.core.pose import estimate_pose_pnp
 from roop_3d.reconstruction.flame_fitter import huber_weights
-from roop_3d.reconstruction.geometry_types import Mesh3D, WeakPerspectiveCamera
-from roop_3d.reconstruction.tps_fallback import build_canonical_head_mesh
+from roop_3d.reconstruction.geometry_types import Mesh3D, PerspectiveCamera
 
 LAYOUT_5 = "5pt"
 LAYOUT_68 = "68pt"
@@ -50,44 +49,17 @@ YAW_SPAN_FOR_DEPTH_DEG = 25.0
 
 
 # --------------------------------------------------------------------------- template
-def _subdivide(vertices: np.ndarray, faces: np.ndarray, uvs: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """One midpoint subdivision. Original vertex indices are preserved (new vertices are appended)."""
-    verts, tex = [v for v in vertices], [u for u in uvs]
-    cache: dict[tuple[int, int], int] = {}
-
-    def midpoint(a: int, b: int) -> int:
-        key = (a, b) if a < b else (b, a)
-        if key not in cache:
-            verts.append((verts[a] + verts[b]) / 2.0)
-            tex.append((tex[a] + tex[b]) / 2.0)
-            cache[key] = len(verts) - 1
-        return cache[key]
-
-    new_faces = []
-    for a, b, c in faces:
-        ab, bc, ca = midpoint(int(a), int(b)), midpoint(int(b), int(c)), midpoint(int(c), int(a))
-        new_faces += [[a, ab, ca], [ab, b, bc], [ca, bc, c], [ab, bc, ca]]
-    return np.asarray(verts, np.float64), np.asarray(new_faces, np.int32), np.asarray(tex, np.float64)
-
-
-@lru_cache(maxsize=4)
-def _template_arrays(subdivisions: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    base = build_canonical_head_mesh(landmark_count=68)
-    verts, faces, uvs = base.vertices.astype(np.float64), base.faces.astype(np.int32), base.uvs.astype(np.float64)
-    for _ in range(subdivisions):
-        verts, faces, uvs = _subdivide(verts, faces, uvs)
-    return verts, faces, uvs
-
-
 def identity_template(subdivisions: int = 2) -> Mesh3D:
-    """The anthropometric facial template (the prior), subdivided for texture resolution.
+    """The identity prior: the open CC0 MakeHuman head + neck (full cranium, ears, neck), a fresh copy per call.
 
-    Indices 0..67 stay the 68 canonical landmark vertices, whatever the subdivision level.
+    The canonical 68-landmark Delaunay strip was removed (it had no cranium and was a frontal 2.5D surface). The landmark
+    layouts live in ``mesh.landmark_vertices`` (``5pt`` / ``68pt``); ``subdivisions`` is accepted for source compatibility
+    and ignored (the MakeHuman template is not subdivided). Raises ``MAKEHUMAN_ASSET_MISSING`` until the head is built.
     """
     if not 0 <= subdivisions <= 3:
         raise DomainError("INVALID_SUBDIVISION", f"subdivisions must be in [0, 3], got {subdivisions}", 422)
-    verts, faces, uvs = _template_arrays(subdivisions)
-    return Mesh3D(verts.copy(), faces.copy(), uvs=uvs.copy())
+    from roop_3d.reconstruction.makehuman_template import makehuman_template
+    return makehuman_template()
 
 
 def template_landmarks(layout: str, mesh: Mesh3D) -> np.ndarray:
@@ -172,7 +144,7 @@ class ViewFit:
     inlier_fraction: float
     consistent: bool = True
     # A view registered AGAINST the fitted geometry (it did not take part in the shape fit) carries its own camera.
-    camera: WeakPerspectiveCamera | None = None
+    camera: PerspectiveCamera | None = None
 
 
 @dataclass
@@ -199,14 +171,13 @@ class IdentityShapeFit:
     def depth_observed_fraction(self) -> float:
         return float(np.mean(self.confidence_z >= 0.5))
 
-    def camera_for(self, view: ViewFit) -> WeakPerspectiveCamera:
+    def camera_for(self, view: ViewFit) -> PerspectiveCamera:
         """The fitted view as a camera acting on MESH coordinates (the fit works about `model_center`)."""
         if view.camera is not None:
             return view.camera
         rot = batch_rotations(np.array([[view.yaw, view.pitch, view.roll]]))[0]
         shift = view.scale * (rot @ self.model_center)[:2]
-        return WeakPerspectiveCamera(rotation=tuple(tuple(float(x) for x in row) for row in rot), scale=view.scale,
-                                     tx=float(view.tx - shift[0]), ty=float(view.ty - shift[1]))
+        return PerspectiveCamera.from_scaled_pose(rot, view.scale, float(view.tx - shift[0]), float(view.ty - shift[1]))
 
 
 # --------------------------------------------------------------------------- Levenberg-Marquardt
@@ -549,7 +520,7 @@ def estimate_pose_from_landmarks(points: np.ndarray) -> tuple[float, float, floa
     """Standard-frame (yaw, pitch up+, roll) from a view's landmarks (5- or 68-point)."""
     pts = np.asarray(points, np.float64)
     five = five_from_68(pts) if pts.shape[0] == 68 else pts
-    pose = estimate_pose_5pt(five)
+    pose = estimate_pose_pnp(five)
     return pose.yaw, pose.pitch, pose.roll
 
 
@@ -568,11 +539,10 @@ class ViewPoseFit:
     rms_iod: float               # same error in units of the 3D inter-ocular distance
     converged: bool
 
-    def camera(self) -> WeakPerspectiveCamera:
+    def camera(self) -> PerspectiveCamera:
         rot = batch_rotations(np.array([[self.yaw, self.pitch, self.roll]]))[0]
         shift = self.scale * (rot @ self.center)[:2]
-        return WeakPerspectiveCamera(rotation=tuple(tuple(float(x) for x in row) for row in rot), scale=float(self.scale),
-                                     tx=float(self.tx - shift[0]), ty=float(self.ty - shift[1]))
+        return PerspectiveCamera.from_scaled_pose(rot, float(self.scale), float(self.tx - shift[0]), float(self.ty - shift[1]))
 
 
 def solve_view_pose(

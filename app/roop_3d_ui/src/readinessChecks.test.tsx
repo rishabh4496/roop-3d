@@ -31,20 +31,21 @@ const flush = async () => { await act(async () => { await Promise.resolve(); awa
 
 describe('pre-flight linter modal', () => {
   const mount = async (props: Record<string, unknown> = {}) => {
-    act(() => root.render(<Linter isOpen targetPath="clip.mp4" inspectionId={'a'.repeat(32)} faceMappings={[]} workstationParameters={{ restoration_blend: 0 }}
-      swapperModelId="hyperswap_1a_256" exportPasses={['alpha', 'relit']} {...props} />));
+    act(() => root.render(<Linter isOpen targetPath="clip.mp4" inspectionId={'a'.repeat(32)} faceMappings={[]} workstationParameters={{ feather_px: 0 }}
+      headTopologyEngine="MakeHuman-CC0-Craniofacial-3D" exportPasses={['alpha', 'relit']} {...props} />));
     await flush();
   };
 
-  it('sends the swapper and the export passes so the TensorRT and disk estimates are about THIS render', async () => {
+  it('sends the head topology engine and the export passes so the estimates are about THIS render', async () => {
     await mount();
     const [url, body] = vi.mocked(post).mock.calls[0] as [string, Record<string, unknown>];
     expect(url).toBe('/system/preflight-lint');
-    expect(body).toMatchObject({ swapper_model_id: 'hyperswap_1a_256', export_passes: ['alpha', 'relit'], target_path: 'clip.mp4' });
+    expect(body).toMatchObject({ head_topology_engine: 'MakeHuman-CC0-Craniofacial-3D', export_passes: ['alpha', 'relit'], target_path: 'clip.mp4' });
+    expect(body).not.toHaveProperty('swapper_model_id');
   });
 
   it('does not re-request the lint on every render when the optional context is omitted', async () => {
-    await mount({ swapperModelId: undefined, exportPasses: undefined });
+    await mount({ headTopologyEngine: undefined, exportPasses: undefined });
     await flush(); await flush();
     expect(vi.mocked(post)).toHaveBeenCalledTimes(1);
     expect((vi.mocked(post).mock.calls[0][1] as Record<string, unknown>).export_passes).toEqual([]);
@@ -120,14 +121,14 @@ describe('clean relit face pass in the export panel', () => {
 describe('batch pre-flight', () => {
   const payload = (target: string, extra: Record<string, unknown> = {}) => ({ target_path: target, inspection_id: 'i', face_mappings: [{ track_id: 't0', faceset_id: 'alice', extra: 1 }], ...extra });
 
-  it('lints each distinct target once, with the rack parameters, swapper and passes of the batch', async () => {
+  it('lints each distinct target once, with the rack parameters, head topology engine and passes of the batch', async () => {
     const { lintBatch, lintRequestFor } = await import('./components/diagnostics/batchLint');
     const post = vi.fn(async (_url: string, _body: unknown) => ({ status: 'PASS', checks: [] }));
-    const result = await lintBatch(post, [payload('a.mp4'), payload('a.mp4'), payload('b.mp4', { export: { passes: ['alpha'] } })], { rackParameters: { restorer_model: 'ultramax' }, swapperId: 'hyperswap_1a_256' });
+    const result = await lintBatch(post, [payload('a.mp4'), payload('a.mp4'), payload('b.mp4', { export: { passes: ['alpha'] } })], { rackParameters: { feather_px: 3 }, headTopologyEngine: 'FLAME-FullHead-3D' });
     expect(post).toHaveBeenCalledTimes(2);
     expect(result.targets).toBe(2);
     const body = post.mock.calls[1][1] as Record<string, unknown>;
-    expect(body).toMatchObject({ target_path: 'b.mp4', swapper_model_id: 'hyperswap_1a_256', export_passes: ['alpha'], workstation_parameters: { restorer_model: 'ultramax' } });
+    expect(body).toMatchObject({ target_path: 'b.mp4', head_topology_engine: 'FLAME-FullHead-3D', export_passes: ['alpha'], workstation_parameters: { feather_px: 3 } });
     expect(lintRequestFor(payload('a.mp4')).face_mappings).toEqual([{ track_id: 't0', faceset_id: 'alice' }]);   // only the string pairs the endpoint accepts
   });
 

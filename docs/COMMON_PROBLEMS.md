@@ -1,5 +1,8 @@
 # Common problems and solutions
 
+<!-- phase0-purge-notice -->
+> **Phase 0 purge notice (2026-11-14).** Roop 3D no longer contains 2D face swappers, 5-point crop-paste, 2.5D strip meshes, weak-perspective cameras or post-crop GAN restorers. Anything below that describes them is **historical** and no longer applies; the current architecture is a full 3D head under a perspective camera, see [Engine and render options](../docs/ENGINE_COMPARISON.md).
+
 Start with *what you see*. Every error the app shows has a code (for example `DISK_FULL`); the second half of this page is the full reference,
 and it is the same text the app shows under *What happened, and every step*.
 
@@ -28,7 +31,7 @@ A render (or a model build) owns the GPU. The preview retries by itself; this is
 ### The swapped face looks wrong
 * When the person turns their head: the FaceSet probably lacks that angle. Open *02 · Identity*, select the FaceSet and read the coverage sentence
   ([FaceSet guide](FACESET_GUIDE.md)). Try the **3D pose** render mode.
-* Soft or smeared: turn on a restoration model whose weights are verified ([Engine comparison](ENGINE_COMPARISON.md)).
+* Soft or smeared: check the UV texture resolution and shader mode ([Engine and render options](ENGINE_COMPARISON.md)); there is no screen-space restorer.
 * Edges or colour: adjust *Mask erosion / feather* and *Colour match* in the Inspector; use **Solo** on *Occlusion & Seam Mask* to see the mask.
 * A hand or hair covering the face: use **Edit Mask** to paint a manual mask for that frame.
 

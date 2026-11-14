@@ -42,9 +42,8 @@ describe('swap scope helpers keep untouched requests byte-identical', () => {
     expect(withSwapScope({ ...adaptive }, 'adaptive_skull').skull_blend).toBe(0.3);
   });
 
-  it('only applies in a 3D render mode', () => {
-    expect(swapScopeApplies(DEFAULT_PARAMETERS)).toBe(false);
-    expect(swapScopeApplies({ ...DEFAULT_PARAMETERS, render_mode: 'pose_3d' })).toBe(true);
+  it('always applies: the full-head render always produces a head silhouette', () => {
+    expect(swapScopeApplies(DEFAULT_PARAMETERS)).toBe(true);
   });
 });
 
@@ -105,18 +104,16 @@ describe('SwapScopeSelector', () => {
     expect(seen.at(-1)).toEqual(DEFAULT_PARAMETERS);
   });
 
-  it('says plainly that the scope needs a 3D render mode, and stops saying it once one is on', async () => {
+  it('never shows a "needs a 3D render mode" warning, since there is no other mode', async () => {
     const plain = await mount();
-    expect(plain.host.querySelector('[data-testid="swap-scope-applies"]')!.textContent).toContain('3D render mode');
+    expect(plain.host.querySelector('[data-testid="swap-scope-applies"]')).toBeNull();
     await plain.unmount();
-    const three = await mount({ ...DEFAULT_PARAMETERS, render_mode: 'pose_3d' });
-    expect(three.host.querySelector('[data-testid="swap-scope-applies"]')).toBeNull();
   });
 });
 
 describe('live preview payload', () => {
   const request = { engine_id: 'reference_onnx', target_path: 'clip.mp4', inspection_id: 'a'.repeat(32), face_mappings: [{ track_id: 'track_0000', faceset_id: 'alice' }] } as unknown as JobRequest;
-  const payload = (parameters: WorkstationParameters) => JSON.parse(JSON.stringify(buildLivePayload({ request, time: 1, fps: 25, restorerAvailable: true, parameters })!));
+  const payload = (parameters: WorkstationParameters) => JSON.parse(JSON.stringify(buildLivePayload({ request, time: 1, fps: 25, parameters })!));
 
   it('leaves the scope out until it is changed, so earlier previews keep their cache keys', () => {
     const plain = payload(DEFAULT_PARAMETERS);

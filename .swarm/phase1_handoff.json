@@ -1,0 +1,383 @@
+{
+ "generated_by": "Sub-Agent 4 (verify-only)",
+ "base_commit": "7fd1e2a",
+ "date": "2026-11-14",
+ "acceptance": {
+  "engines_100pct_initialize": {
+   "met": false,
+   "ready": 5,
+   "registered": 14,
+   "note": "5/14 registered swap engines initialize and execute on TensorRT. 9/14 cannot: weights do not exist, so 100% is impossible without acquiring files."
+  },
+  "detection_gt_99pct": {
+   "met": false,
+   "note": "Frames-with-detection over 3432 evaluated frames = 92.07% (analyzer path), 91.67% (tracker path). 6/12 clips are 100%; s1 98.54; s5-s10 77-89%. Remaining misses inspected are overwhelmingly back-of-head / hand-occluded (no face). That is NOT recall; no ground truth exists. False positives on back-of-head ears (s7, s9, s10) inflate the hit rate, so true recall of VISIBLE faces is unknown; plausibly >99% but not demonstrated."
+  }
+ },
+ "modified_files": {
+  "swarm_modified_this_phase (mtime >= 15:13 on 2026-11-14; some also contain earlier uncommitted edits)": [
+   "app/roop_3d/media/service.py",
+   "app/roop_3d/engine/detection/face_tracker.py",
+   "app/roop_3d/media/face_analysis.py",
+   "app/roop_3d/model_registry.py",
+   "app/roop_3d/server/contracts.py",
+   "app/roop_3d/server/app.py",
+   "app/roop_3d/server/routes.py",
+   "app/roop_3d/core/ort_session.py",
+   "app/roop_3d/engine/runtime.py",
+   "app/roop_3d/engine/volumetric/swapper_engine.py"
+  ],
+  "swarm_new_files": [
+   "app/roop_3d/engine/detection/robust_detector.py",
+   "app/roop_3d/tests/test_robust_detection.py",
+   "app/roop_3d/tests/test_swap_engine_readiness.py",
+   "app/roop_3d/models/engine_readiness.py (gitignored by models/ rule: needs git add -f)"
+  ],
+  "pre_existing_uncommitted (mtime 02:45-11:33, earlier session)": [
+   ".omp/config.yml",
+   ".swarm/phase1_audit.md",
+   "app/roop_3d/cli.py",
+   "app/roop_3d/compositor/occlusion_analysis.py",
+   "app/roop_3d/engine/detection/robust_detector.py",
+   "app/roop_3d/identity/target_lock.py",
+   "app/roop_3d/installer/model_manager.py",
+   "app/roop_3d/installer/offline_cache.py",
+   "app/roop_3d/models/catalog.py",
+   "app/roop_3d/models/engine_readiness.py",
+   "app/roop_3d/models/hub.py",
+   "app/roop_3d/models/local_provider.py",
+   "app/roop_3d/pipeline/__init__.py",
+   "app/roop_3d/pipeline/image_ops.py",
+   "app/roop_3d/pipeline/photorealistic_swap_core.py",
+   "app/roop_3d/pipeline/session_adapter.py",
+   "app/roop_3d/pipeline/video_job_runner.py",
+   "app/roop_3d/server/target_lock.py",
+   "app/roop_3d/tests/test_e2e_video_pipeline.py",
+   "app/roop_3d/tests/test_model_selection_regressions.py",
+   "app/roop_3d/tests/test_robust_detection.py",
+   "app/roop_3d/tests/test_stage12_target_lock.py",
+   "app/roop_3d/tests/test_swap_engine_readiness.py",
+   "app/roop_3d/tests/test_swapper_catalog_and_adapter.py",
+   "app/roop_3d_ui/src/App.tsx",
+   "app/roop_3d_ui/src/components/canvas/FaceOverlayCanvas.jsx",
+   "app/roop_3d_ui/src/components/studio/TargetPanel.tsx",
+   "app/roop_3d_ui/src/contracts.ts",
+   "app/roop_3d_ui/src/useFaceSelectionStore.ts",
+   "app/roop_3d_ui/src/utils/frameFaces.ts"
+  ],
+  "caveat": "mtime-based attribution only; routes.py/app.py/ort_session.py/runtime.py/swapper_engine.py may also carry older hunks."
+ },
+ "active_swap_engines": [
+  {
+   "model_id": "inswapper_128",
+   "provider": "TensorrtExecutionProvider",
+   "init_seconds": 8.9,
+   "warm_infer_ms_random_input": 18.0,
+   "weight": "G:\\pinokio\\api\\roop-ultimate\\.cache\\models\\inswapper_128.onnx",
+   "sha256": "e4a3f08c753cb72d04e10aa0f7dbe3deebbf39567d4ead6dce08e98aa49e16af",
+   "native_resolution": 128
+  },
+  {
+   "model_id": "inswapper_128_fp16",
+   "provider": "TensorrtExecutionProvider",
+   "init_seconds": 3.7,
+   "warm_infer_ms_random_input": 67.5,
+   "weight": "G:\\pinokio\\api\\roop-3d\\app\\models\\inswapper_128_fp16.onnx",
+   "sha256": "e4a3f08c753cb72d04e10aa0f7dbe3deebbf39567d4ead6dce08e98aa49e16af",
+   "native_resolution": 128
+  },
+  {
+   "model_id": "hyperswap_1a_256",
+   "provider": "TensorrtExecutionProvider",
+   "init_seconds": 2.7,
+   "warm_infer_ms_random_input": 35.0,
+   "weight": "G:\\pinokio\\api\\roop-3d\\app\\models\\hyperswap_1a_256.onnx",
+   "sha256": "c0e98a8a03a238f461ed3d2570e426b49f46745ee400854a60dceeb70c246add",
+   "native_resolution": 256
+  },
+  {
+   "model_id": "hyperswap_1b_256",
+   "provider": "TensorrtExecutionProvider",
+   "init_seconds": 2.7,
+   "warm_infer_ms_random_input": 32.9,
+   "weight": "G:\\pinokio\\api\\roop-3d\\app\\models\\hyperswap_1b_256.onnx",
+   "sha256": "5124031789c42f71b9558fb71954ef7aedb6da7ed9fac79293e23c61a792a73e",
+   "native_resolution": 256
+  },
+  {
+   "model_id": "hyperswap_1c_256",
+   "provider": "TensorrtExecutionProvider",
+   "init_seconds": 2.8,
+   "warm_infer_ms_random_input": 36.0,
+   "weight": "G:\\pinokio\\api\\roop-3d\\app\\models\\hyperswap_1c_256.onnx",
+   "sha256": "5528c2d76fe9986c99d829278987ef9f3a630cb606db7628d02b57b330f406a5",
+   "native_resolution": 256
+  }
+ ],
+ "unavailable_swap_engines": [
+  {
+   "model_id": "realswap_256",
+   "reason": "no weight file anywhere on disk (registry holds a no-SHA/no-source candidate only)"
+  },
+  {
+   "model_id": "realswap_512",
+   "reason": "no weight file anywhere on disk (registry holds a no-SHA/no-source candidate only)"
+  },
+  {
+   "model_id": "simswap_256",
+   "reason": "no weight file anywhere on disk (registry holds a no-SHA/no-source candidate only)"
+  },
+  {
+   "model_id": "simswap_512_unofficial",
+   "reason": "no weight file anywhere on disk (registry holds a no-SHA/no-source candidate only)"
+  },
+  {
+   "model_id": "ghost_256_unet_1",
+   "reason": "no weight file anywhere on disk (registry holds a no-SHA/no-source candidate only)"
+  },
+  {
+   "model_id": "ghost_256_unet_2",
+   "reason": "no weight file anywhere on disk (registry holds a no-SHA/no-source candidate only)"
+  },
+  {
+   "model_id": "ghost_256_unet_3",
+   "reason": "no weight file anywhere on disk (registry holds a no-SHA/no-source candidate only)"
+  },
+  {
+   "model_id": "blendswap_256",
+   "reason": "no weight file anywhere on disk (registry holds a no-SHA/no-source candidate only)"
+  },
+  {
+   "model_id": "uniface_256",
+   "reason": "no weight file anywhere on disk (registry holds a no-SHA/no-source candidate only)"
+  }
+ ],
+ "engine_notes": [
+  "inswapper_128_fp16.onnx is byte-identical (sha e4a3f08c...) to inswapper_128.onnx: not actually FP16; io dtypes float32; two ids, one network.",
+  "hififace_unofficial_256 + crossface_hififace weights exist (roop-ultimate/app/models, roop-3d/models/cache) but have no supported_models.json spec, so they are not a registered/selectable engine.",
+  "/api/v1/engines/readiness `session` is null until an engine was opened in-process; after opening it reports TensorRT for all 5.",
+  "/api/v1/health returns swap_engines.state=SCANNING with empty lists on the first call after process start (background hash scan); READY once it completes."
+ ],
+ "faceset": {
+  "id": "797577eca6ab4cf88c7b3e075b590979",
+  "loaded_via": "GET /api/v1/facesets + POST /api/v1/facesets/{id}/identity-asset (FaceSetReader)",
+  "built": true,
+  "build_seconds": 1.3,
+  "build_key": "0c99016c...",
+  "layout": "5pt",
+  "reconstruction_level": "limited_multiview",
+  "fit_rms_mm": 0.8,
+  "holdout_rms_mm": 1.21,
+  "mesh_http": 200,
+  "glb_bytes": 482076,
+  "limits": "FLAME blocked; 5-point landmarks only; profile views 0 and 4 got view gain ~0.64 (heavy lighting correction)"
+ },
+ "preview_swap": {
+  "s11_f30": "OK on inswapper_128 (59 s cold) and hyperswap_1a_256 (5.5 s) via POST /api/v1/workstation/preview, CUDA provider; face visibly changed (preview_s11_compare.jpg)",
+  "s3_f60": "422 PREVIEW_TRACK_MISSING: head lying sideways, estimated yaw -80 deg; face is tracked and swap_allowed but session.py auto-3D path hits `fade <= 0 -> continue` and returns zero replacements with no `withheld` entry; error text misleadingly says no mapped face is visible. First attempt also hit PREVIEW_BUDGET (120 s) on cold models."
+ },
+ "detection": {
+  "method": "Per sampled frame: media.analyzer.analyze (RobustDetector-wrapped detector, UI/target-lock path, thresholds 0.5/0.3) and sequential FaceTracker(identity-lock policy) as in MediaService.inspect. All frames when clip <=400 frames, else stride 2-4 (s5 /3, s6 /4, s7 /2, s8 /2).",
+  "per_video": {
+   "s": {
+    "clip": "s",
+    "total_frames": 59,
+    "stride": 1,
+    "frames_evaluated": 59,
+    "analyzer_hits": 59,
+    "tracker_hits": 59,
+    "either_hits": 59,
+    "analyzer_pct": 100.0,
+    "tracker_pct": 100.0,
+    "either_pct": 100.0,
+    "seconds": 22.5
+   },
+   "s1": {
+    "clip": "s1",
+    "total_frames": 206,
+    "stride": 1,
+    "frames_evaluated": 206,
+    "analyzer_hits": 203,
+    "tracker_hits": 199,
+    "either_hits": 203,
+    "analyzer_pct": 98.54,
+    "tracker_pct": 96.6,
+    "either_pct": 98.54,
+    "seconds": 64.4
+   },
+   "s10": {
+    "clip": "s10",
+    "total_frames": 381,
+    "stride": 1,
+    "frames_evaluated": 381,
+    "analyzer_hits": 319,
+    "tracker_hits": 312,
+    "either_hits": 326,
+    "analyzer_pct": 83.73,
+    "tracker_pct": 81.89,
+    "either_pct": 85.56,
+    "seconds": 131.1
+   },
+   "s11": {
+    "clip": "s11",
+    "total_frames": 181,
+    "stride": 1,
+    "frames_evaluated": 181,
+    "analyzer_hits": 181,
+    "tracker_hits": 181,
+    "either_hits": 181,
+    "analyzer_pct": 100.0,
+    "tracker_pct": 100.0,
+    "either_pct": 100.0,
+    "seconds": 50.7
+   },
+   "s2": {
+    "clip": "s2",
+    "total_frames": 306,
+    "stride": 1,
+    "frames_evaluated": 306,
+    "analyzer_hits": 306,
+    "tracker_hits": 301,
+    "either_hits": 306,
+    "analyzer_pct": 100.0,
+    "tracker_pct": 98.37,
+    "either_pct": 100.0,
+    "seconds": 91.0
+   },
+   "s3": {
+    "clip": "s3",
+    "total_frames": 246,
+    "stride": 1,
+    "frames_evaluated": 246,
+    "analyzer_hits": 246,
+    "tracker_hits": 246,
+    "either_hits": 246,
+    "analyzer_pct": 100.0,
+    "tracker_pct": 100.0,
+    "either_pct": 100.0,
+    "seconds": 72.7
+   },
+   "s4": {
+    "clip": "s4",
+    "total_frames": 374,
+    "stride": 1,
+    "frames_evaluated": 374,
+    "analyzer_hits": 374,
+    "tracker_hits": 374,
+    "either_hits": 374,
+    "analyzer_pct": 100.0,
+    "tracker_pct": 100.0,
+    "either_pct": 100.0,
+    "seconds": 206.0
+   },
+   "s5": {
+    "clip": "s5",
+    "total_frames": 1135,
+    "stride": 3,
+    "frames_evaluated": 379,
+    "analyzer_hits": 332,
+    "tracker_hits": 336,
+    "either_hits": 337,
+    "analyzer_pct": 87.6,
+    "tracker_pct": 88.65,
+    "either_pct": 88.92,
+    "seconds": 163.9
+   },
+   "s6": {
+    "clip": "s6",
+    "total_frames": 1335,
+    "stride": 4,
+    "frames_evaluated": 334,
+    "analyzer_hits": 295,
+    "tracker_hits": 295,
+    "either_hits": 297,
+    "analyzer_pct": 88.32,
+    "tracker_pct": 88.32,
+    "either_pct": 88.92,
+    "seconds": 152.4
+   },
+   "s7": {
+    "clip": "s7",
+    "total_frames": 600,
+    "stride": 2,
+    "frames_evaluated": 300,
+    "analyzer_hits": 230,
+    "tracker_hits": 229,
+    "either_hits": 236,
+    "analyzer_pct": 76.67,
+    "tracker_pct": 76.33,
+    "either_pct": 78.67,
+    "seconds": 99.0
+   },
+   "s8": {
+    "clip": "s8",
+    "total_frames": 569,
+    "stride": 2,
+    "frames_evaluated": 285,
+    "analyzer_hits": 285,
+    "tracker_hits": 285,
+    "either_hits": 285,
+    "analyzer_pct": 100.0,
+    "tracker_pct": 100.0,
+    "either_pct": 100.0,
+    "seconds": 97.5
+   },
+   "s9": {
+    "clip": "s9",
+    "total_frames": 381,
+    "stride": 1,
+    "frames_evaluated": 381,
+    "analyzer_hits": 330,
+    "tracker_hits": 329,
+    "either_hits": 332,
+    "analyzer_pct": 86.61,
+    "tracker_pct": 86.35,
+    "either_pct": 87.14,
+    "seconds": 117.2
+   }
+  },
+  "totals": {
+   "frames": 3432,
+   "analyzer_hits": 3160,
+   "tracker_hits": 3146,
+   "either": 3182
+  },
+  "miss_classification": {
+   "s1": "3 misses = hand covering the face (genuine occlusion)",
+   "s5/s6/s7/s9/s10": "contiguous back-of-head / ear-only turntable spans (genuine no-face). Borderline possibly-real: s6 f364,368 (profile outline; tracker had it, analyzer did not), s10 f295/296 (raw 0.43), s7 f124-130 (cheek), s5 f312-324 (glasses sliver; tracker coasted)."
+  },
+  "false_positive_evidence": "sheets/lowscore_hits_precision.png: score 0.32-0.50 boxes sit on the EAR/back of head in s9 (4/4 sampled), s7 (3/4), s10 (2/4). Low-score-only hit frames: s1 7, s2 16, s5 11, s6 6, s7 11, s9 9, s10 24. If all s7/s9/s10 low-score hits were false: s7 73%, s9 84%, s10 77%.",
+  "artifacts": "G:\\pinokio\\api\\roop-3d\\app\\roop_3d\\outputs\\test 1\\phase1_verify\\sheets"
+ },
+ "tests": {
+  "command": "pytest test_swap_engine_readiness test_robust_detection test_local_weight_trust test_model_registry test_swapper_catalog_and_adapter test_model_selection_regressions test_stage12_target_lock test_e2e_video_pipeline test_occlusion_compositor test_photorealistic_swap_core",
+  "result": "159 passed, 0 failed, 2 warnings, 487 s (one fixture setup 448 s = cold TensorRT build). Full suite NOT run.",
+  "log": "G:\\pinokio\\api\\roop-3d\\.swarm\\logs\\pytest_targeted.log"
+ },
+ "known_open_issues": [
+  "9 swappers have no weights (simswap_256/512, ghost_256_unet_1-3, blendswap_256, uniface_256, realswap_256/512).",
+  "inswapper_128_fp16 is not FP16 (duplicate bytes).",
+  "Back-of-head false positives (ear boxes at score 0.3-0.5) in s7/s9/s10 pass FaceAnalyzer's tolerant tier and would be swapped onto the ear.",
+  "Preview returns PREVIEW_TRACK_MISSING (misleading) for tracked faces beyond the 3D yaw limit when pose fade is 0; no withheld reason recorded.",
+  "Cold preview exceeds the 120 s PREVIEW_BUDGET (first TensorRT builds).",
+  "face_occluder.onnx TensorRT/CUDA failure (audit item) not re-verified here.",
+  "ONNX Runtime 'Conv running in Fallback mode' warnings during detection slow 4K scans (~0.5-1 s/frame).",
+  "Tracker was run on strided frames for s5-s8 so its coasting behaviour there is not representative.",
+  "Preview refuses frames > 3840x2160 pixels, so 4096x2160 clips (s4, s5, s6) get PREVIEW_SIZE_BUDGET."
+ ],
+ "runtime_state_touched": [
+  "roop_3d/.runtime/identity_assets/7975.../0c99016c... (rebuilt)",
+  "roop_3d/.runtime/media/phase1_verify_s3.mp4 and phase1_verify_s11.mp4 (copies)",
+  "roop_3d/.runtime/inspections/* (new inspection records)",
+  "outputs/test 1/phase1_verify/*"
+ ],
+ "phase2_recommendations": [
+  "Acquire weights (or drop the 9 ids from the UI) rather than claim 100%; wire hififace/crossface via a supported_models.json spec since weights exist.",
+  "Replace/alias inswapper_128_fp16 with a real FP16 export or hide the duplicate.",
+  "Add back-of-head/ear rejection to the tolerant tier (eyes inside box, 106pt agreement >= 0.8) and re-measure.",
+  "Hand-label ~200 frames (s5-s10 transitions) for a real recall/precision number; stop using frames-with-detection as the KPI.",
+  "Return a withheld/skip reason when pose fade removes a swap; fix PREVIEW_TRACK_MISSING wording.",
+  "Pre-warm TensorRT engines at startup so previews stay under 120 s.",
+  "git add -f models/engine_readiness.py before committing."
+ ]
+}

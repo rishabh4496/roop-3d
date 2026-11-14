@@ -115,12 +115,12 @@ describe('Hardware Diagnostics & HUD Logic (PipelinePill)', () => {
     });
 
     // 4. Low FPS Bottlenecks
-    expect(computeBottleneck(healthyTelemetry, 4.2, 'restoration')).toEqual({
-      label: 'Face Restoration Model Bound',
+    expect(computeBottleneck(healthyTelemetry, 4.2, 'render')).toEqual({
+      label: '3D Head Render Bound',
       severity: 'warning',
     });
-    expect(computeBottleneck(healthyTelemetry, 5.0, 'warp')).toEqual({
-      label: 'Affine Warp / Tensor Flow Bound',
+    expect(computeBottleneck(healthyTelemetry, 5.0, 'pose')).toEqual({
+      label: '3D Pose Solve Bound',
       severity: 'warning',
     });
     expect(computeBottleneck(healthyTelemetry, 3.1, 'detection')).toEqual({

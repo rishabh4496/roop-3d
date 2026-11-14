@@ -29,7 +29,7 @@ import { faceFlags, faceKey, togglePoseLock, toggleSoloFace } from './components
 import { facePose } from './components/canvas/poseHud';
 import { calculateLetterbox, mapBoxToPixels } from './utils/letterbox';
 import { leftToRightRank } from './utils/poseCells';
-import { DEFAULT_PARAMETERS, PIPELINE_NODES, RESTORER_LABELS, nodeBuffer, pipelineNode, restorerStageLabel, type BlendMode, type WorkstationParameters } from './components/workstation/pipeline';
+import { DEFAULT_PARAMETERS, PIPELINE_NODES, nodeBuffer, pipelineNode, type BlendMode, type WorkstationParameters } from './components/workstation/pipeline';
 import { DockArea, DockPanel, LayoutToolbar } from './components/workstation/WorkspaceLayouts';
 import { FloatingPreviewMedia, pipStore, useFloatingPreview } from './components/workstation/FloatingPreview';
 import { LiveTime } from './components/workstation/LiveTime';
@@ -108,7 +108,7 @@ export function VideoViewport({
   trimEnd = null,
   onTrimChange,
   active = true, parameters = DEFAULT_PARAMETERS, setParameters = () => {}, previewRequest = null,
-  inspector, posePanel, restorerAvailable = false, onPreviewLatency,
+  inspector, posePanel, onPreviewLatency,
   maskBase64 = null, maskKeyframes = [], onMaskKeyframesChange, captureWorkspace = () => ({}), restoreWorkspace = () => {},
   onInspectionUpdate, onSourceExtracted, activeSourceId = '', faceCoverage, studio = null,
   previewView, onPreviewViewChange,
@@ -133,7 +133,6 @@ export function VideoViewport({
   previewRequest?: JobRequest | null;
   inspector?: ReactNode;
   posePanel?: ReactNode;
-  restorerAvailable?: boolean;
   onPreviewLatency?: (latency: Record<string, number>) => void;
   maskBase64?: string | null;
   /** Stage 23: paint/erase strokes scoped to a frame range. */
@@ -227,7 +226,7 @@ export function VideoViewport({
   useEffect(() => { if (history.previewSlot || history.comparison) { setPlaying(false); original.current?.pause(); processed.current?.pause(); } }, [history.previewSlot, history.comparison]);
   const captureSlot = async (slot: string) => {
     const at = now();
-    const payload = buildLivePayload({ timestampSelection: true, request: previewRequest, time: at, fps, parameters, maskBase64, restorerAvailable, solo: 'final' });
+    const payload = buildLivePayload({ timestampSelection: true, request: previewRequest, time: at, fps, parameters, maskBase64, solo: 'final' });
     if (!payload || captureBusy) return;
     const controller = new AbortController(); captureAbort.current = controller; const workspace = captureWorkspace();
     setCaptureBusy(true); setCaptureError(''); setPlaying(false); original.current?.pause(); processed.current?.pause();
@@ -250,7 +249,7 @@ export function VideoViewport({
   const latencyCallback = useRef(onPreviewLatency); latencyCallback.current = onPreviewLatency;
   useEffect(() => { if (!active) { setPlaying(false); setSweepPanel(null); original.current?.pause(); processed.current?.pause(); } }, [active]);
   const selectSolo = (node: string) => { if (pipelineNode(node)?.unavailable || !previewRequest) return; history.live(); setSolo(previous => previous === node ? null : node); setIsMaskEditing(false); };
-  const bypassNode = (node: string) => { if (node !== 'restorer') return; setParameters({ ...parameters, bypass: parameters.bypass.includes(node) ? parameters.bypass.filter(item => item !== node) : [...parameters.bypass, node] }); setSolo('final'); setIsMaskEditing(false); };
+  const bypassNode = (node: string) => { if (node !== 'color') return; setParameters({ ...parameters, bypass: parameters.bypass.includes(node) ? parameters.bypass.filter(item => item !== node) : [...parameters.bypass, node] }); setSolo('final'); setIsMaskEditing(false); };
 
   const [showFaceOverlays, setShowFaceOverlays] = preference('show_overlays');
   // The target frame under the playhead: one persistent server-side decoder, one request in flight, newest frame wins
@@ -332,7 +331,7 @@ export function VideoViewport({
   const showMatteRef = useRef<() => void>(() => {});
   const onTargetAction = useCallback(async (action: TargetAction, menu: FaceMenuTarget, extra?: TargetActionExtra) => {
     const match = frameFaces?.find(item => item.face.face_index === menu.faceRank);
-    // Per-face canvas toggles: view state only (pose lock, mask solo) or the one global enhancer (UltraMax).
+    // Per-face canvas toggles: view state only (pose lock, mask solo).
     if (action === 'toggle_pose_lock') { if (menu.faceKey) togglePoseLock(menu.faceKey, menu.pose); return; }
     if (action === 'solo_mask') {
       if (!menu.faceKey) return;
@@ -340,13 +339,6 @@ export function VideoViewport({
       toggleSoloFace(menu.faceKey);
       if (soloing && previewRequest) showMatteRef.current();          // show the matte for the soloed face
       noticeLater(soloing ? `Face #${menu.faceRank + 1}: only its mask is highlighted; the other faces are dimmed.` : 'All face masks shown.');
-      return;
-    }
-    if (action === 'toggle_ultramax') {
-      const on = parameters.restoration_blend > 0 && parameters.restorer_model === 'ultramax';
-      setParameters(on ? { ...parameters, restoration_blend: 0 }
-        : { ...parameters, restorer_model: 'ultramax', restoration_blend: parameters.restoration_blend > 0 ? parameters.restoration_blend : 0.7, bypass: parameters.bypass.filter(item => item !== 'restorer') });
-      noticeLater(on ? 'UltraMax is off.' : 'UltraMax is on for every swapped face: the render engine uses one enhancer for the whole swap.');
       return;
     }
     if (action === 'bind_specific') {
@@ -361,7 +353,7 @@ export function VideoViewport({
     await lockFrameFace(match);
     const store = useFaceSelectionStore.getState(), face = store.detectedFaces.find(item => item.id === store.activeSelection);
     if (face?.clusterId) { store.setClusterMode(face.clusterId, 'exclude'); noticeLater(`Face #${menu.faceRank + 1} is excluded from the swap.`); }
-  }, [frameFaces, lockFrameFace, targetLock, noticeLater, parameters, setParameters, previewRequest]);
+  }, [frameFaces, lockFrameFace, targetLock, noticeLater, previewRequest]);
   // The locked face's pose follows the frame under the playhead (the stored track keeps one pose for all its frames).
   const activeFaceId = useFaceSelectionStore(state => state.activeSelection);
   useEffect(() => {
@@ -383,7 +375,7 @@ export function VideoViewport({
   useEffect(() => { const handler = () => renderFrameRef.current(); window.addEventListener(RENDER_FRAME_EVENT, handler); return () => window.removeEventListener(RENDER_FRAME_EVENT, handler); }, []);
   const requestedBuffer = solo ? nodeBuffer(solo) : compMode === 'matte' ? 'matte' : 'final';
   const live = useLiveSwapPreview(previewLive && enabled && liveSwap && !playing && !isMaskEditing
-    ? buildLivePayload({ timestampSelection: true, request: previewRequest, time, fps, parameters, maskBase64, restorerAvailable, solo: requestedBuffer })
+    ? buildLivePayload({ timestampSelection: true, request: previewRequest, time, fps, parameters, maskBase64, solo: requestedBuffer })
     : null);
   useEffect(() => { if (live.meta?.latency) latencyCallback.current?.(live.meta.latency); }, [live.meta]);
   // Only show a live image that is the buffer currently asked for: never the previous node's output while a new one loads.
@@ -468,7 +460,7 @@ export function VideoViewport({
     jumpIn: () => seek(trimStart), jumpOut: () => seek(trimEnd ?? duration), resetRange: () => onTrimChange?.(0, null),
     toggleWipe: () => toggleCanvasMode('wipe'), toggleDiff: () => toggleCanvasMode('diff'),
     ...bufferShortcuts,
-    solo: () => selectSolo(selectedNode), bypass: () => bypassNode(selectedNode), sweep: () => { if (previewRequest) setSweepPanel('geometry'); },
+    solo: () => selectSolo(selectedNode), bypass: () => bypassNode(selectedNode), sweep: () => { if (previewRequest) setSweepPanel('masking'); },
     extractFace: quickExtractFace,
     snapshotA: () => void captureSlot('A'), snapshotB: () => void captureSlot('B'), snapshotC: () => void captureSlot('C'), snapshotD: () => void captureSlot('D'),
   }, active && !sweepPanel);
@@ -770,7 +762,7 @@ export function VideoViewport({
     <section className={`viewport-section ${isFullscreen ? 'is-fullscreen' : ''}`}>
       {!studio && <LayoutToolbar onFloat={floating.openWindow}/>}
       <PipelineNodeFlowBar selected={selectedNode} solo={solo} bypass={parameters.bypass} onSelect={setSelectedNode} onSolo={selectSolo} onBypass={bypassNode} busy={false} available={!!previewRequest}
-        restorerLabel={restorerStageLabel(parameters)} latency={live.meta?.latency ?? null} frame={live.meta?.frame_index ?? null} loading={live.status === 'loading'}/>
+        latency={live.meta?.latency ?? null} frame={live.meta?.frame_index ?? null} loading={live.status === 'loading'}/>
       <details className="preview-tools" data-testid="preview-tools">
       <summary><span>Snapshots</span><small>Compare A/B/C/D snapshots</small></summary>
       <SnapshotSlots onCapture={(slot: string) => void captureSlot(slot)} onRestore={restoreWorkspace} busy={captureBusy} captureAvailable={!!previewRequest}/>
@@ -779,7 +771,7 @@ export function VideoViewport({
       <div className="viewport-toolbar">
         <span className="eyebrow">WORKSTATION MEDIA INSPECTOR</span>
         <button className="button small" disabled={!history.past.length} onClick={history.undo}>Undo</button><button className="button small" disabled={!history.future.length} onClick={history.redo}>Redo</button><button className="button small" onClick={() => setHistoryOpen(true)}>Edit history ({history.past.length})</button>
-        <button className="button small" disabled={!previewRequest} onClick={() => { setPlaying(false); original.current?.pause(); processed.current?.pause(); setSweepPanel('geometry'); }}>3×3 Sweep</button>
+        <button className="button small" disabled={!previewRequest} onClick={() => { setPlaying(false); original.current?.pause(); processed.current?.pause(); setSweepPanel('masking'); }}>3×3 Sweep</button>
         <button
           type="button"
           className={`button small use-face-frame-btn ${detectingFaces ? 'busy' : ''}`}
@@ -1073,30 +1065,23 @@ export function VideoViewport({
           <fieldset key={panel} className={`parameter-panel panel-${panel}`}>
             <legend>{PANELS[panel].title}</legend>
             <p className="muted panel-hint">{PANELS[panel].hint}</p>
-            {panel === 'geometry' && <label className="numeric-control">Pose correction method<select aria-label="Pose correction method" value={parameters.pose_mode ?? 'retarget'} onChange={event => setParameters({ ...parameters, pose_mode: event.target.value as 'retarget' | 'mesh_blend' })}><option value="mesh_blend">2.5D / 3D mesh blend (canonical proxy)</option><option value="retarget">Reference LivePortrait retarget</option></select></label>}
             {panel === 'masking' && <label className="numeric-control">Occlusion handling<select aria-label="Occlusion handling" value={parameters.occlusion_mode ?? 'standard'} onChange={event => setParameters({ ...parameters, ...occlusionModePatch(parameters, event.target.value as 'standard' | 'robust') })}><option value="standard">Standard (parser + landmark hull)</option><option value="robust">Robust (hands, hair, glasses, props, face depth order)</option></select></label>}
             {panel === 'masking' && <label className="numeric-control">Seam blend mode<select aria-label="Seam blend mode" value={blendModeOf(parameters)} onChange={event => setParameters({ ...parameters, blend_mode: event.target.value as BlendMode })}>
               {BLEND_MODES.map(item => <option key={item.id} value={item.id} disabled={item.id === 'frequency_separated' && !!frequencyBlockedReason(parameters)} title={item.hint}>{item.label}</option>)}
             </select></label>}
-            {panel === 'restorer' && <>
+            {panel === 'color' && <>
               <label className="numeric-control">Color transfer<select aria-label="Color transfer" value={parameters.color_method ?? 'lab'} onChange={event => setParameters({ ...parameters, color_method: event.target.value as 'lab' | 'reinhard_lab' | 'histogram' })}>
                 <option value="lab">LAB mean/std</option><option value="reinhard_lab">Reinhard LAB</option><option value="histogram">Masked histogram</option>
               </select></label>
               <label className="numeric-control"><input aria-label="3D SH relighting" type="checkbox" checked={parameters.relight ?? false}
                 onChange={event => setParameters({ ...parameters, relight: event.target.checked })}/> 3D SH relighting</label>
-              {parameters.restorer_model === 'ultramax' && <label className="numeric-control">Small-face UltraMax<select aria-label="Small-face UltraMax" value={parameters.ultramax_small_face_mode ?? 'off'} onChange={event => setParameters({ ...parameters, ultramax_small_face_mode: event.target.value as 'bypass' | 'adaptive' | 'off' })}>
-                <option value="off">Always restore (engine default)</option>
-                <option value="bypass">Skip faces at or below {parameters.ultramax_min_native_pixels ?? 320} px</option>
-                <option value="adaptive">Scale detail for faces at or below {parameters.ultramax_min_native_pixels ?? 320} px</option>
-              </select></label>}
             </>}
             {settingsOf(panel).map(spec => {
-              const blocked = spec.id === 'restoration_blend' && !restorerAvailable;
               const inert = inactiveReason(spec, effectiveParameters);
-              return <SettingControl key={spec.id} spec={spec} label={spec.id === 'pose_strength' && parameters.pose_mode !== 'mesh_blend' ? 'Reference retarget strength' : undefined}
+              return <SettingControl key={spec.id} spec={spec}
                 value={settingValue(spec, effectiveParameters)} onChange={value => editParameter(spec.id, value)}
-                disabled={blocked || !!inert}
-                disabledReason={blocked ? `${RESTORER_LABELS[parameters.restorer_model ?? 'gpen']} weights are unavailable, so the restorer cannot run.` : inert ?? undefined}/>;
+                disabled={!!inert}
+                disabledReason={inert ?? undefined}/>;
             })}
             <button type="button" className="button small sweep-btn" disabled={!previewRequest} aria-label={`3×3 Sweep for ${PANELS[panel].title}`}
               onClick={() => { setPlaying(false); original.current?.pause(); processed.current?.pause(); setSweepPanel(panel); }}>3×3 Sweep</button>
@@ -1108,12 +1093,11 @@ export function VideoViewport({
       {faceMenu && <FaceContextMenu target={{ ...faceMenu, faceLabel: frameFaces?.find(item => item.face.face_index === faceMenu.faceRank)?.face.face_id }} activeSourceName={activeSourceName} busy={extraction.busy || targetLock.busy} onClose={() => setFaceMenu(null)}
         targetLabel={targetLock.lock?.label ?? null} onTargetAction={(action, menu, extra) => { setFaceMenu(null); void onTargetAction(action, menu, extra); }}
         bindSources={sources.map(item => ({ id: item.faceset_id, name: item.name }))}
-        ultramaxOn={parameters.restoration_blend > 0 && parameters.restorer_model === 'ultramax'}
         poseLocked={!!faceMenu.faceKey && !!faceState.locks[faceMenu.faceKey]} maskSolo={!!faceMenu.faceKey && faceState.soloKey === faceMenu.faceKey}
         onChoose={(destination, menu) => { setFaceMenu(null); void extraction.run(destination, menu); }}/>}
       {sweepPanel && <ContactSheetModal panel={sweepPanel} parameters={parameters} frameLabel={`Frame ${currentFrame} · ${time.toFixed(3)} s`}
         payloadFor={(patch: Patch) => {
-          return buildLivePayload({ timestampSelection: true, request: previewRequest, time, fps, restorerAvailable, maskBase64, solo: 'final',
+          return buildLivePayload({ timestampSelection: true, request: previewRequest, time, fps, maskBase64, solo: 'final',
             parameters: applySweepPatch(parameters, patch) });
         }}
         onApply={(patch: Patch) => setParameters(applySweepPatch(parameters, patch))} onClose={() => setSweepPanel(null)}/>}

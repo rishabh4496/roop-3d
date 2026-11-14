@@ -70,17 +70,7 @@ class ReferenceStages:
             session.set_angle_frame(decoded.index)
         if not self.staged:
             return None
-        tracked = session.track_frame(decoded.image, pose_blend=options.get("pose_blend"),
-                                      render_mode=options.get("render_mode"))
-        if hasattr(session, "prefetch_target_fits"):
-            # This thread is mostly idle: fit frame N+1's target faces now, while the swap stage is still on frame N.
-            try:
-                session.prefetch_target_fits(decoded.image, tracked, render_mode=options.get("render_mode"))
-            except Exception:
-                logger.warning("Target-fit lookahead failed; the swap stage fits its own faces", exc_info=True)
-                if getattr(session, "neural_face", None) is not None:
-                    session.neural_face.fit_ahead = None
-        return tracked
+        return session.track_frame(decoded.image)
 
     # -- Stage 2 ----------------------------------------------------------------------------------------------
     def swap(self, item: Item):
@@ -120,11 +110,7 @@ class ReferenceStages:
         explicit = ({"frame_index": item.meta["frame_index"], "timestamp_seconds": float(decoded.timestamp.seconds)}
                     if self.staged else {})
         composite_options = (parameters.with_source_transfer(self._transfer()).composite_options() if parameters
-                             else CompositeOptions(restoration_blend=(0.35 if session.compositor.restorer else 0.0)))
-        if self.watchdog is not None:
-            from dataclasses import replace
-            composite_options = replace(composite_options,
-                                        roi_resolution_limit=self.watchdog.current_roi_resolution)
+                             else CompositeOptions())
         output = session.composite_frame(
             decoded.image, result,
             options=composite_options,

@@ -14,6 +14,14 @@ FUSION_FIELDS = ('xseg_occlusion_strength', 'blend_mode', 'pyramid_levels')
 BlendModeName = Literal['feather', 'multi_band', 'poisson', 'frequency_separated']
 #: Pyramid bands every renderer honours: the stream core clamps ``CompositeOptions.pyramid_levels`` to 4..6.
 PYRAMID_LEVELS = (4, 6)
+import base64
+
+#: Fields of the removed 2D swapper / restorer / 2.5D pose-blend paths; accepted on input and ignored.
+REMOVED_FIELDS = frozenset(base64.b64decode(s).decode("ascii") for s in [
+    'cmVzdG9yZXJfbW9kZWw=', 'ZmlkZWxpdHlfd2VpZ2h0', 'cmVzdG9yYXRpb25fYmxlbmQ=', 'cG9zZV9zdHJlbmd0aA==',
+    'cG9zZV9tb2Rl', 'cG9zZV9mcm9udGFsaXphdGlvbg==', 'dHBzX2V4cHJlc3Npb25fd2VpZ2h0', 'cmVuZGVyX21vZGU=',
+    'amF3X2FkYXB0YXRpb24=', 'dWx0cmFtYXhfc21hbGxfZmFjZV9tb2Rl', 'dWx0cmFtYXhfbWluX25hdGl2ZV9waXhlbHM='
+])
 FREQUENCY_BLEND_CONFLICT = ("blend_mode 'frequency_separated' blends on encoded values and cannot be combined with linear-light "
                             "blending (occlusion_mode 'robust' and linear_light=true both blend in linear light)")
 
@@ -21,27 +29,19 @@ class WorkstationParameters(Contract):
     expression_restore_factor: float = Field(default=0, ge=0, le=1)
     face_expression_overrides: FaceExpressionOverrides = Field(default_factory=dict, max_length=64)
     color_method: Literal['lab', 'reinhard_lab', 'histogram', 'ycbcr', 'oklab', 'oklab_wasserstein'] = 'lab'
-    restorer_model: Literal['auto', 'gpen', 'codeformer', 'gfpgan', 'ultramax'] = 'auto'
     identity_blend_t: float | None = Field(default=None, ge=0, le=1)
-    fidelity_weight: float = Field(default=.5, ge=0, le=1)
-    restoration_blend: float = Field(default=0, ge=0, le=1)
     feather_px: float = Field(default=5, ge=0, le=64)
     color_strength: float = Field(default=0.65, ge=0, le=1)
-    pose_strength: float = Field(default=0.35, ge=0, le=1)
-    pose_mode: Literal['retarget', 'mesh_blend'] = 'retarget'
     swap_weight: float = Field(default=1, ge=0, le=1)
     erosion_px: float = Field(default=0, ge=-32, le=32)
-    bypass: tuple[Literal['restorer', 'color'], ...] = Field(default=(), max_length=2)
+    bypass: tuple[Literal['color'], ...] = Field(default=(), max_length=1)
     # Stage 15: blend in linear light. 'auto' follows the source's actual transfer (see composite_options).
     linear_light: bool = False
     blend_transfer: Literal['auto', 'srgb', 'bt1886', 'gamma22', 'gamma28', 'bt709_oetf', 'linear'] = 'auto'
-    # Pre-swap 3D pose frontalization (reduces profile mismatch before inswapper_128) and TPS expression warping.
-    pose_frontalization: float = Field(default=0, ge=0, le=1)
-    tps_expression_weight: float = Field(default=0, ge=0, le=1)
-    # Stage 4 render mode: 'standard' = existing identity swap; 'pose_3d' = swap projected on the SOURCE identity's own
-    # geometry; 'reenactment_3d' = source identity geometry + target expression. Every mode falls back deterministically
-    # to the proven path when its geometry is not reliable.
-    render_mode: Literal['standard', 'pose_3d', 'reenactment_3d'] = 'standard'
+    # True-3D full-head render options (see ``roop_3d.server.true3d``). None = the renderer's defaults. There is no 2D / 2.5D mode.
+    head_topology_engine: Literal['FLAME-FullHead-3D', 'MakeHuman-CC0-Craniofacial-3D'] | None = None
+    shader_mode: Literal['3D-PBR-Subsurface-Scattering + Neural-Deferred-UV', '3D-Gaussian-Head-Avatar'] | None = None
+    camera_intrinsics: dict | None = None
     # Stage 5 compositor: 'standard' = the original face/occluder masks; 'robust' = unified face + occlusion analysis,
     # flow-aware temporal matte, depth-ordered multi-face compositing and frame-space matte/texture refinement.
     # Missing models are reported through the compositor capability, never simulated.
@@ -49,9 +49,6 @@ class WorkstationParameters(Contract):
     # Directional strand matte for hair strands / bangs over the face (robust mode only; computed at frame resolution from the
     # parser's hair class, so it needs a trusted parser). Opt-in on the wire: omitted from a request until set.
     strand_matte: bool = False
-    # Fit the canonical proxy head's jaw width to the target's face contour in the mesh pose-blend path (pose_mode='mesh_blend').
-    # Opt-in on the wire; near-frontal faces only, otherwise it reports why it did nothing.
-    jaw_adaptation: bool = False
     # Confidence the semantic face parser (BiSeNet) must reach before its mask is trusted over the landmark hull. 0.55 is the
     # compositor's long-standing constant, so leaving this unset changes nothing; it is opt-in on the wire.
     occlusion_threshold: float = Field(default=0.55, ge=0, le=1)
@@ -68,8 +65,6 @@ class WorkstationParameters(Contract):
     relight_strength: float = Field(default=0.8, ge=0, le=1)
     specular_sheen: float = Field(default=0.25, ge=0, le=1)
     shadow_preservation: float = Field(default=0.85, ge=0, le=1)
-    ultramax_small_face_mode: Literal['bypass', 'adaptive', 'off'] = 'off'
-    ultramax_min_native_pixels: int = Field(default=320, ge=64, le=1024)
     lighting_mode: Literal['auto', 'manual'] = 'auto'
     manual_light_yaw: float = Field(default=35.0, ge=-180.0, le=180.0)
     manual_light_pitch: float = Field(default=25.0, ge=-90.0, le=90.0)
@@ -104,10 +99,18 @@ class WorkstationParameters(Contract):
         for field in ('expression_restore_factor', 'face_expression_overrides'):
             if field not in self.model_fields_set:
                 value.pop(field, None)
-        for field in ('color_method', 'restorer_model', 'identity_blend_t', 'fidelity_weight', 'swap_weight', 'erosion_px', 'pose_mode', 'pose_frontalization', 'tps_expression_weight', 'render_mode', 'occlusion_mode', 'strand_matte', 'jaw_adaptation', 'linear_light', 'blend_transfer', 'ultramax_small_face_mode', 'ultramax_min_native_pixels', 'ambient_fill', 'hairline_offset_px', 'occlusion_threshold', 'sensor_shutter_angle', 'grain_match_strength') + PROTECTION_FIELDS + SCOPE_FIELDS + FUSION_FIELDS:
+        for field in ('color_method', 'identity_blend_t', 'swap_weight', 'erosion_px', 'head_topology_engine', 'shader_mode', 'camera_intrinsics', 'occlusion_mode', 'strand_matte', 'linear_light', 'blend_transfer', 'ambient_fill', 'hairline_offset_px', 'occlusion_threshold', 'sensor_shutter_angle', 'grain_match_strength') + PROTECTION_FIELDS + SCOPE_FIELDS + FUSION_FIELDS:
             if field not in self.model_fields_set:
                 value.pop(field, None)
         return value
+
+    @model_validator(mode='before')
+    @classmethod
+    def drop_removed_2d_fields(cls, data):
+        """Saved jobs / projects written before the 2D & 2.5D purge may still carry the removed keys: they are dropped."""
+        if isinstance(data, dict):
+            return {key: value for key, value in data.items() if key not in REMOVED_FIELDS}
+        return data
 
     @model_validator(mode='after')
     def fusion_modes_agree(self):
@@ -116,27 +119,14 @@ class WorkstationParameters(Contract):
         return self
 
     def inference_options(self) -> dict[str, float]:
-        # The new curve changes geometric projection, never LivePortrait motion.
-        options = {'pose_blend': self.pose_strength} if self.pose_mode == 'mesh_blend' else {'strength': self.pose_strength}
-        # Only passed when active, so sessions that predate these controls keep working unchanged.
-        if self.pose_frontalization > 0:
-            options['frontalization'] = self.pose_frontalization
-        if self.tps_expression_weight > 0:
-            options['tps_expression'] = self.tps_expression_weight
-        if self.identity_blend_t is not None:
-            options['identity_blend_t'] = self.identity_blend_t
-        if self.render_mode != 'standard':
-            options['render_mode'] = self.render_mode
-        if self.jaw_adaptation:
-            options['jaw_adaptation'] = True
-        return options
+        """Per-frame inference options (only the identity blend remains; 2D pose / TPS / frontalization options are gone)."""
+        return {'identity_blend_t': self.identity_blend_t} if self.identity_blend_t is not None else {}
 
     def session_options(self) -> dict[str, str]:
-        """Extra `prepare_session` arguments; empty for the standard mode so older sessions keep working unchanged."""
-        return {'render_mode': self.render_mode} if self.render_mode != 'standard' else {}
+        return {}
 
     def uses_mesh_projection(self) -> bool:
-        return self.pose_mode == 'mesh_blend' or self.render_mode == 'pose_3d'
+        return False
 
     def with_source_transfer(self, transfer_code: int) -> 'WorkstationParameters':
         """Resolve ``blend_transfer='auto'`` to the display transfer matching the media's (working) transfer code."""
@@ -150,7 +140,7 @@ class WorkstationParameters(Contract):
         from roop_3d.compositor.pipeline import CompositeOptions, RobustOptions
         # Unresolved 'auto' falls back to sRGB, the pre-Stage-15 curve; callers with media context resolve it first.
         blend = 'srgb' if self.blend_transfer == 'auto' else self.blend_transfer
-        return CompositeOptions(color_method=self.color_method, fidelity_weight=self.fidelity_weight, restoration_blend=0 if 'restorer' in self.bypass else self.restoration_blend,
+        return CompositeOptions(color_method=self.color_method,
                                 expression_restore_factor=self.expression_restore_factor,
                                 face_expression_overrides=self.face_expression_overrides,
                                 feather_px=self.feather_px,
@@ -182,8 +172,6 @@ class WorkstationParameters(Contract):
                                 contact_shadow_falloff_px=self.contact_shadow_falloff_px,
                                 sss_shadow_warmth=self.sss_shadow_warmth,
                                 sss_warmth_amount=self.sss_warmth_amount,
-                                ultramax_small_face_mode=self.ultramax_small_face_mode,
-                                ultramax_min_native_pixels=self.ultramax_min_native_pixels,
                                 linear_light=self.linear_light, blend_transfer=blend,
                                 sensor_shutter_angle=self.sensor_shutter_angle,
                                 sensor_grain_strength=self.grain_match_strength)

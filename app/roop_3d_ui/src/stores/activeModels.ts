@@ -5,12 +5,13 @@ import { RUNTIME_SETTINGS_CHANGED } from '../runtimeSettings';
 
 /** One stage's loaded model, from `GET /models/active`. `null` = no session of that stage is in memory. */
 export type ActiveModel = {
-  stage: 'detector' | 'swapper' | 'enhancer'; model_id: string; model_path: string; filename: string;
+  stage: string; model_id: string; model_path: string; filename: string;
   provider: string; precision: string; sha256: string | null; loaded_at: number; switches: number;
 } | null;
+/** Selected: the detector plus the true-3D choices (`head_topology_engine`, `shader_mode`, `camera_mode`). Active: stage name -> loaded model. */
 export type ActiveModels = {
-  selected: { swapper_model: string; detector_model: string; enhancer_model: string };
-  active: { detector: ActiveModel; swapper: ActiveModel; enhancer: ActiveModel };
+  selected: { detector_model: string; head_topology_engine?: string; shader_mode?: string; camera_mode?: string };
+  active: Record<string, ActiveModel>;
 };
 type State = { value: ActiveModels | null; error: string };
 

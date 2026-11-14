@@ -231,19 +231,21 @@ class OcclusionAnalyzer:
             tier = "geometric"
             reasons.append("OCCLUSION_UNVERIFIED")
 
-        if mesh_support is not None and probabilities is not None:
-            # Hair/glasses may lie above or outside the target landmark hull.
-            # A full-head mesh still needs their semantic foreground veto there.
-            from roop_3d.compositor.occlusion import semantic_occluder_mask
+        if mesh_support is not None:
+            # A projected face or source-photo forehead may extend beyond the target landmark hull.
+            # Both semantic foreground and the visible-face networks must veto that entire replacement footprint.
             support_head = np.asarray(mesh_support, np.float32)
             if support_head.shape != shape or not np.isfinite(support_head).all():
                 raise ValueError("Full-head support must match the analysis canvas")
-            # Face-coverage trust is a different question from a confident hair,
-            # hat or glasses prediction. Waiting for face-trust warmup paints
-            # over the hairline in the very first full-head frame of a shot.
-            foreground = semantic_occluder_mask(probabilities)
-            foreground *= probabilities.max(axis=2) >= confidence_threshold
-            front = combine_occluders(front, foreground * np.clip(support_head, 0, 1))
+            support_head = np.clip(support_head, 0, 1)
+            if probabilities is not None:
+                from roop_3d.compositor.occlusion import semantic_occluder_mask
+                # Face-coverage trust warmup must not defer confident hair/hat/glasses protection.
+                foreground = semantic_occluder_mask(probabilities)
+                foreground *= probabilities.max(axis=2) >= confidence_threshold
+                front = combine_occluders(front, foreground * support_head)
+            if visible is not None and xseg_strength > 0.0:
+                front = combine_occluders(front, (1.0 - visible) * support_head * xseg_strength)
 
         # Confidence is the weakest verified component; it never rises above what ran.
         parts = [1.0]

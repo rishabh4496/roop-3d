@@ -133,6 +133,7 @@ class ModelManager:
         imported: list[dict[str, Any]] = []
         skipped: list[dict[str, Any]] = []
         corrupted: list[dict[str, Any]] = []
+        unpinned_files: list[dict[str, Any]] = []
 
         temp_extract = self.root / "cache/tmp" / f"bundle_{os.getpid()}"
         temp_extract.mkdir(parents=True, exist_ok=True)
@@ -148,18 +149,41 @@ class ModelManager:
             else:
                 source_root = bundle_path
 
-            # Map filenames to records
-            records_by_name = {rec.name: rec for rec in self.registry.records()}
+            # Only a pinned identity (SHA-256 and size) can verify bytes. An unpinned catalog candidate is registered last,
+            # so it must never shadow a pinned record of the same file name, nor turn a good file into "corrupted".
+            pinned: dict[str, list[ModelRecord]] = {}
+            unpinned: dict[str, ModelRecord] = {}
             for rec in self.registry.records():
-                for fn in rec.filenames:
-                    records_by_name[fn] = rec
+                for key in dict.fromkeys((rec.name, *rec.filenames)):
+                    if rec.expected_sha256 and rec.byte_size:
+                        pinned.setdefault(key, []).append(rec)
+                    else:
+                        unpinned.setdefault(key, rec)
 
             for parent, dirs, files in os.walk(source_root, followlinks=False):
                 dirs[:] = [d for d in dirs if not is_link(Path(parent) / d)]
                 for fname in files:
                     file_path = Path(parent) / fname
-                    rec = records_by_name.get(fname)
-                    if not rec:
+                    candidates = pinned.get(fname)
+                    if not candidates:
+                        entry = unpinned.get(fname)
+                        if entry is not None:
+                            unpinned_files.append({"name": entry.name, "model_id": entry.model_id, "file": fname,
+                                                   "reason": "No SHA-256 and size are registered for this catalog entry, so the "
+                                                             "file cannot be verified or imported"})
+                        continue
+
+                    # The first pinned identity of that name that the source bytes satisfy is the one imported.
+                    rec, failure = None, None
+                    for candidate in candidates:
+                        try:
+                            verify_file(file_path, candidate.expected_sha256, candidate.byte_size)
+                            rec = candidate
+                            break
+                        except DomainError as err:
+                            failure = err
+                    if rec is None:
+                        corrupted.append({"name": candidates[0].name, "file": fname, "error": str(failure)})
                         continue
 
                     dest = self._target_path(rec)
@@ -171,13 +195,6 @@ class ModelManager:
                             continue
                         except DomainError:
                             pass
-
-                    # Verify source file
-                    try:
-                        verify_file(file_path, rec.expected_sha256, rec.byte_size)
-                    except DomainError as err:
-                        corrupted.append({"name": rec.name, "file": fname, "error": str(err)})
-                        continue
 
                     # Copy atomically to target
                     temp_dest = dest.with_suffix(dest.suffix + ".part")
@@ -201,15 +218,21 @@ class ModelManager:
             "imported_count": len(imported),
             "skipped_count": len(skipped),
             "corrupted_count": len(corrupted),
+            "unpinned_count": len(unpinned_files),
             "imported": imported,
             "skipped": skipped,
             "corrupted": corrupted,
+            "unpinned": unpinned_files,
         }
 
     def verify_all_models(self) -> dict[str, Any]:
         """Runs full SHA-256 verification on all models in the local cache or configured local roots."""
         results = []
         for rec in self.registry.records():
+            if not rec.expected_sha256 or not rec.byte_size:
+                # A catalog candidate has no identity to verify against; "NOT_INSTALLED" would claim a lookup that cannot happen.
+                results.append({"name": rec.name, "model_id": rec.model_id, "state": "UNPINNED_CANDIDATE", "sha256_verified": False})
+                continue
             target = self._target_path(rec)
             resolved = None
             if target.exists():

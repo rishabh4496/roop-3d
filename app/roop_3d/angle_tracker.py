@@ -23,9 +23,7 @@ MAX_BRIDGE_GAP = 8
 TARGET_MATCH_SAME_ANGLE = 0.40
 TARGET_MATCH_PROFILE_CONTINUITY = 0.22
 RENDER_MODE_TO_ENGINE = {
-    "standard_2d": "standard",
-    "estimated_2_5d": "pose_3d",
-    "full_3d_reconstructed": "reenactment_3d",
+    "full_3d_head": "true_3d",
 }
 
 
@@ -33,6 +31,7 @@ def normalize_render_mode(mode: str) -> str:
     """Translate the workstation's Stage 13 labels to the established engine names."""
     if mode in RENDER_MODE_TO_ENGINE:
         return RENDER_MODE_TO_ENGINE[mode]
+    return "true_3d"
     if mode in RENDER_MODE_TO_ENGINE.values():
         return mode
     raise ValueError(f"Unsupported render mode: {mode}")
@@ -122,7 +121,7 @@ class AngleScanResult:
     forward_tracks: int
     backward_tracks: int
     bridged_frames: int
-    render_modes: tuple[str, ...] = ("standard_2d", "estimated_2_5d", "full_3d_reconstructed")
+    render_modes: tuple[str, ...] = ("full_3d_head",)
 
     @property
     def locked_frames(self) -> int:

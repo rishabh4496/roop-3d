@@ -39,7 +39,7 @@ describe('lane model', () => {
   it('lays every stage on one shared time axis in execution order with the real stage names', () => {
     const model = buildLaneModel(pipeline())!;
     expect(model.rows.map(row => row.name)).toEqual(['decode', 'track', 'swap', 'composite', 'write']);
-    expect(model.rows.find(row => row.name === 'composite')!.label).toContain('UltraMax');
+    expect(model.rows.find(row => row.name === 'composite')!.label).toContain('Composite');
     expect(model.rows.find(row => row.name === 'write')!.label).toContain('PNG checkpoint');
     const swap = model.rows.find(row => row.name === 'swap')!;
     expect(swap.segments[0]).toMatchObject({ frame: 10, left: 30, width: 40 });
@@ -109,7 +109,7 @@ describe('StreamOverlapPanel', () => {
   it('renders measured lanes, overlap, the PCIe link, copy verdict and ring buffer from one payload', () => {
     act(() => root.render(<StreamOverlapPanel metrics={payload()} />));
     expect(host.querySelectorAll('[data-testid^="lane-"]:not([data-testid="lanes-empty"])')).toHaveLength(5);
-    expect(text('lane-swap')).toContain('Stage 2 · 3D swap');
+    expect(text('lane-swap')).toContain('Stage 2 · 3D head render');
     expect(text('overlap-line')).toContain('62%');
     expect(text('gpu-stream-note')).toContain('not measured');
     expect(host.textContent).toContain('812');                                 // PCIe TX MB/s from NVML

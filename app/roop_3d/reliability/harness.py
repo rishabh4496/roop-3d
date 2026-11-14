@@ -114,7 +114,7 @@ class StubSession:
         return 255 - image
 
     def capability(self):
-        return {"identity_swapper": {"inference_state": "VERIFIED_LOCAL"},
+        return {"renderer": {"wired": False},
                 "portrait": {"state": "UNSUPPORTED"}, "lip_sync": {"state": "UNSUPPORTED"}}
 
     def release_session(self):
@@ -183,8 +183,7 @@ def fixture_catalog(root: Path):
     directory = root / "roop_3d/.runtime/harness_models"
     directory.mkdir(parents=True, exist_ok=True)
     records = []
-    for role, name in (("detector", "scrfd_10g_bnkps.onnx"), ("recognizer", "w600k_r50.onnx"),
-                       ("identity_swapper", "inswapper_128.onnx")):
+    for role, name in (("detector", "scrfd_10g_bnkps.onnx"), ("recognizer", "w600k_r50.onnx")):
         data = ("Roop 3D deterministic dependency fixture: " + role).encode()
         path = directory / name
         if not path.exists():

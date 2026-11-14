@@ -1,15 +1,12 @@
 """First-Use Automatic Model Downloader & Integrity Verifier for Roop 3D.
 
 Maintains canonical registries, verified upstream URLs, and SHA-256 checksums for:
-1. inswapper_128_fp16.onnx
-2. scrfd_2.5g.onnx
-3. 1k3d68.onnx
-4. 2d106det.onnx
-5. xseg.onnx
-6. bisenet.onnx
-7. occluder.onnx
-8. GPEN-BFR-512.onnx
-9. ultramax.onnx
+1. scrfd_2.5g.onnx
+2. 1k3d68.onnx
+3. 2d106det.onnx
+4. xseg.onnx
+5. bisenet.onnx
+6. occluder.onnx
 
 Provides chunked, resumable downloads (*.part), atomic moves, SHA-256 integrity verification,
 and real-time WebSocket progress reporting via EventBroker.
@@ -52,22 +49,6 @@ class ModelSpec:
 
 # Canonical registry of all 9 required models
 REQUIRED_MODELS: Dict[str, ModelSpec] = {
-    "inswapper_128_fp16.onnx": ModelSpec(
-        model_id="inswapper_128_fp16",
-        name="inswapper_128_fp16.onnx",
-        aliases=("inswapper_128.onnx", "inswapper_128_fp16.onnx", "inswapper_128.model.onnx"),
-        primary_url="https://huggingface.co/ezioruan/inswapper_128.onnx/resolve/6ffdf0e83c5996cc425e77b59913fc48d79441be/inswapper_128.onnx",
-        fallback_url="https://huggingface.co/facefusion/models-3.0.0/resolve/main/inswapper_128_fp16.onnx",
-        expected_sha256="e4a3f08c753cb72d04e10aa0f7dbe3deebbf39567d4ead6dce08e98aa49e16af",
-        acceptable_sha256s=(
-            "e4a3f08c753cb72d04e10aa0f7dbe3deebbf39567d4ead6dce08e98aa49e16af",
-            "eae68e48eb33ac8870a6f39f886f32e2d93e18a804e3b7b62c1214fa619d8560",
-            "c4eccca86ad177586c85c28bf1a64a9d9ed237e283a15818d831f7facfd3f420",
-        ),
-        expected_size_bytes=554253681,
-        category="swapper",
-        description="InsightFace 128x128 face swapper neural engine.",
-    ),
     "scrfd_2.5g.onnx": ModelSpec(
         model_id="scrfd_2.5g",
         name="scrfd_2.5g.onnx",
@@ -165,39 +146,6 @@ REQUIRED_MODELS: Dict[str, ModelSpec] = {
         expected_size_bytes=70324403,
         category="occlusion",
         description="High-precision foreground hand, hair, and object occluder.",
-    ),
-    "GPEN-BFR-512.onnx": ModelSpec(
-        model_id="GPEN-BFR-512",
-        name="GPEN-BFR-512.onnx",
-        aliases=("GPEN-BFR-512.onnx", "gpen_bfr_512.onnx", "gpen_bfr_512.model.onnx"),
-        primary_url="https://huggingface.co/CountFloyd/deepfake/resolve/ee7d0fe0c284700192ff11e14ecdab5b40185204/GPEN-BFR-512.onnx",
-        fallback_url="https://huggingface.co/facefusion/models-3.0.0/resolve/728b9659bd9691bf32cbf7f61af478d94b7ba81e/gpen_bfr_512.onnx",
-        expected_sha256="0960f836488737faee862412e87fc4c2f74122d2ee7fefd4e0e29b10ec871b69",
-        acceptable_sha256s=(
-            "0960f836488737faee862412e87fc4c2f74122d2ee7fefd4e0e29b10ec871b69",
-            "d5f066b9068a8b74217f9712e28e875a6144629b108a6f7355acbdb3a2832c54",
-            "d5f066b9062df67e2ea3c9ef526ebcd9e3fba46fa0bfd30d5bfaab03f9011707",
-        ),
-        expected_size_bytes=284250449,
-        category="enhancer",
-        description="GPEN Realistic 512px blind face restoration neural engine.",
-    ),
-    "ultramax.onnx": ModelSpec(
-        model_id="ultramax",
-        name="ultramax.onnx",
-        aliases=("ultramax_bfr.onnx", "ultramax.onnx", "codeformer.fp16.onnx", "codeformer.onnx", "ultramax_bfr.model.onnx"),
-        primary_url="https://huggingface.co/netrunner-exe/Face-Upscalers-onnx/resolve/c0d6e7796b70241abe2fc29b398b3c6a5c766783/codeformer.fp16.onnx",
-        fallback_url="https://huggingface.co/CountFloyd/deepfake/resolve/ee7d0fe0c284700192ff11e14ecdab5b40185204/CodeFormerv0.1.onnx",
-        expected_sha256="5414b2c989eb93feb7b5bccd22a1a9f3842a127411932663d03884af140a48b6",
-        acceptable_sha256s=(
-            "5414b2c989eb93feb7b5bccd22a1a9f3842a127411932663d03884af140a48b6",
-            "5414b2c989eb2fb12d5930b91e779a1f10bc47cc15da9942a4a753697ebaa400",
-            "9aa48fc4b212351239bc7bf08a90ec4ef0b991efcdcf3a7e584f7bbdcf83626e",
-            "21710e7ab61c82683576c428e9c1b6fe1ed419586b7b39e394c3449c294b550f",
-        ),
-        expected_size_bytes=188576500,
-        category="enhancer",
-        description="UltraMax decoupled zero-copy Laplacian pyramid face restoration.",
     ),
 }
 

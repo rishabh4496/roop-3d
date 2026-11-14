@@ -5,20 +5,20 @@ import { PreviewURL } from '../../state';
 import { PANELS, SETTINGS, SETTING_BY_ID, inactiveReason, settingValue, type PanelId, type SettingId } from '../controls/settingsRegistry';
 import { DEFAULT_PARAMETERS, type WorkstationParameters } from './pipeline';
 import type { LivePayload } from '../../livePreview';
-import { ENHANCER_CHOICES, RELIGHT_LEVELS, type EnhancerChoice, type Patch } from './sweepPatch';
+import { CAMERA_FOV_LEVELS, RELIGHT_LEVELS, type Patch } from './sweepPatch';
 import ZoomableImage from './ZoomableImage';
 
 export type { Patch } from './sweepPatch';
 export const LEVELS = ['Low', 'Medium', 'High'] as const;
 
-type AxisId = SettingId | 'enhancer' | 'relight_strength';
-type Value = number | EnhancerChoice;
+type AxisId = SettingId | 'camera_fov_deg' | 'relight_strength';
+type Value = number;
 type Tile = { row: number; column: number; x: Value; y: Value; url: string | null; state: 'pending' | 'loading' | 'ready' | 'error' | 'busy'; message?: string };
 
 /** One sweepable dimension: a continuous setting (Low / Medium / High) or a categorical / stepped control. */
 type Axis = {
   id: AxisId; label: string; group: string; values: [Value, Value, Value];
-  /** Why the engine would ignore this axis for the current parameters (the selected restorer, occlusion mode, blend), or null when it acts. */
+  /** Why the engine would ignore this axis for the current parameters (the occlusion mode, blend), or null when it acts. */
   inactive?: (parameters: WorkstationParameters) => string | null;
   /** Short text for the value, used in accessible names. */
   text: (value: Value, index: number) => string;
@@ -41,13 +41,11 @@ const continuous = (id: SettingId): Axis => {
   };
 };
 const percent = (value: Value) => `${Math.round(Number(value) * 100)}%`;
-const choiceLabel = (value: Value) => ENHANCER_CHOICES.find(choice => choice.id === value)?.label ?? String(value);
-
-const ENHANCER_AXIS: Axis = {
-  id: 'enhancer', label: 'Enhancer', group: 'Restorer', values: ENHANCER_CHOICES.map(choice => choice.id) as [EnhancerChoice, EnhancerChoice, EnhancerChoice],
-  text: choiceLabel, caption: value => `Enhancer: ${choiceLabel(value)}`, alt: index => `${ENHANCER_CHOICES[index].label} enhancer`,
-  current: parameters => (parameters.restoration_blend > 0 && !parameters.bypass.includes('restorer') ? choiceLabel(parameters.restorer_model === 'ultramax' ? 'ultramax' : 'gpen') : 'None'),
-  levels: () => ENHANCER_CHOICES.map(choice => choice.label).join(' · '),
+const CAMERA_AXIS: Axis = {
+  id: 'camera_fov_deg', label: 'Camera field of view', group: '3D Camera', values: CAMERA_FOV_LEVELS,
+  text: value => `${value}°`, caption: value => `Camera FOV ${value}°`, alt: index => `${CAMERA_FOV_LEVELS[index]}° field of view`,
+  current: parameters => (parameters.camera?.mode === 'manual' && parameters.camera.fov_deg != null ? `${parameters.camera.fov_deg}°` : 'auto'),
+  levels: () => CAMERA_FOV_LEVELS.map(value => `${value}°`).join(' · '),
 };
 const RELIGHT_AXIS: Axis = {
   id: 'relight_strength', label: 'SH relighting strength', group: '3D Relighting', values: RELIGHT_LEVELS,
@@ -57,7 +55,7 @@ const RELIGHT_AXIS: Axis = {
 };
 
 /** Settings first (so panel defaults and ordering are unchanged), then the two stepped axes. */
-export const AXES: Axis[] = [...SETTINGS.map(spec => continuous(spec.id)), ENHANCER_AXIS, RELIGHT_AXIS];
+export const AXES: Axis[] = [...SETTINGS.map(spec => continuous(spec.id)), CAMERA_AXIS, RELIGHT_AXIS];
 const AXIS_BY_ID = Object.fromEntries(AXES.map(axis => [axis.id, axis])) as Record<AxisId, Axis>;
 
 type Props = {
@@ -79,7 +77,7 @@ export function defaultAxes(panel?: PanelId, parameters: WorkstationParameters =
   const inPanel = active.filter(spec => spec.panel === panel).map(spec => spec.id);
   const rest = active.filter(spec => !inPanel.includes(spec.id)).map(spec => spec.id);
   const pool = [...inPanel, ...rest];
-  return [pool[0] ?? 'tps_expression_weight', pool[1] ?? 'pose_strength'];
+  return [pool[0] ?? 'swap_weight', pool[1] ?? 'feather_px'];
 }
 
 /**

@@ -5,10 +5,11 @@ import type { ActiveModel } from '../../stores/activeModels';
 import './engineStatus.css';
 
 type Stage = SwitchFailure['stage'];
-const STAGES: Stage[] = ['detector', 'swapper', 'enhancer'];
+/** The detector always shows; the stages the 3D renderer loads (head model, shader ...) appear as the engine reports them. */
+const stagesOf = (active: Record<string, unknown> | undefined): Stage[] => ['detector', ...Object.keys(active ?? {}).filter(stage => stage !== 'detector')];
 
 function StageChip({ stage, active, selected, failure }: { stage: Stage; active: ActiveModel; selected: string | undefined; failure: SwitchFailure | undefined }) {
-  const label = STAGE_LABEL[stage];
+  const label = STAGE_LABEL[stage] ?? stage.replaceAll('_', ' ');
   const verified = !!active?.sha256;
   const title = [
     active ? `${active.filename}\n${active.provider.replace('ExecutionProvider', '')} · ${active.precision}\n${active.model_path}` : `Nothing is loaded for this stage yet${selected ? ` (selected: ${selected}; it loads on the next preview or render)` : ''}.`,
@@ -19,7 +20,7 @@ function StageChip({ stage, active, selected, failure }: { stage: Stage; active:
     <li className={`engine-chip ${active ? 'loaded' : 'idle'} ${failure ? 'failed' : ''}`} data-testid={`engine-${stage}`} data-stage={stage} title={title}>
       <span className="engine-chip-label">{label}:</span>
       <b className="engine-chip-value">{active ? active.model_id : '—'}</b>
-      {stage === 'enhancer' && active && <span className={`engine-chip-verify ${verified ? 'ok' : 'warn'}`}>{verified ? '• Verified' : '• Unverified'}</span>}
+      {stage !== 'detector' && active && <span className={`engine-chip-verify ${verified ? 'ok' : 'warn'}`}>{verified ? '• Verified' : '• Unverified'}</span>}
       {failure && <span className="engine-chip-fail" role="img" aria-label={`Switch to ${failure.model_id} failed`}>⚠ {failure.model_id} failed</span>}
     </li>
   );
@@ -58,8 +59,8 @@ function TrtBuildStrip() {
 }
 
 /**
- * The engines actually running, read back from `GET /api/pipeline/status` (never the dropdown selection): the detector, swapper
- * and enhancer model each stage has loaded, whether the enhancer's weight file was integrity-checked, and the execution
+ * The engines actually running, read back from `GET /api/pipeline/status` (never the dropdown selection): the detector and the 3D
+ * head stages each have loaded, whether their weight files were integrity-checked, and the execution
  * provider + precision the sessions were really built with. A model that failed to load shows its name with a warning here
  * and raises a toast with the backend's exact reason; the previous model is reported as such, not hidden.
  */
@@ -73,10 +74,10 @@ export default function EngineStatusBar() {
     <>
     <section className="engine-bar" aria-label="Active engines" data-testid="engine-status-bar" data-state={value ? 'live' : error ? 'offline' : 'loading'}>
       <ul className="engine-chips">
-        {STAGES.map(stage => <StageChip key={stage} stage={stage} active={value?.active?.[stage] ?? null} failure={failureOf(stage)}
-          selected={value?.selected?.[`${stage}_model` as const]} />)}
+        {stagesOf(value?.active).map(stage => <StageChip key={stage} stage={stage} active={value?.active?.[stage] ?? null} failure={failureOf(stage)}
+          selected={(value?.selected as Record<string, string | undefined> | undefined)?.[`${stage}_model`]} />)}
         <li className={`engine-chip precision ${value?.precision?.label ? 'loaded' : 'idle'}`} data-testid="engine-precision"
-          title={value?.precision?.label ? Object.entries(value.precision.stages).map(([stage, text]) => `${STAGE_LABEL[stage as Stage] ?? stage}: ${text}`).join('\n') : `No session is loaded yet. Configured precision policy: ${value?.precision?.policy ?? 'auto'}.`}>
+          title={value?.precision?.label ? Object.entries(value.precision.stages).map(([stage, text]) => `${STAGE_LABEL[stage] ?? stage}: ${text}`).join('\n') : `No session is loaded yet. Configured precision policy: ${value?.precision?.policy ?? 'auto'}.`}>
           <span className="engine-chip-label">Precision:</span>
           <b className="engine-chip-value">{value?.precision?.label ?? '—'}</b>
         </li>

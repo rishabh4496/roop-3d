@@ -41,6 +41,5 @@ export function withHairlineInset(parameters: WorkstationParameters, inset: numb
   return inset === 0 ? rest : { ...rest, hairline_offset_px: -inset };           // omitted at 0 so untouched requests stay byte-identical
 }
 
-/** The jaw clamp, the hairline matting and the jaw feather only run on a 3D-projected matte (3D render modes) or the robust compositor. */
-export const matteProtectionApplies = (parameters: WorkstationParameters): boolean =>
-  (!!parameters.render_mode && parameters.render_mode !== 'standard') || parameters.occlusion_mode === 'robust';
+/** The jaw clamp, the hairline matting and the jaw feather shape the matte of the 3D head render, which is the only render path. */
+export const matteProtectionApplies = (_parameters: WorkstationParameters): boolean => true;

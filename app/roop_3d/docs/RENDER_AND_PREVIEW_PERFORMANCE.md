@@ -1,5 +1,8 @@
 # Render and preview performance (Nov 12 2026)
 
+<!-- phase0-purge-notice -->
+> **Phase 0 purge notice (2026-11-14).** Roop 3D no longer contains 2D face swappers, 5-point crop-paste, 2.5D strip meshes, weak-perspective cameras or post-crop GAN restorers. Anything below that describes them is **historical** and no longer applies; the current architecture is a full 3D head under a perspective camera, see [Engine and render options](../../../docs/ENGINE_COMPARISON.md).
+
 What changed, what it measured, and the switches. All are environment variables read at call time; defaults are the
 recommended settings.
 

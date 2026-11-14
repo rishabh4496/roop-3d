@@ -1,4 +1,8 @@
-"""Local camera studio. Host-frame egress is measured and never advertised as zero-copy."""
+"""Local camera studio. Host-frame egress is measured and never advertised as zero-copy.
+
+Frames are rendered by the true-3D full-head renderer only (``server/true3d.py``). Starting the studio without a wired renderer
+answers HTTP 503 ``RENDERER_NOT_WIRED`` ("3D renderer not wired"); there is no fallback face swap.
+"""
 from __future__ import annotations
 
 import importlib.util
@@ -12,18 +16,18 @@ from typing import Literal
 import cv2
 import numpy as np
 from fastapi import APIRouter, Request
-from pydantic import Field
+from pydantic import Field, model_validator
 from starlette.concurrency import run_in_threadpool
 
 from roop_3d.core.errors import DomainError
 from roop_3d.core.settings import Contract
+from roop_3d.server.true3d import CameraIntrinsicsSpec, HeadTopologyEngine, ShaderMode, True3DSettings, migrate_legacy, renderer_status, require_renderer
 
 router = APIRouter(prefix="/api/v1/studio")
 
 
 class StudioConfig(Contract):
     source_faceset_id: str = Field(pattern=r"^[A-Za-z0-9_-]{1,64}$")
-    swapper_model_id: str | None = Field(default=None, pattern=r"^[a-z0-9][a-z0-9_]{0,95}$")
     input: Literal["webcam", "screen"] = "webcam"
     device: int = Field(default=0, ge=0, le=32)
     backend: Literal["auto", "dshow", "msmf", "v4l2"] = "auto"
@@ -32,7 +36,20 @@ class StudioConfig(Contract):
     fps: Literal[30, 60] = 30
     virtual_camera: bool = False
     spout: bool = False
-    render_mode: Literal["standard", "pose_3d", "reenactment_3d"] = "standard"
+    head_topology_engine: HeadTopologyEngine | None = None
+    shader_mode: ShaderMode | None = None
+    camera: CameraIntrinsicsSpec | None = None
+    legacy_dropped: tuple[str, ...] = Field(default=(), max_length=64)
+
+    @model_validator(mode="before")
+    @classmethod
+    def drop_removed_fields(cls, data):
+        clean, dropped = migrate_legacy(data)
+        return {**clean, "legacy_dropped": tuple(dropped)} if dropped else clean
+
+    def true3d(self) -> True3DSettings:
+        values = {name: getattr(self, name) for name in ("head_topology_engine", "shader_mode", "camera") if getattr(self, name) is not None}
+        return True3DSettings(**values)
 
 
 class LiveStudio:
@@ -56,9 +73,10 @@ class LiveStudio:
                     "virtual_camera_available": importlib.util.find_spec("pyvirtualcam") is not None,
                     "screen_available": importlib.util.find_spec("mss") is not None,
                     "spout_available": sys.platform == "win32" and importlib.util.find_spec("SpoutGL") is not None,
-                    "ndi_available": False}
+                    "ndi_available": False, "renderer": renderer_status()}
 
     def start(self, config):
+        require_renderer()   # 503 RENDERER_NOT_WIRED: the studio never starts a capture loop it cannot render
         with self._lock:
             if self._thread is not None and self._thread.is_alive():
                 raise DomainError("STUDIO_RUNNING", "Stop the current live studio before starting another", 409)
@@ -83,11 +101,7 @@ class LiveStudio:
         return self.snapshot()
 
     def _run(self, config):
-        from roop_3d.engine.pipeline_runner import MasterPipelineRunner
-        from roop_3d.engine.volumetric.session import ReferencePipeline
-        from roop_3d.engine.runtime import RuntimeConfig
         session = None
-        reader = None
         admission = None
         scheduler = self.state.previews.scheduler
         try:
@@ -98,20 +112,10 @@ class LiveStudio:
             with ExitStack() as stack:
                 # Hold the preview lease through cleanup: model rebinds wait until this session stops.
                 stack.enter_context(self.state.engine_gate.preview_section())
-                runner = MasterPipelineRunner(self.state.root, self.state.models, self.state.media, lambda: settings)
-                reader = runner.faceset_reader
-                stack.callback(reader.release)
-                source = reader.read(runner._faceset_path(config.source_faceset_id), faceset_id=config.source_faceset_id)
-                provider = settings.preferred_provider if admission.profile != "cpu" and settings.preferred_provider != "auto" else admission.provider
-                runtime = RuntimeConfig(provider=provider, hardware_profile=admission.profile,
-                                        reserve_mib=settings.memory_safety_reserve_mb,
-                                        precision_policy=settings.precision_policy, detector_model_id=settings.detector_model_id)
-                session = ReferencePipeline(self.state.models, runtime)
-                stack.callback(session.release_session)
-                session.select_swapper(config.swapper_model_id or settings.swapper_model_id)
-                session.prepare_session(source, retarget="off", render_mode=config.render_mode)
-                if session.swapper.model is not None:
-                    session.swapper.model.morph_factor = settings.dfm_morph_factor
+                # The connected true-3D renderer owns the session: it reconstructs the source head once and renders it per frame.
+                renderer = require_renderer()
+                session = renderer.open_live_session(self.state, config, config.true3d(), admission)
+                stack.callback(session.close)
                 if config.input == "webcam":
                     if config.backend in ("dshow", "msmf") and sys.platform != "win32" or config.backend == "v4l2" and not sys.platform.startswith("linux"):
                         raise DomainError("STUDIO_BACKEND", "Capture backend does not match this operating system", 422)
@@ -152,8 +156,7 @@ class LiveStudio:
                 while not self._stop.is_set():
                     began = time.perf_counter()
                     frame = cv2.resize(read_frame(), (config.width, config.height))
-                    result = session.infer_frame(frame)
-                    output = np.ascontiguousarray(session.composite_frame(frame, result))
+                    output = np.ascontiguousarray(session.render(frame))
                     if camera is not None:
                         camera.send(output)
                     if sender is not None:

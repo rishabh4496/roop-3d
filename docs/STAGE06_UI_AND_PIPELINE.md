@@ -1,5 +1,8 @@
 # Stage 6: simplified 3-zone workstation, connected render pipeline, full-app verification
 
+<!-- phase0-purge-notice -->
+> **Phase 0 purge notice (2026-11-14).** Roop 3D no longer contains 2D face swappers, 5-point crop-paste, 2.5D strip meshes, weak-perspective cameras or post-crop GAN restorers. Anything below that describes them is **historical** and no longer applies; the current architecture is a full 3D head under a perspective camera, see [Engine and render options](../docs/ENGINE_COMPARISON.md).
+
 Real paths: the prompt's `app/roop/` + `roop_3d/` is `app/roop_3d/` (backend) and its React app is `app/roop_3d_ui/`.
 Render-mode names map to the saved `render_mode` values: `standard_2d` = `standard`, `estimated_2_5d` = `pose_3d`,
 `full_3d_reconstructed` = `reenactment_3d`.

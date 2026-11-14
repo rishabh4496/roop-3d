@@ -35,8 +35,8 @@ def _string_provider_options(options: Mapping[str, object]) -> dict[str, str]:
 # time and kernel selection quality. [INFERENCE] no on-device A/B of 3 vs 5 exists in this repo; revisit with measurements.
 TRT_BUILDER_OPTIMIZATION_LEVEL = 5
 
-# FP32 locks (never FP16, therefore never INT8): the swapper, GPEN and the motion extractor.
-FP32_LOCKED_MODEL_TOKENS = ("inswapper", "motion_extractor", "gpen")
+# FP32 locks (never FP16, therefore never INT8): the LivePortrait motion extractor.
+FP32_LOCKED_MODEL_TOKENS = ("motion_extractor",)
 
 INT8_ENV_FLAG = "ROOP_TRT_INT8"
 INT8_CACHE_ENV = "ROOP_TRT_INT8_CALIBRATION_CACHE"
@@ -57,7 +57,7 @@ def trt_int8_options(model_name: str, engine_cache_dir: Path | str,
     Opt-in is ``ROOP_TRT_INT8=1`` and it REQUIRES ``ROOP_TRT_INT8_CALIBRATION_CACHE`` to name an existing file inside the engine
     cache directory (ORT resolves the table name relative to ``trt_engine_cache_path``). Nothing is calibrated here: a missing
     table raises ``INT8_CALIBRATION_MISSING`` rather than silently building an uncalibrated or FP16 engine. FP32-locked models
-    (swapper, GPEN, motion extractor) are refused with ``INT8_FP32_LOCKED_MODEL``. Real INT8 quality/speed on Ada is not validated
+    (the motion extractor) are refused with ``INT8_FP32_LOCKED_MODEL``. Real INT8 quality/speed on Ada is not validated
     in this repo (reference repo rejected it); the cache content is the caller's responsibility."""
     env = os.environ if environ is None else environ
     if str(env.get(INT8_ENV_FLAG, "")).strip().lower() not in ("1", "true", "yes", "on"):
@@ -94,20 +94,8 @@ def _image_size(name: str) -> tuple[int, int, int]:
     name = name.casefold()
     if "xseg" in name:
         return 3, 256, 256
-    if "inswapper" in name:
-        return 3, 128, 128
-    if any(token in name for token in ("ghost_256", "ghost_1_256", "ghost_2_256", "ghost_3_256",
-                                       "blendswap_256", "uniface_256", "hyperswap_1a_256", "hyperswap_1b_256",
-                                       "hyperswap_1c_256", "realswap_256", "simswap_256")):
-        return 3, 256, 256
-    if any(token in name for token in ("realswap_512", "simswap_512")):
-        return 3, 512, 512
-    if "256" in name and any(x in name for x in ("gpen", "ultramax", "gfpgan", "codeformer")):
-        return 3, 256, 256
     if "1024" in name:
         return 3, 1024, 1024
-    if any(x in name for x in ("gpen", "ultramax", "gfpgan", "codeformer")):
-        return 3, 512, 512
     if any(x in name for x in ("scrfd", "retinaface")):
         return 3, 640, 640
     if any(x in name for x in ("landmark", "2dfan", "1k3d68", "106")):
@@ -303,7 +291,7 @@ def _cuda_fp16_model_path(path: Path, cache_path: Path):
 
     path = Path(path).resolve(strict=True)
     if any(token in path.name.casefold() for token in FP32_LOCKED_MODEL_TOKENS):
-        # InSwapper / GPEN / the motion extractor are FP32-locked: the mixed-precision rewrite makes their output NaN.
+        # The motion extractor is FP32-locked: the mixed-precision rewrite makes its output NaN.
         return path, None
     digest = hashlib.sha256()
     with path.open("rb") as stream:
@@ -329,6 +317,10 @@ def _cuda_fp16_model_path(path: Path, cache_path: Path):
     return target, converted
 
 
+#: Model-name tokens that need FP32-pinned sensitive ops. The 2D face restorers that used this were removed; empty on purpose.
+FP32_SAFE_ENHANCER_TOKENS: tuple[str, ...] = ()
+
+
 def _fp32_safe_model_path(path: Path, cache_path: Path, name: str):
     """Create an owned derived ONNX graph that pins sensitive enhancer ops to FP32.
 
@@ -337,7 +329,7 @@ def _fp32_safe_model_path(path: Path, cache_path: Path, name: str):
     partition executes those operations in FP32 while TRT still sees the
     convolution and matrix products as FP16 candidates.
     """
-    if not any(token in name.casefold() for token in ("gpen", "ultramax", "codeformer")):
+    if not any(token in name.casefold() for token in FP32_SAFE_ENHANCER_TOKENS):
         return path, None
     import onnx
     from onnx import TensorProto, helper
@@ -441,21 +433,13 @@ def _static_input_contract(name: str) -> tuple[int, int, bool] | None:
     folded = name.casefold()
     if any(token in folded for token in ("scrfd", "retinaface")):
         return 640, 640, True
-    if "inswapper" in folded:
-        return 128, 128, False
-    if any(token in folded for token in ("hyperswap_1a_256", "hyperswap_1b_256", "hyperswap_1c_256",
-            "realswap_256", "simswap_256", "ghost_256", "ghost_1_256", "ghost_2_256", "ghost_3_256",
-            "blendswap_256", "uniface_256")):
-        return 256, 256, False
-    if any(token in folded for token in ("realswap_512", "simswap_512")):
-        return 512, 512, False
     if "xseg" in folded or "occluder" in folded:
         return 256, 256, True
     if "1k3d68" in folded or "2d106det" in folded or "landmark" in folded:
         return 192, 192, True
     if "motion_extractor" in folded or "appearance_feature_extractor" in folded:
         return 256, 256, True
-    if any(token in folded for token in ("gpen", "ultramax", "gfpgan", "codeformer", "bisenet", "face_parser")):
+    if any(token in folded for token in ("bisenet", "face_parser")):
         _, height, width = _image_size(name)
         return height, width, True
     return None
@@ -527,7 +511,7 @@ def _static_model_path(path: Path, cache_path: Path, name: str):
 def _profiles(nodes, name: str):
     channels, height, width = _image_size(name)
     folded_name = name.casefold()
-    batch_sizes = (1, 4, 8) if "inswapper_128" in folded_name else (1, 2, 4)
+    batch_sizes = (1, 2, 4)
     result = [{}, {}, {}]
     for node in nodes:
         if not node.shape or not any(not isinstance(d, int) or d <= 0 for d in node.shape):

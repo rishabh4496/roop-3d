@@ -149,7 +149,7 @@ def close_apertures(image, points, left=False, right=False, lips=False):
     return output
 
 
-class ExpressionRestorer:
+class ExpressionRetargeter:
     def __init__(self, catalog=None, config=RuntimeConfig(), *, portrait=None, geometry=None):
         self.catalog, self.config = catalog, config
         self.portrait, self.geometry = portrait, geometry
@@ -262,3 +262,8 @@ class ExpressionRestorer:
             self.geometry.release()
         self.portrait = self.geometry = None
         self.last_report = {}
+
+    retarget = restore
+
+
+ExpressionRestorer = ExpressionRetargeter

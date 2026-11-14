@@ -42,7 +42,7 @@ def precision_for(model: str | Path, environ: Mapping[str, str] | None = None) -
     env = os.environ if environ is None else environ
     from roop_3d.trt_fp8_builder import HEAVY_RESTORERS, model_name
     name = model_name(model)
-    if name == "inswapper_128" or "motion_extractor" in name or "gpen" in name:
+    if "motion_extractor" in name:
         return "FP32"
     if env.get("ROOP_TRT_FP16") == "0":
         return "FP32"
@@ -65,7 +65,7 @@ class BatchProfile:
 def validate_profile(model, profile: BatchProfile) -> None:
     for value in runtime_inputs(model):
         dims = value.type.tensor_type.shape.dim
-        if not dims or value.name in ("w", "fidelity_weight"):
+        if not dims or value.name == "w":
             continue
         fixed = dims[0].dim_value
         if fixed and any(b != fixed for b in profile.batches):
@@ -144,12 +144,7 @@ class TensorRTSessionBuilder:
         import onnxruntime as ort
         path = model_source(Path(model_path))
         model = onnx.load(path, load_external_data=False)
-        from roop_3d.trt_fp8_builder import model_name, validate_swapper_fp32, HEAVY_RESTORERS
-        if model_name(path) == "inswapper_128":
-            try:
-                validate_swapper_fp32(model)
-            except ValueError as error:
-                raise TensorRTBuildError(str(error)) from error
+        from roop_3d.trt_fp8_builder import model_name, HEAVY_RESTORERS
         if any(v.data_location == onnx.TensorProto.EXTERNAL for v in model.graph.initializer):
             raise TensorRTBuildError("External tensor data needs separately verified registry support")
         reason = static_batch_reason(path.name)
@@ -171,7 +166,7 @@ class TensorRTSessionBuilder:
             raise TensorRTBuildError("FP8 needs a separately calibrated E4M3FN Q/DQ ONNX artifact")
         if fp8_model_path is not None:
             if model_name(path) not in HEAVY_RESTORERS:
-                raise TensorRTBuildError("FP8 is restricted to the four heavy restorers; inswapper is FP32 only")
+                raise TensorRTBuildError("FP8 is restricted to the registered heavy upscaler models")
             if not callable(fp8_validate):
                 raise TensorRTBuildError("FP8 requires an explicit reference parity acceptance callback")
             from roop_3d.trt_fp8_builder import validate_fp8_graph

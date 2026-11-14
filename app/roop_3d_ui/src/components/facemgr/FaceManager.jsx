@@ -230,7 +230,7 @@ export default function FaceManager({
       observedCount,
       wellCoveredCount,
       percentage,
-      isEstimated25D: observedCount < 60,
+      sparseCoverage: observedCount < 60,
     };
   }, [lattice]);
 
@@ -678,8 +678,8 @@ export default function FaceManager({
             </div>
             <div className="sphere-stat-row">
               <span>Coverage Fidelity</span>
-              <span className={`fidelity-tag ${coverageStats.isEstimated25D ? 'partial' : 'full'}`}>
-                {coverageStats.isEstimated25D ? 'Estimated 2.5D' : 'Full 3D Reconstructed'}
+              <span className={`fidelity-tag ${coverageStats.sparseCoverage ? 'partial' : 'full'}`}>
+                {coverageStats.sparseCoverage ? 'Sparse view coverage' : 'Full 3D Reconstructed'}
               </span>
             </div>
 

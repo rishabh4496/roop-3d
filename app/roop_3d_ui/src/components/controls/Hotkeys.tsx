@@ -20,7 +20,7 @@ export const KEY_LABELS: Record<string, string> = {
   play: 'Play / pause', previous: 'Previous frame', next: 'Next frame', markIn: 'Mark trim in', markOut: 'Mark trim out', jumpIn: 'Jump to trim in', jumpOut: 'Jump to trim out', resetRange: 'Reset trim range',
   toggleWipe: 'Toggle split wipe', toggleDiff: 'Toggle diff map',
   // One key per node of the preview pipeline (components/workstation/pipeline.ts), in that order.
-  buffer1: 'Solo buffer 1 (Raw Target)', buffer2: 'Solo buffer 2 (6DoF 3D Mesh & Pose)', buffer3: 'Solo buffer 3 (Canonical UV Projection)', buffer4: 'Solo buffer 4 (SH 3D Relighting & Normals)', buffer5: 'Solo buffer 5 (Base 3D Swap)', buffer6: 'Solo buffer 6 (UltraMax High-Res)', buffer7: 'Solo buffer 7 (XSeg + Hair Occlusion Matte)', buffer8: 'Solo buffer 8 (Final Composite)',
+  buffer1: 'Solo buffer 1 (Raw Target)', buffer2: 'Solo buffer 2 (6DoF Head Pose & Mesh)', buffer3: 'Solo buffer 3 (Head UV Atlas)', buffer4: 'Solo buffer 4 (SH 3D Relighting & Normals)', buffer5: 'Solo buffer 5 (3D Head Render)', buffer6: 'Solo buffer 6 (XSeg + Hair Occlusion Matte)', buffer7: 'Solo buffer 7 (Colour Match & Grade)', buffer8: 'Solo buffer 8 (Final Composite)',
   solo: 'Solo selected pipeline node', bypass: 'Bypass selected pipeline node', sweep: 'Parameter sweep',
   extractFace: 'Extract face from frame',
   snapshotA: 'Capture snapshot A', snapshotB: 'Capture snapshot B', snapshotC: 'Capture snapshot C', snapshotD: 'Capture snapshot D',

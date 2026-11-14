@@ -16,7 +16,6 @@ from roop_3d.reconstruction.flame_fitter import (
     FLAMEFitter,
     FLAMEFittingResult,
     FLAMEModel,
-    SyntheticFLAMEModel,
     geman_mcclure_weights,
     huber_weights,
     verify_flame_license,
@@ -30,7 +29,7 @@ from roop_3d.reconstruction.geometry_types import (
     Mesh3D,
     Pose3D,
     UVOrigin,
-    WeakPerspectiveCamera,
+    PerspectiveCamera,
     euler_to_rotation_matrix,
     opencv_to_opengl_camera,
     opengl_to_opencv_camera,
@@ -66,19 +65,12 @@ from roop_3d.reconstruction.multiview_fit import (
     identity_template,
 )
 from roop_3d.reconstruction.reenactment import (
-    RENDER_MODES,
-    IdentityRig,
-    ReenactmentEngine,
-    ReenactmentFrame,
     ReenactmentSettings,
     TargetObservation,
 )
 from roop_3d.reconstruction.tps_fallback import (
-    ThinPlateSplineWarper,
-    build_canonical_head_mesh,
     get_canonical_3d_landmarks,
     solve_pose_pnp,
-    warp_delaunay_piecewise_affine,
 )
 from roop_3d.reconstruction.uv_completion import FullHeadUVCompleter
 from roop_3d.reconstruction.uv_synthesizer import (
@@ -88,10 +80,6 @@ from roop_3d.reconstruction.uv_synthesizer import (
 )
 
 __all__ = [
-    "RENDER_MODES",
-    "IdentityRig",
-    "ReenactmentEngine",
-    "ReenactmentFrame",
     "ReenactmentSettings",
     "TargetObservation",
     "FaceSetCoverageReport",
@@ -103,7 +91,7 @@ __all__ = [
     "IdentityShapeFit",
     "ViewLandmarks",
     "ViewQuality",
-    "WeakPerspectiveCamera",
+    "PerspectiveCamera",
     "analyze_faceset",
     "build_identity_asset",
     "compute_build_key",
@@ -123,13 +111,10 @@ __all__ = [
     "FLAMEModel",
     "Mesh3D",
     "Pose3D",
-    "SyntheticFLAMEModel",
-    "ThinPlateSplineWarper",
     "UVSynthesisResult",
     "UVSynthesizer",
     "UVOrigin",
     "ViewObservation",
-    "build_canonical_head_mesh",
     "euler_to_rotation_matrix",
     "export_mesh_glb",
     "export_mesh_obj",
@@ -149,5 +134,4 @@ __all__ = [
     "solve_pose_pnp",
     "uv_to_pixel",
     "verify_flame_license",
-    "warp_delaunay_piecewise_affine",
 ]

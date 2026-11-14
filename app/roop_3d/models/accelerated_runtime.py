@@ -100,7 +100,7 @@ class AcceleratorFactory:
                 # Detector/recognizer now join the accelerated chain. Fractions
                 # reserve the largest share for the identity model; warp may
                 # retain its CPU reference independently.
-                divisor = {"identity_swapper": 3, "recognizer": 8, "detector": 16,
+                divisor = {"recognizer": 8, "detector": 16,
                            "liveportrait_warp": 4, "liveportrait_motion": 16,
                            "liveportrait_appearance": 32}.get(record.get("role"), 32)
                 budget //= divisor

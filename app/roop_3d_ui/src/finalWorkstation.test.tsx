@@ -4,7 +4,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import ContactSheetModal, { AXES, type Patch } from './components/workstation/ContactSheetModal';
 import ZoomableImage, { MAX_ZOOM, clampPan } from './components/workstation/ZoomableImage';
-import { SWEEP_ENHANCER_BLEND, applySweepPatch } from './components/workstation/sweepPatch';
+import { CAMERA_FOV_LEVELS, applySweepPatch } from './components/workstation/sweepPatch';
 import { DEFAULT_PARAMETERS } from './components/workstation/pipeline';
 import { buildLivePayload } from './livePreview';
 import CurveEditorTrack from './components/timeline/CurveEditorTrack';
@@ -14,45 +14,32 @@ import { CURVE_HINTS, CURVE_PARAMETERS, evaluateParameters } from './stores/para
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 
 describe('sweep patch semantics', () => {
-  it('"None" is a restoration blend of 0 and leaves the other enhancer settings alone', () => {
-    const next = applySweepPatch({ ...DEFAULT_PARAMETERS, restorer_model: 'ultramax', restoration_blend: .8 }, { enhancer: 'none' });
-    expect(next.restoration_blend).toBe(0);
-    expect(next.restorer_model).toBe('ultramax');
-  });
-
-  it('GPEN Realistic and UltraMax select the real restorer, keep a non-zero blend, and fall back to a visible one', () => {
-    expect(applySweepPatch({ ...DEFAULT_PARAMETERS, restoration_blend: .4 }, { enhancer: 'gpen' })).toMatchObject({ restorer_model: 'gpen', restoration_blend: .4 });
-    // a restorer at blend 0 would look exactly like "None", so a swept tile must use a visible blend
-    expect(applySweepPatch(DEFAULT_PARAMETERS, { enhancer: 'ultramax' })).toMatchObject({ restorer_model: 'ultramax', restoration_blend: SWEEP_ENHANCER_BLEND });
-    expect(applySweepPatch({ ...DEFAULT_PARAMETERS, bypass: ['restorer', 'color'] }, { enhancer: 'ultramax' }).bypass).toEqual(['color']);
-  });
-
   it('sweeping relight strength switches relighting on, since it does nothing otherwise', () => {
     expect(applySweepPatch(DEFAULT_PARAMETERS, { relight_strength: .25 })).toMatchObject({ relight: true, relight_strength: .25 });
   });
 
-  it('applies a swept CodeFormer fidelity like any setting, and un-bypasses the restorer when its blend is swept', () => {
-    const next = applySweepPatch({ ...DEFAULT_PARAMETERS, restorer_model: 'codeformer', bypass: ['restorer'] }, { fidelity_weight: .9, restoration_blend: .6 });
-    expect(next.fidelity_weight).toBe(.9);
-    expect(next.bypass).toEqual([]);
+  it('a swept field of view is a manual perspective camera for that tile, never an orthographic one', () => {
+    const next = applySweepPatch(DEFAULT_PARAMETERS, { camera_fov_deg: 85 });
+    expect(next.camera).toMatchObject({ mode: 'manual', projection: 'perspective', focal_unit: 'fov_deg', fov_deg: 85 });
   });
 
   it('the tile preview and the applied parameters are the same object of settings', () => {
-    const patch: Patch = { enhancer: 'ultramax', relight_strength: .6 };
+    const patch: Patch = { camera_fov_deg: 30, relight_strength: .6 };
     const request = { engine_id: 'reference_onnx', target_path: 't.mp4', inspection_id: 'i', face_mappings: [{ track_id: 't0', faceset_id: 'f' }] } as never;
     const parameters = applySweepPatch(DEFAULT_PARAMETERS, patch);
-    const payload = buildLivePayload({ request, time: 1, fps: 25, parameters, restorerAvailable: true, solo: 'final' })!;
-    expect(payload.restorer).toBe('ultramax');
+    const payload = buildLivePayload({ request, time: 1, fps: 25, parameters, solo: 'final' })!;
+    expect(payload.camera).toMatchObject({ mode: 'manual', projection: 'perspective', fov_deg: 30 });
     expect(payload.relight).toBe(true);
     expect(payload.relight_strength).toBe(.6);
   });
 });
 
 describe('sweep axes cover the requested comparison', () => {
-  it('offers an enhancer axis of None / GPEN Realistic / UltraMax and a 25 / 60 / 100 % relighting axis', () => {
-    const enhancer = AXES.find(axis => axis.id === 'enhancer')!, relight = AXES.find(axis => axis.id === 'relight_strength')!;
-    expect(enhancer.values).toEqual(['none', 'gpen', 'ultramax']);
-    expect(enhancer.levels()).toBe('None · GPEN Realistic · UltraMax');
+  it('offers a perspective camera field-of-view axis and a 25 / 60 / 100 % relighting axis, and no enhancer axis', () => {
+    const camera = AXES.find(axis => axis.id === 'camera_fov_deg')!, relight = AXES.find(axis => axis.id === 'relight_strength')!;
+    expect(AXES.find(axis => (axis.id as string) === 'enhancer')).toBeUndefined();
+    expect(camera.values).toEqual(CAMERA_FOV_LEVELS);
+    expect(camera.levels()).toBe('30° · 55° · 85°');
     expect(relight.values).toEqual([.25, .6, 1]);
     expect(relight.levels()).toBe('25% · 60% · 100%');
   });
@@ -66,7 +53,7 @@ describe('3×3 contact sheet with stepped axes and native-pixel zoom', () => {
   const setup = () => {
     const onApply = vi.fn(), onClose = vi.fn(), render = vi.fn(async () => tile());
     const payloadFor = vi.fn((patch: Patch) => ({ patch, frame_index: 7 }));
-    act(() => { root.render(<ContactSheetModal panel="restorer" parameters={DEFAULT_PARAMETERS} frameLabel="Frame 7" payloadFor={payloadFor as never} onApply={onApply} onClose={onClose} render={render as never} />); });
+    act(() => { root.render(<ContactSheetModal panel="color" parameters={DEFAULT_PARAMETERS} frameLabel="Frame 7" payloadFor={payloadFor as never} onApply={onApply} onClose={onClose} render={render as never} />); });
     return { onApply, onClose, render, payloadFor };
   };
   const choose = (label: string, value: string) => act(async () => {
@@ -76,20 +63,19 @@ describe('3×3 contact sheet with stepped axes and native-pixel zoom', () => {
   });
   const generate = async () => act(async () => { [...document.querySelectorAll('button')].find(b => b.textContent === 'Generate contact sheet')!.click(); await vi.advanceTimersByTimeAsync(0); });
 
-  it('renders the enhancer (X) by relighting strength (Y) grid in row-major order and applies the clicked cell', async () => {
+  it('renders the camera field of view (X) by relighting strength (Y) grid in row-major order and applies the clicked cell', async () => {
     const { onApply, onClose, payloadFor } = setup();
-    await choose('X axis setting', 'enhancer');
+    await choose('X axis setting', 'camera_fov_deg');
     await choose('Y axis setting', 'relight_strength');
     await generate();
-    expect(payloadFor.mock.calls.map(([patch]) => [patch.enhancer, patch.relight_strength])).toEqual([
-      ['none', .25], ['gpen', .25], ['ultramax', .25], ['none', .6], ['gpen', .6], ['ultramax', .6], ['none', 1], ['gpen', 1], ['ultramax', 1]]);
+    expect(payloadFor.mock.calls.map(([patch]) => [patch.camera_fov_deg, patch.relight_strength])).toEqual([
+      [30, .25], [55, .25], [85, .25], [30, .6], [55, .6], [85, .6], [30, 1], [55, 1], [85, 1]]);
     const cells = [...document.querySelectorAll<HTMLButtonElement>('.sweep-cell')];
     expect(cells).toHaveLength(9);
-    expect(cells[8].textContent).toContain('Enhancer: UltraMax');
+    expect(cells[8].textContent).toContain('Camera FOV 85°');
     expect(cells[8].textContent).toContain('SH relighting 100%');
-    expect(cells[8].getAttribute('aria-label')).toBe('Apply Enhancer UltraMax and SH relighting strength 100%');
     await act(async () => cells[4].click());
-    expect(onApply).toHaveBeenCalledWith({ enhancer: 'gpen', relight_strength: .6 });
+    expect(onApply).toHaveBeenCalledWith({ camera_fov_deg: 55, relight_strength: .6 });
     expect(onClose).toHaveBeenCalled();
   });
 
@@ -110,7 +96,7 @@ describe('3×3 contact sheet with stepped axes and native-pixel zoom', () => {
     await act(async () => zoomButtons[2].click());
     await act(async () => [...document.querySelectorAll('button')].find(b => b.textContent === 'Apply these settings')!.click());
     expect(onApply).toHaveBeenCalledTimes(1);
-    expect(onApply.mock.calls[0][0]).toEqual({ color_strength: .9, restoration_blend: .25 });   // row 0 (Low restorer blend), column 2 (High colour)
+    expect(onApply.mock.calls[0][0]).toEqual({ color_strength: .9, swap_weight: .3 });   // row 0 (Low identity weight), column 2 (High colour)
   });
 });
 
@@ -156,10 +142,10 @@ describe('parameter curves for the animatable workstation controls', () => {
   beforeEach(() => { useHistoryStore.getState().reset(); host = document.createElement('div'); document.body.append(host); root = createRoot(host); });
   afterEach(async () => { await act(async () => root.unmount()); host.remove(); });
 
-  it('lists the five requested parameters first, each mapped to a real engine field', () => {
+  it('lists the animatable parameters, each mapped to a real engine field, and none from the removed 2D / 2.5D path', () => {
     const order = Object.keys(CURVE_PARAMETERS);
-    expect(order.slice(0, 5)).toEqual(['pose_correction_strength', 'fidelity_weight', 'relight_strength', 'mask_feather', 'occlusion_threshold']);
-    expect(CURVE_PARAMETERS.pose_correction_strength.field).toBe('pose_strength');
+    expect(order.slice(0, 3)).toEqual(['relight_strength', 'mask_feather', 'occlusion_threshold']);
+    expect(order.join(' ')).not.toMatch(/pose_correction|fidelity|tps|frontaliz|restor/);
     expect(CURVE_PARAMETERS.relight_strength.field).toBe('relight_strength');
     expect(CURVE_PARAMETERS.occlusion_threshold.field).toBe('occlusion_threshold');
     expect(CURVE_PARAMETERS.mask_feather.field).toBe('feather_px');

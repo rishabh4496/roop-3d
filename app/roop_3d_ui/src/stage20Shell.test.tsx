@@ -116,7 +116,7 @@ describe('ShellDrawers', () => {
 describe('TelemetryHeader', () => {
   it('maps engine stage names to graph nodes, and lights nothing for an unknown or idle stage', () => {
     expect(GRAPH_NODES.map(node => node.id)).toEqual(['identity', 'target', 'lbs', 'relight', 'output']);
-    expect(['detection', 'landmark', 'warp', 'restoration', 'blend', 'encode'].map(nodeForStage)).toEqual(['target', 'target', 'lbs', 'relight', 'relight', 'output']);
+    expect(['detection', 'landmark', 'pose', 'render', 'blend', 'encode'].map(nodeForStage)).toEqual(['target', 'target', 'lbs', 'relight', 'relight', 'output']);
     expect([nodeForStage('idle'), nodeForStage(''), nodeForStage(null), nodeForStage('something_new')]).toEqual([null, null, null, null]);
   });
 
@@ -142,7 +142,7 @@ describe('TelemetryHeader', () => {
     const { host } = await mount(<TelemetryHeader parameters={DEFAULT_PARAMETERS} />);
     await act(async () => {
       publishHardware({ gpus: [{ name: 'NVIDIA GeForce RTX 4090', total_vram_mib: 24576, free_vram_mib: 18432 }], logical_cpu_count: 16 });
-      publishProgress({ stage: 'warp', fps: 23.46 });
+      publishProgress({ stage: 'pose', fps: 23.46 });
     });
     await flush();
     expect(host.querySelector('[data-testid=thm-gpu]')!.textContent).toContain('NVIDIA GeForce RTX 4090');
@@ -152,8 +152,8 @@ describe('TelemetryHeader', () => {
     expect(host.querySelector<HTMLElement>('.thm-bar i')!.style.width).toBe('25%');
     expect(host.querySelector('[data-testid=thm-fps] .ul-sr-only')!.textContent).toBe('23.5');
     expect([...host.querySelectorAll('.thm-node[data-active=true]')].map(node => (node as HTMLElement).dataset.node)).toEqual(['lbs']);
-    expect(host.querySelector('[data-testid=thm-map]')!.getAttribute('aria-label')).toBe('Pipeline graph, running: warp');
-    await act(async () => publishProgress({ stage: 'restoration', fps: 20 }));
+    expect(host.querySelector('[data-testid=thm-map]')!.getAttribute('aria-label')).toBe('Pipeline graph, running: pose');
+    await act(async () => publishProgress({ stage: 'render', fps: 20 }));
     expect([...host.querySelectorAll('.thm-node[data-active=true]')].map(node => (node as HTMLElement).dataset.node)).toEqual(['relight']);
   });
 

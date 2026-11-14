@@ -18,7 +18,7 @@ export const GRAPH_NODES: readonly { id: GraphNode; label: string; hash: string;
   { id: 'identity', label: '.fsz Identity', hash: '#/identity-forge', hint: 'Source FaceSet: open Identity Forge' },
   { id: 'target', label: 'Target Media', hash: '#/studio', hint: 'Target video: open the Studio' },
   { id: 'lbs', label: '3D LBS + Jaw/Cage', hash: '#/studio', hint: 'Mesh, pose and jaw/cage warp' },
-  { id: 'relight', label: 'SH Relight + TRT UltraMax', hash: '#/studio', hint: 'Spherical-harmonics relight and the enhancer' },
+  { id: 'relight', label: 'SH Relight + PBR Shade', hash: '#/studio', hint: 'Spherical-harmonics relight and the 3D shader' },
   { id: 'output', label: 'MP4 Output', hash: '#/queue', hint: 'Rendered output: open the Batch Queue' },
 ];
 
@@ -32,7 +32,7 @@ export function nodeForStage(stage: string | null | undefined): GraphNode | null
   if (/(identity|source|faceset|embed)/.test(name)) return 'identity';
   if (/(detect|landmark|decode|track|inspect|target)/.test(name)) return 'target';
   if (/(warp|mesh|pose|lbs|swap|cage|jaw|reconstruct)/.test(name)) return 'lbs';
-  if (/(restor|relight|light|enhanc|ultramax|blend|composit|matte)/.test(name)) return 'relight';
+  if (/(relight|light|shad|render|blend|composit|matte)/.test(name)) return 'relight';
   if (/(encode|output|mux|write|export)/.test(name)) return 'output';
   return null;
 }
@@ -66,7 +66,7 @@ function Node({ node, nodeRef, active, className }: { node: (typeof GRAPH_NODES)
   return <a ref={nodeRef} href={node.hash} className={cn('thm-node', active && 'active', className)} data-node={node.id} data-active={active ? 'true' : 'false'} title={node.hint}>{node.label}</a>;
 }
 
-/** The compact graph: [.fsz Identity] + [Target Media] -> [3D LBS + Jaw/Cage] -> [SH Relight + TRT UltraMax] -> [MP4 Output]. */
+/** The compact graph: [.fsz Identity] + [Target Media] -> [3D LBS + Jaw/Cage] -> [SH Relight + PBR Shade] -> [MP4 Output]. */
 function PipelineMiniMap() {
   const stage = useTelemetry(state => state.progress?.stage ?? state.pipeline?.stage ?? null);
   const running = !!stage && stage !== 'idle';

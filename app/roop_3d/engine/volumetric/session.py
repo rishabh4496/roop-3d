@@ -1,7 +1,9 @@
-"""Stage 06 lifecycle: tracking -> identity transfer -> optional 3D reenactment.
+"""Session lifecycle: tracking -> identity gate -> true-3D head render (NOT YET WIRED).
 
-Returns model crops and exact crop-to-frame matrices; the full-frame compositor
-and its occlusion/segmentation logic remain Stage 09 work.
+The 2D identity swapper, 5-point crop-paste, canonical-strip pose blend, 2D TPS expression warp and the reenactment
+painter's renderer were removed. ``ReferencePipeline`` still owns detection, landmarks, tracking, the identity gate, angle
+trajectories and compositing of a rendered head layer; ``infer_frame`` raises ``True3DRendererUnavailable`` for any face that
+would have to be rendered, instead of silently falling back to a 2D / 2.5D path.
 """
 from __future__ import annotations
 
@@ -10,18 +12,18 @@ from pathlib import Path
 import threading
 import time
 from collections.abc import Mapping
-from typing import Literal
+from typing import Any
 import cv2
 import numpy as np
 
 from roop_3d.core.errors import DomainError
 from roop_3d.core.settings import Settings
+from roop_3d.core.true3d_guard import True3DRendererUnavailable, require_true3d_renderer
 from roop_3d.engine.detection.face_tracker import FaceObservation, FaceTracker, TrackedFace
 from roop_3d.engine.runtime import RuntimeConfig, image_bgr
 from roop_3d.engine.volumetric.angle_diagnostics import AngleDiagnostics
-from roop_3d.engine.volumetric.identity_swapper import IdentitySwapper, SwapResult
 from roop_3d.engine.volumetric.presence import PoseFade, SwapPresence
-from roop_3d.engine.volumetric.preprocess import AlignedCrop, landmark_crop, transform_points
+from roop_3d.engine.volumetric.preprocess import landmark_crop, transform_points
 from roop_3d.engine.volumetric.reference_adapter import LivePortraitAdapter
 from roop_3d.faceset.schemas import FaceSetDocument
 from roop_3d.models.catalog import ModelCatalog
@@ -29,10 +31,7 @@ from roop_3d.engine.resources import guarded, inference, register
 from roop_3d.temporal import smoothstep
 from roop_3d.compositor.pipeline import CompositeOptions, FrameCompositor
 from roop_3d.engine.audio_sync.lip_sync_adapter import LipSyncAdapter, LipSyncFrameInput
-from roop_3d.reconstruction.expression_tps import apply_expression_to_crop, group, layout_is_plausible
-from roop_3d.reconstruction.pose_blend import PoseBlendProjector, PoseBlendResult
-from roop_3d.reconstruction.reenactment import (RENDER_MODES, IdentityRig, ReenactmentEngine, ReenactmentFrame,
-                                                ReenactmentSettings, TargetObservation)
+from roop_3d.reconstruction.reenactment import ReenactmentSettings
 
 
 @dataclass(frozen=True)
@@ -66,12 +65,10 @@ class Replacement:
     reference_index: int
     method: str
     coverage: np.ndarray | None = None
-    projection: PoseBlendResult | None = None
     landmarks5: np.ndarray | None = None
-    # Stage 4: what ran, and why the proven path was used instead of the requested mode (never silent).
-    render_mode: str = "standard"
+    # Why a face was not rendered (never silent); there is no 2D fallback path.
+    render_mode: str = "true_3d"
     fallback_reason: str | None = None
-    reenactment: ReenactmentFrame | None = None
     full_head: bool = False
     target_silhouette: np.ndarray | None = None
     source_silhouette: np.ndarray | None = None
@@ -79,8 +76,6 @@ class Replacement:
     face_detail: object = None
     # Fade factor of a face whose swap is held through, or returning from, a one/two-frame tracker gate.
     presence: float = 1.0
-    # The crop already went through the restorer at its native resolution (the dense path restores before it composites).
-    restored: bool = False
 
 
 @dataclass(frozen=True)
@@ -101,66 +96,12 @@ class FrameResult:
     withheld: tuple[Withheld, ...] = ()
 
 
-def swapped_portrait(portrait: AlignedCrop, swap: SwapResult) -> np.ndarray:
-    """Place the identity crop within a portrait for the appearance encoder only."""
-    portrait_matrix = np.vstack((portrait.matrix, (0, 0, 1)))
-    swap_inverse = np.vstack((swap.alignment.inverse, (0, 0, 1)))
-    local = (portrait_matrix @ swap_inverse)[:2]
-    height, width = swap.image.shape[:2]
-    mask = np.zeros((height, width), np.float32)
-    cv2.ellipse(mask, (round(width * 0.5), round(height * 0.555)),
-                (round(width * 0.39), round(height * 0.46)), 0, 0, 360, 1, -1)
-    blur = max(3, round(min(height, width) * 0.117)) | 1
-    mask = cv2.GaussianBlur(mask, (blur, blur), max(1.0, height * 0.0234))
-    size = (portrait.image.shape[1], portrait.image.shape[0])
-    weight = cv2.warpAffine(mask, local, size)[:, :, None]
-    fake = cv2.warpAffine(swap.image, local, size)
-    return np.clip(fake * weight + portrait.image * (1 - weight), 0, 255).astype(np.uint8)
-
-
-PROFILE_TRIM_START, PROFILE_TRIM_FULL = 30.0, 40.0   # |yaw| between which the far-cheek trim fades in (degrees)
-
-
-def profile_aware_mask(shape: tuple[int, int], landmarks5: np.ndarray, yaw: float) -> np.ndarray:
-    """Tighten the far cheek edge for turned faces while leaving the near side untouched.
-
-    The trim fades in over ``PROFILE_TRIM_START``..``PROFILE_TRIM_FULL`` degrees of yaw: a threshold would pop the cheek
-    edge in a single frame wherever the head crosses it.
-    """
-    height, width = shape
-    result = np.ones((height, width), np.float32)
-    amount = smoothstep((abs(float(yaw)) - PROFILE_TRIM_START) / (PROFILE_TRIM_FULL - PROFILE_TRIM_START))
-    if amount <= 0.0 or width < 16 or height < 16:
-        return result
-    points = np.asarray(landmarks5, np.float64)
-    if points.shape != (5, 2) or not np.isfinite(points).all():
-        return result
-    nose_x = float(points[2, 0])
-    eye_distance = max(1.0, float(np.linalg.norm(points[1] - points[0])))
-    # The far cheek silhouette sits about two thirds of an inter-ocular distance past the bridge.
-    # A cosine feather keeps the bridge and eye coverage continuous at the cutoff.
-    feather = max(4.0, width * 0.07)
-    if yaw > 0:
-        edge = nose_x - 0.65 * eye_distance
-        x = np.arange(width, dtype=np.float32)
-        ramp = np.clip((x - (edge - feather)) / feather, 0.0, 1.0)
-    else:
-        edge = nose_x + 0.65 * eye_distance
-        x = np.arange(width, dtype=np.float32)
-        ramp = np.clip(((edge + feather) - x) / feather, 0.0, 1.0)
-    ramp = 0.5 - 0.5 * np.cos(np.pi * ramp)
-    result *= (1.0 - amount * (1.0 - ramp))[None, :]
-    return result
-
-
 class ReferencePipeline:
     def __init__(self, catalog: ModelCatalog | None = None, config: RuntimeConfig = RuntimeConfig()):
         self.catalog, self.config = catalog or ModelCatalog(), config
         self.tracker: FaceTracker | None = None
-        self.swapper = IdentitySwapper(self.catalog, config)
         self.portrait = LivePortraitAdapter(self.catalog, config)
-        # The compositor and its parser/restorer adapters are lazy; session creation
-        # does not activate any additional inference model.
+        # The compositor and its parser adapters are lazy; session creation does not activate any additional model.
         self.compositor = FrameCompositor(self.catalog, config)
         self.compositor.expression_portrait = self.portrait
         self.angle_diagnostics = AngleDiagnostics()
@@ -172,7 +113,7 @@ class ReferencePipeline:
         self.identity_guard = None
         self.prepared = False
         self.lock = threading.RLock()
-        # Stages 1 (tracking) and 3 (composite) have their own locks so they can overlap the swap stage.
+        # Stages 1 (tracking) and 3 (composite) have their own locks so they can overlap the render stage.
         # Order whenever more than one is needed: track_lock -> lock -> composite_lock.
         self.track_lock = threading.RLock()
         self.composite_lock = threading.RLock()
@@ -180,22 +121,11 @@ class ReferencePipeline:
         self.frames_tracked = 0
         self.last_latency: StageLatency | None = None
         self.frames_processed = 0
-        self.pose_projector: PoseBlendProjector | None = None
-        # Stage 4 render modes: "standard" (existing identity swap), "pose_3d", "reenactment_3d"
-        self.render_mode = "standard"
         self.default_source: FaceSetDocument | None = None
         self.identity_store = None
-        self.rigs: dict[str, IdentityRig] = {}
-        self.rig_status: dict[str, dict] = {}
-        self.reenactors: dict[int, ReenactmentEngine] = {}
-        self.pose_projectors: dict[str, PoseBlendProjector] = {}
+        self.neural_face = None          # the dense-correspondence swap engine was removed; always None
         self.full_head_engines = {}
         self.head_landmarks = None
-        self.neural_face = None
-        # Interactive previews may opt in to degrading to the standard 2D swap when the dense facial bundle is not
-        # installed. Renders keep the strict default (explicit DENSE_FACE_ASSETS_MISSING error, never a silent change).
-        self.dense_face_optional = False
-        self.dense_face_unavailable: str | None = None
         self.angle_trajectories: dict[int, tuple[Any, ...]] = {}
         self.angle_frame_index: int | None = None
         self.reenactment_settings = ReenactmentSettings()
@@ -205,24 +135,12 @@ class ReferencePipeline:
         self._pose_fade = PoseFade()
         register(self, "release_session")
 
-    def select_swapper(self, model_id: str) -> None:
-        """Select a registered swapper before source preparation/model activation."""
-        if self.prepared:
-            raise DomainError("SESSION_ALREADY_PREPARED", "Swapper selection is fixed for a prepared render session", 409)
-        if self.catalog.swapper_spec(model_id) is None:
-            raise DomainError("SWAPPER_MODEL_UNSUPPORTED", "Selected model is not a registered swapper", 422)
-        self.swapper.model_id = model_id
-
-    @guarded
     def prepare_session(self, source: FaceSetDocument, *, track_ids: set[int] | None = None,
                         sources_by_track: Mapping[int, FaceSetDocument] | None = None,
-                        retarget: Literal["auto", "off", "required"] = "auto",
-                        track_policy=None, detection_threshold: float = 0.5,
-                        render_mode: str = "standard", identity_store=None,
-                        reenactment_settings: ReenactmentSettings | None = None) -> dict:
+                        retarget: str = "auto", track_policy=None, detection_threshold: float = 0.5,
+                        identity_store=None, reenactment_settings: ReenactmentSettings | None = None) -> dict:
+        """Track-and-gate session setup. It does NOT require the renderer; rendering a face does (see ``infer_frame``)."""
         with self.lock:
-            if render_mode not in RENDER_MODES:
-                raise ValueError(f"render_mode must be one of {RENDER_MODES}")
             if retarget not in ("auto", "off", "required") or track_ids is not None and (
                     len(track_ids) > 32 or any(type(i) is not int or i < 0 for i in track_ids)):
                 raise ValueError("Invalid session selection/policy")
@@ -232,135 +150,25 @@ class ReferencePipeline:
                 raise ValueError("Mapped FaceSets must use selected nonnegative track IDs")
             self.release_session()
             try:
-                self.swapper.prepare_session(source, sources_by_track=mapped_sources)
                 self.tracker = FaceTracker(self.catalog, config=self.config, threshold=detection_threshold,
                                            policy=track_policy)
                 self.selected_ids = frozenset(track_ids) if track_ids is not None else None
                 self.sources_by_track = mapped_sources
-                self.default_source, self.render_mode = source, render_mode
+                self.default_source = source
                 self.identity_store = identity_store
                 self.reenactment_settings = reenactment_settings or ReenactmentSettings()
-                self.dense_face_unavailable = None
-                if render_mode != "standard":
-                    self._prepare_identity_rigs(source, mapped_sources, identity_store, prepare_dense=False)
-                if render_mode != "standard" and self.dense_face_unavailable:
-                    self.portrait.fallback_reason = self.dense_face_unavailable
-                elif render_mode != "standard":
-                    self.portrait.fallback_reason = (
-                        "Identity-asset reenactment uses measured target landmarks and the source rig; "
-                        "the dense neural face model is not required"
-                        if render_mode == "reenactment_3d" else
-                        "Pose projection uses the source identity asset when available; otherwise the canonical proxy is "
-                        "used with an explicit fallback reason")
-                elif retarget != "off":
+                if retarget != "off":
                     self.portrait.prepare_session(required=retarget == "required")
                 else:
-                    self.portrait.fallback_reason = "LivePortrait disabled explicitly; identity-only path selected"
+                    self.portrait.fallback_reason = "LivePortrait expression retargeting disabled explicitly"
                 self.prepared = True
                 return self.capability()
             except BaseException:
                 self.release_session()
                 raise
 
-    def _prepare_identity_rigs(self, source: FaceSetDocument, mapped: Mapping[int, FaceSetDocument], store=None,
-                               *, prepare_dense: bool = True) -> None:
-        """Load an explicitly built asset, or build through an explicitly supplied store, for live 3D use."""
-        documents = {d.faceset_id: d for d in (source, *mapped.values())}.values()
-        dense_capabilities: dict[str, dict] = {}
-        if prepare_dense:
-            from roop_3d.reconstruction.neural_face import NeuralFaceEngine, WARM_ENGINE
-            from roop_3d.core.ort_session import pool_scope_active
-            if self.neural_face is None:
-                try:
-                    self._warm_key = (id(self.catalog), self.config.provider, self.config.hardware_profile,
-                                      self.config.precision_policy, self.config.cpu_threads) if pool_scope_active() else None
-                    warm = WARM_ENGINE.take(self._warm_key) if self._warm_key is not None else None
-                    self.neural_face = warm if warm is not None else NeuralFaceEngine.load(self.catalog, self.config)
-                except DomainError as error:
-                    if not self.dense_face_optional or error.code != "DENSE_FACE_ASSETS_MISSING":
-                        raise
-                    self.dense_face_unavailable = f"{error.code}: standard 2D identity swap used instead. {error.message}"
-                    return
-            for document in documents:
-                self.neural_face.prepare(document)
-                dense_capabilities[document.faceset_id] = self.neural_face.capability()
-
-        from roop_3d.reconstruction.identity_asset import (
-            IdentityAssetSettings, IdentityAssetStore, compute_build_key,
-        )
-        settings = IdentityAssetSettings()
-        cache_only = store is None
-        store_error = None
-        if cache_only:
-            try:
-                store = IdentityAssetStore()
-            except Exception as error:
-                store_error = error
-
-        for document in documents:
-            faceset_id = document.faceset_id
-            dense = dense_capabilities.get(faceset_id, {})
-            try:
-                if store_error is not None:
-                    raise DomainError("IDENTITY_ASSET_STORE_UNAVAILABLE", str(store_error), 503) from store_error
-                build_key = compute_build_key(document, settings)
-                if cache_only:
-                    asset = store.load(faceset_id, build_key)
-                    reused = True
-                    if asset is None:
-                        raise DomainError(
-                            "IDENTITY_ASSET_NOT_BUILT",
-                            "No matching identity asset is cached; build it explicitly before rendering",
-                            409,
-                        )
-                else:
-                    asset, reused = store.get_or_build(document, settings)
-                manifest = asset.manifest
-                if (manifest.build_key != build_key or manifest.faceset_id != faceset_id
-                        or manifest.faceset_source_sha256 != document.source_sha256):
-                    raise DomainError(
-                        "IDENTITY_ASSET_MISMATCH",
-                        "The stored identity asset does not match the selected FaceSet and settings",
-                        409,
-                    )
-                rig = IdentityRig(asset)
-                self.rigs[faceset_id] = rig
-                self.rig_status[faceset_id] = {
-                    **dense,
-                    "available": True,
-                    "identity_asset_available": True,
-                    "reason": None,
-                    "identity_asset": {
-                        "build_key": build_key,
-                        "reused": bool(reused),
-                        "template": manifest.settings.get("template", "canonical"),
-                        "depth_triangulated": bool(manifest.claims.get("depth_triangulated", False)),
-                        "observed_yaw_range_deg": list(rig.yaw_range),
-                        "observed_pitch_range_deg": list(rig.pitch_range),
-                        "missing_information": list(manifest.missing_information),
-                    },
-                }
-            except Exception as error:
-                self.rigs.pop(faceset_id, None)
-                self.rig_status[faceset_id] = {
-                    **dense,
-                    "available": False,
-                    "identity_asset_available": False,
-                    "reason": f"{getattr(error, 'code', type(error).__name__)}: {error}",
-                    "identity_asset": {"available": False},
-                }
-
     def _document_for(self, track_id: int) -> FaceSetDocument | None:
         return self.sources_by_track.get(track_id, self.default_source)
-
-    def _rig_for(self, track_id: int) -> IdentityRig | None:
-        document = self._document_for(track_id)
-        return self.rigs.get(document.faceset_id) if document is not None else None
-
-    def _unavailable_reason(self, track_id: int) -> str:
-        document = self._document_for(track_id)
-        status = self.rig_status.get(document.faceset_id) if document is not None else None
-        return "IDENTITY_ASSET_UNAVAILABLE" + (f": {status['reason']}" if status and status.get("reason") else "")
 
     def _frame_time(self) -> float:
         if self._frame_context is not None:
@@ -436,15 +244,6 @@ class ReferencePipeline:
         """Install the render-time identity lock check (see roop_3d.identity.guard)."""
         with self.lock:
             self.identity_guard = guard
-
-    def _roll_exceeded(self, track_id: int, roll: float) -> bool:
-        """The dense path hands a face to the 2D swap above ``dense_3d_max_roll``; leaving that fallback needs the head to
-        come ``pose_hysteresis_degrees`` back inside the limit, so a roll hovering at the limit does not flip the method
-        (and the whole look of the face) from frame to frame."""
-        limit = dense_3d_max_roll()
-        exceeded = abs(float(roll)) > limit - (self.pose_hysteresis_degrees if self._roll_latched.get(track_id) else 0.0)
-        self._roll_latched[track_id] = exceeded
-        return exceeded
 
     def configure_temporal(self, settings) -> None:
         from roop_3d.temporal import TrackTemporalStabilizer
@@ -687,41 +486,20 @@ class ReferencePipeline:
         return tuple(by_id[key] for key in sorted(by_id))
 
     @inference
-    def infer_frame(self, image: np.ndarray, *, strength: float = 0.35, pose_blend: float | None = None,
-                    frontalization: float = 0.0, tps_expression: float = 0.0, identity_blend_t: float | None = None,
-                    render_mode: str | None = None, tracked: TrackedFrame | None = None,
-                    jaw_adaptation: bool = False) -> FrameResult:
-        """``tracked`` (from :meth:`track_frame`) lets Stage 1 run ahead; without it tracking happens inline as before.
+    def infer_frame(self, image: np.ndarray, *, tracked: TrackedFrame | None = None, **_unused) -> FrameResult:
+        """Track, gate, then render. Rendering a face needs the true-3D FullHeadEngine path, which is not wired:
+        any face that passes the gates raises ``True3DRendererUnavailable`` (no 2D / 2.5D fallback, no fake output).
 
-        ``jaw_adaptation`` (opt-in) fits the canonical proxy's jaw width to the target's 106-point face contour in the mesh
-        pose-blend path (``pose_blend`` given); the outcome, applied or not and why, is on ``replacement.projection.jaw``."""
+        ``tracked`` (from :meth:`track_frame`) lets Stage 1 run ahead; without it tracking happens inline. A frame with no
+        selected, gate-passing face returns an empty result (nothing to render, so nothing is falsely reported as rendered)."""
         with self.lock:
             if not self.prepared or self.tracker is None:
                 raise DomainError("SESSION_NOT_PREPARED", "Prepare a source before frame inference", 409)
             image_bgr(image)
-            if not np.isfinite(strength) or not 0 <= strength <= 1:
-                raise ValueError("Retargeting strength must be within 0..1")
-            if pose_blend is not None and (not np.isfinite(pose_blend) or not 0 <= pose_blend <= 1):
-                raise ValueError('Mesh pose blend must be within 0..1')
-            for name, amount in (('Pose frontalization', frontalization), ('TPS expression weight', tps_expression)):
-                if not np.isfinite(amount) or not 0 <= amount <= 1:
-                    raise ValueError(f'{name} must be within 0..1')
-            mode = self.render_mode if render_mode is None else render_mode
-            if mode not in RENDER_MODES:
-                raise ValueError(f"render_mode must be one of {RENDER_MODES}")
-            if mode in ("pose_3d", "reenactment_3d") and self.default_source is not None:
-                if any(document.faceset_id not in self.rig_status
-                       for document in (self.default_source, *self.sources_by_track.values())):
-                    self._prepare_identity_rigs(
-                        self.default_source, self.sources_by_track, self.identity_store, prepare_dense=False)
-            if mode != "standard" and self.dense_face_unavailable:
-                mode = "standard"
-            if mode == "pose_3d" and pose_blend is None:
-                pose_blend = 1.0
             began = time.perf_counter()
             if tracked is None:
                 self._frame_context = None
-                faces = self.tracker.process(image, include203=self.portrait.available and pose_blend is None)
+                faces = self.tracker.process(image, include203=False)
                 faces = self._persistent_target_faces(self._apply_angle_trajectories(faces))
                 detection_end = time.perf_counter()
                 tracked = TrackedFrame(faces, bool(self.tracker.scene_cut), frozenset(self.tracker.active_ids),
@@ -730,10 +508,7 @@ class ReferencePipeline:
                 faces, detection_end = tracked.faces, began + tracked.detection_ms / 1000
             self._frame_context = tracked
             scene_cut, active_ids = tracked.scene_cut, tracked.active_ids
-            frame_time = tracked.frame_time
             self.portrait.retain_tracks(active_ids)
-            for track_id in set(self.reenactors) - set(active_ids):
-                self.reenactors.pop(track_id).release()
             for track_id in set(self.full_head_engines) - set(active_ids):
                 self.full_head_engines.pop(track_id).rasterizer.release()
             if scene_cut:
@@ -743,137 +518,33 @@ class ReferencePipeline:
             else:
                 self._roll_latched = {key: value for key, value in self._roll_latched.items() if key in active_ids}
                 self._pose_fade.retain(active_ids)
-            if self.neural_face is not None:
-                self.neural_face.retain_tracks(active_ids)
-            replacements, swap_seconds, retarget_seconds, projection_seconds = [], 0.0, 0.0, 0.0
             withheld: list[Withheld] = []
-            gated: set[int] = set()   # tracker policy closed the gate this frame (not an identity verdict)
-            for tracked in faces:
-                if self.selected_ids is not None and tracked.track_id not in self.selected_ids:
+            renderable: list[TrackedFace] = []
+            for face in faces:
+                if self.selected_ids is not None and face.track_id not in self.selected_ids:
                     continue
-                if not tracked.swap_allowed:
-                    gated.add(tracked.track_id)
-                    withheld.append(Withheld(tracked.track_id, tracked.reason or tracked.state, tracked.state, tracked.confidence))
+                if not face.swap_allowed:
+                    withheld.append(Withheld(face.track_id, face.reason or face.state, face.state, face.confidence))
                     continue
                 if self.identity_guard is not None:
-                    verdict = self.identity_guard.check(tracked)
+                    verdict = self.identity_guard.check(face)
                     if not verdict.allowed:
-                        withheld.append(Withheld(tracked.track_id, verdict.reason or "IDENTITY_UNVERIFIED",
-                                                 tracked.state, verdict.similarity))
+                        withheld.append(Withheld(face.track_id, verdict.reason or "IDENTITY_UNVERIFIED",
+                                                 face.state, verdict.similarity))
                         continue
-                face = tracked.observation
-                target_reference = self._target_reference(tracked)
-                if face.landmarks68 is None:
-                    measured = self._bank_landmarks(target_reference, face.box)
-                    if measured is not None:
-                        face = replace(face, landmarks68=measured)
-                        tracked = replace(tracked, observation=face)
-                at = time.perf_counter()
-                yaw_limit, pitch_limit = auto_3d_limits()
-                extreme = abs(face.pose[0]) > yaw_limit or abs(face.pose[1]) > pitch_limit
-                face_mode = ("standard" if mode in ("pose_3d", "reenactment_3d") else
-                             "pose_3d" if mode == "standard" and extreme else mode)
-                dense_fallback = self.dense_face_unavailable if face_mode != "standard" else None
-                if face_mode != "standard" and not dense_fallback and self._roll_exceeded(tracked.track_id, face.pose[2]):
-                    # The dense mesh fit breaks down on a strongly rolled head (a close-up lying on a pillow produced a duplicated
-                    # eye and a warped mouth, which the compositor then rightly masked away: no swap at all). The standard 2D swap
-                    # aligns by the five landmarks, so it copes with roll.
-                    dense_fallback = f"DENSE_3D_ROLL_LIMIT: head roll {face.pose[2]:.0f} deg exceeds {dense_3d_max_roll():.0f}; standard 2D swap used"
-                if face_mode != "standard" and not dense_fallback:
-                    document = self._document_for(tracked.track_id)
-                    if document is None:
-                        raise DomainError("DENSE_FACE_SOURCE_REQUIRED", "3D correspondence requires a source identity", 409)
-                    if self.neural_face is None or document.faceset_id not in self.neural_face.sources:
-                        self._prepare_identity_rigs(document, {})
-                    dense_fallback = self.dense_face_unavailable
-                if dense_fallback:
-                    face_mode = "standard"
-                if face_mode != "standard":
-                    fade = self._pose_fade.level(tracked.track_id, face.pose, self.pose_hysteresis_degrees)
-                    if fade <= 0.0:
-                        continue          # the head is turned away from the camera: no face is drawn on it
-                    generated = self.neural_face.process(image, face, document, self.swapper, track_id=tracked.track_id,
-                                                         frame_index=self.frames_processed, timestamp=frame_time,
-                                                         scene_cut=scene_cut, pose_confidence=tracked.confidence)
-                    self.dense_enhancer_calls += 1
-                    if self.neural_face.last_diag is not None:
-                        self.angle_diagnostics.record_swap(self.frames_processed, tracked.track_id,
-                                                           {**self.neural_face.last_diag, "presence": fade}, pose=face.pose)
-                    projection_seconds += time.perf_counter() - at
-                    replacements.append(Replacement(tracked.track_id, generated.image, generated.inverse, -1,
-                        "dense_3d_correspondence_neural_ultramax", coverage=generated.coverage,
-                        landmarks5=generated.landmarks5, render_mode=face_mode, restored=True, presence=fade))
-                    continue
-                swap = self.swapper.infer_frame(image, face.landmarks5, pose=face.pose,
-                                                track_id=tracked.track_id, frontalization=frontalization,
-                                                **({"identity_blend_t": identity_blend_t} if identity_blend_t is not None else {}))
-                swap_seconds += time.perf_counter() - at
-                if self.portrait.available and pose_blend is None and face.landmarks203 is not None:
-                    at = time.perf_counter()
-                    crop = landmark_crop(image, face.landmarks106, 512, expansion=2.3, vertical_shift=-0.15)
-                    driving_points = transform_points(face.landmarks203, crop.matrix).astype(np.float32)
-                    if tracked.track_id not in self.portrait.tracks:
-                        source_portrait = swapped_portrait(crop, swap)
-                        source_points = self.tracker.dense.infer203(source_portrait,
-                            transform_points(face.landmarks106, crop.matrix).astype(np.float32))
-                        self.portrait.prepare_track(tracked.track_id, source_portrait, crop.image, source_points, driving_points)
-                    generated = self.portrait.infer_frame(tracked.track_id, crop.image, driving_points, strength=strength)
-                    inverse, method = crop.inverse, "identity_swap_liveportrait"
-                    retarget_seconds += time.perf_counter() - at
-                else:
-                    generated, inverse, method = swap.image, swap.alignment.inverse, "identity_swap"
-                if tps_expression > 0:
-                    at = time.perf_counter()
-                    warp = apply_expression_to_crop(generated, inverse, face.landmarks106, tps_expression, self._detect_landmarks106)
-                    if warp.applied:
-                        generated, method = warp.image, method + '_tps_expression'
-                    projection_seconds += time.perf_counter() - at
-                projection = None
-                fallback_reason, reenactment, coverage = dense_fallback, None, None
-                if pose_blend is not None:
-                    at = time.perf_counter()
-                    try:
-                        if mode == "pose_3d":
-                            projector, fallback_reason = self._pose_3d_projector(tracked.track_id)
-                        else:
-                            if self.pose_projector is None:
-                                self.pose_projector = PoseBlendProjector(
-                                    sampling_device="cuda" if self.config.provider == "CUDAExecutionProvider" else "cpu")
-                            projector = self.pose_projector
-                        observed = transform_points(face.landmarks5, cv2.invertAffineTransform(inverse))
-                        projection = projector.render(generated, observed, pose_blend,
-                                                      **({"jaw_contour": self._jaw_contour(face, inverse)} if jaw_adaptation else {}))
-                        generated, method = projection.image, ('identity_swap_pose_3d' if mode == "pose_3d" else 'identity_swap_tps_mesh_blend')
-                        coverage = projection.coverage
-                    except DomainError as error:
-                        if mode != "pose_3d":
-                            raise
-                        # 3D Pose never forces a projection the landmarks cannot support: keep the proven swap crop.
-                        projection, fallback_reason = None, f"POSE_PROJECTION_REJECTED: {error.code}"
-                    projection_seconds += time.perf_counter() - at
-                if mode == "reenactment_3d":
-                    at = time.perf_counter()
-                    generated, coverage, method, fallback_reason, reenactment = self._reenact(
-                        tracked, image, generated, inverse, coverage, method)
-                    projection_seconds += time.perf_counter() - at
-                if abs(face.pose[0]) > PROFILE_TRIM_START:
-                    crop_landmarks = transform_points(face.landmarks5, cv2.invertAffineTransform(inverse))
-                    profile_mask = profile_aware_mask(generated.shape[:2], crop_landmarks, face.pose[0])
-                    coverage = profile_mask if coverage is None else coverage * profile_mask
-                replacements.append(Replacement(tracked.track_id, generated, inverse.copy(), swap.reference_index,
-                                                method, coverage, projection,
-                                                transform_points(face.landmarks5, cv2.invertAffineTransform(inverse)),
-                                                mode if fallback_reason is None else "standard", fallback_reason, reenactment))
-            replacements = self._presence.apply(self.frames_processed, replacements, gated)
+                renderable.append(face)
+            if renderable:
+                require_true3d_renderer(f"render {len(renderable)} tracked face(s)")
+                raise True3DRendererUnavailable(
+                    "3D renderer not wired: FullHeadEngine rendering is not connected to ReferencePipeline.infer_frame",
+                    {"track_ids": [face.track_id for face in renderable]})
             ended = time.perf_counter()
             self.frames_processed += 1
-            self.last_latency = StageLatency((detection_end - began) * 1000, swap_seconds * 1000,
-                                             retarget_seconds * 1000, (ended - began) * 1000, projection_seconds * 1000)
-            return FrameResult(faces, tuple(replacements), self.last_latency, scene_cut, tuple(withheld))
+            self.last_latency = StageLatency((detection_end - began) * 1000, 0.0, 0.0, (ended - began) * 1000, 0.0)
+            return FrameResult(faces, (), self.last_latency, scene_cut, tuple(withheld))
 
-    def track_frame(self, image: np.ndarray, *, pose_blend: float | None = None,
-                    render_mode: str | None = None) -> TrackedFrame:
-        """Stage 1: detection, landmarks, pose and track association for one frame (no swap work).
+    def track_frame(self, image: np.ndarray, **_kwargs) -> TrackedFrame:
+        """Stage 1: detection, landmarks, pose and track association for one frame (no render work).
 
         Pass the result to :meth:`infer_frame` as ``tracked``.  Frames must be tracked in order; only this method
         touches the tracker, so it may safely run on a thread of its own while Stage 2 works on an earlier frame.
@@ -882,15 +553,8 @@ class ReferencePipeline:
             if not self.prepared or self.tracker is None:
                 raise DomainError("SESSION_NOT_PREPARED", "Prepare a source before frame inference", 409)
             image_bgr(image)
-            mode = self.render_mode if render_mode is None else render_mode
-            if mode not in RENDER_MODES:
-                raise ValueError(f"render_mode must be one of {RENDER_MODES}")
-            if mode != "standard" and self.dense_face_unavailable:
-                mode = "standard"
-            if mode == "pose_3d" and pose_blend is None:
-                pose_blend = 1.0
             began = time.perf_counter()
-            faces = self.tracker.process(image, include203=self.portrait.available and pose_blend is None)
+            faces = self.tracker.process(image, include203=False)
             faces = self._persistent_target_faces(self._apply_angle_trajectories(faces))
             seconds = getattr(self.tracker, "timestamp_seconds", None)
             frame_time = float(seconds) if seconds is not None and np.isfinite(seconds) else self.frames_tracked / 30.0
@@ -899,160 +563,32 @@ class ReferencePipeline:
                                 (time.perf_counter() - began) * 1000)
 
     def begin_fit_ahead(self) -> None:
-        """A pipelined render is about to start: let the track thread fit target faces for the swap stage ahead of time."""
-        if self.neural_face is not None:
-            self.neural_face.begin_fit_ahead(self.frames_processed)
+        """No-op: the dense-correspondence fit-ahead belonged to the removed 2D swap path."""
 
     def prefetch_target_fits(self, image: np.ndarray, tracked: TrackedFrame, *, render_mode: str | None = None) -> None:
-        """Stage 1 helper: fit the faces Stage 2 is likely to swap with the dense-3D path (``fit_ahead``).
-
-        Only a *prediction*: Stage 2 re-derives its own decision (identity guard, pose fade, roll latch) and uses a
-        precomputed fit only when it was made from identical inputs, so a face predicted wrongly just wastes this work.
-        Read-only on session state; the one call per frame also keeps the lookahead's frame counter in step."""
-        engine = self.neural_face
-        if engine is None or engine.fit_ahead is None or not self.prepared:
-            return
-        mode = self.render_mode if render_mode is None else render_mode
-        candidates = []                                         # an unknown mode or missing dense assets: nothing to fit
-        if mode in RENDER_MODES and not self.dense_face_unavailable:
-            yaw_limit, pitch_limit = auto_3d_limits()
-            roll_limit = dense_3d_max_roll()
-            for face in tracked.faces:
-                if (self.selected_ids is not None and face.track_id not in self.selected_ids) or not face.swap_allowed:
-                    continue
-                pose = face.observation.pose
-                if mode == "standard" and abs(pose[0]) <= yaw_limit and abs(pose[1]) <= pitch_limit:
-                    continue                                    # the standard 2D swap handles it: no dense fit needed
-                if abs(pose[2]) > roll_limit:
-                    continue
-                document = self._document_for(face.track_id)
-                if document is None or document.faceset_id not in engine.sources:
-                    continue
-                candidates.append((face.track_id, face.observation.landmarks5))
-        engine.fit_ahead.submit(image, candidates, timestamp=tracked.frame_time, scene_cut=tracked.scene_cut,
-                                active_ids=tracked.active_ids)
-
-    def _refine_full_head(self, tracked, image, rendered, coverage, inverse, strength):
-        """Condition the portrait appearance encoder on the entire UV render.
-
-        SPADE produces a full 512px portrait. Transfer its fine-scale residual,
-        retaining the UV render's low-frequency identity shape and silhouette.
-        This uses existing portrait weights; it is not a newly trained head model.
-        """
-        from roop_3d.reconstruction.full_head import bridge_neural_detail
-        side = rendered.shape[0]
-        to_crop = cv2.invertAffineTransform(inverse)
-        points106 = transform_points(tracked.observation.landmarks106, to_crop) * (512 / side)
-        source = cv2.resize(rendered, (512, 512))
-        target = self.compositor._crop_to_frame(image, inverse, rendered.shape[:2])
-        target = cv2.resize(target, (512, 512))
-        target203 = self.tracker.dense.infer203(target, points106.astype(np.float32))
-        # Re-encode the current pose-dependent UV render: cached features from a
-        # different pose would reintroduce wrong silhouettes at extreme turns.
-        source203 = self.tracker.dense.infer203(source, points106.astype(np.float32))
-        self.portrait.prepare_track(tracked.track_id, source, target, source203, target203)
-        neural = self.portrait.infer_frame(tracked.track_id, target, target203, strength=strength)
-        return bridge_neural_detail(rendered, cv2.resize(neural, (side, side)), coverage)
-
-    def _pose_3d_projector(self, track_id: int):
-        """(projector, fallback_reason): the source identity's own geometry when an asset exists, else the proven proxy."""
-        document = self._document_for(track_id)
-        rig = self._rig_for(track_id)
-        if document is None or rig is None:
-            if self.pose_projector is None:
-                self.pose_projector = PoseBlendProjector(
-                    sampling_device="cuda" if self.config.provider == "CUDAExecutionProvider" else "cpu")
-            return self.pose_projector, self._unavailable_reason(track_id)
-        projector = self.pose_projectors.get(document.faceset_id)
-        if projector is None:
-            projector = self.pose_projectors[document.faceset_id] = PoseBlendProjector.from_identity_asset(
-                rig.asset, sampling_device="cuda" if self.config.provider == "CUDAExecutionProvider" else "cpu")
-        return projector, None
-
-    def _reenact(self, tracked: TrackedFace, image: np.ndarray, generated: np.ndarray, inverse: np.ndarray,
-                 coverage: np.ndarray | None, method: str):
-        """3D Reenactment of one face; returns (image, coverage, method, fallback_reason, frame).
-
-        Engaged: the engine render replaces the crop, cross-faded with the proven path's crop while it ramps in/out, and
-        its coverage (zero where the atlas has no pixels, e.g. an open mouth) lets the compositor keep the target there.
-        Not engaged (or no asset): the proven crop is returned untouched, with the reason."""
-        rig = self._rig_for(tracked.track_id)
-        if rig is None:
-            return generated, coverage, method, self._unavailable_reason(tracked.track_id), None
-        engine = self.reenactors.get(tracked.track_id)
-        if engine is None:
-            engine = self.reenactors[tracked.track_id] = ReenactmentEngine(rig, self.reenactment_settings)
-            engine.sampling_device = "cuda" if self.config.provider == "CUDAExecutionProvider" else "cpu"
-            engine.renderer_profile = self.config.hardware_profile
-        face = tracked.observation
-        to_crop = cv2.invertAffineTransform(inverse)
-        cut = (self._frame_context.scene_cut if self._frame_context is not None
-               else bool(self.tracker is not None and self.tracker.scene_cut))
-        try:
-            observation = TargetObservation(
-                landmarks5=transform_points(face.landmarks5, to_crop), landmarks106=transform_points(face.landmarks106, to_crop),
-                timestamp=self._frame_time(), scene_cut=cut, sharpness=self._face_sharpness(image, face.box))
-        except (ValueError, TypeError):
-            observation = TargetObservation(None, None, self._frame_time(), cut)
-        frame = engine.process(observation, generated.shape[:2])
-        if not frame.engaged or frame.image is None or frame.coverage is None:
-            return generated, coverage, method, frame.reason, frame
-        weight = float(frame.weight)
-        engine_alpha = frame.coverage * weight
-        base_alpha = (np.ones(generated.shape[:2], np.float32) if coverage is None else coverage.astype(np.float32)) * (1.0 - weight)
-        total = engine_alpha + base_alpha
-        mixed = ((frame.image.astype(np.float32) * engine_alpha[..., None] + generated.astype(np.float32) * base_alpha[..., None])
-                 / np.maximum(total[..., None], 1e-6))
-        return (np.clip(mixed, 0, 255).astype(np.uint8), np.clip(total, 0.0, 1.0).astype(np.float32),
-                "identity_reenactment_3d" + ("" if weight >= 1.0 else "_blend"), None, frame)
-
-    @staticmethod
-    def _jaw_contour(face, inverse: np.ndarray) -> np.ndarray:
-        """The detector's 33-point face contour in replacement-crop pixels. An implausible 106 layout is never trusted: NaNs make
-        the projector report ``contour_invalid`` instead of silently skipping the requested fit."""
-        points = None if face.landmarks106 is None else np.asarray(face.landmarks106, np.float64)
-        if points is None or points.shape != (106, 2) or not layout_is_plausible(points):
-            return np.full((33, 2), np.nan)
-        return transform_points(group(points, "contour"), cv2.invertAffineTransform(inverse))
+        """No-op: see :meth:`begin_fit_ahead`."""
 
     def _detect_landmarks106(self, crop: np.ndarray) -> np.ndarray | None:
-        """106 dense landmarks of a generated crop (the crop is a tight face, so the box is the whole image)."""
+        """106 dense landmarks of a crop (the crop is a tight face, so the box is the whole image)."""
         if self.tracker is None:
             return None
         h, w = crop.shape[:2]
         return self.tracker.dense.infer106(crop, np.array((0, 0, w, h), np.float32))
 
     def capability(self) -> dict:
+        from roop_3d.pipeline import true3d_renderer
         return {"prepared": self.prepared, "frames_processed": self.frames_processed,
-                "identity_swapper": self.swapper.model.capability() if self.swapper.model else None,
+                "renderer": {"wired": true3d_renderer.is_wired(), "message": "3D renderer not wired"
+                             if not true3d_renderer.is_wired() else "ready"},
                 "portrait": self.portrait.capability(), "profile": self.config.hardware_profile,
                 "selected_track_ids": sorted(self.selected_ids) if self.selected_ids is not None else None,
-                "pose_method": ("three_tier_morphable_model" if self.neural_face is not None else
-                                "identity_asset_anchored_five_point" if self.rigs else
-                                "five_point_geometric_estimate"), "dense_landmarks": (68, 106, 203),
-                "full_head": {"active": False, "renderer": "disabled_legacy_cg"},
-                "hybrid_mesh_renderer": {str(track_id): engine.renderer_status()
-                                         for track_id, engine in self.reenactors.items()},
-                "dense_face": self.neural_face.capability() if self.neural_face is not None else {
-                    "available": False, "active": False,
-                    "reason": self.dense_face_unavailable or "Dense face bundle has not been loaded",
-                    "raw_mesh_compositing": False},
-                "pose_projection": {
-                    "state": "AVAILABLE" if self.neural_face is not None or self.pose_projector is not None or self.rigs else "NOT_LOADED",
-                    "geometry": ("SEMANTIC_ANATOMICAL_FACE" if self.neural_face is not None else
-                                 "SOURCE_IDENTITY_ASSET" if self.rigs else "ESTIMATED_CANONICAL_PROXY_68"),
-                    "camera": "FITTED_EXPORT_PINHOLE" if self.neural_face is not None else "ESTIMATED_CROP_PINHOLE",
-                    "active": self.neural_face is not None or self.pose_projector is not None or bool(self.rigs),
-                    "jaw_adaptation": "OPT_IN_CANONICAL_PROXY_JAWLINE_FROM_106_CONTOUR"},
+                "dense_landmarks": (68, 106, 203),
+                "full_head": {"active": False, "renderer": "not_wired"},
                 "full_frame_compositor": self.compositor.capability(),
                 "lip_sync": self.lip_sync.capability(),
-                "render_modes": {"available": list(RENDER_MODES), "default": self.render_mode,
-                                 "fallback": "pose_3d uses the selected identity asset or an explicitly reported canonical-proxy fallback; "
-                                             "reenactment_3d uses the selected identity asset and measured target landmarks, "
-                                             "falling back to the proven swap with a reason when unavailable or not engaged "
-                                             "(6 GB perspective UV; 12 GB hybrid with explicit UV fallback on raster failure)",
-                                 "identity_assets": dict(self.rig_status),
-                                 "active_reenactors": len(self.reenactors)}}
+                "render_modes": {"available": ["true_3d"], "default": "true_3d",
+                                 "fallback": "none: faces that cannot be rendered by the true-3D path raise "
+                                             "True3DRendererUnavailable; there is no 2D / 2.5D fallback"}}
 
     def prefetch_composite_inputs(self, image: np.ndarray, result: FrameResult, options: CompositeOptions = CompositeOptions()) -> int:
         """Warm the compositor's face-parser cache for ``result`` (no state is touched; safe next to ``composite_frame``)."""
@@ -1109,7 +645,6 @@ class ReferencePipeline:
             if self.tracker is not None:
                 self.tracker.release()
             self.tracker = None
-            self.swapper.release_session()
             self.portrait.release_session()
             self.compositor.release()
             self.lip_sync.release()
@@ -1119,58 +654,16 @@ class ReferencePipeline:
             self.prepared = False
             self.last_latency = None
             self.frames_processed = 0
-            self.pose_projector = None
-            self.render_mode, self.default_source, self.identity_store = "standard", None, None
-            self.rigs.clear()
-            self.rig_status.clear()
-            for engine in self.reenactors.values():
-                engine.release()
-            self.reenactors.clear()
-            self.pose_projectors.clear()
+            self.default_source, self.identity_store = None, None
             for engine in self.full_head_engines.values():
                 engine.rasterizer.release()
             self.full_head_engines.clear()
             self.head_landmarks = None
-            if self.neural_face is not None:
-                warm_key = getattr(self, "_warm_key", None)
-                if warm_key is not None:
-                    # A live preview: keep the engine warm for the next one instead of tearing the 3D head down.
-                    from roop_3d.reconstruction.neural_face import WARM_ENGINE
-                    self.neural_face.reset_tracks()
-                    WARM_ENGINE.put(warm_key, self.neural_face)
-                else:
-                    self.neural_face.release()
-                self.neural_face = None
-                self._warm_key = None
             self.angle_trajectories.clear()
             self.angle_frame_index = None
             self._roll_latched.clear()
             self._presence.reset()
             self._pose_fade.reset()
-
-
-def dense_3d_max_roll() -> float:
-    """Head roll (degrees) beyond which the dense 3D path hands the face to the standard swap (``ROOP3D_3D_MAX_ROLL``, default 40)."""
-    import os
-    try:
-        return float(os.environ.get("ROOP3D_3D_MAX_ROLL", 40.0))
-    except ValueError:
-        return 40.0
-
-
-def auto_3d_limits() -> tuple[float, float]:
-    """(yaw, pitch) in degrees beyond which a face leaves the 2D swap for the dense 3D path (default 30 / 25).
-
-    ``ROOP3D_AUTO_3D_YAW`` / ``ROOP3D_AUTO_3D_PITCH`` change them; a value of 180 disables the automatic switch.
-    """
-    import os
-
-    def read(name: str, default: float) -> float:
-        try:
-            return float(os.environ.get(name, default))
-        except ValueError:
-            return default
-    return read("ROOP3D_AUTO_3D_YAW", 30.0), read("ROOP3D_AUTO_3D_PITCH", 25.0)
 
 
 def prepare_session(source: FaceSetDocument, *, catalog: ModelCatalog | None = None,

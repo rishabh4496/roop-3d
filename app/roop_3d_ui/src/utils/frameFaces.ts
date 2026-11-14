@@ -38,6 +38,7 @@ export function matchFrameFaces(
 ): MatchedFrameFace[] {
   const pairs: { frame: number; stored: number; score: number }[] = [];
   faces.forEach((face, f) => stored.forEach((candidate, s) => {
+    if (candidate.selectable === false || !candidate.clusterId) return;
     if (face.track_id && typeof face.track_id === 'string') {
       if (face.track_id === candidate.clusterId) pairs.push({ frame: f, stored: s, score: 2 });
       return;
@@ -90,9 +91,10 @@ export function cropRect(bbox: readonly number[], width: number, height: number,
 }
 
 /** The server face (from `/media/detect-frame-faces`) that is the same face as the clicked candidate. */
-export function bestOverlap<T extends { bbox: number[] }>(face: FrameFace, candidates: T[]): T | null {
+export function bestOverlap<T extends { bbox: number[]; selectable?: boolean; track_id?: string | null }>(face: FrameFace, candidates: T[]): T | null {
   let best: T | null = null, bestScore = 0;
   for (const candidate of candidates) {
+    if (candidate.selectable === false || candidate.track_id === null) continue;
     const score = iou(face.bbox_norm, candidate.bbox);
     if (score > bestScore) { best = candidate; bestScore = score; }
   }

@@ -1,8 +1,9 @@
-import { useMemo, useState } from 'react';
+import { useState } from 'react';
 import { post } from '../../api';
 import type { Capabilities, Config } from '../../contracts';
-import { fidelityRestorer, type RestorerModel, type WorkstationParameters } from '../workstation/pipeline';
+import type { WorkstationParameters } from '../workstation/pipeline';
 import { RENDER_MODES } from '../workstation/renderModes';
+import True3DControls from '../studio/True3DControls';
 import { modelStatus, useModelCatalog, type ModelStatus } from '../../stores/modelCatalog';
 import { setRack, useRack } from '../../stores/rackSelection';
 import ModelSelect, { StatusPill, type RackOption } from './ModelSelect';
@@ -27,30 +28,6 @@ const Wiring = ({ live }: { live: boolean }) => (
   </span>
 );
 
-const SWAPPERS: RackOption[] = [
-  { id: 'hyperswap_1a_256' }, { id: 'hyperswap_1b_256' }, { id: 'hyperswap_1c_256' },
-  { id: 'realswap_512' }, { id: 'realswap_256' }, { id: 'simswap_512_unofficial' }, { id: 'simswap_256' },
-  { id: 'inswapper_128' }, { id: 'inswapper_128_fp16' },
-  { id: 'ghost_256_unet_1' }, { id: 'ghost_256_unet_2' }, { id: 'ghost_256_unet_3' },
-  { id: 'blendswap_256' }, { id: 'uniface_256' },
-];
-/** Rack ids of the four restorers the engine has adapters for, and the `restorer_model` each one sends. */
-const ENHANCER_ENGINE: Record<string, RestorerModel> = { ultramax: 'ultramax', gpen_bfr_512: 'gpen', codeformer: 'codeformer', gfpgan_v14: 'gfpgan' };
-const ENGINE_ENHANCER: Record<RestorerModel, string> = { ultramax: 'ultramax', gpen: 'gpen_bfr_512', codeformer: 'codeformer', gfpgan: 'gfpgan_v14' };
-const RESTORER_ADAPTERS = 'GPEN 512, CodeFormer, GFPGAN v1.4 and UltraMax';
-const NO_ADAPTER = `No render adapter: the engine runs ${RESTORER_ADAPTERS} only.`;
-const ENHANCERS: RackOption[] = [
-  { id: 'none', modelId: null, label: 'None', note: 'No face restoration: the raw swap is composited.' },
-  { id: 'ultramax', label: 'UltraMax', badge: 'CodeFormer fp16',
-    note: 'The registered codeformer.fp16.onnx weights, then Laplacian detail fusion into the swap (not a GPEN / Real-ESRGAN cascade).' },
-  { id: 'gpen_bfr_512', label: 'GPEN Realistic', badge: '512px' },
-  { id: 'gpen_bfr_1024', label: 'GPEN Realistic', badge: '1024px', disabledReason: 'No render adapter: the GPEN restorer loads the 512 px model only.' },
-  { id: 'codeformer' }, { id: 'gfpgan_v14' },
-  { id: 'restoreformer_pp', disabledReason: NO_ADAPTER },
-];
-const ENHANCER_ARTIFACT = `Registered artifact without a render adapter: the engine runs ${RESTORER_ADAPTERS} by their pinned file names only.`;
-const NO_UPSCALER = 'The render engine has no frame-upscaler stage: these weights are registry artifacts only.';
-const UPSCALERS: RackOption[] = [{ id: 'none', modelId: null, label: 'None' }, ...['realesrgan_x2plus', 'realesrgan_x4plus', '4x_ultrasharp'].map(id => ({ id, disabledReason: NO_UPSCALER }))];
 const DETECTORS: RackOption[] = [{ id: 'scrfd' }, { id: 'retinaface' }, { id: 'yoloface' }];
 
 const RUNTIMES = [
@@ -85,33 +62,16 @@ function FilePill({ file }: { file: string }) {
 
 export default function EngineModelRack({ params, onParams, config, caps, onSaveConfig, variant = 'workspace' }: RackProps) {
   const rack = useRack(state => state);
-  const { models } = useModelCatalog();
   const [trtMessage, setTrtMessage] = useState('');
   const [trtBusy, setTrtBusy] = useState(false);
 
-  const swapperValue = rack.swapper ?? (typeof config?.swapper_model_id === 'string' ? config.swapper_model_id : 'inswapper_128');
-  const swapperOptions = useMemo(() => [...SWAPPERS, ...models.filter(model => model.category === "swapper" && model.local_format === "dfm").map(model => ({ id: model.id, label: `${model.name} (DFM)` }))].map(option => {
-    const reason = caps?.workstation.controls.swapper_model_id?.[option.id];
-    return reason ? { ...option, disabledReason: reason } : option;
-  }), [caps, models]);
-
-  const blend = params.restoration_blend ?? 0;
-  const engine = params.restorer_model ?? 'gpen';
-  const enhancerValue = blend > 0 ? ENGINE_ENHANCER[engine] : 'none';
+  const detectorValue = typeof config?.detector_model_id === 'string' ? config.detector_model_id : rack.detector;
   /** Every model dropdown also persists to the backend config at once, so previews, renders and the read-back follow it. */
   const persist = (patch: Config) => {
     if (!config || !onSaveConfig) return;
     if (Object.entries(patch).every(([key, value]) => config[key] === value)) return;
     onSaveConfig({ ...config, ...patch });
   };
-  const pickEnhancer = (id: string) => {
-    if (id === 'none') { onParams({ restoration_blend: 0 }); persist({ face_restoration_policy: 'off' }); return; }
-    const model = ENHANCER_ENGINE[id];
-    if (model) { onParams({ restorer_model: model, restoration_blend: blend > 0 ? blend : 0.7 }); persist({ face_restoration_policy: model }); }
-  };
-  const restorerRuns = blend > 0 && !(params.bypass ?? []).includes('restorer');
-  const fidelityActive = fidelityRestorer(engine) && restorerRuns;
-  const mode = params.render_mode ?? 'standard';
   const robust = params.occlusion_mode === 'robust';
 
   const provider = typeof config?.preferred_provider === 'string' ? config.preferred_provider : 'auto';
@@ -144,53 +104,24 @@ export default function EngineModelRack({ params, onParams, config, caps, onSave
   const rebuildTrt = async () => {
     setTrtBusy(true); setTrtMessage('');
     try {
-      const result = await post<{ status?: string; results?: { fp16_enabled: boolean; canary_verified: boolean }[] }>('/models/compile_trt', { model_id: swapperValue, precision: precision === 'fp32' ? 'fp32' : 'fp16' });
+      const result = await post<{ status?: string; results?: { fp16_enabled: boolean; canary_verified: boolean }[] }>('/models/compile_trt', { model_id: detectorValue, precision: precision === 'fp32' ? 'fp32' : 'fp16' });
       const built = result.results?.[0];
-      setTrtMessage(`TensorRT engine for ${swapperValue}: ${result.status ?? 'accepted'}.${built ? ` ${built.fp16_enabled ? 'FP16 mixed precision' : 'FP32 (model safety policy)'}.${built.canary_verified ? ' Canary passed.' : ''}` : ''}`);
+      setTrtMessage(`TensorRT engine for ${detectorValue}: ${result.status ?? 'accepted'}.${built ? ` ${built.fp16_enabled ? 'FP16 mixed precision' : 'FP32 (model safety policy)'}.${built.canary_verified ? ' Canary passed.' : ''}` : ''}`);
     } catch (reason) { setTrtMessage(reason instanceof Error ? reason.message : 'The TensorRT rebuild could not start.'); } finally { setTrtBusy(false); }
   };
 
   return (
     <div className="rack" data-testid="engine-model-rack" data-variant={variant}>
-      <ActiveModelBadge selected={{ swapper: swapperValue, detector: typeof config?.detector_model_id === 'string' ? config.detector_model_id : rack.detector,
-        enhancer: blend > 0 ? engine : 'off' }} />
-      <section className="rack-section" aria-label="Face swapper model">
-        <h4>Face swapper <Wiring live /></h4>
-        <ModelSelect label="Swapper model" category="swapper" value={swapperValue} onChange={id => { setRack({ swapper: id }); persist({ swapper_model_id: id }); }} options={swapperOptions}
-          registeredDisabledReason="Registered artifact without a render adapter: the engine cannot run it yet." testId="rack-swapper"
-          hint="Sent with every preview and render job. Choosing a model that is not installed offers to download or locate it first." />
-      </section>
-
-      <section className="rack-section" aria-label="3D pipeline mode">
-        <h4>3D pipeline mode <Wiring live /></h4>
-        <div className="mode-cards" role="radiogroup" aria-label="3D pipeline mode">
-          {RENDER_MODES.map(item => (
-            <button key={item.id} type="button" role="radio" aria-checked={mode === item.id} className={`mode-card ${mode === item.id ? 'active' : ''}`} onClick={() => onParams({ render_mode: item.id })} title={item.hint}>
-              <b>{item.label}</b>
-            </button>
-          ))}
-        </div>
-        <small className="muted">{RENDER_MODES.find(item => item.id === mode)?.hint}</small>
-      </section>
-
-      <section className="rack-section" aria-label="Face enhancer">
-        <h4>Face enhancer / restorer <Wiring live /></h4>
-        <ModelSelect label="Enhancer" category="enhancer" value={enhancerValue} onChange={pickEnhancer} options={ENHANCERS} registeredDisabledReason={ENHANCER_ARTIFACT} testId="rack-enhancer" />
-        <label className="inspector-field">Enhancer blend <output>{Math.round(blend * 100)}%</output>
-          <input type="range" aria-label="Enhancer blend" min={0} max={100} step={1} value={Math.round(blend * 100)} onChange={event => onParams({ restoration_blend: Number(event.target.value) / 100 })} /></label>
-        <label className="inspector-field">Fidelity <output>{Math.round((params.fidelity_weight ?? 0.5) * 100)}%</output>
-          <input type="range" aria-label="Enhancer fidelity" min={0} max={100} step={1} disabled={!fidelityActive} value={Math.round((params.fidelity_weight ?? 0.5) * 100)} onChange={event => onParams({ fidelity_weight: Number(event.target.value) / 100 })} />
-          {!fidelityActive && <small>{fidelityRestorer(engine) ? 'Raise the enhancer blend above 0 to use fidelity.' : 'Fidelity applies to CodeFormer and UltraMax: GPEN and GFPGAN have no fidelity input.'}</small>}</label>
-      </section>
-
-      <section className="rack-section" aria-label="Frame upscaler">
-        <h4>Frame upscaler <Wiring live={false} /></h4>
-        <ModelSelect label="Upscaler" category="upscaler" value="none" onChange={() => undefined} options={UPSCALERS} registeredDisabledReason={NO_UPSCALER} testId="rack-upscaler" />
+      <ActiveModelBadge selected={{ detector: detectorValue, head: params.head_topology_engine, shader: params.shader_mode }} />
+      <section className="rack-section" aria-label="3D head reconstruction" data-testid="rack-true3d">
+        <h4>3D head reconstruction <Wiring live /></h4>
+        <small className="muted" data-testid="render-mode-hint">{RENDER_MODES[0].hint}</small>
+        <True3DControls params={params} onParams={onParams} compact={variant === 'batch'} />
       </section>
 
       <section className="rack-section" aria-label="Face detector">
         <h4>Face detector <Wiring live /></h4>
-        <ModelSelect label="Face detector" category="detector" value={typeof config?.detector_model_id === 'string' ? config.detector_model_id : rack.detector} onChange={id => { setRack({ detector: id }); persist({ detector_model_id: id }); }} options={DETECTORS.map(option => !onSaveConfig ? { ...option, disabledReason: 'Change the detector from the Faceswap workspace or Settings.' } : option)} testId="rack-detector" />
+        <ModelSelect label="Face detector" category="detector" value={detectorValue} onChange={id => { setRack({ detector: id }); persist({ detector_model_id: id }); }} options={DETECTORS.map(option => !onSaveConfig ? { ...option, disabledReason: 'Change the detector from the Faceswap workspace or Settings.' } : option)} testId="rack-detector" />
         <small className="muted" data-testid="landmarker-note">3D landmarks are measured by the engine (5-point detector landmarks, 68-point and 106-point models) and are not selectable.</small>
       </section>
 
@@ -231,5 +162,3 @@ export default function EngineModelRack({ params, onParams, config, caps, onSave
     </div>
   );
 }
-
-export { SWAPPERS, ENHANCERS };

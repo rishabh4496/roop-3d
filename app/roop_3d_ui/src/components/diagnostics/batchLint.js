@@ -4,15 +4,15 @@ export const SKIP_KEY = 'roop3d_skip_linter';
 
 /**
  * The lint request for one job payload. Mappings are reduced to the string pairs the endpoint accepts.
- * @param {any} payload @param {Record<string, unknown>} [rackParameters] @param {string | null} [swapperId]
+ * @param {any} payload @param {Record<string, unknown>} [rackParameters] @param {string | null} [headTopologyEngine]
  */
-export function lintRequestFor(payload, rackParameters = {}, swapperId = null) {
+export function lintRequestFor(payload, rackParameters = {}, headTopologyEngine = null) {
   const mappings = (payload.face_mappings ?? []).map(item => ({ track_id: String(item.track_id ?? ''), faceset_id: String(item.faceset_id ?? '') }));
   const parameters = { ...(payload.workstation_parameters ?? {}), ...rackParameters };
   return {
     target_path: payload.target_path, inspection_id: payload.inspection_id ?? null, face_mappings: mappings,
     workstation_parameters: Object.keys(parameters).length ? parameters : null,
-    swapper_model_id: swapperId || payload.swapper_model_id || null,
+    head_topology_engine: headTopologyEngine || parameters.head_topology_engine || null,
     export_passes: payload.export?.passes ?? [],
   };
 }
@@ -24,9 +24,9 @@ const name = path => String(path).split(/[\\/]/).pop();
  * (the linter itself could not be reached: never a reason to refuse the batch).
  * @param {(url: string, body: any) => Promise<any>} post
  * @param {any[]} payloads
- * @param {{ rackParameters?: Record<string, unknown>, swapperId?: string | null }} [options]
+ * @param {{ rackParameters?: Record<string, unknown>, headTopologyEngine?: string | null }} [options]
  */
-export async function lintBatch(post, payloads, { rackParameters = {}, swapperId = null } = {}) {
+export async function lintBatch(post, payloads, { rackParameters = {}, headTopologyEngine = null } = {}) {
   const seen = new Set(), failures = [], warnings = [];
   let unavailable = false;
   for (const payload of payloads) {
@@ -34,7 +34,7 @@ export async function lintBatch(post, payloads, { rackParameters = {}, swapperId
     seen.add(payload.target_path);
     let report;
     try {
-      report = await post('/system/preflight-lint', lintRequestFor(payload, rackParameters, swapperId));
+      report = await post('/system/preflight-lint', lintRequestFor(payload, rackParameters, headTopologyEngine));
     } catch {
       unavailable = true;
       continue;

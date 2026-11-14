@@ -2,7 +2,7 @@
 
 Verifies:
 - Offline dependency cache (cache/uv) status.
-- Core offline inference model readiness (detector, recognizer, swapper).
+- Core offline inference model readiness (detector, recognizer).
 - Strict offline loopback bind and zero cloud dependency.
 """
 from __future__ import annotations
@@ -27,11 +27,6 @@ CORE_OFFLINE_MODELS = [
         "role": "recognizer",
         "name": "w600k_r50.onnx",
         "description": "ArcFace identity embedding extractor (512-d)",
-    },
-    {
-        "role": "swapper",
-        "name": "inswapper_128.onnx",
-        "description": "128x128 facial identity swapper neural network",
     },
 ]
 
@@ -80,11 +75,9 @@ def check_offline_readiness(root: Path, registry: ModelRegistry | None = None) -
 
     for item in CORE_OFFLINE_MODELS:
         name = item["name"]
-        rec = None
-        for r in registry.records():
-            if r.name == name or name in r.filenames:
-                rec = r
-                break
+        # A catalog candidate with the same file name has no digest to verify; prefer the pinned identity.
+        matches = [r for r in registry.records() if r.name == name or name in r.filenames]
+        rec = next((r for r in matches if r.expected_sha256 and r.byte_size), matches[0] if matches else None)
 
         if not rec:
             core_status.append({

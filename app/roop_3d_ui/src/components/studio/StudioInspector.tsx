@@ -2,11 +2,11 @@ import { lazy, Suspense, useEffect, useMemo, useState, type ReactNode, type Ref 
 import { api } from '../../api';
 import type { Capabilities, Config, Coverage, FaceSet, IdentitySheet, Reconstruction, ReconstructionStatus, Track } from '../../contracts';
 import EngineModelRack from '../modelhub/EngineModelRack';
-import { PREVIEW_TAB_LABEL, RENDER_MODES, renderModeInfo } from '../workstation/renderModes';
+import { PREVIEW_TAB_LABEL, renderModeInfo } from '../workstation/renderModes';
 import { useFaceSelectionStore } from '../../useFaceSelectionStore';
-import { useModelCatalog } from '../../stores/modelCatalog';
 import { selectEngine, useSelectedEngine } from '../../stores/engineSelection';
-import { restorerAvailable, type RestorerModel, type WorkstationParameters } from '../workstation/pipeline';
+import type { WorkstationParameters } from '../workstation/pipeline';
+import True3DControls from './True3DControls';
 import { ErrorRetry } from './FaceSetDetail';
 import { formatClock, trackLabel } from './TargetPanel';
 import EngineExplainer from '../guide/EngineExplainer';
@@ -65,43 +65,21 @@ export interface StudioInspectorProps {
   reconstructionPicker: ReactNode;
   /** "+ Create .fsz from Video/Photos" control rendered inside the 3D viewer panel. */
   facesetCreator?: ReactNode;
-  /** VideoViewport portals its Geometry / Masking / Restorer parameter panels into this element (Advanced Diagnostics). */
+  /** VideoViewport portals its Masking / Colour parameter panels into this element (Advanced Diagnostics). */
   panelsRef: Ref<HTMLDivElement>;
   processing: ReactNode;
   /** Primary action footer (Render Current Frame / Start Full Render / progress / telemetry). */
   footer?: ReactNode;
 }
 
-export const ENHANCERS: readonly { id: 'none' | RestorerModel; label: string; hint: string }[] = [
-  { id: 'none', label: 'None', hint: 'No face restoration: the raw swap is composited.' },
-  { id: 'gpen', label: 'GPEN Realistic 512', hint: 'Natural skin and eyes; the fast default restorer.' },
-  { id: 'ultramax', label: 'UltraMax High-Detail', hint: 'CodeFormer detail fused into the swap through a Laplacian pyramid, so colour and low frequencies stay yours.' },
-  { id: 'codeformer', label: 'CodeFormer', hint: 'Strongest repair of blurry or damaged faces; uses the fidelity setting under Advanced.' },
-];
-
-/** Active enhancer: restoration only runs while its blend is above zero. */
-export const activeEnhancer = (parameters: WorkstationParameters): 'none' | RestorerModel =>
-  parameters.restoration_blend > 0 ? (parameters.restorer_model ?? 'gpen') : 'none';
-
 export default function StudioInspector({ caps, config, onSaveConfig, track, sheet, sources, assignedId, onAssign, parameters, setParameters, coverage, mesh, onIdentityMesh, reconstruction, reconstructionPicker, facesetCreator, panelsRef, processing, footer }: StudioInspectorProps) {
   const engine = useSelectedEngine();
   const engines = useEngines();
   const cluster = useFaceSelectionStore(state => (track ? state.targetClusters.find(item => item.id === track.track_id) ?? null : null));
   const sheetTrack = track ? sheet?.tracks.find(item => item.track_id === track.track_id) : undefined;
-  const enhancer = activeEnhancer(parameters);
-  const catalog = useModelCatalog();
-  const restorerReady = restorerAvailable(catalog.loaded ? catalog.models : caps?.models, parameters.restorer_model);
-  const renderMode = parameters.render_mode ?? 'standard';
+  const renderMode = 'full_3d_head' as const;
   const robust = parameters.occlusion_mode === 'robust';
   const set = (patch: Partial<WorkstationParameters>) => setParameters({ ...parameters, ...patch });
-  const pickMode = (value: NonNullable<WorkstationParameters['render_mode']>) => {
-    const { render_mode: _old, ...rest } = parameters;
-    setParameters(value === 'standard' ? rest : { ...rest, render_mode: value });
-  };
-  const pickEnhancer = (value: 'none' | RestorerModel) => {
-    if (value === 'none') { set({ restoration_blend: 0 }); return; }
-    set({ restorer_model: value, restoration_blend: parameters.restoration_blend > 0 ? parameters.restoration_blend : 0.7 });
-  };
   const info = renderModeInfo(renderMode);
   const [morphPreview, setMorphPreview] = useState(false);
   const lighting = useMemo(() => viewerLighting(parameters), [parameters]);
@@ -126,14 +104,9 @@ export default function StudioInspector({ caps, config, onSaveConfig, track, she
     <div className="studio-inspector workflow-inspector">
       <div className="workflow-scroll">
         <section className="workflow-step" aria-labelledby="step-swap" data-testid="step-swap">
-          <h3 id="step-swap"><span className="step-no">1</span>Swap &amp; 3D mode{renderMode !== 'standard' && <span className="status-chip ok">3D</span>}</h3>
-          <div className="mode-cards" role="radiogroup" aria-label="3D render mode">
-            {RENDER_MODES.map(mode => (
-              <button key={mode.id} type="button" role="radio" aria-checked={renderMode === mode.id} className={`mode-card ${renderMode === mode.id ? 'active' : ''}`}
-                onClick={() => pickMode(mode.id)}><b>{mode.label}</b></button>
-            ))}
-          </div>
+          <h3 id="step-swap"><span className="step-no">1</span>3D head reconstruction<span className="status-chip ok">3D</span></h3>
           <small className="muted" data-testid="render-mode-hint">{info.hint}</small>
+          <True3DControls params={parameters} onParams={set} />
           <small className="render-mode-preview">Viewer tab for this mode: <b>{PREVIEW_TAB_LABEL[info.preview]}</b></small>
           <SwapScopeSelector parameters={parameters} setParameters={setParameters} />
           <div className="inspector-viewer">
@@ -162,26 +135,11 @@ export default function StudioInspector({ caps, config, onSaveConfig, track, she
           <label className="inspector-field">Mask feather / blur <output>{(parameters.feather_px ?? 0).toFixed(0)} px</output>
             <input type="range" aria-label="Mask feather" min={0} max={32} step={1} value={parameters.feather_px ?? 0} onChange={event => set({ feather_px: Number(event.target.value) })} /></label>
           <CompositingControls params={parameters} onParams={set} />
-          <HairNeckProtection parameters={parameters} setParameters={setParameters} enhancer={enhancer} />
-        </section>
-
-        <section className="workflow-step" aria-labelledby="step-enhance" data-testid="step-enhance">
-          <h3 id="step-enhance"><span className="step-no">3</span>Face restoration</h3>
-          <label className="inspector-field">Enhancer
-            <select aria-label="Enhancer" value={enhancer} onChange={event => pickEnhancer(event.target.value as 'none' | RestorerModel)}>
-              {ENHANCERS.map(item => <option key={item.id} value={item.id}>{item.label}</option>)}
-            </select>
-            <small className={enhancer === 'none' || restorerReady ? 'muted' : 'identity-warn'}>
-              {enhancer !== 'none' && !restorerReady ? 'No usable weight file in app/models: restoration stays off.' : ENHANCERS.find(item => item.id === enhancer)?.hint}
-            </small>
-          </label>
-          <label className="inspector-field">Blend amount <output>{Math.round(parameters.restoration_blend * 100)}%</output>
-            <input type="range" aria-label="Enhancer blend amount" min={0} max={100} step={1} value={Math.round(parameters.restoration_blend * 100)}
-              onChange={event => set({ restoration_blend: Number(event.target.value) / 100 })} /></label>
+          <HairNeckProtection parameters={parameters} setParameters={setParameters} />
         </section>
 
         <section className="workflow-step" aria-labelledby="step-rack" data-testid="step-rack">
-          <h3 id="step-rack"><span className="step-no">4</span>Engine &amp; Model Rack</h3>
+          <h3 id="step-rack"><span className="step-no">3</span>Engine &amp; Model Rack</h3>
           <EngineModelRack params={parameters} onParams={set} config={config ?? null} caps={caps} onSaveConfig={onSaveConfig} />
         </section>
       </div>
@@ -221,8 +179,8 @@ export default function StudioInspector({ caps, config, onSaveConfig, track, she
 
           <Section title="Models & engine">
             {engines.error ? <ErrorRetry message={`Model hub unavailable: ${engines.error}`} onRetry={engines.retry} /> : !engines.engines ? <div className="skeleton-line" aria-label="Loading engines" /> : (
-              <label className="inspector-field">Swap engine
-                <select aria-label="Swap engine" value={engine} onChange={event => selectEngine(event.target.value)}>
+              <label className="inspector-field">Render engine
+                <select aria-label="Render engine" value={engine} onChange={event => selectEngine(event.target.value)}>
                   {engines.engines.some(item => item.engine_id === engine) ? null : <option value={engine}>{engine}</option>}
                   {engines.engines.map(item => <option key={item.engine_id} value={item.engine_id} disabled={!item.selectable}>{item.name}{item.selectable ? '' : ` (${item.status.toLowerCase().replaceAll('_', ' ')})`}</option>)}
                 </select>
@@ -230,12 +188,6 @@ export default function StudioInspector({ caps, config, onSaveConfig, track, she
               </label>)}
             {engines.engines && <EngineExplainer engines={engines.engines} selectedId={engine} onSelect={selectEngine} />}
             <HardwareExplainer caps={caps} />
-            <label className="inspector-field">Restoration model
-              <select aria-label="Restoration model" value={parameters.restorer_model ?? 'gpen'} onChange={event => set({ restorer_model: event.target.value as RestorerModel })}>
-                <option value="gpen">GPEN</option><option value="ultramax">UltraMax</option><option value="codeformer">CodeFormer</option>
-              </select>
-              <small className={restorerReady ? 'muted' : 'identity-warn'}>{restorerReady ? 'Weights verified locally.' : 'No usable weight file in app/models: restoration stays off.'}</small>
-            </label>
           </Section>
 
           <Section title="Colour & lighting">
@@ -262,7 +214,7 @@ export default function StudioInspector({ caps, config, onSaveConfig, track, she
                 onChange={event => set({ grain_match_strength: Number(event.target.value) })} /></label>
           </Section>
 
-          <div className="inspector-panels" ref={panelsRef} aria-label="Pose, expression, masking and restoration parameters" />
+          <div className="inspector-panels" ref={panelsRef} aria-label="Pose, expression, masking and geometry parameters" />
 
           <Section title="Processing">{processing}</Section>
         </div>

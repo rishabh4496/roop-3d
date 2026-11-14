@@ -35,9 +35,9 @@ from roop_3d.core.errors import DomainError
 from roop_3d.core.pose import euler_from_rotation, rotation_from_euler
 from roop_3d.core.settings import Contract
 from roop_3d.flame_3d_engine import EyeGaze, FlameParameters
-from roop_3d.reconstruction.expression_tps import group, layout_is_plausible
+from roop_3d.reconstruction.landmark_layout import group, layout_is_plausible
 from roop_3d.reconstruction.arkit_bridge import ARKitBridgeOutput, ARKit52To3DMMBridge
-from roop_3d.reconstruction.geometry_types import WeakPerspectiveCamera
+from roop_3d.reconstruction.geometry_types import PerspectiveCamera
 from roop_3d.reconstruction.multiview_fit import (
     estimate_pose_from_landmarks,
     identity_template,
@@ -565,9 +565,10 @@ class VideoHeadTracker3D:
         if self.lighting is not None and ev.image_bgr is not None and self._lighting_countdown <= 0:
             self._lighting_countdown = self.s.lighting_stride
             shift = camera.scale * (camera.rotation @ self._model_centre)[:2]
-            estimate = self.lighting.estimate(ev.image_bgr, WeakPerspectiveCamera(
-                rotation=tuple(tuple(float(x) for x in row) for row in camera.rotation), scale=camera.scale,
-                tx=camera.tx - float(shift[0]), ty=camera.ty - float(shift[1])))
+            height, width = ev.image_bgr.shape[:2]
+            estimate = self.lighting.estimate(ev.image_bgr, PerspectiveCamera.from_scaled_pose(
+                np.asarray(camera.rotation), camera.scale, camera.tx - float(shift[0]), camera.ty - float(shift[1]),
+                frame_size=(width, height)))
         self._lighting_countdown -= 1
         if estimate is not None:
             filtered = self.filters.update("lighting", estimate.coefficients.reshape(-1).astype(np.float64), t)

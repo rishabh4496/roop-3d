@@ -56,21 +56,19 @@ export default function BottleneckFlamegraph({
   const sourceLabel = {
     live: 'Live per-frame timings',
     job: `Live per-frame timings · job ${activeJob?.job_id?.slice(0, 8) ?? ''} · frame ${activeJob?.progress?.frame ?? 0}`,
-    preview: 'Preview capture timings (detection, pose and swap only)',
+    preview: 'Preview capture timings (detection, pose and head render only)',
     none: 'No measured timings yet',
   }[resolved.source];
 
   const bottleneckAdvice = useMemo(() => {
     if (!primaryBottleneck) return '';
     switch (primaryBottleneck.id) {
-      case 'restorer':
-        return 'Restorer consumes the largest portion of frame budget. Enabling TensorRT FP16 execution engine can reduce restorer latency by up to 55%.';
-      case 'inswapper':
-        return 'Swapper graph is the primary constraint. Ensure GPU execution provider is selected and input face resolution matches 128x128.';
+      case 'head_render':
+        return 'The 3D head render is the primary constraint. Ensure a GPU execution provider is selected, or lower the output resolution for previews.';
       case 'detection':
         return 'Detection is taking significant time. Enable Motion-Compensated ROI Frame Reuse in Temporal Controls to skip full-frame scans.';
-      case 'pose_tps':
-        return '3D Pose / TPS is active on all frames. Lower TPS expression weight or switch from mesh blend to retarget for a speedup.';
+      case 'head_pose':
+        return '3D pose and mesh fitting run on every frame. Use a lighter landmark model or a smaller preview resolution for a speedup.';
       case 'masking':
         return 'Masking and colour fusion dominate the frame. Reduce edge feather, or disable relighting and the face parser for a faster matte.';
       case 'decode':

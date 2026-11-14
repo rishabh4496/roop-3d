@@ -34,6 +34,6 @@ export default function PhotoSynthesisAction({ images, name, onSaved }: { images
     {running && <span role="status"><progress max={1} value={job.progress}/> {job.phase ?? 'Synthesizing'} · {job.scanned} / 36 angles</span>}
     {(error || job?.error) && <p role="alert">{error || job?.error}</p>}
     {job?.status === 'ready' && <span role="status">36-angle faceset saved and activated.</span>}
-    <small>33 views on the requested 15° grid, plus three frontal views at (yaw, pitch): (0°, −15°), (0°, +15°), (+7.5°, 0°). Includes UltraMax, ArcFace scores and UV textures.</small>
+    <small>33 views on the requested 15° grid, plus three frontal views at (yaw, pitch): (0°, −15°), (0°, +15°), (+7.5°, 0°). Includes ArcFace scores and UV textures.</small>
   </div>;
 }

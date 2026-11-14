@@ -1,6 +1,6 @@
 """Which model file each pipeline stage has loaded right now.
 
-Every session holder (detector, swapper, enhancer) reports here when it builds a session. The registry is the
+Every session holder (detector, enhancer) reports here when it builds a session. The registry is the
 single answer to "what is actually in VRAM" for the UI read-back badge, and it is where a model switch is
 detected: sessions are keyed by ``(stage, model_id, model_path, execution_provider, precision_mode)`` and a
 request whose key differs from the active one must replace the session instead of reusing it.
@@ -16,7 +16,7 @@ from typing import Any
 
 log = logging.getLogger(__name__)
 
-STAGES = ("detector", "swapper", "enhancer")
+STAGES = ("detector", "enhancer")
 CacheKey = tuple[str, str, str, str, str]
 
 

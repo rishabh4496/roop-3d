@@ -10,8 +10,8 @@ export const LANE_ORDER = ['decode', 'track', 'swap', 'composite', 'write'];
 export const LANES = {
   decode: { label: 'Decode', hw: 'NVDEC / software decoder', color: '#38bdf8' },
   track: { label: 'Stage 1 · 3D pose & tracking', hw: 'Detector, landmarks, 6DoF pose', color: '#a78bfa' },
-  swap: { label: 'Stage 2 · 3D swap', hw: 'Swapper model, mesh reenactment', color: '#f43f5e' },
-  composite: { label: 'Stage 3 · Composite + restorer (UltraMax)', hw: 'Mask, relight, restorer, blend', color: '#f59e0b' },
+  swap: { label: 'Stage 2 · 3D head render', hw: 'Full-head mesh, PBR / Gaussian shading, expression rig', color: '#f43f5e' },
+  composite: { label: 'Stage 3 · Composite', hw: 'Mask, relight, colour match, blend', color: '#f59e0b' },
   write: { label: 'Frame write (PNG checkpoint)', hw: 'Per-frame checkpoint; the final NVENC encode runs after the last frame, outside this graph', color: '#06b6d4' },
 };
 

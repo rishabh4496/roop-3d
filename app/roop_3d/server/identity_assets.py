@@ -2,8 +2,7 @@
 
 Additive and local-only. Every route reads the same FaceSet archive the existing ``/facesets/{id}/views`` and
 ``/coverage`` routes read, and the identity asset uses the exact ``IdentityAssetStore`` / default settings that the
-Stage 4 render session uses (``engine/volumetric/session.py``), so an asset built from the panel is the one a
-``pose_3d`` / ``reenactment_3d`` render reuses, and vice versa.
+true-3D render session uses, so an asset built from the panel is the one a render reuses, and vice versa.
 
 * ``GET  /facesets/{id}/views/{index}/image``  bounded JPEG of one stored view (no embeddings).
 * ``GET  /facesets/{id}/identity-asset``       coverage readiness + the cached asset manifest, or ``not_built``.
@@ -11,9 +10,9 @@ Stage 4 render session uses (``engine/volumetric/session.py``), so an asset buil
 * ``POST /facesets/{id}/identity-asset``       explicit user action: build (or reuse) the asset on the CPU.
 * ``GET  /facesets/{id}/identity-asset/mesh``  the cached asset as a viewer mesh (glTF frame, observed atlas).
 
-All three accept ``?template=canonical|makehuman`` (default ``canonical``, the template ``pose_3d`` / ``reenactment_3d`` render
-sessions reuse). ``makehuman`` is the open CC0 head+neck template (5-point landmarks; it must be built first, see
-``roop_3d.reconstruction.makehuman_build``); such assets are for inspection / export and are refused by the expression rig.
+All three build on the full-head template only: the open CC0 MakeHuman head+neck (it must be built first, see
+``roop_3d.reconstruction.makehuman_build``). The former frontal-strip ``canonical`` template (a 2.5D proxy) was removed; a
+client that still sends ``?template=canonical`` is served the full-head template.
 
 ``GET .../identity-asset/mesh`` additionally takes, for ``template=makehuman`` assets only:
 
@@ -37,7 +36,7 @@ from typing import Any, Literal
 
 import cv2
 import numpy as np
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import Response
 from pydantic import Field
 from starlette.concurrency import run_in_threadpool
@@ -49,7 +48,11 @@ from roop_3d.faceset.faceset_reader import FaceSetReader
 
 router = APIRouter(prefix="/api/v1")
 _FACESET_ID = re.compile(r"[A-Za-z0-9_-]{1,64}")
-TemplateName = Literal["canonical", "makehuman"]
+TemplateName = Literal["makehuman", "canonical"]   # "canonical" is the removed 2.5D strip: accepted, served as "makehuman"
+
+
+def _template(template: TemplateName = Query(default="makehuman")) -> str:
+    return "makehuman"
 _CONTROLLERS: dict[tuple, Any] = {}
 _CONTROLLERS_GUARD = threading.Lock()
 _BUILD_LOCKS: dict[str, threading.Lock] = {}
@@ -82,7 +85,7 @@ def load_document(request: Request, faceset_id: str):
     return FaceSetReader(request.app.state.models, cache_root=root / "roop_3d/.runtime/cache").read(archive, faceset_id=faceset_id)
 
 
-def _settings(template: str = "canonical"):
+def _settings(template: str = "makehuman"):
     from roop_3d.reconstruction.identity_asset import IdentityAssetSettings
     return IdentityAssetSettings(template=template)
 
@@ -132,7 +135,7 @@ def _manifest_summary(asset) -> dict[str, Any]:
     }
 
 
-def _status(document, store, template: str = "canonical") -> dict[str, Any]:
+def _status(document, store, template: str = "makehuman") -> dict[str, Any]:
     from roop_3d.reconstruction.faceset_quality import analyze_faceset
     from roop_3d.reconstruction.identity_asset import compute_build_key, flame_status
     report = analyze_faceset(document)
@@ -147,7 +150,7 @@ def _status(document, store, template: str = "canonical") -> dict[str, Any]:
         "coverage": _coverage_summary(report),
         "asset": _manifest_summary(asset) if asset is not None else None,
         "flame": flame_status(),
-        "note": "Built only on explicit request. pose_3d / reenactment_3d renders reuse this exact asset.",
+        "note": "Built only on explicit request. The true-3D renderer reuses this exact asset.",
     }
 
 
@@ -170,12 +173,12 @@ def faceset_view_image(faceset_id: str, index: int, request: Request, size: int 
 
 
 @router.get("/facesets/{faceset_id}/identity-asset")
-async def identity_asset_status(faceset_id: str, request: Request, template: TemplateName = Query(default="canonical")):
+async def identity_asset_status(faceset_id: str, request: Request, template: str = Depends(_template)):
     document = await run_in_threadpool(load_document, request, faceset_id)
     return await run_in_threadpool(_status, document, _store(), template)
 
 
-def _build(document, template: str = "canonical") -> dict[str, Any]:
+def _build(document, template: str = "makehuman") -> dict[str, Any]:
     with _BUILD_LOCKS_GUARD:
         lock = _BUILD_LOCKS.setdefault(document.faceset_id, threading.Lock())
     if not lock.acquire(blocking=False):
@@ -193,12 +196,12 @@ def _build(document, template: str = "canonical") -> dict[str, Any]:
 
 
 @router.post("/facesets/{faceset_id}/identity-asset")
-async def build_identity_asset(faceset_id: str, request: Request, template: TemplateName = Query(default="canonical")):
+async def build_identity_asset(faceset_id: str, request: Request, template: str = Depends(_template)):
     document = await run_in_threadpool(load_document, request, faceset_id)
     return await run_in_threadpool(_build, document, template)
 
 
-def _bake_atlas(document, resolution: int, template: str = "canonical") -> dict[str, Any]:
+def _bake_atlas(document, resolution: int, template: str = "makehuman") -> dict[str, Any]:
     """Build/reuse the local multi-view asset, then persist its PBR PNG maps beside that asset."""
     from roop_3d.rendering.uv_baker import MAP_SUFFIXES, atlas_manifest, bake_pbr_atlas
     from roop_3d.reconstruction.identity_asset import compute_build_key
@@ -243,14 +246,14 @@ def _bake_atlas(document, resolution: int, template: str = "canonical") -> dict[
 
 @router.post("/facesets/{faceset_id}/bake-atlas")
 async def bake_faceset_atlas(faceset_id: str, value: BakeAtlasRequest, request: Request,
-                             template: TemplateName = Query(default="canonical")):
+                             template: str = Depends(_template)):
     document = await run_in_threadpool(load_document, request, faceset_id)
     return await run_in_threadpool(_bake_atlas, document, value.resolution, template)
 
 
 @router.get("/facesets/{faceset_id}/bake-atlas/{filename}")
 async def get_baked_atlas(faceset_id: str, filename: str, request: Request,
-                          template: TemplateName = Query(default="canonical")):
+                          template: str = Depends(_template)):
     if not _FACESET_ID.fullmatch(faceset_id) or not re.fullmatch(r"atlas_(?:2k|4k)_(?:basecolor|normal|orm|cavity)\.png", filename):
         raise DomainError("ATLAS_FILE_INVALID", "The baked atlas file name is invalid", 422)
     document = await run_in_threadpool(load_document, request, faceset_id)
@@ -380,7 +383,7 @@ def _prepare_mesh(document, template: str, topology: str | None, sliders: dict[s
     return _MeshView(asset, source_mesh, texture, provenance, topology_block, semantic, prior_block)
 
 
-def _mesh(document, template: str = "canonical", topology: str | None = None, sliders: dict[str, float] | None = None,
+def _mesh(document, template: str = "makehuman", topology: str | None = None, sliders: dict[str, float] | None = None,
           albedo_prior: bool = False) -> dict[str, Any]:
     from roop_3d.reconstruction.identity_asset import parametric_block, to_gltf_frame
     view = _prepare_mesh(document, template, topology, sliders or {}, albedo_prior)
@@ -452,7 +455,7 @@ def _normal_map(view: _MeshView, template: str, topology_block: dict[str, Any] |
     return normal_map_from_height(height, per_texel), "baked from the asset's UV displacement"
 
 
-def _glb(document, template: str = "canonical", topology: str | None = None, sliders: dict[str, float] | None = None,
+def _glb(document, template: str = "makehuman", topology: str | None = None, sliders: dict[str, float] | None = None,
          albedo_prior: bool = False, shape_keys: bool = False, normal_map: bool = True) -> bytes:
     """Binary glTF of the identity mesh: albedo atlas, optional normal map, optional shape keys. Same inputs as ``_mesh``."""
     sliders = sliders or {}
@@ -485,7 +488,7 @@ def _glb(document, template: str = "canonical", topology: str | None = None, sli
 
 @router.get("/facesets/{faceset_id}/identity-asset/mesh")
 async def identity_asset_mesh(
-    faceset_id: str, request: Request, template: TemplateName = Query(default="canonical"),
+    faceset_id: str, request: Request, template: str = Depends(_template),
     topology: str | None = Query(default=None, max_length=64),
     jaw_width: float = Query(default=0.0), cheekbone_prominence: float = Query(default=0.0),
     chin_projection: float = Query(default=0.0), nose_bridge: float = Query(default=0.0),
@@ -500,7 +503,7 @@ async def identity_asset_mesh(
 
 @router.get("/facesets/{faceset_id}/identity-asset/mesh.glb")
 async def identity_asset_mesh_glb(
-    faceset_id: str, request: Request, template: TemplateName = Query(default="canonical"),
+    faceset_id: str, request: Request, template: str = Depends(_template),
     topology: str | None = Query(default=None, max_length=64),
     jaw_width: float = Query(default=0.0), cheekbone_prominence: float = Query(default=0.0),
     chin_projection: float = Query(default=0.0), nose_bridge: float = Query(default=0.0),

@@ -1,3 +1,6 @@
+<!-- phase0-purge-notice -->
+> **Phase 0 purge notice (2026-11-14).** Roop 3D no longer contains 2D face swappers, 5-point crop-paste, 2.5D strip meshes, weak-perspective cameras or post-crop GAN restorers. Anything below that describes them is **historical** and no longer applies; the current architecture is a full 3D head under a perspective camera, see [Engine and render options](../../../docs/ENGINE_COMPARISON.md).
+
 ﻿# R3 slice 3 â€” roop-3d: UI, tests, audit scripts, docs, root files
 
 Slice: `app/roop_3d_ui/` (359 tracked files; node_modules/dist/test-results are not tracked), `app/roop_3d/tests/` (202), `app/roop_3d/audit/` (49), repo-root `docs/` (98), root-level and other tracked files (46). Total **754** tracked files. All paths relative to `G:/pinokio/api/roop-3d`. Evidence is `file:line` read from the working tree on 2026-11-13; counts of tests are static (`def test_` / `it(`), nothing was executed. Anything not read from code/docs is tagged [INFERENCE].

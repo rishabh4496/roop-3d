@@ -1,4 +1,4 @@
-"""Acceptance tests for Stage 08 2.5D landmark PnP solver and TPS/Delaunay warper."""
+"""Acceptance tests for the Stage 08 perspective landmark PnP solver (the 2.5D mesh / TPS / Delaunay warpers were removed in Phase 0)."""
 from __future__ import annotations
 
 import numpy as np
@@ -7,17 +7,12 @@ import pytest
 from roop_3d.core.errors import DomainError
 from roop_3d.reconstruction.geometry_types import (
     CameraIntrinsics,
-    Mesh3D,
-    Pose3D,
     euler_to_rotation_matrix,
     rotation_matrix_to_rodrigues,
 )
 from roop_3d.reconstruction.tps_fallback import (
-    ThinPlateSplineWarper,
-    build_canonical_head_mesh,
     get_canonical_3d_landmarks,
     solve_pose_pnp,
-    warp_delaunay_piecewise_affine,
 )
 
 
@@ -61,66 +56,3 @@ def test_solve_pose_pnp_ground_truth_recovery():
     assert recovered.roll == pytest.approx(gt_roll, abs=0.5)
     np.testing.assert_allclose(recovered.tvec, gt_tvec, atol=0.01)
     assert recovered.reprojection_error < 0.1  # Sub-pixel accuracy
-
-
-def test_build_canonical_head_mesh():
-    mesh = build_canonical_head_mesh(landmark_count=68)
-    assert isinstance(mesh, Mesh3D)
-    assert len(mesh.vertices) >= 68
-    assert len(mesh.faces) > 50
-    assert mesh.uvs is not None
-    assert mesh.uvs.shape == (len(mesh.vertices), 2)
-    assert np.all((mesh.uvs >= 0.0) & (mesh.uvs <= 1.0))
-    assert mesh.normals.shape == mesh.vertices.shape
-
-
-def test_tps_warper_identity_and_points():
-    src_pts = np.array([
-        [10.0, 10.0],
-        [50.0, 10.0],
-        [50.0, 50.0],
-        [10.0, 50.0],
-        [30.0, 30.0],
-    ], dtype=np.float64)
-
-    # Test identity mapping
-    warper_ident = ThinPlateSplineWarper(src_pts, src_pts)
-    transformed_ident = warper_ident.transform_points(src_pts)
-    np.testing.assert_allclose(transformed_ident, src_pts, atol=1e-3)
-
-    # Test shifting center point
-    dst_pts = src_pts.copy()
-    dst_pts[4] = [35.0, 25.0]
-    warper_shifted = ThinPlateSplineWarper(src_pts, dst_pts)
-    transformed_shifted = warper_shifted.transform_points(src_pts)
-    np.testing.assert_allclose(transformed_shifted, dst_pts, atol=1e-3)
-
-
-def test_tps_image_warping():
-    # 64x64 synthetic gradient image
-    img = np.zeros((64, 64, 3), dtype=np.uint8)
-    img[:, :, 0] = np.tile(np.linspace(0, 255, 64, dtype=np.uint8), (64, 1))
-    img[:, :, 1] = np.tile(np.linspace(0, 255, 64, dtype=np.uint8)[:, None], (1, 64))
-
-    src_pts = np.array([
-        [0.0, 0.0], [63.0, 0.0], [63.0, 63.0], [0.0, 63.0], [32.0, 32.0]
-    ], dtype=np.float64)
-    dst_pts = np.array([
-        [0.0, 0.0], [63.0, 0.0], [63.0, 63.0], [0.0, 63.0], [36.0, 28.0]
-    ], dtype=np.float64)
-
-    warper = ThinPlateSplineWarper(src_pts, dst_pts)
-    warped = warper.warp_image(img, output_shape=(64, 64))
-
-    assert warped.shape == (64, 64, 3)
-    assert warped.dtype == np.uint8
-    assert not np.all(warped == 0)
-
-
-def test_delaunay_mesh_warper():
-    img = np.ones((60, 60, 3), dtype=np.uint8) * 128
-    src = np.array([[10, 10], [50, 10], [30, 50]], dtype=np.float32)
-    dst = np.array([[15, 12], [48, 15], [32, 45]], dtype=np.float32)
-
-    warped = warp_delaunay_piecewise_affine(img, src, dst, output_shape=(60, 60))
-    assert warped.shape == (60, 60, 3)

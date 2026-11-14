@@ -4,6 +4,15 @@ All notable changes to the Roop 3D project are documented in this file.
 
 ---
 
+## Phase 0 purge: zero 2D / zero 2.5D (2026-11-14)
+
+- **Removed:** 2D face swappers (inswapper-class, hyperswap, simswap, ghost, blendswap, uniface, hififace), the 5-point crop-and-paste path and its
+  compositor plumbing, 2.5D frontal-strip meshes (`pose_blend`, canonical Delaunay strip, jaw fit, frontalization, TPS expression), weak-perspective /
+  orthographic cameras, and post-crop 2D GAN restorers (CodeFormer, GFPGAN, GPEN, UltraMax, RestoreFormer).
+- **Added:** `core/true3d_guard.py` (`True3DArchitectureGuard`), `server/true3d.py` typed true-3D options, and `tests/test_zero_2d_and_25d_policy.py`, an
+  AST/runtime gate computed from the import graph.
+- **Status:** the live render path is unwired (`RENDERER_NOT_WIRED`) pending full-head renderer integration. Older entries below describe code that no longer exists.
+
 ## [Unreleased]
 
 ### Live dense pose and sub-pixel crop fusion

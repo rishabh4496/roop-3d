@@ -1,3 +1,6 @@
+<!-- phase0-purge-notice -->
+> **Phase 0 purge notice (2026-11-14).** Roop 3D no longer contains 2D face swappers, 5-point crop-paste, 2.5D strip meshes, weak-perspective cameras or post-crop GAN restorers. Anything below that describes them is **historical** and no longer applies; the current architecture is a full 3D head under a perspective camera, see [Engine and render options](../../../docs/ENGINE_COMPARISON.md).
+
 ﻿# R3_2 â€” roop-3d slice 2: pipeline, server & runtime (code audit)
 
 Scope: `app/roop_3d/{compositor,color,enhancers,pipeline,media,io,execution,core,async_pipeline,models,orchestrator,server,jobs,queue,reliability,telemetry,security,installer,bridges,editing,evaluation,tools,docs}`, top-level `app/roop_3d/*` not owned by slices 1/3 (pose_matrix, angle_tracker, relighting_3d, temporal*, faceset_* excluded as slice 1/3 by assignment), `app/roop/`, `app/core/`, `app/diagnostics/`, `app/tests/`, `app/api.py`, `app/serve.py`. Static reading only; no tests/builds run. Line counts via AST/`count('\n')`; symbol:line from `ast` top-level defs. `[INFERENCE]` = not verified by execution.

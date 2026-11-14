@@ -41,7 +41,7 @@ from roop_3d.media.video_writer import encode_video
 from roop_3d.telemetry.pinokio_terminal import AUDIO_POLICY_TEXT, HUD
 from roop_3d.models.catalog import ModelCatalog, render_dependencies
 from roop_3d.compositor.pipeline import CompositeOptions
-from roop_3d.compositor.restoration import GpenRestorer
+from roop_3d.core.true3d_guard import require_true3d_renderer
 from roop_3d.engine.edit_plan import FrameEditPlan
 from roop_3d.engine.detection.track_policy import POLICY_VERSION, TrackPolicy
 
@@ -173,34 +173,6 @@ class PreparedPipeline:
     identity_lock: object | None = None
     identity_guard: object | None = None
     tracking: Mapping | None = None
-
-
-def _restoration_provenance(session, capability: dict) -> tuple[dict, str | None]:
-    """Report the restorer route that actually ran, alongside configured route snapshots."""
-    dense_report = (capability.get("dense_face") or {}).get("enhancer") or {}
-    compositor_report = (capability.get("full_frame_compositor") or {}).get("restorer") or {}
-    dense_restorer = getattr(getattr(session, "neural_face", None), "enhancer", None)
-    compositor_restorer = getattr(getattr(session, "compositor", None), "restorer", None)
-    routes = []
-    if getattr(dense_restorer, "inference_verified", False):
-        routes.append(("dense_face.enhancer", dense_report, dense_restorer))
-    if getattr(compositor_restorer, "inference_verified", False):
-        routes.append(("full_frame_compositor.restorer", compositor_report, compositor_restorer))
-    route, primary, restorer = routes[0] if routes else (None, compositor_report or dense_report, None)
-    report = {
-        **primary,
-        "route": route,
-        "invoked": bool(routes),
-        "invoked_routes": [name for name, _, _ in routes],
-        "routes": {
-            "dense_face.enhancer": dense_report,
-            "full_frame_compositor.restorer": compositor_report,
-        },
-    }
-    model = (getattr(restorer, "model", None) or
-             getattr(getattr(restorer, "runner", None), "model", None))
-    record = getattr(model, "record", None)
-    return report, record.get("sha256") if isinstance(record, dict) else None
 
 
 class MasterPipelineRunner:
@@ -505,8 +477,8 @@ class MasterPipelineRunner:
         if record.request.export:
             from roop_3d.media.provenance import require_mode
             require_mode(record.request.export.finishing.provenance)
-            if {'normal', 'depth'} & set(record.request.export.passes) and record.request.parameters_at(0).pose_mode != 'mesh_blend':
-                raise DomainError('VFX_GEOMETRY_UNAVAILABLE', 'Normal/depth exports require mesh blend mode', 422)
+            if {'normal', 'depth'} & set(record.request.export.passes):
+                require_true3d_renderer('normal/depth pass export')
             if record.request.export.passes and settings.video_timing_policy == 'cfr':
                 raise DomainError('VFX_TIMING_POLICY', 'Pass exports require preserved source timing; conform VFR media before rendering for NLE interchange', 422)
         target, digest, total, sources, labels_to_ids, faceset_ids = self._prepare_inputs(record, settings)
@@ -517,14 +489,6 @@ class MasterPipelineRunner:
         self._require_disk_space(record, target, total, checkpoint)
         # Bind actual verified local dependencies, not registry presence. Missing optional models stay optional.
         models = render_dependencies(self.catalog)
-        selected_model = record.request.swapper_model_id or settings.swapper_model_id
-        try:
-            selected_path = self.catalog.resolve_local_model(selected_model)
-        except DomainError as error:
-            if error.code != "MODEL_NOT_INSTALLED":
-                raise
-        else:
-            models[f"selected_swapper:{selected_model}"] = sha256_file(selected_path)[1]
         if settings.lip_sync_mode != "off":
             candidates = [row for row in self.catalog.public() if row.get("installed")
                           and row.get("local_format") == "onnx" and "wav2lip" in row["name"].casefold()
@@ -611,10 +575,10 @@ class MasterPipelineRunner:
 
     @staticmethod
     def _pose_settings(record: JobRecord, documents: Mapping[int, FaceSetDocument]) -> dict:
-        """Pose/TPS parameters plus the Stage 0 3x3 pose-matrix fingerprint of every mapped FaceSet."""
+        """True-3D render options plus the Stage 0 3x3 pose-matrix fingerprint of every mapped FaceSet."""
         parameters = record.request.workstation_parameters
         values = parameters.model_dump(mode="json") if parameters is not None else {}
-        keep = ("pose_mode", "pose_strength", "pose_frontalization", "tps_expression_weight", "render_mode")
+        keep = ("head_topology_engine", "shader_mode", "camera_intrinsics")
         matrices: dict[str, dict] = {}
         from roop_3d.faceset import pose_matrix
         for document in {item.faceset_id: item for item in documents.values()}.values():
@@ -669,11 +633,11 @@ class MasterPipelineRunner:
         timing = timing if timing is not None else (getattr(getattr(session, 'compositor', None), 'last_timing', None) or {})
         found: dict[str, float | None] = {
             'decode': number(decode_ms), 'detection': number(getattr(latency, 'detection_ms', None)),
-            'inswapper': number(getattr(latency, 'swap_ms', None)), 'masking': number(timing.get('masking')),
-            'restorer': number(timing.get('restorer')), 'encode': number(encode_ms)}
+            'head_render': number(getattr(latency, 'swap_ms', None)), 'masking': number(timing.get('masking')),
+            'expression': number(timing.get('restorer')), 'encode': number(encode_ms)}
         retarget, projection = number(getattr(latency, 'retarget_ms', None)), number(getattr(latency, 'projection_ms', None))
         if retarget is not None or projection is not None:
-            found['pose_tps'] = (retarget or 0.0) + (projection or 0.0)
+            found['head_pose'] = (retarget or 0.0) + (projection or 0.0)
         return {key: round(value, 3) for key, value in found.items() if value is not None}
 
     def _save_frame(self, job_id: str, index: int, image: np.ndarray, expected_shape: tuple[int, ...]) -> None:
@@ -713,17 +677,12 @@ class MasterPipelineRunner:
         base_source = next(iter(source_by_track.values()))
         runtime_config = self._runtime_config(admission, self.settings_for(record.request, settings))
         session = self.pipeline_factory(self.catalog, runtime_config)
-        select_swapper = getattr(session, "select_swapper", None)
-        if callable(select_swapper):
-            select_swapper(record.request.swapper_model_id or settings.swapper_model_id)
         mapped_seen: set[int] = set()
         started = time.monotonic()
         decoded_count = 0
         expected_shape: tuple[int, ...] | None = None
         last_completed = checkpoint.completed_frame
         capability: dict = {}
-        restorer_sha256: str | None = None
-        restoration_report: dict = {}
         export = record.request.export
         hdr_policy = export.hdr_policy if export else 'tonemap_sdr'
         if hdr_policy != 'tonemap_sdr':  # raises HDR_INPUT_REJECTED for PQ/HLG input before any work is done
@@ -740,7 +699,7 @@ class MasterPipelineRunner:
                 raise signal()
             session.prepare_session(base_source, track_ids=numeric_ids,
                                     sources_by_track=source_by_track,
-                                    retarget='off' if record.request.parameters_at(0).uses_mesh_projection() else 'auto',
+                                    retarget='auto',
                                     **record.request.parameters_at(0).session_options(),
                                     **(prepared.tracking or {}))
             if hasattr(session, 'set_target_registry') and hasattr(self.media, 'target_locks'):
@@ -765,35 +724,6 @@ class MasterPipelineRunner:
                 diagnostics.configure(
                     record.request.angle_diagnostics,
                     runtime_path(settings.output_root, self.root) / angle_jsonl_name(record.job_id))
-            architecture = record.request.parameters_at(0).restorer_model
-            if architecture == "auto":
-                # Each family keeps its own engine: UltraMax / GFPGAN are never silently served by GPEN.
-                architecture = settings.face_restoration_policy
-            if architecture not in {"off", "auto", "gpen", "codeformer", "gfpgan", "ultramax"}:
-                raise DomainError("RESTORER_UNAVAILABLE", "The selected restoration architecture has no verified local adapter", 503)
-            animated_restoration = bool(record.request.parameter_curves and any(key.value > 0 for key in record.request.parameter_curves.tracks.get('restorer_opacity', ())))
-            if architecture == 'ultramax':
-                from roop_3d.compositor.restoration import UltraMaxPipelineRestorer
-                session.compositor.restorer = UltraMaxPipelineRestorer(self.catalog, runtime_config)
-            elif architecture == 'codeformer':
-                from roop_3d.compositor.restoration import CodeFormerRestorer
-                session.compositor.restorer = CodeFormerRestorer(self.catalog, runtime_config)
-            elif architecture == 'gfpgan':
-                from roop_3d.compositor.restoration import GfpganRestorer
-                session.compositor.restorer = GfpganRestorer(self.catalog, runtime_config)
-            elif architecture in ('auto', 'gpen') or animated_restoration or (record.request.workstation_parameters and record.request.workstation_parameters.composite_options().restoration_blend > 0):
-                try:
-                    gpen = next((item for item in self.catalog.records()
-                                 if item["name"] == "gpen_bfr_512.onnx" and item["state"] == "VERIFIED_LOCAL"), None)
-                except (KeyError, TypeError):
-                    gpen = None
-                if gpen is not None:
-                    try:
-                        self.catalog.verify(gpen)
-                    except DomainError:
-                        gpen = None
-                    if gpen is not None:
-                        session.compositor.restorer = GpenRestorer(self.catalog, runtime_config)
             mark_running()
             if checkpoint.completed_frame >= 0:
                 # Show the saved position immediately; inference replays the earlier frames to rebuild tracker state.
@@ -863,8 +793,6 @@ class MasterPipelineRunner:
                     stage15_audio_source = audio_path
                 lip_syncer = LipSyncer(audio_path, stream_index=settings.lip_sync_audio_stream)
                 session.lip_sync.prepare(settings.lip_sync_mode, session.config)
-            if getattr(getattr(session, "swapper", None), "model", None) is not None:
-                session.swapper.model.morph_factor = settings.dfm_morph_factor
 
             frame_stages = ReferenceStages(
                 session, request=request, edit_plan=prepared.edit_plan, export=export, identity_report=identity_report,
@@ -980,7 +908,6 @@ class MasterPipelineRunner:
             capability = session.capability()
             if diagnostics is not None:
                 diagnostics.close()
-            restoration_report, restorer_sha256 = _restoration_provenance(session, capability)
         except BaseException as error:
             if diagnostics is not None:
                 diagnostics.discard()
@@ -1032,21 +959,15 @@ class MasterPipelineRunner:
                     model_hashes["recognizer"] = recognizer_rec["sha256"]
             except Exception:
                 pass
-            if capability.get("identity_swapper", {}).get("sha256"):
-                model_hashes["identity_swapper"] = capability["identity_swapper"]["sha256"]
-            if restorer_sha256:
-                model_hashes["restorer"] = restorer_sha256
 
             metadata = {
                 "stage": "12",
                 "job_id": record.job_id,
                 "runtime_profile": admission.profile,
                 "provider": admission.provider,
-                "identity_transfer": capability.get("identity_swapper", {}).get("inference_state", "UNKNOWN"),
+                "renderer": capability.get("renderer", {"wired": False}),
                 "liveportrait": capability.get("portrait", {}).get("state", "UNKNOWN"),
                 "stage08_uv": "UNSUPPORTED" if settings.execution_mode in {"volumetric", "hybrid"} else "NOT_REQUESTED",
-                "pose_projection": capability.get('pose_projection', {}),
-                "pose_mode": record.request.parameters_at(0).pose_mode,
                 "stage10_lip_sync": capability.get("lip_sync", {}).get("state", "UNKNOWN"),
                 "stage11_diffusion_vfx": "UNSUPPORTED" if settings.execution_mode in {"hybrid", "diffusion_vfx"} else "NOT_REQUESTED",
                 "face_mappings": [{"track_id": label, "faceset_id": source_id}
@@ -1059,7 +980,6 @@ class MasterPipelineRunner:
                 "dependency_model_digests": checkpoint.model_digests,
                 "inspection_sha256": checkpoint.inspection_sha256,
                 "identity_assets": capability.get("render_modes", {}).get("identity_assets", {}),
-                "restoration": restoration_report,
             }
             if identity_report is not None:
                 metadata['identity_lock'] = identity_report.manifest()

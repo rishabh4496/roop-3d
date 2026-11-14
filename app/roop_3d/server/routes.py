@@ -18,6 +18,7 @@ from roop_3d.models.registry import ModelRecord
 from roop_3d.server.contracts import (Capabilities, ModelAvailability, ModelSummary,
                                      ModelDownloadRequest, ModelLicenseNotice)
 from roop_3d.server.diagnostics import BenchmarkRequest, PreFlightLintRequest
+from roop_3d.server.true3d import renderer_status, shader_options, topology_options
 from roop_3d.server.ws import EVENT_ADAPTER, event_stream
 
 router = APIRouter(prefix="/api/v1")
@@ -73,16 +74,8 @@ def capabilities(request: Request) -> Capabilities:
     trt = bool(precision_status.get("tensorrt_available"))
     cuda_fp16 = bool(precision_status.get("cuda_fp16_available"))
     mixed_precision = bool(precision_status.get("available") or trt or cuda_fp16)
-    try:
-        from roop_3d.compositor.stream_restoration import load_ultramax_spec
-        weights = load_ultramax_spec(state.root).model_name
-        # The rack maps the registered codeformer.fp16 artifact onto id=ultramax, so ask the catalog instead of
-        # expecting the weight's file name among the row ids/names.
-        ultramax = weights in available or state.models.weight_available('ultramax', weights)
-    except (ValueError, OSError, TypeError, KeyError):
-        ultramax = False
     rows_by_id = {item["id"]: item for item in model_rows}
-    swapper_ready = {item["model_id"]: item for item in state.models.swapper_readiness()}
+    renderer = renderer_status()
 
     def presence_reason(row: dict[str, Any] | None) -> str | None:
         """Presence/verification facts only; never sufficient to enable a control."""
@@ -91,36 +84,14 @@ def capabilities(request: Request) -> Capabilities:
         row_state = str(row.get("state") or "UNKNOWN")
         if row.get("blocked") or row_state == "BLOCKED":
             return "Blocked by model governance"
-        if row.get("category") == "swapper" and row.get("adapter_supported") is False:
-            return str(row.get("adapter_unsupported_reason") or "No compatible swap-engine adapter")
         if not row.get("installed"):
             return "Weights are not installed"
         if row_state not in ("VERIFIED_LOCAL", "VERIFIED_REMOTE"):
             return f"Weights are present but unverified ({row_state})"
         return None
 
-    def swapper_reason(row: dict[str, Any]) -> str | None:
-        """Mirror resolve_local_model: registry artifacts need governance READY; app/models files run under local-use policy."""
-        reason = presence_reason(row)
-        if reason is not None:
-            return reason
-        report = swapper_ready.get(row["id"])
-        if report is None:
-            # Local DFM rows have a runtime adapter and explicit app/models trust, but no registry readiness row.
-            if row.get("local_format") == "dfm" and row.get("selectable") is True:
-                return None
-            return "No swap-engine readiness report exists for this model"
-        readiness = str(report.get("readiness"))
-        if readiness in ("READY_REGISTRY_VERIFIED", "LOCAL_UNREVIEWED"):
-            return None
-        artifact = report.get("artifact") or {}
-        if artifact.get("local_use_policy"):
-            return None  # explicit app/models local-use policy, as enforced by resolve_local_model
-        detail = report.get("reason") or "; ".join(report.get("governance_issues") or ()) or "governance gate refused inference"
-        return f"Not eligible for inference ({readiness}): {detail}"
-
     def governed_reason(model_id: str) -> str | None:
-        """Non-swapper models: presence plus the catalog lifecycle (license, provenance, compatibility, integrity)."""
+        """Models: presence plus the catalog lifecycle (license, provenance, compatibility, integrity)."""
         reason = presence_reason(rows_by_id.get(model_id))
         if reason is not None:
             return reason
@@ -138,25 +109,26 @@ def capabilities(request: Request) -> Capabilities:
             refusals.append(f"{result.get('lifecycle_state')}: " + "; ".join(result.get("issues") or ()))
         return "Not eligible for inference (" + (" | ".join(refusals) or "no governance record") + ")"
 
-    swappers = {item["id"]: swapper_reason(item) for item in model_rows if item["category"] == "swapper"}
+    topology_rows = topology_options()
+    shader_rows = shader_options(bool(renderer["wired"]))
     options = {
-        "swapper_model_id": swappers,
+        # True-3D controls: null = selectable, text = why not. Same availability the /true3d/options route reports.
+        "head_topology_engine": {row["id"]: (None if row["available"] else row["reason"]) for row in topology_rows},
+        "shader_mode": {row["id"]: row["reason"] for row in shader_rows},
+        "camera_projection": {"perspective": None},
+        "camera_mode": {"auto": None, "manual": None},
         "execution_mode": {"swap": None, "volumetric": None if lp else "LivePortrait weights are unavailable", "hybrid": "No verified diffusion loader is configured", "diffusion_vfx": "No verified diffusion loader is configured"},
         "preferred_provider": {"auto": None, "CPUExecutionProvider": None, "CUDAExecutionProvider": None if gpu else "CUDA is unavailable", "TensorrtExecutionProvider": None if trt else "TensorRT requires an NVIDIA GPU, its execution provider and packaged TensorRT libraries"},
         "hardware_profile": {"auto": None, "cpu": None, "6gb": None if gpu else "No CUDA GPU is available", "12gb": None if gpu and hardware.gpus and hardware.gpus[0].total_vram_mib >= MIN_12GB_PROFILE_VRAM_MIB else "A CUDA GPU with at least 10 GB of video memory is required"},
         "precision_policy": {"auto": None, "fp32": None, "fp16": None if mixed_precision else "FP16 mixed precision requires TensorRT or CUDA FP16 support"},
         "detector_model_id": {key: governed_reason(key) for key in ('scrfd', 'retinaface', 'yoloface')},
-        "face_restoration_policy": {"off": None, "auto": None, "gfpgan": governed_reason('gfpgan_v14'),
-            "gpen": governed_reason('gpen_bfr_512'),
-            "codeformer": governed_reason('codeformer'),
-            "ultramax": governed_reason('ultramax') if ultramax else "UltraMax requires an installed model and preprocessing contract"},
         "render_backend": {"auto": None, "reference": None, "stream": None},
         "lip_sync_mode": {"off": None, "wav2lip": None, "wav2lip_gan_fp16": None,
                           "musetalk": "Whisper/VAE engine bundle unavailable", "edtalk": "Pose/emotion engine bundle unavailable"},
         "audio_policy": {"copy": None, "transcode": None, "drop": "The workstation preserves source audio; use copy or transcode"},
     }
     workstation = {"features": {key: {"enabled": True, "reason": None} for key in
-        ("uploads", "frame_preview", "face_inspection", "pose_inspection", "pose_mesh_blend", "reconstruction_viewer", "projects", "trim", "video_playback")},
+        ("uploads", "frame_preview", "face_inspection", "pose_inspection", "reconstruction_viewer", "projects", "trim", "video_playback")},
         "controls": options, "read_only_parameters": {key: "Configure this infrastructure setting offline" for key in
         ("schema_version", "host", "port", "dev_cors", "max_body_bytes", "cache_root", "output_root", "model_search_paths", "diagnostics_level")},
         "disabled_parameters": {"remote_processing_enabled": "No remote adapter is configured", "synthetic_media_notice": "Synthetic media notice is required"},
@@ -165,6 +137,8 @@ def capabilities(request: Request) -> Capabilities:
         "job_controls": {"pause": ["queued", "preparing", "running"], "resume": ["paused", "interrupted"],
                          "cancel": ["queued", "preparing", "running", "pausing", "paused", "interrupted"]},
         "upload_chunk_bytes": min(CHUNK_BYTES, state.settings.max_body_bytes), "max_asset_bytes": MAX_ASSET_BYTES}
+    workstation["features"]["true_3d_render"] = {"enabled": bool(renderer["wired"]), "reason": None if renderer["wired"] else renderer["message"]}
+    workstation["renderer"] = renderer
     workstation["features"]["queue"] = {"enabled": state.worker is not None, "reason": None if state.worker is not None else "Background worker is disabled"}
     workstation["tensorrt_mixed_precision"] = precision_status
     workstation["active_hardware_profile"] = state.settings.hardware_profile
@@ -217,21 +191,33 @@ def active_model_readback(request: Request) -> dict[str, Any]:
 
 
 @router.get("/engines/readiness")
-def swap_engine_readiness(request: Request) -> dict[str, Any]:
-    """Every supported swap engine: READY when its weights resolve under the trust policy, else UNAVAILABLE with the reason.
+def render_engine_readiness(request: Request) -> dict[str, Any]:
+    """Readiness of the true-3D render path: the renderer itself, the head-topology engines and the shader modes.
 
-    ``session`` is what ONNX Runtime did the last time the weight was opened (provider chosen, providers fallen back
-    from and why, tensor dtypes); it is null until the engine has been opened once in this process."""
-    from roop_3d.models.engine_readiness import swap_engine_report, summarize
-    rows = swap_engine_report(request.app.state.models)
+    ``renderer.wired`` is False (state ``not_wired``, code ``RENDERER_NOT_WIRED``) until a real 3D renderer is connected; nothing
+    here reports a ready engine on the strength of installed weights alone. ``session`` data is not synthesised."""
     settings = request.app.state.settings
+    renderer = renderer_status()
+    topologies = topology_options()
+    shaders = shader_options(bool(renderer["wired"]))
+    engines = [{"id": row["id"], "kind": "head_topology_engine", "label": row["label"], "ready": bool(row["available"] and renderer["wired"]),
+                "readiness": "READY" if row["available"] and renderer["wired"] else "UNAVAILABLE",
+                "reason": row["reason"] if not row["available"] else (None if renderer["wired"] else renderer["message"])} for row in topologies]
+    engines += [{"id": row["id"], "kind": "shader_mode", "label": row["label"], "ready": bool(row["available"]),
+                 "readiness": "READY" if row["available"] else "UNAVAILABLE", "reason": row["reason"]} for row in shaders]
+    ready = [row["id"] for row in engines if row["ready"]]
     return {"selected": _selected_models(settings), "preferred_provider": settings.preferred_provider,
-            "precision_policy": settings.precision_policy, "summary": summarize(rows), "engines": rows}
+            "precision_policy": settings.precision_policy, "renderer": renderer,
+            "summary": {"ready": ready, "unavailable": [{"id": row["id"], "reason": row["reason"]} for row in engines if not row["ready"]],
+                        "renderer_wired": bool(renderer["wired"])},
+            "engines": engines}
 
 
 def _selected_models(settings: Settings) -> dict[str, str]:
-    return {"swapper_model": settings.swapper_model_id, "detector_model": settings.detector_model_id,
-            "enhancer_model": settings.face_restoration_policy}
+    from roop_3d.server.unified_state import state as unified
+    true3d = unified.get_true3d()
+    return {"detector_model": settings.detector_model_id, "head_topology_engine": true3d.head_topology_engine,
+            "shader_mode": true3d.shader_mode, "camera_mode": true3d.camera.mode}
 
 
 _PROVIDER_NAMES = {"TensorrtExecutionProvider": "TensorRT", "CUDAExecutionProvider": "CUDA", "CPUExecutionProvider": "CPU",
@@ -268,7 +254,7 @@ def pipeline_status(request: Request) -> dict[str, Any]:
     from roop_3d.engine import active_models
     state = request.app.state
     active = active_models.snapshot()
-    loaded = [active[stage] for stage in ("swapper", "enhancer", "detector") if active.get(stage)]
+    loaded = [item for item in active.values() if isinstance(item, dict) and item.get("provider")]
     primary = loaded[0] if loaded else None
     return {"pipeline": state.pipeline.snapshot().model_dump(mode="json"),
             "selected": _selected_models(state.settings), "active": active,
@@ -344,7 +330,7 @@ def _resolve_manifest_entry_id(manager: Any, model_id: str) -> str | None:
     if model_id in manager.entries:
         return model_id
     normalized = model_id.strip().lower()
-    for prefix in ("swapper_", "detector_", "restorer_", "animator_", "parser_", "recognizer_"):
+    for prefix in ("detector_", "animator_", "parser_", "recognizer_"):
         candidate = f"{prefix}{normalized}"
         if candidate in manager.entries:
             return candidate
@@ -365,12 +351,6 @@ def _resolve_manifest_entry_id(manager: Any, model_id: str) -> str | None:
         "scrfd": "detector_det_10g",
         "det_10g": "detector_det_10g",
         "scrfd_2.5g": "detector_scrfd_2_5g",
-        "inswapper_128": "swapper_inswapper_128",
-        "inswapper_128_fp16": "swapper_inswapper_128_fp16",
-        "gpen_bfr_512": "restorer_gpen_bfr_512",
-        "codeformer": "restorer_codeformer",
-        "gfpgan_v14": "restorer_gfpgan_v14",
-        "ultramax": "restorer_ultramax",
     }
     alias = aliases.get(normalized)
     if alias and alias in manager.entries:

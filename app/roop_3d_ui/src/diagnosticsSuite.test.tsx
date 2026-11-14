@@ -172,20 +172,20 @@ describe('Pre-Flight Render Linter Modal', () => {
 });
 
 describe('Per-Frame Bottleneck Flamegraph & Temporal Controls', () => {
-  it('shows the seven measured stages from live timings and flags the slowest as the bottleneck', async () => {
-    const timings = { decode: 2.5, detection: 6.5, pose_tps: 5.0, inswapper: 9.8, masking: 4.0, restorer: 15.2, encode: 3.5 };
+  it('shows the six measured stages from live timings and flags the slowest as the bottleneck', async () => {
+    const timings = { decode: 2.5, detection: 6.5, head_pose: 5.0, head_render: 15.2, masking: 4.0, encode: 3.5 };
 
     await mount(<Flamegraph timings={timings} />);
 
     expect(host.querySelector('.bottleneck-flamegraph-container')).toBeTruthy();
     expect(host.textContent).toContain('Pipeline Bottleneck Flamegraph');
-    expect(PIPELINE_STAGES.map(stage => stage.label)).toEqual(['Decode', 'Detection', '3D Pose / TPS', 'Inswapper', 'Masking', 'Restorer', 'Encode']);
+    expect(PIPELINE_STAGES.map(stage => stage.label)).toEqual(['Decode', 'Detection', '3D Pose & Mesh', '3D Head Render', 'Masking', 'Encode']);
     for (const stage of PIPELINE_STAGES) {
       expect(host.querySelector(`[data-testid="flamegraph-stage-${stage.id}"]`)).toBeTruthy();
     }
-    expect(host.querySelector('[data-testid="flamegraph-stage-restorer"]')!.textContent).toContain('15.2');
-    expect(host.querySelector('[data-testid="flamegraph-stage-restorer"]')!.className).toContain('bottleneck');
-    expect(host.textContent).toContain('46.5 ms'); // measured total = sum of the seven stages
+    expect(host.querySelector('[data-testid="flamegraph-stage-head_render"]')!.textContent).toContain('15.2');
+    expect(host.querySelector('[data-testid="flamegraph-stage-head_render"]')!.className).toContain('bottleneck');
+    expect(host.textContent).toContain('36.7 ms'); // measured total = sum of the six stages
     expect(host.textContent).toContain('BOTTLENECK');
     expect(host.textContent).not.toContain('not measured');
   });
@@ -193,24 +193,24 @@ describe('Per-Frame Bottleneck Flamegraph & Temporal Controls', () => {
   it('never invents numbers: with no measurements every stage reads "not measured"', async () => {
     await mount(<Flamegraph />);
     expect(host.querySelector('[data-testid="flamegraph-source"]')!.textContent).toContain('No measured timings yet');
-    expect(host.querySelectorAll('.stage-ms.muted')).toHaveLength(7);
+    expect(host.querySelectorAll('.stage-ms.muted')).toHaveLength(6);
     expect(host.textContent).not.toContain('BOTTLENECK');
     expect(host.textContent).not.toMatch(/\d+(\.\d+)? ms \(/);
   });
 
   it('prefers the running job’s per-frame timings and leaves unmeasured stages blank', async () => {
-    const job = { job_id: 'abcdef1234567890', state: 'running', progress: { frame: 12, stage_timings_ms: { decode: 1.2, inswapper: 8, encode: 2 } } };
+    const job = { job_id: 'abcdef1234567890', state: 'running', progress: { frame: 12, stage_timings_ms: { decode: 1.2, head_render: 8, encode: 2 } } };
     await mount(<Flamegraph activeJob={job} latency={{ detection_ms: 99 }} />);
     expect(host.querySelector('[data-testid="flamegraph-source"]')!.textContent).toContain('job abcdef12');
-    expect(host.querySelector('[data-testid="flamegraph-stage-inswapper"]')!.textContent).toContain('8');
+    expect(host.querySelector('[data-testid="flamegraph-stage-head_render"]')!.textContent).toContain('8');
     expect(host.querySelector('[data-testid="flamegraph-stage-detection"]')!.textContent).toContain('not measured'); // preview value ignored
-    expect(host.querySelector('[data-testid="flamegraph-stage-restorer"]')!.textContent).toContain('not measured');
+    expect(host.querySelector('[data-testid="flamegraph-stage-masking"]')!.textContent).toContain('not measured');
   });
 
-  it('maps preview-capture latency onto detection, pose/TPS and swap only', async () => {
-    await mount(<Flamegraph latency={{ detection_ms: 6, swap_ms: 9, retarget_ms: 3, projection_ms: 1.5, total_ms: 40 }} />);
+  it('maps preview-capture latency onto detection, head pose and head render only', async () => {
+    await mount(<Flamegraph latency={{ detection_ms: 6, render_ms: 9, tracking_ms: 3, projection_ms: 1.5, total_ms: 40 }} />);
     expect(host.querySelector('[data-testid="flamegraph-source"]')!.textContent).toContain('Preview capture');
-    expect(host.querySelector('[data-testid="flamegraph-stage-pose_tps"]')!.textContent).toContain('4.5');
+    expect(host.querySelector('[data-testid="flamegraph-stage-head_pose"]')!.textContent).toContain('4.5');
     expect(host.querySelector('[data-testid="flamegraph-stage-masking"]')!.textContent).toContain('not measured');
   });
 

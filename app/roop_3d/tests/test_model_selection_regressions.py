@@ -3,6 +3,7 @@ from types import SimpleNamespace
 
 import numpy as np
 import pytest
+from roop_3d.core.errors import DomainError
 
 from roop_3d.models.catalog import ModelCatalog
 from roop_3d.models.registry import Manifest, ModelRegistry
@@ -26,8 +27,35 @@ def test_catalog_reports_provider_weights_as_installed(tmp_path, model_id, name,
     row = next(r for r in catalog.public() if r['id'] == model_id)
     assert row['installed'], 'Weights resolved by the runtime must be selectable in the rack'
     assert row['state'] == 'VERIFIED_LOCAL'
-    assert catalog.resolve_local_model(model_id) == path
+    if role == 'identity_swapper':
+        assert row['selectable'] is False  # Hash-verified external bytes are not inference-ready without governance approval.
+    with pytest.raises(DomainError) as failure:
+        catalog.resolve_local_model(model_id)
+    assert failure.value.code == 'LICENSE_UNVERIFIED'
 
+def test_capabilities_refuse_unreviewed_external_swapper_weights(tmp_path):
+    from fastapi.testclient import TestClient
+    from roop_3d.core.settings import Settings
+    from roop_3d.server.app import create_app
+
+    data = b'unreviewed external model bytes'
+    record = artifact(data, model_id='hyperswap_1a_256', name='hyperswap_1a_256.onnx',
+                      filenames=['hyperswap_1a_256.onnx'], role='identity_swapper')
+    registry = ModelRegistry(manifest=Manifest(evidence_scope='Fixture', models=(record,)))
+    path = tmp_path / 'roop_3d/.runtime/weights/hyperswap_1a_256.onnx'
+    path.parent.mkdir(parents=True)
+    path.write_bytes(data)
+    catalog = ModelCatalog(root=tmp_path, cache_root=tmp_path, registry=registry,
+                           search_paths=lambda: ('roop_3d/.runtime/weights',))
+    app = create_app(Settings(), repo_root=tmp_path, worker_enabled=False)
+    app.state.models = catalog
+
+    with TestClient(app, base_url='http://127.0.0.1:8030') as client:
+        response = client.get('/api/v1/system/capabilities')
+
+    assert response.status_code == 200
+    reason = response.json()['workstation']['controls']['swapper_model_id']['hyperswap_1a_256']
+    assert reason and 'REFUSED_LICENSE_UNVERIFIED' in reason
 
 def test_catalog_does_not_verify_corrupted_provider_weights(tmp_path):
     record = artifact(b'expected', model_id='gpen_bfr_512', name='gpen_bfr_512.onnx',

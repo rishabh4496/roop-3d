@@ -38,7 +38,7 @@ app/roop_3d/                      Python package
   orchestrator/ capability-based selection of pipeline components per tier
   installer/    preflight, model_manager (offline import), offline_cache, update_manager, verification
   reliability/  soak harness, startup reconciliation, repair, resource audit
-  compositor/ swappers/ enhancers/ …   the neural stages
+  compositor/ enhancers/ rendering/ …   full-head rendering, UV-texture detail and compositing (no 2D swapper)
   tests/        pytest (offline; no weights required)
 app/roop_3d_ui/                   React 19 + TypeScript + Vite interface
   src/App.tsx   the workstation shell: state, API calls, routing, dialogs

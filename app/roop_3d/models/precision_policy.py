@@ -43,10 +43,6 @@ def policy_for(model_name: str, role: str | None) -> PrecisionPolicy:
     if role == "recognizer":
         fp32, fp16 = Tolerance(0.001, 0.00005, 0.995), Tolerance(0.02, 0.002, 0.995)
         candidate = True
-    elif role == "identity_swapper":
-        fp32 = Tolerance(0.001, 0.00005, image_psnr_db=65, image_ssim=0.9995, border_absolute=0.001)
-        fp16 = Tolerance(0.05, 0.0025, image_psnr_db=40, image_ssim=0.995, border_absolute=0.025)
-        candidate = True
     elif role == "liveportrait_appearance":
         candidate = True
     elif role == "liveportrait_warp":

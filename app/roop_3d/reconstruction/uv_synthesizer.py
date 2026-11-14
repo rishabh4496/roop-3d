@@ -22,7 +22,7 @@ from roop_3d.reconstruction.geometry_types import (
     Mesh3D,
     Pose3D,
     UVOrigin,
-    WeakPerspectiveCamera,
+    PerspectiveCamera,
     uv_to_pixel,
 )
 
@@ -87,8 +87,8 @@ class ViewObservation(Contract):
     intrinsics: CameraIntrinsics | None = Field(default=None, description="Pinhole camera parameters (legacy path)")
     sharpness: float = Field(default=1.0, ge=0.0, description="Image sharpness metric")
     occlusion_mask: np.ndarray | None = Field(default=None, description="Optional binary face mask (H, W)")
-    camera: WeakPerspectiveCamera | None = Field(
-        default=None, description="Scaled-orthographic camera fitted to this view (identity path)")
+    camera: PerspectiveCamera | None = Field(
+        default=None, description="Perspective K[R|t] camera fitted to this view (identity path)")
     view_quality: float = Field(default=1.0, ge=0.0, le=1.0,
                                 description="0..1 trust in this view (landmark consistency x image quality)")
     view_index: int = Field(default=-1, description="Source FaceSet view index, reported in per-texel provenance")
@@ -383,7 +383,7 @@ class UVSynthesizer:
 
     SILHOUETTE_FEATHER = 0.04         # fraction of the face extent over which weights ramp up from the silhouette
 
-    def _visible_by_zbuffer(self, camera: WeakPerspectiveCamera, texel_depth: np.ndarray,
+    def _visible_by_zbuffer(self, camera: PerspectiveCamera, texel_depth: np.ndarray,
                             texel_xy: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         """(visible, silhouette_feather) per texel. `visible` is False where the surface point is hidden behind other
         front-facing geometry; the feather ramps 0 -> 1 with distance from the projected silhouette, so texels at
@@ -391,8 +391,9 @@ class UVSynthesizer:
         if self.visibility_backend == "gpu":
             return self._visible_on_gpu(camera, texel_xy)
         verts = self.mesh.vertices.astype(np.float64)
-        vxy, vdepth = camera.project(verts), camera.depth(verts)
-        face_n = camera.rotate_normals(self.mesh.compute_face_normals())[:, 2]
+        vxy, vdepth = camera.project(verts), -camera.depth(verts)       # larger = closer for the painter's pass below
+        centroids = verts[self.mesh.faces].mean(axis=1)
+        face_n = camera.view_cosine(centroids, self.mesh.compute_face_normals())
         front = np.where(face_n > 0.0)[0]
         if len(front) == 0:
             return np.zeros(len(texel_depth), dtype=bool), np.zeros(len(texel_depth))
@@ -417,14 +418,7 @@ class UVSynthesizer:
     def _visible_on_gpu(self, camera, texel_xy):
         """Depth-test every UV surface sample, not average-depth triangle painting."""
         from roop_3d.reconstruction.full_head import GPUHeadRasterizer, head_roi
-        class OrthographicPose:
-            perspective = False
-            rotation = np.diag([1., 1., -1.]) @ np.asarray(camera.rotation) @ np.diag([1., 1., -1.])
-            def project(self, points):
-                return camera.project(points)
-            def camera_vertices(self, points):
-                return np.column_stack((np.zeros((len(points), 2)), 2. - camera.depth(points)))
-        pose = OrthographicPose()
+        pose = camera.head_pose()          # true K[R|t]: the perspective Z-buffer rasterizer
         side = 1024
         inverse = head_roi(camera.project(self.mesh.vertices), side)
         ys, xs = np.where(self.face_texel_mask)
@@ -503,13 +497,13 @@ class UVSynthesizer:
             if img.ndim != 3 or img.shape[2] != 3:
                 raise DomainError("INVALID_IMAGE", "Observation images must be BGR (H, W, 3)", 422)
             h_img, w_img = img.shape[:2]
-            vis = cam.rotate_normals(nrm)[:, 2]
+            vis = cam.view_cosine(pts, nrm)
             xy = cam.project(pts)
             in_img = (xy[:, 0] >= 1) & (xy[:, 0] <= w_img - 2) & (xy[:, 1] >= 1) & (xy[:, 1] <= h_img - 2)
             ok = (vis > max(self.vis_thresh, self.GRAZING_MIN_COS)) & in_img
             if not ok.any():
                 continue
-            unoccluded, silhouette = self._visible_by_zbuffer(cam, cam.depth(pts), xy)
+            unoccluded, silhouette = self._visible_by_zbuffer(cam, -cam.depth(pts), xy)
             ok &= unoccluded
             if obs.occlusion_mask is not None:
                 clear = remap_points(obs.occlusion_mask.astype(np.float32), xy[:, 0], xy[:, 1], cv2.INTER_NEAREST) > 128

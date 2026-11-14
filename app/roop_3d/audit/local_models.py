@@ -57,11 +57,9 @@ def family_hint(name: str) -> str:
     groups = (
         ("lipsync", ("wav2lip", "musetalk")),
         ("animation", ("liveportrait",)),
-        ("swapper", ("inswapper", "hyperswap", "hififace", "simswap")),
         ("detector", ("scrfd", "retinaface", "det_10g", "yoloface", "yunet")),
         ("recognizer", ("arcface", "w600k", "glintr", "adaface", "sface")),
         ("parser", ("bisenet", "xseg", "resnet18", "face_occluder")),
-        ("restorer", ("gfpgan", "codeformer", "gpen", "restoreformer", "dmdnet")),
     )
     return next((label for label, hints in groups if any(h in name for h in hints)), "other")
 

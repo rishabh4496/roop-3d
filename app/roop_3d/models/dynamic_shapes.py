@@ -22,8 +22,6 @@ class StaticBatchRequired(DynamicShapeError):
 
 
 def static_batch_reason(name: str) -> str | None:
-    if "gpen" in name.casefold() and any(size in name for size in ("256", "512")):
-        return "GPEN internal weight reshaping/grouped convolution requires static batch-size-1 compilation"
     return None
 
 
@@ -39,7 +37,7 @@ def input_shapes(model, batch: int, overrides: dict[str, tuple[int, ...]] | None
         shape = list((overrides or {}).get(value.name, tuple(d.dim_value for d in dims)))
         if len(shape) != len(dims):
             raise DynamicShapeError(f"Rank mismatch for {value.name}")
-        if shape and value.name not in ("w", "fidelity_weight"):
+        if shape and value.name != "w":
             shape[0] = batch
         if any(d <= 0 for d in shape):
             raise DynamicShapeError(f"Supply concrete nonbatch dimensions for {value.name} with --shapes")
@@ -55,7 +53,7 @@ def sample_inputs(model, batch: int, overrides=None, *, seed: int = 83, fidelity
     for value in runtime_inputs(model):
         dtype = onnx.helper.tensor_dtype_to_np_dtype(value.type.tensor_type.elem_type)
         shape = shapes[value.name]
-        if value.name in ("w", "fidelity_weight"):
+        if value.name == "w":
             result[value.name] = np.full(shape, fidelity, dtype=dtype)
         elif np.issubdtype(dtype, np.floating):
             result[value.name] = rng.uniform(-0.5, 0.5, shape).astype(dtype)
@@ -76,25 +74,6 @@ def surgery(model, model_name: str):
         raise StaticBatchRequired(reason)
     result = copy.deepcopy(model)
     graph = result.graph
-    # A live fidelity input is mandatory; do not invent the location of a frozen w.
-    if "codeformer" in model_name.casefold():
-        inputs = {v.name: v for v in graph.input}
-        weight = next((n for n in ("w", "fidelity_weight") if n in inputs), None)
-        if weight is None:
-            raise DynamicShapeError("CodeFormer export must supply w as its second runtime input; re-export the source model")
-        required = {v.name for v in graph.output}
-        for node in reversed(graph.node):
-            if required.intersection(node.output):
-                required.update(node.input)
-        if weight not in required:
-            raise DynamicShapeError("CodeFormer fidelity input is disconnected/frozen; re-export required")
-        for initializer in list(graph.initializer):
-            if initializer.name == weight:
-                graph.initializer.remove(initializer)
-        ordered = [v for v in graph.input if v.name != weight]
-        ordered.insert(1, inputs[weight])
-        del graph.input[:]
-        graph.input.extend(ordered)
     try:
         inferred = onnx.shape_inference.infer_shapes(result)
     except (onnx.shape_inference.InferenceError, ValueError):
@@ -137,7 +116,7 @@ def surgery(model, model_name: str):
             node.input[1] = name
     for value in runtime_inputs(result):
         dims = value.type.tensor_type.shape.dim
-        if dims and value.name not in ("w", "fidelity_weight"):
+        if dims and value.name != "w":
             if dims[0].dim_value not in (0, 1):
                 raise DynamicShapeError(f"{value.name} is not a batch-1 input")
             dims[0].dim_param = "batch"
@@ -171,7 +150,7 @@ def validate_conversion(original, converted, batches=(1, 4, 8), overrides=None) 
         assert_finite(actual)
         samples = []
         for index in range(batch):
-            single = {n: v if n in ("w", "fidelity_weight") else v[index:index + 1] for n, v in feeds.items()}
+            single = {n: v if n == "w" else v[index:index + 1] for n, v in feeds.items()}
             outputs = reference.run(None, single)
             assert_finite(outputs)
             samples.append(outputs)
@@ -187,15 +166,6 @@ def validate_conversion(original, converted, batches=(1, 4, 8), overrides=None) 
                 raise DynamicShapeError(f"Output {index} does not preserve independent batch samples: {output.shape}")
             np.testing.assert_allclose(output, expected, rtol=1e-4, atol=1e-5)
         checked.append(batch)
-    # Verify w stays a runtime input at more than one value (without claiming source-export parity).
-    if "codeformer" in original.graph.name.casefold() or any(v.name in ("w", "fidelity_weight") for v in runtime_inputs(converted)):
-        for fidelity in (0.0, 1.0):
-            feeds = sample_inputs(converted, 1, overrides, fidelity=fidelity)
-            actual, expected = candidate.run(None, feeds), reference.run(None, feeds)
-            assert_finite(actual)
-            assert_finite(expected)
-            for a, b in zip(actual, expected):
-                np.testing.assert_allclose(a, b, rtol=1e-4, atol=1e-5)
     return {"checked_batches": checked, "finite": True, "single_sample_parity": True, "provider": "CPUExecutionProvider"}
 
 

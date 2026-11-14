@@ -11,14 +11,14 @@ const api = vi.fn();
 vi.mock('./api', () => ({ api: (...args: unknown[]) => api(...args) }));
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 
-const loaded = (stage: 'detector' | 'swapper' | 'enhancer', model_id: string, filename: string, sha256: string | null = 'a'.repeat(64)) => ({
+const loaded = (stage: 'detector' | 'head' | 'shader', model_id: string, filename: string, sha256: string | null = 'a'.repeat(64)) => ({
   stage, model_id, model_path: `/app/models/${filename}`, filename, provider: 'TensorrtExecutionProvider', precision: 'fp16', sha256, loaded_at: 1, switches: 0,
 });
 const status = (patch: Partial<PipelineStatus> = {}): PipelineStatus => ({
   pipeline: { engine_state: 'IDLE', engine_label: null, engine_model: null, engine_precision: null },
-  selected: { swapper_model: 'inswapper_128', detector_model: 'scrfd', enhancer_model: 'gpen' },
-  active: { detector: loaded('detector', 'scrfd', 'scrfd_2.5g_kps.onnx'), swapper: loaded('swapper', 'inswapper_128', 'inswapper_128.onnx'), enhancer: loaded('enhancer', 'gpen_bfr_512', 'GPEN-BFR-512.onnx') },
-  precision: { label: 'TensorRT FP16 Mixed', stage: 'swapper', stages: { swapper: 'TensorRT FP16 Mixed', detector: 'TensorRT FP16 Mixed' }, policy: 'fp16' },
+  selected: { detector_model: 'scrfd', head_topology_engine: 'MakeHuman-CC0-Craniofacial-3D' },
+  active: { detector: loaded('detector', 'scrfd', 'scrfd_2.5g_kps.onnx'), head: loaded('head', 'makehuman_cc0', 'makehuman_head_v1.npz'), shader: loaded('shader', 'pbr_sss', 'pbr_sss.onnx') },
+  precision: { label: 'TensorRT FP16 Mixed', stage: 'head', stages: { head: 'TensorRT FP16 Mixed', detector: 'TensorRT FP16 Mixed' }, policy: 'fp16' },
   failures: [], ...patch,
 });
 
@@ -33,43 +33,44 @@ const flush = () => act(async () => { await new Promise(resolve => setTimeout(re
 const text = (id: string) => host.querySelector(`[data-testid="${id}"]`)!.textContent!;
 
 describe('EngineStatusBar', () => {
-  it('shows the live detector, swapper, enhancer (verified) and precision read back from /pipeline/status', async () => {
+  it('shows the live detector, head model, shader (verified) and precision read back from /pipeline/status', async () => {
     await act(async () => root.render(<EngineStatusBar />));
     await flush();
     expect(api).toHaveBeenCalledWith('/pipeline/status');
     expect(text('engine-detector')).toBe('Detector:scrfd');
-    expect(text('engine-swapper')).toBe('Swapper:inswapper_128');
-    expect(text('engine-enhancer')).toBe('Enhancer:gpen_bfr_512• Verified');
+    expect(text('engine-head')).toBe('Head model:makehuman_cc0• Verified');
+    expect(text('engine-shader')).toBe('Shader:pbr_sss• Verified');
     expect(text('engine-precision')).toBe('Precision:TensorRT FP16 Mixed');
-    expect(host.querySelector('[data-testid=engine-swapper]')!.getAttribute('title')).toContain('inswapper_128.onnx');
+    expect(host.querySelector('[data-testid=engine-head]')!.getAttribute('title')).toContain('makehuman_head_v1.npz');
+    expect(host.querySelector('[data-testid=engine-swapper], [data-testid=engine-enhancer]')).toBeNull();
   });
 
-  it('says so instead of inventing a model when nothing is loaded, and never labels an unhashed enhancer Verified', async () => {
-    current = status({ active: { detector: null, swapper: null, enhancer: loaded('enhancer', 'codeformer', 'codeformer.onnx', null) }, precision: { label: null, stage: null, stages: {}, policy: 'auto' } });
+  it('says so instead of inventing a model when nothing is loaded, and never labels an unhashed shader Verified', async () => {
+    current = status({ active: { detector: null, head: null, shader: loaded('shader', 'gaussian_head', 'gaussian_head.onnx', null) }, precision: { label: null, stage: null, stages: {}, policy: 'auto' } });
     await act(async () => root.render(<EngineStatusBar />));
     await flush();
-    expect(text('engine-swapper')).toBe('Swapper:—');
+    expect(text('engine-head')).toBe('Head model:—');
     expect(text('engine-precision')).toBe('Precision:—');
-    expect(text('engine-enhancer')).toContain('• Unverified');
-    expect(text('engine-enhancer')).not.toContain('• Verified');
+    expect(text('engine-shader')).toContain('• Unverified');
+    expect(text('engine-shader')).not.toContain('• Verified');
   });
 
   it('turns a failed model switch into an error toast with the exact backend reason, once, and flags the stage', async () => {
-    current = status({ failures: [{ id: 1, stage: 'swapper', model_id: 'simswap_256', code: 'MODEL_NOT_INSTALLED', reason: 'Selected swapper has no installed local ONNX weights', at: 100 }] });
+    current = status({ failures: [{ id: 1, stage: 'head', model_id: 'flame2023_open', code: 'MODEL_NOT_INSTALLED', reason: 'Selected head model has no installed local weights', at: 100 }] });
     await act(async () => root.render(<><EngineStatusBar /><ToastHost /></>));
     await flush();
     const alert = host.querySelector('[role=alert]')!;
-    expect(alert.textContent).toContain('Swapper did not switch to simswap_256');
-    expect(alert.textContent).toContain('Selected swapper has no installed local ONNX weights [MODEL_NOT_INSTALLED]');
-    expect(alert.textContent).toContain('Still using inswapper_128 (inswapper_128.onnx).');          // the old model is named, not silently kept
-    expect(host.querySelector('[data-testid=engine-swapper]')!.className).toContain('failed');
-    expect(text('engine-swapper')).toContain('simswap_256 failed');
+    expect(alert.textContent).toContain('Head model did not switch to flame2023_open');
+    expect(alert.textContent).toContain('Selected head model has no installed local weights [MODEL_NOT_INSTALLED]');
+    expect(alert.textContent).toContain('Still using makehuman_cc0 (makehuman_head_v1.npz).');        // the old model is named, not silently kept
+    expect(host.querySelector('[data-testid=engine-head]')!.className).toContain('failed');
+    expect(text('engine-head')).toContain('flame2023_open failed');
 
     await act(async () => { await refreshPipelineStatus(); });                                       // the same failure on the next poll
     expect(toastStore.get().items).toHaveLength(1);
-    current = status({ failures: [{ id: 2, stage: 'enhancer', model_id: 'codeformer', code: 'MODEL_SESSION_FAILED', reason: 'Verified model could not initialize on the requested provider', at: 200 }] });
+    current = status({ failures: [{ id: 2, stage: 'shader', model_id: 'gaussian_head', code: 'MODEL_SESSION_FAILED', reason: 'Verified model could not initialize on the requested provider', at: 200 }] });
     await act(async () => { await refreshPipelineStatus(); });
-    expect(toastStore.get().items.map(item => item.title)).toEqual(['Swapper did not switch to simswap_256', 'Enhancer did not switch to codeformer']);
+    expect(toastStore.get().items.map(item => item.title)).toEqual(['Head model did not switch to flame2023_open', 'Shader did not switch to gaussian_head']);
   });
 
   it('keeps working (offline note) when the status endpoint is unreachable', async () => {

@@ -1,0 +1,113 @@
+{
+  "phase": "phase0_pure_3d_eradication",
+  "status": "PASSED",
+  "timestamp": "2026-11-14T20:11:00Z",
+  "summary": "Complete eradication of 2D swapper and 2.5D depth-warped architectures. Repository roop-3d is locked to True 3D Full-Head Parametric + Neural PBR/Gaussian Reconstruction with strict runtime architecture guard enforcement.",
+  "swarm_topology": {
+    "subagent_1_forensics_auditor": {
+      "role": "2D & 2.5D Forensics Auditor",
+      "model": "Claude Sonnet 5.5 High",
+      "status": "COMPLETE",
+      "deliverables": [
+        ".swarm/phase0_2d_25d_purge_manifest.md"
+      ],
+      "purged_catalog": {
+        "banned_2d_swappers": [
+          "inswapper_128", "simswap", "ghost", "reswapper", "blendswap", "uniface", "hyperswap", "realswap", "hififace"
+        ],
+        "banned_25d_primitives": [
+          "3DDFA_V2 frontal strip",
+          "Weak-perspective / orthographic 2x3 projection matrices",
+          "2.5D piecewise 2D triangle affine warping (warp_delaunay_piecewise_affine, ThinPlateSplineWarper)",
+          "2D screen-space post-render GAN restoration (CodeFormer, GFPGAN, GPEN, UltraMax on frames/crops)"
+        ]
+      }
+    },
+    "subagent_2_backend_eradicator": {
+      "role": "Backend 2D & 2.5D Eradicator",
+      "model": "Claude Sonnet 5.5 High",
+      "status": "COMPLETE",
+      "deliverables": [
+        ".swarm/phase0_agent2_report.md",
+        "app/roop_3d/core/true3d_guard.py",
+        "app/roop_3d/enhancers/uv_detailer.py",
+        "app/roop_3d/pipeline/true3d_renderer.py"
+      ],
+      "enforcements": {
+        "guard_module": "roop_3d.core.true3d_guard.True3DArchitectureGuard",
+        "topology_requirements": "Watertight 3D mesh (V in R^(N x 3), F int triangles, manifold edges, consistent winding, cranium dome, forehead, temples, cheekbones, mandible, submental neck, eyeball spheres, oral cavity)",
+        "camera_requirements": "Full 3x3 perspective intrinsics matrix K, orthonormal R with det +1, translation t in SE(3), positive depth division",
+        "shader_requirements": "3D perspective Z-buffered rasterization with PBR Subsurface Scattering or 3D Gaussian Splatting",
+        "neural_detailers": "Retained strictly as UV-space canonical texture detailers (UVTextureDetailer) operating on unwrapped 1024/2048 UV albedo maps before rasterization, never on 2D video frames"
+      }
+    },
+    "subagent_3_ui_and_schema_refactor": {
+      "role": "UI & FastAPI Schema Pure-3D Refactor",
+      "model": "Claude Sonnet 5.5 High",
+      "status": "COMPLETE",
+      "deliverables": [
+        ".swarm/phase0_agent3_report.md",
+        "app/roop_3d/server/true3d.py",
+        "app/roop_3d_ui/src/true3d.ts",
+        "app/roop_3d_ui/src/components/studio/True3DControls.tsx"
+      ],
+      "exposed_controls": {
+        "head_topology_engine": [
+          "FLAME-FullHead-3D",
+          "MakeHuman-CC0-Craniofacial-3D"
+        ],
+        "shader_mode": [
+          "3D-PBR-Subsurface-Scattering + Neural-Deferred-UV",
+          "3D-Gaussian-Head-Avatar"
+        ],
+        "camera_intrinsics": "Perspective Camera with Dynamic FOV / Perspective Focal Length Solver"
+      }
+    },
+    "subagent_4_zero_policy_gatekeeper": {
+      "role": "AST & Runtime Zero-2D / Zero-2.5D Gatekeeper",
+      "model": "Claude Sonnet 5.5 High",
+      "status": "COMPLETE",
+      "deliverables": [
+        "app/roop_3d/tests/test_zero_2d_and_25d_policy.py",
+        ".swarm/phase0_handoff.json"
+      ],
+      "test_suite_execution": {
+        "runner": "app/roop_3d/.venv/Scripts/python.exe",
+        "command": "pytest -c pyproject.toml app/roop_3d/tests/test_zero_2d_and_25d_policy.py -v",
+        "total_tests": 20,
+        "passed": 20,
+        "failed": 0,
+        "results": {
+          "test_active_set_is_computed_from_the_import_graph": "PASSED",
+          "test_scanner_detects_planted_violations": "PASSED",
+          "test_uv_builder_may_call_a_detailer_only_on_uv_maps": "PASSED",
+          "test_allow_lists_have_reasons_and_are_not_stale": "PASSED",
+          "test_no_dangling_internal_imports_in_active_modules": "PASSED",
+          "test_a_zero_2d_swapper_identifiers_and_model_ids": "PASSED",
+          "test_b_zero_five_point_crop_paste": "PASSED",
+          "test_c_zero_25d_geometry": "PASSED",
+          "test_d_zero_2d_post_crop_gan_calls": "PASSED",
+          "test_residual_purged_modules_are_gone": "PASSED",
+          "test_e_guard_accepts_valid_full_head_with_perspective_camera": "PASSED",
+          "test_e_guard_rejects_frontal_strip_mesh": "PASSED",
+          "test_e_guard_rejects_non_watertight_mesh": "PASSED",
+          "test_e_guard_rejects_front_only_shell_of_a_real_head": "PASSED",
+          "test_e_guard_rejects_affine_orthographic_cameras": "PASSED",
+          "test_e_guard_rejects_non_se3_pose_and_head_behind_camera": "PASSED",
+          "test_e_guard_rejects_banned_render_config_keys": "PASSED",
+          "test_f_openapi_schema_exposes_no_removed_options": "PASSED",
+          "test_f_ui_contracts_expose_no_removed_options": "PASSED",
+          "test_f_ui_sources_expose_no_removed_options": "PASSED"
+        }
+      }
+    }
+  },
+  "acceptance_criteria": {
+    "zero_2d_swappers_in_active_path": true,
+    "zero_25d_geometry_and_orthographic_projection": true,
+    "zero_2d_post_crop_gan_restoration": true,
+    "runtime_guard_installed_and_validated": true,
+    "honest_readiness_reporting": true,
+    "isolation_contract_respected": true
+  }
+}

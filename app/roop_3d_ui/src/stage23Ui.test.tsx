@@ -67,7 +67,7 @@ describe('Stage 23 paint / erase brush scope', () => {
   it('sends the range mask to the live preview exactly where the render will use it', () => {
     const request = { face_mappings: [{ track_id: 'track_0001', faceset_id: 'a' }], target_path: 't.mp4', inspection_id: 'a'.repeat(32), mask_keyframes: [{ start_frame: 10, end_frame: 20, mask_base64: 'RANGE' }] } as unknown as JobRequest;
     const params = { bypass: [], restoration_blend: 0, pose_mode: 'retarget' } as never;
-    const at = (seconds: number) => buildLivePayload({ request, time: seconds, fps: 10, parameters: params, maskBase64: 'WHOLE', restorerAvailable: false, solo: null }) as Record<string, unknown>;
+    const at = (seconds: number) => buildLivePayload({ request, time: seconds, fps: 10, parameters: params, maskBase64: 'WHOLE', solo: null }) as Record<string, unknown>;
     expect(at(1.5).mask_base64).toBe('RANGE');   // frame 15
     expect(at(2.5).mask_base64).toBe('WHOLE');   // frame 25, outside the range
   });

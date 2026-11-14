@@ -46,7 +46,7 @@ export function SpatialInspector({
       <div className="section-title">
         <span>3D SPATIAL STUDIO</span>
         <span className="tiny-badge">
-          {isFlame ? 'FLAME 3D MESH' : mesh ? '2.5D GEOMETRY' : 'CANONICAL HEAD'}
+          {isFlame ? 'FLAME 3D MESH' : mesh ? '3D GEOMETRY' : 'FULL 3D HEAD'}
         </span>
       </div>
 
@@ -76,7 +76,7 @@ export function SpatialInspector({
         style={{ display: activeTab === 'pose' || activeTab === 'morph' || activeTab === 'lighting' ? 'block' : 'none' }}
       >
         <PoseGeometryViewer coverage={coverage} track={track} mesh={mesh} reconstruction={reconstruction}
-          renderMode={parameters ? parameters.render_mode ?? 'standard' : undefined} lighting={lighting} morph={morph} />
+          renderMode={parameters ? 'full_3d_head' : undefined} lighting={lighting} morph={morph} />
       </div>
 
       <div
@@ -119,13 +119,13 @@ export function SpatialInspector({
         hidden={activeTab !== 'flame'}
         style={{ display: activeTab === 'flame' ? 'block' : 'none' }}
       >
-        <FlameMeshViewer mesh={mesh} poseStrength={parameters?.pose_strength ?? 0.35} />
+        <FlameMeshViewer mesh={mesh} poseStrength={1} />
       </div>
 
       <p className="muted compact" style={{ marginTop: 10 }}>
         {mesh
-          ? `Imported ${isFlame ? 'FLAME 3D' : 'approximate 2.5D'} topology · user supplied provenance`
-          : 'Canonical low-poly 3D head with live tracking slerp + FaceSet orientation sphere.'}
+          ? `Imported ${isFlame ? 'FLAME 3D' : '3D'} topology · user supplied provenance`
+          : 'Full 3D head with live tracking slerp + FaceSet orientation sphere.'}
       </p>
 
       {mesh?.texture && (

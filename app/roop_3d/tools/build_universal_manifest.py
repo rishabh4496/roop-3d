@@ -36,11 +36,11 @@ UA = {"User-Agent": "roop-3d-manifest-builder"}
 HF_REPOS = (
     "facefusion/models-3.0.0", "facefusion/models-3.1.0", "facefusion/models-3.2.0", "facefusion/models-3.3.0",
     "facefusion/models-3.4.0", "hacksider/deep-live-cam", "CountFloyd/deepfake", "Aitrepreneur/insightface",
-    "ezioruan/inswapper_128.onnx", "netrunner-exe/Face-Upscalers-onnx", "opencv/face_detection_yunet",
+    "opencv/face_detection_yunet",
     "opencv/face_recognition_sface", "datvtn/face_occluder", "AgentRecon/scrfd-2.5g", "DavidHoa/buffalo_l",
     "karanjakhar/insightface_weights", "immich-app/buffalo_l", "immich-app/buffalo_s",
 )
-SEARCH_TERMS = ("insightface", "buffalo_l", "inswapper", "hyperswap", "gpen", "codeformer", "xseg", "scrfd", "facefusion")
+SEARCH_TERMS = ("insightface", "buffalo_l", "xseg", "scrfd", "facefusion")
 GITHUB_RELEASES = ("facefusion/facefusion-assets",)
 
 # (manifest id, registry file name or None, category, stages, display name, note)
@@ -53,14 +53,6 @@ CORE: tuple[tuple[str, str | None, str, tuple[str, ...], str, str], ...] = (
     ("arcface_w600k_r50", "w600k_r50.onnx", "recognition", (S1, S3), "ArcFace w600k_r50 (buffalo_l)", ""),
     ("arcface_w600k_r50_facefusion", "arcface_w600k_r50.onnx", "recognition", (S1, S3), "ArcFace w600k_r50 (FaceFusion export)", ""),
     ("recognizer_sface_2021dec", "face_recognition_sface_2021dec.onnx", "recognition", (S1,), "SFace recognizer (OpenCV Zoo)", ""),
-    ("swapper_inswapper_128", "inswapper_128.onnx", "swapper_2d", (S3,), "InSwapper 128", ""),
-    ("swapper_hyperswap_1a_256", "hyperswap_1a_256.onnx", "swapper_2d", (S3,), "HyperSwap 1A 256", ""),
-    ("swapper_hyperswap_1b_256", "hyperswap_1b_256.onnx", "swapper_2d", (S3,), "HyperSwap 1B 256", ""),
-    ("swapper_hyperswap_1c_256", "hyperswap_1c_256.onnx", "swapper_2d", (S3,), "HyperSwap 1C 256", ""),
-    ("restorer_gpen_bfr_512", "gpen_bfr_512.onnx", "restoration", (S3,), "GPEN-BFR 512", ""),
-    ("restorer_gpen_bfr_512_realistic", "GPEN-BFR-512.onnx", "restoration", (S3,), "GPEN-BFR 512 (realistic export)", ""),
-    ("restorer_codeformer_fp16", "codeformer.fp16.onnx", "restoration", (S3,), "CodeFormer FP16 (UltraMax restorer)", ""),
-    ("restorer_gfpgan_1_4", "GFPGANv1.4.onnx", "restoration", (S3,), "GFPGAN 1.4", ""),
     ("occluder_xseg", "xseg.onnx", "occlusion", (S2, S3), "XSeg occlusion mask", ""),
     ("occluder_face_occluder", "face_occluder.onnx", "occlusion", (S2, S3), "Face occluder", ""),
     ("parser_bisenet_resnet_34", "bisenet_resnet_34.onnx", "face_parsing", (S3,), "BiSeNet ResNet-34 face parser", ""),

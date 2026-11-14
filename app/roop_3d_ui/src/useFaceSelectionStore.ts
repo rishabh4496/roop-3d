@@ -55,6 +55,8 @@ export function clusterFaces(
   assignments: Record<string, string> = {}
 ): TargetCluster[] {
   if (!faces || faces.length === 0) return [];
+  const selectableFaces = faces.filter(face => face.selectable !== false);
+  if (selectableFaces.length === 0) return [];
 
   const clustersMap = new Map<string, DetectedFace[]>();
   const protectedCluster = (face: DetectedFace) => existingClusters?.find(cluster => cluster.id === face.clusterId && (cluster.mode !== 'swap' || cluster.splitLocked));
@@ -66,8 +68,8 @@ export function clusterFaces(
     const visited = new Set<string>();
     let autoClusterIdx = 0;
 
-    for (let i = 0; i < faces.length; i++) {
-      const face = faces[i];
+    for (let i = 0; i < selectableFaces.length; i++) {
+      const face = selectableFaces[i];
       if (visited.has(face.id)) continue;
 
       const clusterKey = face.clusterId || `cluster_${autoClusterIdx++}`;
@@ -81,8 +83,8 @@ export function clusterFaces(
       visited.add(face.id);
 
       if (face.embedding) {
-        for (let j = i + 1; j < faces.length; j++) {
-          const other = faces[j];
+        for (let j = i + 1; j < selectableFaces.length; j++) {
+          const other = selectableFaces[j];
           if (visited.has(other.id) || !other.embedding || protectedCluster(other)) continue;
           if (cosineDistance(face.embedding, other.embedding) <= 1 - similarityThreshold) {
             group.push(other);
@@ -94,7 +96,7 @@ export function clusterFaces(
     }
   } else {
     // Group by existing clusterId (e.g. track_0000)
-    for (const face of faces) {
+    for (const face of selectableFaces) {
       const key = face.clusterId || 'cluster_0';
       const list = clustersMap.get(key) ?? [];
       list.push(face);
@@ -164,7 +166,7 @@ const listeners = new Set<Listener>();
 function clusteredState(faces: DetectedFace[], threshold: number, clusters: TargetCluster[], assignments: Record<string, string>) {
   const targetClusters = clusterFaces(faces, threshold, clusters, assignments);
   const ids = new Map(targetClusters.flatMap(cluster => cluster.faceIds.map(id => [id, cluster.id] as const)));
-  return { detectedFaces: faces.map(face => ({ ...face, clusterId: ids.get(face.id) ?? face.clusterId })), targetClusters };
+  return { detectedFaces: faces.map(face => ({ ...face, clusterId: face.selectable === false ? '' : ids.get(face.id) ?? face.clusterId })), targetClusters };
 }
 
 let state: FaceSelectionStoreState = {
@@ -195,6 +197,7 @@ let state: FaceSelectionStoreState = {
 
   setActiveSelection: (faceId: string | null) => {
     const face = faceId ? state.detectedFaces.find(f => f.id === faceId) : null;
+    if (face && (face.selectable === false || !face.clusterId)) return;
     state = {
       ...state,
       activeSelection: faceId,
@@ -437,7 +440,7 @@ let state: FaceSelectionStoreState = {
     if (!faces || faces.length === 0) return null;
     const newFaces: DetectedFace[] = faces.map(f => ({
       id: f.id,
-      clusterId: f.track_id,
+      clusterId: f.track_id ?? '',
       frameIndex: f.frame_index,
       timestamp: f.timestamp,
       bbox: f.bbox,
@@ -446,6 +449,10 @@ let state: FaceSelectionStoreState = {
       pose: f.pose,
       pose3d: f.pose3d,
       thumbnailUrl: f.thumbnail_base64 ? `data:image/jpeg;base64,${f.thumbnail_base64}` : undefined,
+      selectable: f.selectable !== false && !!f.track_id,
+      identityState: f.identity_state,
+      uncertaintyReason: f.uncertainty_reason,
+      clusterMatch: f.cluster_match,
     }));
     const existingMap = new Map(state.detectedFaces.map(f => [f.id, f]));
     for (const nf of newFaces) {
@@ -457,10 +464,10 @@ let state: FaceSelectionStoreState = {
       if (cluster.startFrame === undefined) cluster.startFrame = 0;
       if (cluster.endFrame === undefined) cluster.endFrame = null;
     }
-    const primaryId = autoSelect ? newFaces[0]?.id ?? null : state.activeSelection;
-    const primaryCluster = primaryId
-      ? clustered.detectedFaces.find(f => f.id === primaryId)?.clusterId ?? null
-      : state.selectedClusterId;
+    const requestedPrimaryId = autoSelect ? newFaces.find(face => face.selectable !== false && !!face.clusterId)?.id ?? null : state.activeSelection;
+    const primaryFace = requestedPrimaryId ? clustered.detectedFaces.find(face => face.id === requestedPrimaryId) : null;
+    const primaryId = primaryFace && primaryFace.selectable !== false && primaryFace.clusterId ? requestedPrimaryId : null;
+    const primaryCluster = primaryId ? primaryFace?.clusterId ?? null : null;
     state = {
       ...state,
       ...clustered,

@@ -1,5 +1,8 @@
 # Stage 12: binary glTF export and the optional Blender bridge
 
+<!-- phase0-purge-notice -->
+> **Phase 0 purge notice (2026-11-14).** Roop 3D no longer contains 2D face swappers, 5-point crop-paste, 2.5D strip meshes, weak-perspective cameras or post-crop GAN restorers. Anything below that describes them is **historical** and no longer applies; the current architecture is a full 3D head under a perspective camera, see [Engine and render options](../../../docs/ENGINE_COMPARISON.md).
+
 Path mapping: the prompt's `app/roop_3d/io/` is the new package `roop_3d/io/` (it did not exist), the "existing JSON `/mesh`
 endpoint" is `server/identity_assets.py`, and tests live in `roop_3d/tests/` (run from `app/`).
 (Not to be confused with `STAGE12_MODEL_GOVERNANCE.md`, a different series.)

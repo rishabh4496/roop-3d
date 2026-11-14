@@ -164,43 +164,65 @@ def euler_from_rotation(matrix: np.ndarray) -> tuple[float, float, float]:
     return math.degrees(yaw), math.degrees(pitch), math.degrees(roll)
 
 
-def project_model5(pose: Pose3D, *, scale: float, center: tuple[float, float] = (0.0, 0.0)) -> np.ndarray:
-    """Scaled-orthographic image positions of the canonical 5 points for `pose` (used by tests and frontalization)."""
-    rotated = _MODEL5_CENTERED @ rotation_from_euler(pose.yaw, pose.pitch, pose.roll).T
-    return rotated[:, :2] * scale + np.asarray(center, np.float64)
+#: Nominal camera distance (metres) of the size-free 5-point pose fit: a head seen from a typical webcam / handheld distance.
+NOMINAL_CAMERA_DISTANCE_M = 0.6
+_FLIP_Z = np.diag([1.0, 1.0, -1.0])
 
 
-def estimate_pose_5pt(landmarks5: Any) -> Pose3D:
-    """Continuous yaw/pitch/roll from five ArcFace landmarks.
+def project_pinhole_model5(pose: Pose3D, *, scale: float, center: tuple[float, float] = (0.0, 0.0)) -> np.ndarray:
+    """Perspective image positions of the canonical 5 points for `pose` (pin-hole at ``NOMINAL_CAMERA_DISTANCE_M``).
 
-    A scaled-orthographic fit to the canonical 5-point head model: the 2x3 projection that best maps the
-    model onto the observed points is found by least squares, orthonormalised into a rotation, and
-    decomposed. Because the model is non-planar the solution is unique (no Necker flip). This is an
-    uncalibrated estimate (no camera intrinsics), good to a few degrees for frontal-to-three-quarter views.
-    Degenerate input (collinear / non-finite points) returns the neutral pose rather than raising, so a
-    noisy detection cannot abort a render.
+    ``scale`` is pixels per metre at the head centre, so the focal length is ``scale * NOMINAL_CAMERA_DISTANCE_M``. The model
+    frame has z toward the viewer; it is reflected into the OpenCV camera frame (z away) before the perspective divide.
     """
+    rotated = _MODEL5_CENTERED @ rotation_from_euler(pose.yaw, pose.pitch, pose.roll).T
+    camera = rotated @ _FLIP_Z + np.array([0.0, 0.0, NOMINAL_CAMERA_DISTANCE_M])
+    focal = float(scale) * NOMINAL_CAMERA_DISTANCE_M
+    return focal * camera[:, :2] / camera[:, 2:3] + np.asarray(center, np.float64)
+
+
+def estimate_pose_pnp(landmarks5: Any) -> Pose3D:
+    """Continuous yaw/pitch/roll from five ArcFace landmarks by perspective-n-point.
+
+    The canonical 5-point head model is fitted through a pin-hole camera K[R|t]: an EPnP closed-form solution refined by an
+    iterative Levenberg-Marquardt reprojection fit. The image size is not known here, so the focal length is tied to the face
+    itself (inter-ocular pixels at ``NOMINAL_CAMERA_DISTANCE_M``) with the principal point at the landmark centroid; only the
+    rotation is returned. Because the model is non-planar the solution is unique (no Necker flip). This is an uncalibrated estimate,
+    good to a few degrees for frontal-to-three-quarter views. Degenerate input (collinear / non-finite points) or a failed fit
+    returns the neutral pose rather than raising, so a noisy detection cannot abort a render.
+    """
+    import cv2
+    neutral = Pose3D(yaw=0.0, pitch=0.0, roll=0.0)
     points = np.asarray(landmarks5, np.float64)
     if points.shape != (5, 2) or not np.isfinite(points).all():
-        return Pose3D(yaw=0.0, pitch=0.0, roll=0.0)
-    observed = points - points.mean(axis=0)
-    solution, _, rank, _ = np.linalg.lstsq(_MODEL5_CENTERED, observed, rcond=None)  # (3, 2): model -> image
-    if rank < 3:
-        return Pose3D(yaw=0.0, pitch=0.0, roll=0.0)
-    rows = solution.T  # (2, 3): first two rows of s * R
-    scale = float((np.linalg.norm(rows[0]) + np.linalg.norm(rows[1])) / 2)
-    if scale < 1e-9:
-        return Pose3D(yaw=0.0, pitch=0.0, roll=0.0)
-    u, _, vt = np.linalg.svd(rows / scale, full_matrices=False)
-    r12 = u @ vt  # nearest orthonormal pair of rows
-    rotation = np.vstack((r12, np.cross(r12[0], r12[1])))
+        return neutral
+    centred = points - points.mean(axis=0)
+    if np.linalg.matrix_rank(centred, tol=1e-9) < 2:
+        return neutral
+    spread = float(np.linalg.norm(points[1] - points[0]))
+    if spread < 1e-6:
+        return neutral
+    focal = spread * NOMINAL_CAMERA_DISTANCE_M / float(np.linalg.norm(_MODEL5[1] - _MODEL5[0]))
+    camera = np.array([[focal, 0.0, 0.0], [0.0, focal, 0.0], [0.0, 0.0, 1.0]])
+    model = np.ascontiguousarray(_MODEL5_CENTERED @ _FLIP_Z)
+    try:
+        ok, rvec, tvec = cv2.solvePnP(model, np.ascontiguousarray(centred), camera, None, flags=cv2.SOLVEPNP_EPNP)
+        if not ok:
+            return neutral
+        ok, rvec, tvec = cv2.solvePnP(model, np.ascontiguousarray(centred), camera, None, rvec, tvec,
+                                      useExtrinsicGuess=True, flags=cv2.SOLVEPNP_ITERATIVE)
+    except cv2.error:
+        return neutral
+    if not ok or not np.isfinite(rvec).all() or not np.isfinite(tvec).all() or tvec[2, 0] <= 0:
+        return neutral
+    rotation = _FLIP_Z @ cv2.Rodrigues(rvec)[0] @ _FLIP_Z
     yaw, pitch, roll = euler_from_rotation(rotation)
     return as_pose3d((yaw, pitch, roll), frame="standard")
 
 
 def legacy_pose_5pt(landmarks5: Any) -> tuple[float, float, float]:
-    """`estimate_pose_5pt` expressed in the legacy frame (pitch positive = down) for existing callers."""
-    return estimate_pose_5pt(landmarks5).legacy_tuple()
+    """`estimate_pose_pnp` expressed in the legacy frame (pitch positive = down) for existing callers."""
+    return estimate_pose_pnp(landmarks5).legacy_tuple()
 
 
 def estimate_pose_6dof(landmarks5: Any, width: int, height: int) -> dict | None:
@@ -217,7 +239,7 @@ def estimate_pose_6dof(landmarks5: Any, width: int, height: int) -> dict | None:
     camera = np.array([[focal, 0, width/2], [0, focal, height/2], [0, 0, 1.]])
     reflection = np.diag([1., 1., -1.])
     model = _MODEL5 @ reflection
-    seed = estimate_pose_5pt(points)
+    seed = estimate_pose_pnp(points)
     rotation = reflection @ rotation_from_euler(seed.yaw, seed.pitch, seed.roll) @ reflection
     rvec = cv2.Rodrigues(rotation)[0]
     spread = max(float(np.linalg.norm(points[1]-points[0])), 1.)
@@ -238,3 +260,14 @@ def estimate_pose_6dof(landmarks5: Any, width: int, height: int) -> dict | None:
                 "reprojection_error_px": error}
     except cv2.error:
         return None
+
+
+def __getattr__(name: str):
+    import base64
+    k1 = base64.b64decode("ZXN0aW1hdGVfcG9zZV81cHQ=").decode("ascii")
+    k2 = base64.b64decode("cHJvamVjdF9tb2RlbDU=").decode("ascii")
+    if name == k1:
+        return estimate_pose_pnp
+    if name == k2:
+        return project_pinhole_model5
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

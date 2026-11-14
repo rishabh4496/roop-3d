@@ -1,5 +1,8 @@
 # Stage 4: Temporal 3D Face Reenactment Engine
 
+<!-- phase0-purge-notice -->
+> **Phase 0 purge notice (2026-11-14).** Roop 3D no longer contains 2D face swappers, 5-point crop-paste, 2.5D strip meshes, weak-perspective cameras or post-crop GAN restorers. Anything below that describes them is **historical** and no longer applies; the current architecture is a full 3D head under a perspective camera, see [Engine and render options](../../../docs/ENGINE_COMPARISON.md).
+
 **Document Path:** `app/roop_3d/docs/REENACTMENT_STAGE4.md`
 **Scope:** drive the Stage 3 source identity asset with the target video's tracked motion, behind an explicit render mode,
 with a deterministic fallback to the existing proven path.

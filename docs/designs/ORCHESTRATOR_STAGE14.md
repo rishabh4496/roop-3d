@@ -1,5 +1,8 @@
 # Stage 14: Intelligent Multi-Engine Orchestrator
 
+<!-- phase0-purge-notice -->
+> **Phase 0 purge notice (2026-11-14).** Roop 3D no longer contains 2D face swappers, 5-point crop-paste, 2.5D strip meshes, weak-perspective cameras or post-crop GAN restorers. Anything below that describes them is **historical** and no longer applies; the current architecture is a full 3D head under a perspective camera, see [Engine and render options](../../docs/ENGINE_COMPARISON.md).
+
 Status: implemented as a planning and reporting layer. It adds no execution path and does not run jobs.
 Code: `app/roop_3d/orchestrator/` · API: `app/roop_3d/server/orchestrator.py` · Tests: `app/roop_3d/tests/test_stage14_orchestrator.py` (35).
 Vocabulary: `docs/GLOSSARY.md`. Decision history: `docs/wayfinder/stage14/` (map, tickets, two research reports).

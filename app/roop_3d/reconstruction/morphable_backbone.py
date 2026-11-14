@@ -134,7 +134,7 @@ def load_geometry_session(catalog, name: str, path, config):
     import logging
     import os
     from dataclasses import replace
-    from roop_3d.engine.volumetric.swapper_engine import load_local_session
+    from roop_3d.core.local_session import load_local_session
     wanted = os.environ.get("ROOP3D_GEOMETRY_PROVIDER", "auto").strip().lower()
     on_gpu_stack = config.provider in ("TensorrtExecutionProvider", "CUDAExecutionProvider")
     use_gpu = wanted != "cpu" and on_gpu_stack and (wanted == "cuda" or config.hardware_profile == "12gb")

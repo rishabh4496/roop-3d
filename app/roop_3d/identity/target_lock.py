@@ -168,7 +168,7 @@ class Association:
     cluster_id: int | None
     score: float
     margin: float
-    reason: str                    # strong | pose_bridge | new_cluster | no_embedding
+    reason: str                    # strong | pose_bridge | ambiguous | new_cluster | no_embedding
     entry: BankEntry | None = None
 
 
@@ -193,8 +193,11 @@ class FaceTrackRegistry:
 
     def associate(self, refs: list[FaceRef], frame_index: int, *, learn: bool = True,
                   only: set[int] | None = None) -> list[Association]:
-        """Assign every face of one frame to a cluster (creating clusters for unmatched faces)."""
+        """Assign faces globally; ambiguous read-only matches are withheld, not guessed."""
         with self.lock:
+            from roop_3d.engine.detection.track_policy import TrackPolicy
+
+            identity_policy = TrackPolicy()
             out: list[Association | None] = [None] * len(refs)
             valid = [i for i, r in enumerate(refs) if r.embedding is not None
                      and np.isfinite(r.embedding).all() and np.linalg.norm(r.embedding) > 0]
@@ -210,6 +213,36 @@ class FaceTrackRegistry:
                     sims[i, j], entries[(i, j)] = self.clusters[cid].score(emb[i])
             from scipy.optimize import linear_sum_assignment
             from roop_3d.media.detector import iou
+            predicted = {
+                cid: self.clusters[cid].motion.predict(frame_index)
+                if self.clusters[cid].motion is not None else None
+                for cid in ids
+            }
+
+            def ambiguous(row: int, column: int) -> bool:
+                score = float(sims[row, column])
+                box = np.asarray(refs[row].bbox)
+                for other in valid:
+                    if other == row:
+                        continue
+                    rival = float(sims[other, column])
+                    if rival < identity_policy.weak_cosine or score - rival >= identity_policy.ambiguity_margin:
+                        continue
+                    other_box = np.asarray(refs[other].bbox)
+                    prior = predicted[ids[column]]
+                    if (prior is not None and iou(other_box, prior) >= 0.1) or iou(box, other_box) >= 0.1:
+                        return True
+                for other_column, other_id in enumerate(ids):
+                    if other_column == column:
+                        continue
+                    rival = float(sims[row, other_column])
+                    if rival < identity_policy.weak_cosine or score - rival >= identity_policy.ambiguity_margin:
+                        continue
+                    prior = predicted[other_id]
+                    if prior is not None and iou(box, prior) >= 0.1:
+                        return True
+                return False
+
             # Dummy columns allow unmatched observations without displacing valid matches.
             costs = np.full((len(valid), len(ids) + len(valid)), 2.0)
             for row, i in enumerate(valid):
@@ -217,8 +250,9 @@ class FaceTrackRegistry:
                     if sims[i, j] < MIN_COSINE:
                         continue
                     cluster = self.clusters[cid]
-                    predicted = cluster.motion.predict(frame_index) if cluster.motion else refs[i].bbox
-                    costs[row, j] = .70 * (1 - sims[i, j]) + .30 * (1 - iou(np.asarray(refs[i].bbox), np.asarray(predicted)))
+                    prior = predicted[cid]
+                    box_prediction = prior if prior is not None else refs[i].bbox
+                    costs[row, j] = .70 * (1 - sims[i, j]) + .30 * (1 - iou(np.asarray(refs[i].bbox), np.asarray(box_prediction)))
             if valid:
                 rows, columns = linear_sum_assignment(costs)
                 for row, j in zip(rows, columns):
@@ -228,11 +262,18 @@ class FaceTrackRegistry:
                     score = float(sims[i, j])
                     alternatives = [sims[i, k] for k in range(len(ids)) if k != j]
                     margin = score - max(alternatives + [IMPOSTOR_FLOOR])
-                    out[i] = Association(ids[j], score, margin, "strong" if score >= STRONG else "pose_bridge", entries[(i,j)])
+                    is_ambiguous = ambiguous(i, j)
+                    if is_ambiguous and not learn:
+                        out[i] = Association(None, score, margin, "ambiguous", entries[(i, j)])
+                    else:
+                        reason = "ambiguous" if is_ambiguous else "strong" if score >= STRONG else "pose_bridge"
+                        out[i] = Association(ids[j], score, margin, reason, entries[(i, j)])
             for i in valid:
                 if out[i] is None:
                     cluster = self._new(refs[i], frame_index)
                     out[i] = Association(cluster.cluster_id, 1.0, 1.0, "new_cluster", cluster.bank[0])
+                    continue
+                if out[i].cluster_id is None or out[i].reason == "ambiguous":
                     continue
                 cluster = self.clusters[out[i].cluster_id]
                 cluster.seen[frame_index] = list(refs[i].bbox)

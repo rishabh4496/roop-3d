@@ -115,7 +115,7 @@ _STAGE_HINT_STATES = frozenset({"rendering", "running", "pausing", "prescanning"
 _STAGE_HINTS: tuple[tuple[SpecState, tuple[str, ...]], ...] = (
     (SpecState.slicing, ("slic", "split", "gop")),
     (SpecState.merging, ("merg", "concat", "join", "stitch")),
-    (SpecState.restoring, ("restor", "enhanc", "gfpgan", "gpen", "codeformer", "blend")),
+    (SpecState.restoring, ("detail", "blend")),
 )
 
 

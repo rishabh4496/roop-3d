@@ -39,7 +39,7 @@ export default function LightProbeSphere({
   const updateParam = useCallback((key: keyof WorkstationParameters, value: any) => {
     if (!setParameters) return;
     const current = parameters ?? {
-      restoration_blend: 0, feather_px: 5, color_strength: 0.65, pose_strength: 0.35, bypass: []
+      feather_px: 5, color_strength: 0.65, bypass: []
     };
     setParameters({ ...current, [key]: value });
   }, [parameters, setParameters]);
@@ -83,7 +83,7 @@ export default function LightProbeSphere({
 
     if (setParameters) {
       const current = parameters ?? {
-        restoration_blend: 0, feather_px: 5, color_strength: 0.65, pose_strength: 0.35, bypass: []
+        feather_px: 5, color_strength: 0.65, bypass: []
       };
       setParameters({
         ...current,

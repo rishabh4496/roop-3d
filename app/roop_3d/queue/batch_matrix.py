@@ -28,124 +28,33 @@ class BatchStrategy(str, Enum):
     RECIPE_MATRIX = "recipe_matrix"
 
 
-DEFAULT_OUTPUT_TEMPLATE = "{target}_{source}_{restorer}_{timestamp}.mp4"
+DEFAULT_OUTPUT_TEMPLATE = "{target}_{source}_{shader}_{timestamp}.mp4"
 
 
-# Every recipe parameter is a real ``WorkstationParameters`` field (the job schema rejects unknown names) and each recipe names its
-# restorer explicitly through ``restorer_model``, so a recipe never depends on the saved global restorer policy.
+# Every recipe parameter is a real ``WorkstationParameters`` field (the job schema rejects unknown names). Recipes tune the
+# compositing / relighting of a rendered true-3D head; the 2D restorer / TPS / frontalization recipes were removed.
 BUILTIN_RECIPES: list[dict[str, Any]] = [
     {
-        "id": "photoreal_natural",
-        "name": "Natural Photoreal",
-        "description": "GPEN-512 enhancement (blend 0.35), retarget pose, 2 px mask feather.",
-        "restorer": "gpen",
-        "parameters": {
-            "pose_mode": "retarget",
-            "restorer_model": "gpen",
-            "restoration_blend": 0.35,
-            "feather_px": 2,
-            "erosion_px": 2,
-            "swap_weight": 1.0,
-        },
+        "id": "natural_3d",
+        "name": "Natural 3D Head",
+        "description": "Rendered head layer with a 2 px mask feather and erosion, no relighting.",
+        "shader": "auto",
+        "parameters": {"feather_px": 2, "erosion_px": 2, "swap_weight": 1.0},
     },
     {
-        "id": "high_fidelity_ultra",
-        "name": "High-Fidelity Ultra",
-        "description": "Strong GPEN restoration (0.80), retarget pose, 3 px mask feather and erosion.",
-        "restorer": "gpen",
-        "parameters": {
-            "pose_mode": "retarget",
-            "restorer_model": "gpen",
-            "restoration_blend": 0.80,
-            "feather_px": 3,
-            "erosion_px": 3,
-            "swap_weight": 1.0,
-        },
+        "id": "relit_3d",
+        "name": "Relit 3D Head",
+        "description": "Spherical-harmonics relighting (0.80) with specular sheen and shadow preservation.",
+        "shader": "auto",
+        "parameters": {"relight": True, "relight_strength": 0.80, "specular_sheen": 0.25, "shadow_preservation": 0.85,
+                       "feather_px": 3, "erosion_px": 2},
     },
     {
-        "id": "codeformer_fidelity",
-        "name": "CodeFormer Fidelity Sweep",
-        "description": "CodeFormer at blend 0.70 with its fidelity input (w) set to 0.85.",
-        "restorer": "codeformer",
-        "parameters": {
-            "pose_mode": "retarget",
-            "restorer_model": "codeformer",
-            "restoration_blend": 0.70,
-            "fidelity_weight": 0.85,
-            "feather_px": 3,
-            "erosion_px": 2,
-            "swap_weight": 1.0,
-        },
-    },
-    {
-        "id": "ultramax_restoration",
-        "name": "UltraMax Deep Dynamic",
-        "description": "UltraMax (the registered codeformer.fp16 weights plus Laplacian detail fusion) at blend 0.65.",
-        "restorer": "ultramax",
-        "parameters": {
-            "pose_mode": "retarget",
-            "restorer_model": "ultramax",
-            "restoration_blend": 0.65,
-            "feather_px": 2,
-            "erosion_px": 2,
-            "swap_weight": 1.0,
-        },
-    },
-    {
-        "id": "mesh_geometry_3d",
-        "name": "3D Mesh Blend & Geometry",
-        "description": "Mesh blend pose mode (canonical 3D head proxy projection), GPEN restoration 0.40, swap weight 0.90.",
-        "restorer": "gpen",
-        "parameters": {
-            "pose_mode": "mesh_blend",
-            "restorer_model": "gpen",
-            "restoration_blend": 0.40,
-            "feather_px": 4,
-            "erosion_px": 2,
-            "swap_weight": 0.90,
-        },
-    },
-    {
-        "id": "frontalization_tps_preset_a",
-        "name": "TPS / Frontalization Subtle",
-        "description": "Frontalization 0.25, TPS expression 0.35, gentle expression transfer.",
-        "restorer": "gpen",
-        "parameters": {
-            "pose_mode": "retarget",
-            "restorer_model": "gpen",
-            "pose_frontalization": 0.25,
-            "tps_expression_weight": 0.35,
-            "restoration_blend": 0.30,
-            "swap_weight": 1.0,
-        },
-    },
-    {
-        "id": "frontalization_tps_preset_b",
-        "name": "TPS / Frontalization Balanced",
-        "description": "Frontalization 0.50, TPS expression 0.65, full yaw/pitch correction.",
-        "restorer": "gpen",
-        "parameters": {
-            "pose_mode": "retarget",
-            "restorer_model": "gpen",
-            "pose_frontalization": 0.50,
-            "tps_expression_weight": 0.65,
-            "restoration_blend": 0.45,
-            "swap_weight": 1.0,
-        },
-    },
-    {
-        "id": "frontalization_tps_preset_c",
-        "name": "TPS / Frontalization Extreme",
-        "description": "Frontalization 0.85, TPS expression 1.0, canonical stage 0 frontalization.",
-        "restorer": "gpen",
-        "parameters": {
-            "pose_mode": "retarget",
-            "restorer_model": "gpen",
-            "pose_frontalization": 0.85,
-            "tps_expression_weight": 1.0,
-            "restoration_blend": 0.50,
-            "swap_weight": 1.0,
-        },
+        "id": "soft_blend_3d",
+        "name": "Soft Blend 3D Head",
+        "description": "Wider feather (4 px), reduced swap weight (0.90) and lower colour-match strength.",
+        "shader": "auto",
+        "parameters": {"feather_px": 4, "erosion_px": 2, "swap_weight": 0.90, "color_strength": 0.5},
     },
 ]
 
@@ -160,22 +69,22 @@ def format_output_name(
     template: str,
     target: str,
     source: str,
-    restorer: str = "auto",
+    shader: str = "auto",
     timestamp: str | None = None,
     recipe: str | None = None,
     extra: dict[str, Any] | None = None,
 ) -> str:
-    """Evaluate an output naming template string such as '{target}_{source}_{restorer}_{timestamp}.mp4'."""
+    """Evaluate an output naming template string such as '{target}_{source}_{shader}_{timestamp}.mp4'."""
     target_stem = sanitize_filename(Path(target).stem)
     source_stem = sanitize_filename(Path(source).stem if ("/" in source or "\\" in source) else source)
     ts = timestamp or datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     recipe_str = sanitize_filename(recipe or "default")
-    restorer_str = sanitize_filename(restorer or "auto")
+    shader_str = sanitize_filename(shader or "auto")
 
     mapping = {
         "target": target_stem,
         "source": source_stem,
-        "restorer": restorer_str,
+        "shader": shader_str,
         "timestamp": ts,
         "recipe": recipe_str,
     }
@@ -196,7 +105,7 @@ class RecipeConfig(Contract):
     id: str
     name: str
     description: str = ""
-    restorer: str = "auto"
+    shader: str = "auto"
     parameters: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -263,31 +172,31 @@ def _resolve_target(item: str | dict[str, Any] | TargetDescriptor, default_inspe
     raise TypeError(f"Unsupported target descriptor: {type(item)}")
 
 
-_RESTORER_FIELD = "restorer_model"
+_SHADER_FIELD = "shader_mode"
 
 
 def _effective_parameters(
     base: dict[str, Any] | None,
-    restorer: str | None,
+    shader: str | None,
     overrides: dict[str, Any] | None,
     label: str,
 ) -> tuple[dict[str, Any], str]:
-    """Merge base parameters, the selected restorer and explicit overrides, validate against ``WorkstationParameters``.
+    """Merge base parameters, the selected shader and explicit overrides, validate against ``WorkstationParameters``.
 
-    Precedence (lowest to highest): ``base`` < selected ``restorer`` (unless ``auto``) < ``overrides``. ``auto`` injects nothing,
-    so the base value (or the schema default ``auto``) stays in force. Returns the merged dict and the effective restorer name,
+    Precedence (lowest to highest): ``base`` < selected ``shader`` (unless ``auto``) < ``overrides``. ``auto`` injects nothing,
+    so the base value (or the schema default ``auto``) stays in force. Returns the merged dict and the effective shader name,
     which is the single source for output naming.
     """
     merged = dict(base or {})
-    selected = (restorer or "auto").strip().lower() or "auto"
+    selected = (shader or "auto").strip() or "auto"
     if selected != "auto":
-        merged[_RESTORER_FIELD] = selected
+        merged[_SHADER_FIELD] = selected
     merged.update(overrides or {})
     try:
         parsed = WorkstationParameters.model_validate(merged)
     except ValueError as exc:
         raise ValueError(f"{label} has parameters the job schema rejects: {exc}") from exc
-    return merged, parsed.restorer_model
+    return merged, parsed.shader_mode or "auto"
 
 
 class BatchMatrixEngine:
@@ -394,7 +303,7 @@ class BatchMatrixEngine:
         cls,
         sources: list[str],
         targets: list[str | dict[str, Any] | TargetDescriptor],
-        restorer: str = "gpen",
+        shader: str = "auto",
         output_template: str = DEFAULT_OUTPUT_TEMPLATE,
         active_cells: list[str] | list[tuple[int, int]] | None = None,
         default_inspection_id: str = "0" * 32,
@@ -420,9 +329,9 @@ class BatchMatrixEngine:
                 else:
                     cell_filter.add(str(c))
 
-        # The selected restorer is injected into every job's real ``restorer_model`` (``auto`` keeps the job/global policy);
+        # The selected shader is injected into every job's real ``shader_mode`` (``auto`` keeps the job/global policy);
         # an unsupported name is rejected here instead of failing later at job submission.
-        matrix_params, effective_restorer = _effective_parameters(workstation_parameters, restorer, None, "Per-File Matrix")
+        matrix_params, effective_shader = _effective_parameters(workstation_parameters, shader, None, "Per-File Matrix")
 
         for t_idx, t_item in enumerate(targets):
             t_path, insp_id, tracks, trim_s, trim_e = _resolve_target(t_item, default_inspection_id)
@@ -443,7 +352,7 @@ class BatchMatrixEngine:
                     output_template,
                     target=t_path,
                     source=src,
-                    restorer=effective_restorer,
+                    shader=effective_shader,
                     timestamp=ts,
                     extra={"t_idx": t_idx, "s_idx": s_idx},
                 )
@@ -458,7 +367,7 @@ class BatchMatrixEngine:
                     workstation_parameters=dict(matrix_params),
                     trim_start_seconds=trim_s,
                     trim_end_seconds=trim_e,
-                    metadata={"target_index": t_idx, "source_index": s_idx, "restorer": effective_restorer},
+                    metadata={"target_index": t_idx, "source_index": s_idx, "shader": effective_shader},
                 )
                 manifests.append(manifest)
 
@@ -491,23 +400,23 @@ class BatchMatrixEngine:
                 r_id = r_item.id
                 r_name = r_item.name
                 r_params = r_item.parameters
-                r_restorer = r_item.restorer
+                r_shader = r_item.shader
             elif isinstance(r_item, dict):
                 r_id = r_item.get("id", f"recipe_{r_idx + 1}")
                 r_name = r_item.get("name", r_id)
                 r_params = r_item.get("parameters", {})
-                r_restorer = r_item.get("restorer", "auto")
+                r_shader = r_item.get("shader", "auto")
             else:
                 continue
 
-            # The recipe's restorer is a real job parameter, not just a filename token; explicit ``restorer_model`` in the recipe wins.
-            merged_params, effective_restorer = _effective_parameters(base_parameters, r_restorer, r_params, f"Recipe '{r_id}'")
+            # The recipe's shader is a real job parameter, not just a filename token; explicit ``shader_mode`` in the recipe wins.
+            merged_params, effective_shader = _effective_parameters(base_parameters, r_shader, r_params, f"Recipe '{r_id}'")
 
             out_name = format_output_name(
                 output_template,
                 target=t_path,
                 source=source,
-                restorer=effective_restorer,
+                shader=effective_shader,
                 timestamp=ts,
                 recipe=r_id,
             )
@@ -559,7 +468,7 @@ class BatchMatrixEngine:
             return cls.generate_per_file_matrix(
                 sources=spec["sources"],
                 targets=spec["targets"],
-                restorer=spec.get("restorer", "gpen"),
+                shader=spec.get("shader", "auto"),
                 output_template=spec.get("output_template", DEFAULT_OUTPUT_TEMPLATE),
                 active_cells=spec.get("active_cells"),
                 default_inspection_id=spec.get("default_inspection_id", "0" * 32),

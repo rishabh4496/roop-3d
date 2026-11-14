@@ -1,5 +1,8 @@
 # Stage 5: Advanced Occlusion and High-Fidelity Compositor
 
+<!-- phase0-purge-notice -->
+> **Phase 0 purge notice (2026-11-14).** Roop 3D no longer contains 2D face swappers, 5-point crop-paste, 2.5D strip meshes, weak-perspective cameras or post-crop GAN restorers. Anything below that describes them is **historical** and no longer applies; the current architecture is a full 3D head under a perspective camera, see [Engine and render options](../../../docs/ENGINE_COMPARISON.md).
+
 **Document Path:** `app/roop_3d/docs/OCCLUSION_STAGE5.md`
 **Scope:** keep everything that is physically in front of a replaced face (hands, hair, glasses, props, a nearer face) in
 front of it, stay temporally stable while doing so, and fuse the swapped face without halos, over-smoothing or damaged

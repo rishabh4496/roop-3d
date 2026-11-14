@@ -53,8 +53,17 @@ class EngineRegistry:
         return runner
 
     def selectable(self, engine_id: str) -> bool:
+        """True only when the engine is registered AND its render path can run: with the true-3D renderer unwired no render
+        engine is selectable (there is no 2D / 2.5D fallback to offer instead)."""
         try:
             self.validate(engine_id)
         except DomainError:
             return False
-        return True
+        from roop_3d.core.true3d_guard import renderer_is_wired
+        return renderer_is_wired()
+
+    def require_renderer(self, engine_id: str) -> None:
+        """Validate the engine and raise ``True3DRendererUnavailable`` ("3D renderer not wired") while the renderer is not wired."""
+        self.validate(engine_id)
+        from roop_3d.core.true3d_guard import require_true3d_renderer
+        require_true3d_renderer(f"engine {engine_id}")

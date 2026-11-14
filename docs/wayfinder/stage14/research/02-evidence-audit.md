@@ -1,5 +1,8 @@
 # 02 Evidence audit (Stage 14 wayfinder research)
 
+<!-- phase0-purge-notice -->
+> **Phase 0 purge notice (2026-11-14).** Roop 3D no longer contains 2D face swappers, 5-point crop-paste, 2.5D strip meshes, weak-perspective cameras or post-crop GAN restorers. Anything below that describes them is **historical** and no longer applies; the current architecture is a full 3D head under a perspective camera, see [Engine and render options](../../../../docs/ENGINE_COMPARISON.md).
+
 Facts only. No design decisions. Ticket: `docs/wayfinder/stage14/tickets/02-evidence-audit.md`.
 Staleness rule under test (map.md "Settled while charting", Validated bullet): an exact-match benchmark record needs all Model sha256, precision, execution provider, hardware tier, and render-profile definition to match.
 

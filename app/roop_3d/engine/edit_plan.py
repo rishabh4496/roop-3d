@@ -98,7 +98,7 @@ class FrameEditPlan:
         session.selected_ids = frozenset(active)
         for track_id, key in active.items():
             if self.current.get(track_id) != key:
-                session.swapper.set_track_source(track_id, self.documents[key])
+                session.sources_by_track[track_id] = self.documents[key]
                 # Rebuild portrait conditioning after an identity change.
                 session.portrait.tracks.pop(track_id, None)
         self.current = active

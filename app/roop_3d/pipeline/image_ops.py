@@ -14,8 +14,7 @@ from dataclasses import dataclass
 import cv2
 import numpy as np
 
-from roop_3d.reconstruction.expression_tps import BLOCKS, group
-from roop_3d.reconstruction.tps_fallback import ThinPlateSplineWarper
+from roop_3d.reconstruction.landmark_layout import BLOCKS, group
 
 LUMA_BGR = np.array([0.114, 0.587, 0.299], np.float32)
 
@@ -131,59 +130,6 @@ def inner_anchor_indices() -> np.ndarray:
 
 
 # ------------------------------------------------------------------------------------------------ dense TPS displacement
-def tps_flow(from_points: np.ndarray, to_points: np.ndarray, shape: tuple[int, int], *, grid_max_side: int = 96,
-             min_jacobian: float = 0.25) -> tuple[np.ndarray, np.ndarray, float, float]:
-    """Backward sampling maps ``(map_x, map_y)`` that carry content at ``from_points`` onto ``to_points``.
-
-    The thin-plate spline is solved on a coarse grid (cost is points x grid cells, not points x pixels) and upsampled. The ROI
-    border is pinned so the warp cannot leak outward. If the field would fold (determinant below ``min_jacobian``) the
-    displacement is scaled down by bisection. Returns ``(map_x, map_y, kept_fraction, min_jacobian)``.
-    """
-    h, w = int(shape[0]), int(shape[1])
-    src, dst = np.asarray(from_points, np.float64), np.asarray(to_points, np.float64)
-    border = _border(w, h)
-    sources = np.vstack((src, border))
-    targets = np.vstack((dst, border))
-    cell = max(1.0, max(h, w) / grid_max_side)
-    gh, gw = max(4, int(np.ceil(h / cell))), max(4, int(np.ceil(w / cell)))
-    # Corner-aligned sample grid in pixel-INDEX coordinates (what cv2.remap consumes): the first and last samples sit on
-    # pixel 0 and pixel w-1, so the upsample below is exact at the borders and an identity field stays an identity.
-    gx = np.linspace(0.0, w - 1.0, gw)
-    gy = np.linspace(0.0, h - 1.0, gh)
-    grid = np.stack(np.meshgrid(gx, gy), -1).reshape(-1, 2)
-    norm = np.array((max(w, 1), max(h, 1)), np.float64)
-    warper = ThinPlateSplineWarper(targets / norm, sources / norm, regularization=1e-9)
-    mapped = (warper.transform_points(grid / norm) * norm).reshape(gh, gw, 2)
-    identity = grid.reshape(gh, gw, 2)
-
-    step_x, step_y = (w - 1.0) / (gw - 1), (h - 1.0) / (gh - 1)
-
-    def min_det(fraction: float) -> float:
-        field = identity + fraction * (mapped - identity)
-        dxdx = np.gradient(field[..., 0], step_x, axis=1)
-        dxdy = np.gradient(field[..., 0], step_y, axis=0)
-        dydx = np.gradient(field[..., 1], step_x, axis=1)
-        dydy = np.gradient(field[..., 1], step_y, axis=0)
-        return float((dxdx * dydy - dxdy * dydx).min())
-
-    kept = 1.0
-    determinant = min_det(1.0)
-    if determinant < min_jacobian:
-        lo, hi = 0.0, 1.0
-        for _ in range(10):
-            mid = 0.5 * (lo + hi)
-            lo, hi = (mid, hi) if min_det(mid) >= min_jacobian else (lo, mid)
-        kept, determinant = lo, min_det(lo)
-    field = identity + kept * (mapped - identity)
-    # corner-aligned bilinear upsample: dense pixel (x, y) reads coarse sample (x * (gw-1)/(w-1), y * (gh-1)/(h-1))
-    u = np.tile((np.arange(w, dtype=np.float32) * ((gw - 1) / max(w - 1, 1)))[None, :], (h, 1))
-    v = np.tile((np.arange(h, dtype=np.float32) * ((gh - 1) / max(h - 1, 1)))[:, None], (1, w))
-    field32 = field.astype(np.float32)
-    map_x = cv2.remap(np.ascontiguousarray(field32[..., 0]), u, v, cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE)
-    map_y = cv2.remap(np.ascontiguousarray(field32[..., 1]), u, v, cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE)
-    return map_x, map_y, float(kept), float(determinant)
-
-
 def _border(width: int, height: int, per_side: int = 12) -> np.ndarray:
     xs, ys = np.linspace(0.0, width - 1.0, per_side + 1), np.linspace(0.0, height - 1.0, per_side + 1)
     return np.array([(x, 0.0) for x in xs] + [(x, height - 1.0) for x in xs]
@@ -252,22 +198,25 @@ def laplacian_pyramid_blend(foreground: np.ndarray, background: np.ndarray, alph
     """Blend ``foreground`` over ``background`` with ``levels`` Laplacian bands (+ the Gaussian residual).
 
     Each band is mixed with the mask at the same scale, so low frequencies (colour, shading) cross the seam over a wide
-    distance and high frequencies (pores, edges) over a narrow one. ``alpha = 0`` returns the background and ``alpha = 1`` the
-    foreground, up to float rounding.
+    distance and high frequencies (pores, edges) over a narrow one. Pixels with zero alpha are restored exactly from the
+    background after reconstruction: Gaussian mask pyramids otherwise spread colour across occluders and coverage holes.
+    An all-one alpha reproduces the foreground up to float rounding.
 
-    Per-band mixing of a hard edge under a ramped mask overshoots, and clipping turns the overshoot into saturated colour specks. With
-    ``limit_overshoot`` every output channel is bounded by the local (5x5) min / max of the two inputs, which cannot move an exact
-    alpha 0 / 1 result and removes the specks.
+    Per-band mixing of a hard edge under a ramped mask overshoots, and clipping turns the overshoot into saturated colour specks.
+    With ``limit_overshoot`` every output channel is bounded by the local (5x5) min / max of the two inputs.
     """
     fg = np.asarray(foreground, np.float32)
     bg = np.asarray(background, np.float32)
     if fg.shape != bg.shape or fg.ndim != 3:
         raise ValueError("foreground and background must be matching H x W x C images")
-    mask = np.clip(np.asarray(alpha, np.float32), 0.0, 1.0)
+    mask = np.asarray(alpha, np.float32)
     if mask.ndim == 2:
         mask = mask[:, :, None]
-    if mask.shape[:2] != fg.shape[:2]:
-        raise ValueError("alpha must match the image size")
+    if mask.shape != (*fg.shape[:2], 1) or not np.isfinite(mask).all():
+        raise ValueError("alpha must be a finite single-channel plane matching the image size")
+    if not np.isfinite(fg).all() or not np.isfinite(bg).all():
+        raise ValueError("foreground and background must be finite")
+    mask = np.clip(mask, 0.0, 1.0)
     levels = int(max(1, min(levels, int(np.log2(min(fg.shape[:2]))) - 1)))
 
     def pyramid(image: np.ndarray) -> list[np.ndarray]:
@@ -292,6 +241,7 @@ def laplacian_pyramid_blend(foreground: np.ndarray, background: np.ndarray, alph
         low = cv2.erode(np.minimum(fg, bg), kernel)
         high = cv2.dilate(np.maximum(fg, bg), kernel)
         out = np.minimum(np.maximum(out, low), high)
+    out = np.where(mask > 0.0, out, bg)
     return np.clip(out, 0, 255).astype(np.uint8) if foreground.dtype == np.uint8 else out
 
 

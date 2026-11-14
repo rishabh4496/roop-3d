@@ -5,13 +5,13 @@ import TrackingTelemetryPanel from './TrackingTelemetryPanel';
 import { publishHardware, publishProgress, useTelemetry } from '../../stores/telemetryStore';
 
 /**
- * Standard 5-stage facial transformation pipeline stages.
+ * The 5-stage true-3D head pipeline stages.
  */
 export const PIPELINE_STAGES = [
   { id: 'detection', label: 'Detection', abbr: 'DET' },
   { id: 'landmark', label: 'Landmark', abbr: 'LMK' },
-  { id: 'warp', label: 'Warp', abbr: 'WRP' },
-  { id: 'restoration', label: 'Restoration', abbr: 'RST' },
+  { id: 'pose', label: '3D Pose', abbr: 'POS' },
+  { id: 'render', label: '3D Render', abbr: 'RND' },
   { id: 'blend', label: 'Blend', abbr: 'BLN' },
 ];
 
@@ -67,11 +67,11 @@ export function computeBottleneck(telemetry, fps = 0, stage = '') {
     }
   }
   if (fps > 0 && fps < 8) {
-    if (stage === 'restoration') {
-      return { label: 'Face Restoration Model Bound', severity: 'warning' };
+    if (stage === 'render') {
+      return { label: '3D Head Render Bound', severity: 'warning' };
     }
-    if (stage === 'warp') {
-      return { label: 'Affine Warp / Tensor Flow Bound', severity: 'warning' };
+    if (stage === 'pose') {
+      return { label: '3D Pose Solve Bound', severity: 'warning' };
     }
     return { label: 'Compute Bound (Low FPS)', severity: 'warning' };
   }

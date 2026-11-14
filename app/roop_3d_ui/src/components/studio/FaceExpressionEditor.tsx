@@ -54,7 +54,7 @@ export default function FaceExpressionEditor({ parameters, setParameters, trackI
     <summary>Micro-expression &amp; 3D Face Editor<small>{trackId ?? 'Select a target face'}</small></summary>
     <PrecisionRangeSlider className="inspector-field" label="Expression restore factor" min={0} max={1} step={.01} value={parameters.expression_restore_factor ?? 0}
       onChange={value => setParameters({ ...parameters, expression_restore_factor: value })} />
-    <small className="muted">Restores target expression before UltraMax. Blinks below EAR 0.16 close fully. Requires local LivePortrait, eye and 68-point landmark models.</small>
+    <small className="muted">Drives the head rig's expression. Blinks below EAR 0.16 close fully. Requires the eye and 68-point landmark models.</small>
     <fieldset disabled={!trackId} aria-label="Per-face 3D expression and pose">
       {FACE_EDIT_CONTROLS.map(control => {
         if (control.key === 'blink_right') return null; // rendered together with blink_left

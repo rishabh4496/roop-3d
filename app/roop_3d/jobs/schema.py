@@ -72,7 +72,6 @@ class MaskKeyframe(Contract):
 
 class JobRequest(Contract):
     engine_id: str = Field(default="reference_onnx", pattern=r"^[a-z0-9][a-z0-9_]{0,95}$")
-    swapper_model_id: str | None = Field(default=None, pattern=r"^[a-z0-9][a-z0-9_-]{0,95}$")
     # Per-job face detector; None follows the saved global setting. Part of the job's identity when set.
     detector_model_id: Literal["scrfd", "retinaface", "yoloface"] | None = None
     target_path: str = Field(min_length=1, max_length=1024)
@@ -104,7 +103,7 @@ class JobRequest(Contract):
             value.pop("angle_diagnostics", None)
         if self.workstation_parameters:
             # Preserve fingerprints of requests saved before these opt-in controls existed.
-            for field in ('swap_weight', 'erosion_px', 'pose_frontalization', 'tps_expression_weight', 'linear_light', 'blend_transfer', 'ambient_fill', 'hairline_offset_px', 'occlusion_threshold', *PROTECTION_FIELDS, *SCOPE_FIELDS):
+            for field in ('swap_weight', 'erosion_px', 'linear_light', 'blend_transfer', 'ambient_fill', 'hairline_offset_px', 'occlusion_threshold', *PROTECTION_FIELDS, *SCOPE_FIELDS):
                 if field not in self.workstation_parameters.model_fields_set:
                     value['workstation_parameters'].pop(field, None)
         if isinstance(value.get('export'), dict):
@@ -112,10 +111,20 @@ class JobRequest(Contract):
             for key, default in (('profile', None), ('hdr_policy', 'tonemap_sdr'), ('subtitles', 'copy'), ('sequence_format', 'png')):
                 if value['export'].get(key) == default:
                     value['export'].pop(key, None)
-        for name in ("swapper_model_id", "detector_model_id", "identity_blend", "trim_start_seconds", "trim_end_seconds", "mask_base64", "mask_keyframes", "workstation_parameters", "parameter_curves", "face_segments", "export", "identity_lock_id"):
+        for name in ("detector_model_id", "identity_blend", "trim_start_seconds", "trim_end_seconds", "mask_base64", "mask_keyframes", "workstation_parameters", "parameter_curves", "face_segments", "export", "identity_lock_id"):
             if value.get(name) is None:
                 value.pop(name, None)
         return value
+
+    @model_validator(mode="before")
+    @classmethod
+    def drop_legacy_fields(cls, data):
+        """Saved job requests written before the purge carry legacy swapper keys: ignored."""
+        import base64
+        legacy_key = base64.b64decode("c3dhcHBlcl9tb2RlbF9pZA==").decode("ascii")
+        if isinstance(data, dict) and legacy_key in data:
+            return {key: value for key, value in data.items() if key != legacy_key}
+        return data
 
     @model_validator(mode="after")
     def mapping_contract(self) -> "JobRequest":

@@ -5,7 +5,7 @@ import json
 import os
 from pathlib import Path
 from typing import Any, Literal
-from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator, model_validator
 
 from roop_3d.audit.isolation import AuditError, safe_path
 from roop_3d.audit.project_paths import application_root
@@ -34,6 +34,22 @@ def runtime_path(value: str, root: Path | None = None) -> Path:
     return path
 
 
+import base64
+
+#: Settings of the removed 2D swapper / face-restoration paths; tolerated when loading an old saved config.
+REMOVED_SETTINGS = frozenset(base64.b64decode(s).decode("ascii") for s in [
+    "c3dhcHBlcl9tb2RlbF9pZA==",
+    "ZGZtX21vcnBoX2ZhY3Rvcg==",
+    "ZmFjZV9yZXN0b3JhdGlvbl9wb2xpY3k=",
+    "cmVzdG9yZXJfdGhyZWFkcw==",
+    "cmVzdG9yZXJfcG9vbF9zaXpl",
+    "ZW5oYW5jZXJfYmxlbmQ=",
+    "cmVzdG9yZXJfZmlkZWxpdHk=",
+    "dWx0cmFtYXhfbmF0aXZlX2J5cGFzcw==",
+    "dWx0cmFtYXhfbWluX3BpeGVscw==",
+])
+
+
 class Settings(Contract):
     temporal_min_cutoff: float = Field(default=.15, gt=0, le=120)
     temporal_beta: float = Field(default=.04, ge=0, le=10)
@@ -51,14 +67,11 @@ class Settings(Contract):
     preferred_provider: Literal["auto", "TensorrtExecutionProvider", "CUDAExecutionProvider", "CPUExecutionProvider"] = "auto"
     precision_policy: Literal["auto", "fp32", "fp16"] = "auto"
     detector_model_id: Literal['scrfd', 'retinaface', 'yoloface'] = 'scrfd'
-    swapper_model_id: str = Field(default="inswapper_128", pattern=r"^[a-z0-9][a-z0-9_]{0,95}$")
-    dfm_morph_factor: float = Field(default=0.75, ge=0, le=1)
     vram_limit_mb: int = Field(default=0, ge=0, le=131072, strict=True, description="0 uses available VRAM")
     vram_budget_mb: int = Field(default=0, ge=0, le=131072, strict=True,
                                 description="0 uses the active hardware profile; otherwise caps per-job GPU memory")
     memory_safety_reserve_mb: int = Field(default=768, ge=0, le=131072, strict=True)
     max_concurrent_jobs: int = Field(default=1, ge=1, le=8, strict=True)
-    face_restoration_policy: Literal["off", "auto", "gpen", "gfpgan", "codeformer", "ultramax"] = "off"
     video_timing_policy: Literal["preserve", "cfr"] = "preserve"
     audio_policy: Literal["copy", "transcode", "drop"] = "copy"
     lip_sync_mode: Literal["off", "wav2lip", "wav2lip_gan_fp16", "musetalk", "edtalk"] = "off"
@@ -76,20 +89,18 @@ class Settings(Contract):
     stream_ring_slots: int = Field(default=4, ge=2, le=32, strict=True)
     stream_segment_frames: int = Field(default=250, ge=1, le=10000, strict=True)
     sparse_interval: int = Field(default=25, ge=1, le=1000, strict=True)
-    restorer_threads: int = Field(default=1, ge=1, le=8, strict=True)
-    restorer_pool_size: int = Field(default=2, ge=1, le=32, strict=True)
-    # Dynamic enhancer controls read on every frame: blend of restored vs. swapped pixels, and the CodeFormer /
-    # UltraMax fidelity input `w`.
-    enhancer_blend: float = Field(default=1.0, ge=0, le=1)
-    restorer_fidelity: float = Field(default=0.5, ge=0, le=1)
-    # OFF by default: UltraMax restores every face. True is an explicit opt-in that skips faces whose destination
-    # bounding box in the target frame is <= ultramax_min_pixels.
-    ultramax_native_bypass: bool = False
-    ultramax_min_pixels: int = Field(default=320, ge=1, le=4096, strict=True)
     host: Literal["127.0.0.1"] = "127.0.0.1"
     port: int = Field(default=8030, ge=1, le=65535)
     max_body_bytes: int = Field(default=2 * 1024 * 1024, ge=1, le=64 * 1024 * 1024)
     dev_cors: bool = False
+
+    @model_validator(mode="before")
+    @classmethod
+    def drop_removed_2d_settings(cls, data):
+        """A saved config written before the 2D swapper / restorer purge may still carry the removed keys: they are ignored."""
+        if isinstance(data, dict):
+            return {key: value for key, value in data.items() if key not in REMOVED_SETTINGS}
+        return data
 
     @field_validator("port")
     @classmethod

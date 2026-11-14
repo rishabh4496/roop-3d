@@ -189,9 +189,6 @@ class OrtModel:
         self.session = None
         providers: list = ["CPUExecutionProvider"]
         divisor = {
-            "inswapper_128.onnx": 4, "inswapper_128.batch.onnx": 4,
-            "inswapper_128_dynamic.onnx": 4, "gpen_bfr_512.onnx": 4,
-            "GPEN-BFR-512.onnx": 4, "CodeFormerv0.1.onnx": 3, "codeformer.fp16.onnx": 8,
             "scrfd_2.5g_kps.onnx": 32, "scrfd_10g_bnkps.onnx": 16, "det_10g.onnx": 16,
             "w600k_r50.onnx": 16, "bisenet_resnet_34.onnx": 16, "face_parser.onnx": 16,
             "liveportrait_warping_spade.onnx": 2,
@@ -260,9 +257,9 @@ class OrtModel:
         catalog.verify(self.record)
         self._check_graph()
         self._io_binder = GpuIoBinding(self.session)
-        # Restorers report themselves to the active-model read-back (swapper/detector report from their own holders).
+        # Upscalers report themselves to the active-model read-back (the detector reports from its own holder).
         self._active_key = None
-        if self.record.get("role") == "face_restorer":
+        if self.record.get("role") == "frame_upscaler":
             from roop_3d.engine import active_models
             entry = active_models.activate("enhancer", self.record["model_id"], self.path, self.provider,
                                            config.precision_policy, self.record.get("sha256"))

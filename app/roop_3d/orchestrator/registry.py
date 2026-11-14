@@ -31,18 +31,8 @@ ADAPTERS: dict[str, str] = {
     "scrfd_detector": "roop_3d.media.detector:Detector",
     "arcface_recognizer": "roop_3d.faceset.recognizer:Recognizer",
     "landmarks_106": "roop_3d.engine.detection.dense_landmarks:DenseLandmarks",
-    "inswapper_reference": "roop_3d.engine.volumetric.identity_swapper:IdentitySwapper",
-    "inswapper_batch_stream": "roop_3d.vectorized_pipeline:GpuBatchPipeline",
     "identity_asset_builder": "roop_3d.reconstruction.identity_asset:IdentityAssetStore",
-    "pose_blend_projector": "roop_3d.reconstruction.pose_blend:PoseBlendProjector",
     "liveportrait_retarget": "roop_3d.engine.volumetric.reference_adapter:LivePortraitAdapter",
-    "tps_expression": "roop_3d.reconstruction.expression_tps:apply_expression_to_crop",
-    "reenactment_3d": "roop_3d.reconstruction.reenactment:ReenactmentEngine",
-    "gpen_reference": "roop_3d.compositor.restoration:GpenRestorer",
-    "codeformer_reference": "roop_3d.compositor.restoration:CodeFormerRestorer",
-    "stream_restorer_gpen": "roop_3d.compositor.stream_restoration:DecoupledRestorer",
-    "stream_restorer_codeformer": "roop_3d.compositor.stream_restoration:DecoupledRestorer",
-    "stream_restorer_ultramax": "roop_3d.compositor.stream_restoration:DecoupledRestorer",
     "bisenet_face_parser": "roop_3d.compositor.masks:BisenetFaceParser",
     "xseg_visible_face": "roop_3d.compositor.occlusion_analysis:OcclusionAnalyzer",
     "pyav_video_writer": "roop_3d.media.video_writer:encode_video",
@@ -178,7 +168,7 @@ class CapabilityRegistry:
                     issues.append(Issue("PRECISION_CONTRADICTS_MODEL", eid, f"precisions[{ref.model_id}]"))
                 if "FP16" in engine.precisions:
                     from roop_3d.models.precision_policy import policy_for
-                    if not policy_for(record.name, record.role).fp16_candidate or "inswapper" in record.name.lower():
+                    if not policy_for(record.name, record.role).fp16_candidate :
                         issues.append(Issue("PRECISION_CONTRADICTS_MODEL", eid, f"precisions[{ref.model_id}]"))
             if names:
                 if any(n in heavy_names for n in names) and engine.residency != "heavy":

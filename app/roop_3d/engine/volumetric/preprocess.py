@@ -1,4 +1,9 @@
-"""Deterministic similarity alignment and exact paired affine transforms."""
+"""Deterministic similarity alignment and exact paired affine transforms.
+
+``aligned_crop`` is the 5-point ArcFace-template crop that identity-embedding and landmark/shape REGRESSOR networks require
+as input. It is NOT a face-swap crop: nothing is pasted back through its inverse, and the swap-oriented templates
+(FFHQ 512, roll-compensated crops) were removed with the 2D swappers.
+"""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -8,11 +13,6 @@ import numpy as np
 from roop_3d.core.errors import DomainError
 from roop_3d.engine.runtime import image_bgr
 from roop_3d.faceset.recognizer import ARCFACE_REFERENCE_5PTS
-
-FFHQ_REFERENCE_5PTS_512 = np.array(((192.98138, 239.94708), (318.90277, 240.19360),
-                                    (256.63416, 314.01935), (201.26117, 371.41043),
-                                    (313.08905, 371.15118)), np.float64)
-
 
 @dataclass(frozen=True)
 class AlignedCrop:
@@ -38,11 +38,9 @@ def similarity(source: np.ndarray, destination: np.ndarray) -> np.ndarray:
 
 
 def template_points(size: int, template: str = "arcface_112") -> np.ndarray:
-    """The swapper's five canonical landmark positions in a ``size`` px crop."""
-    if size not in (112, 128, 256, 512) or template not in ("arcface_112", "ffhq_512"):
+    """The ArcFace five-landmark template in a ``size`` px crop (embedding / regressor input only)."""
+    if size not in (112, 128, 256, 512) or template != "arcface_112":
         raise DomainError("ALIGNMENT_CONTRACT", "Expected five landmarks and a supported canonical crop size", 422)
-    if template == "ffhq_512":
-        return FFHQ_REFERENCE_5PTS_512 * (size / 512.0)
     reference = ARCFACE_REFERENCE_5PTS.astype(np.float64).copy()
     if size != 112:
         reference[:, 0] += 8
@@ -51,7 +49,7 @@ def template_points(size: int, template: str = "arcface_112") -> np.ndarray:
 
 
 def registration_matrix(landmarks5: np.ndarray, size: int, template: str = "arcface_112") -> np.ndarray:
-    """Similarity (2x3, frame -> crop) that puts the five landmarks on the swapper's template."""
+    """Similarity (2x3, frame -> crop) that puts the five landmarks on the ArcFace template."""
     if np.asarray(landmarks5).shape != (5, 2):
         raise DomainError("ALIGNMENT_CONTRACT", "Expected five landmarks and a supported canonical crop size", 422)
     return similarity(landmarks5, template_points(size, template))
@@ -63,34 +61,6 @@ def aligned_crop(image: np.ndarray, landmarks5: np.ndarray, size: int = 128, *,
     matrix = registration_matrix(landmarks5, size, template)
     crop = cv2.warpAffine(image, matrix, (size, size), flags=cv2.INTER_CUBIC, borderMode=cv2.BORDER_REPLICATE)
     return AlignedCrop(crop, matrix, cv2.invertAffineTransform(matrix))
-
-
-def roll_compensated_aligned_crop(image: np.ndarray, landmarks5: np.ndarray, roll: float, size: int = 128,
-                                 *, compensation: np.ndarray | None = None,
-                                 template: str = "arcface_112") -> AlignedCrop:
-    """Counter-rotate a target face around its eye midpoint before canonical alignment.
-
-    The returned transforms still map exactly between the original full frame and the
-    canonical crop, so the compositor and 3D projector need no special roll handling.
-    ``compensation`` may be a precomputed Stage 13 affine for this roll and center.
-    """
-    points = np.asarray(landmarks5, np.float64)
-    if points.shape != (5, 2) or not np.isfinite(points).all() or not np.isfinite(roll):
-        raise DomainError("LANDMARKS_INVALID", "Roll compensation requires five finite landmarks and a finite roll", 422)
-    image_bgr(image)
-    center = tuple(float(v) for v in points[:2].mean(axis=0))
-    rotation = (np.asarray(compensation, np.float64) if compensation is not None
-                else cv2.getRotationMatrix2D(center, -float(np.clip(roll, -180.0, 180.0)), 1.0))
-    if rotation.shape != (2, 3) or not np.isfinite(rotation).all():
-        raise DomainError("ALIGNMENT_INVALID", "Roll compensation matrix must be finite 2x3 affine", 422)
-    height, width = image.shape[:2]
-    upright = cv2.warpAffine(image, rotation, (width, height), flags=cv2.INTER_LINEAR,
-                             borderMode=cv2.BORDER_REFLECT_101)
-    upright_points = transform_points(points, rotation)
-    aligned = aligned_crop(upright, upright_points, size, template=template)
-    composed = (np.vstack((aligned.matrix, (0.0, 0.0, 1.0)))
-                @ np.vstack((rotation, (0.0, 0.0, 1.0))))[:2]
-    return AlignedCrop(aligned.image, composed, cv2.invertAffineTransform(composed))
 
 
 def landmark_crop(image: np.ndarray, points: np.ndarray, size: int, expansion: float = 1.5,

@@ -47,17 +47,16 @@ describe('protection helpers keep untouched requests byte-identical', () => {
     expect(protectionTouched(reset)).toBe(false);
   });
 
-  it('the matte controls only apply to a 3D-projected matte', () => {
-    expect(matteProtectionApplies(DEFAULT_PARAMETERS)).toBe(false);
-    expect(matteProtectionApplies({ ...DEFAULT_PARAMETERS, render_mode: 'pose_3d' })).toBe(true);
+  it('the matte controls always apply: the 3D head render is the only render path', () => {
+    expect(matteProtectionApplies(DEFAULT_PARAMETERS)).toBe(true);
     expect(matteProtectionApplies({ ...DEFAULT_PARAMETERS, occlusion_mode: 'robust' })).toBe(true);
   });
 });
 
 describe('HairNeckProtection', () => {
-  function Harness({ initial = DEFAULT_PARAMETERS, enhancer = 'ultramax', onChange }: { initial?: WorkstationParameters; enhancer?: string; onChange: (value: WorkstationParameters) => void }) {
+  function Harness({ initial = DEFAULT_PARAMETERS, onChange }: { initial?: WorkstationParameters; onChange: (value: WorkstationParameters) => void }) {
     const [parameters, setParameters] = useState(initial);
-    return <HairNeckProtection parameters={parameters} enhancer={enhancer} setParameters={value => { onChange(value); setParameters(value); }} />;
+    return <HairNeckProtection parameters={parameters} setParameters={value => { onChange(value); setParameters(value); }} />;
   }
   async function mount(props: Parameters<typeof Harness>[0]) {
     const host = document.createElement('div'); document.body.append(host);
@@ -116,13 +115,14 @@ describe('HairNeckProtection', () => {
     } finally { await unmount(); }
   });
 
-  it('says why a control has no effect instead of pretending: pores need UltraMax, the jaw feather needs neck protection, the matte needs a 3D matte', async () => {
-    const { host, unmount } = await mount({ enhancer: 'gpen', initial: withProtection(DEFAULT_PARAMETERS, 'neck_protection', false), onChange: () => {} });
+  it('says why a control has no effect instead of pretending: the jaw feather needs neck protection; pores no longer depend on a restorer', async () => {
+    const { host, unmount } = await mount({ initial: withProtection(DEFAULT_PARAMETERS, 'neck_protection', false), onChange: () => {} });
     try {
-      expect(field(host, 'Skin micro-texture and pore retention').disabled).toBe(true);
-      expect(host.textContent).toContain('UltraMax enhancer only');
+      expect(field(host, 'Skin micro-texture and pore retention').disabled).toBe(false);
+      expect(host.textContent).not.toContain('UltraMax');
       expect(field(host, 'Jaw-to-neck feather falloff').disabled).toBe(true);
-      expect(host.querySelector('[data-testid="protection-scope"]')?.textContent).toContain('3D render mode');
+      expect(host.textContent).toContain('Needs Strict Neck');
+      expect(host.querySelector('[data-testid="protection-scope"]')).toBeNull();
     } finally { await unmount(); }
     const robust = await mount({ initial: { ...DEFAULT_PARAMETERS, occlusion_mode: 'robust' }, onChange: () => {} });
     try {
@@ -204,7 +204,7 @@ describe('HeadModelBackbone', () => {
 
 describe('live preview payload', () => {
   const request = { engine_id: 'reference_onnx', target_path: 'clip.mp4', inspection_id: 'a'.repeat(32), face_mappings: [{ track_id: 'track_0000', faceset_id: 'alice' }] } as unknown as JobRequest;
-  const payload = (parameters: WorkstationParameters) => JSON.parse(JSON.stringify(buildLivePayload({ request, time: 1, fps: 25, restorerAvailable: true, parameters })!));
+  const payload = (parameters: WorkstationParameters) => JSON.parse(JSON.stringify(buildLivePayload({ request, time: 1, fps: 25, parameters })!));
 
   it('leaves the new fields out until they are touched, so earlier previews keep their cache keys', () => {
     const plain = payload(DEFAULT_PARAMETERS);

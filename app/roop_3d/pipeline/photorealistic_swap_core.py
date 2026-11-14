@@ -1,23 +1,16 @@
-"""Photorealistic 3D swap core: craniofacial geometry + rectified neural swap + quotient-image relight + Laplacian composite.
+"""Photorealistic 3D head compositor: silhouette geometry + rendered head layer + quotient-image relight + Laplacian composite.
 
-The face the viewer sees is ALWAYS photographic: pixels come from the neural swap (``inswapper``) and the source FaceSet's
-own photographs, then a restorer. Geometry (the source's skull and jaw projected into the target frame) only decides WHERE
-those pixels land, and illumination geometry only multiplies them by a smooth ratio; a shaded mesh is never composited.
+The input is a rendered true-3D head layer (``FacePacket.rendered_crop`` with its coverage plane). The former 2D neural-swap
+crop, landmark thin-plate rectification, FaceSet photograph patch and aligned-crop GAN restorer were removed.
 
-Four steps per face (``Photorealistic3DSwapCore.process_face``)::
+Steps per face (``Photorealistic3DSwapCore.process_face``)::
 
   1. geometry   target outline vs source-locked outline -> overhang inpaint + perimeter-cage warp of hair / ears / neck
-                 (rendering.silhouette_replacement.SilhouetteReplacer, the Stage 6B machinery)
-  2. rectify    the neural swap and the FaceSet photograph are warped (thin-plate field, inner landmarks pinned) so the
-                 face occupies the source-locked jaw / chin / forehead; the photograph fills what the 128 px swap cannot reach
-  3. relight    R_sh = Render_SH(N, L_target) / (Render_SH(N, L_source) + 1e-4) multiplied onto the photographic layer in
-                 linear light, then a bounded TRUST-style skin-tone gain (albedo vs illumination decomposition)
-  4. restore    restorer on the aligned face ROI, FaceSet high-frequency detail (never beyond the photograph's own),
-                 camera focus + grain matching, occluder-aware alpha, then a 4-band Laplacian composite onto the step-1 plate
-
-What this is NOT, stated so nobody over-reads the reports: the "source skull" is the FaceSet view's 106-point outline aligned
-to the target by a similarity on the eyes / nose / mouth (not a fitted 3DMM per frame), and the SH normals are a silhouette
-ellipsoid unless the caller supplies mesh normals. Both are named in every :class:`FaceReport`.
+                 (rendering.silhouette_replacement.SilhouetteReplacer; screen-space, kept pending the full-head render path)
+  2. rectify    the rendered layer is placed in the ROI (affine of the layer canvas; no TPS, no photograph patch)
+  3. relight    R_sh = Render_SH(N, L_target) / (Render_SH(N, L_source) + 1e-4) multiplied onto the layer in linear light,
+                 then a bounded TRUST-style skin-tone gain
+  4. optics     camera focus + grain matching, occluder-aware alpha, then a 4-band Laplacian composite onto the step-1 plate
 """
 from __future__ import annotations
 
@@ -31,18 +24,15 @@ import numpy as np
 from roop_3d.core.errors import DomainError
 from roop_3d.pipeline import image_ops as ops
 from roop_3d.pipeline.image_ops import LUMA_BGR
-from roop_3d.reconstruction.expression_tps import BLOCKS, layout_is_plausible
+from roop_3d.reconstruction.landmark_layout import BLOCKS, layout_is_plausible
 from roop_3d.relighting_3d import SphericalHarmonicsLighting
 from roop_3d.rendering.silhouette_inpaint import DonorFrame
 from roop_3d.rendering.silhouette_replacement import SilhouetteReplacer, resolve_scope
 from roop_3d.rendering.skin_calibration import (SceneIllumination, UnbiasedSkinToneCalibrator, linear_to_srgb,
                                                 srgb_to_linear)
 
-#: ``restorer(aligned_crop_bgr, landmarks5_in_crop) -> restored BGR (any size, same framing) | None`` (None = declined).
-RestoreFn = Callable[[np.ndarray, np.ndarray], "np.ndarray | None"]
-
 MAX_CONTOUR_SHIFT = 0.30        # per-point cap on the jaw move, as a fraction of face width (the spline stays fold-free)
-STEP_NAMES = ("geometry", "rectify", "relight", "restore", "blend")
+STEP_NAMES = ("geometry", "rectify", "relight", "restore", "blend")   # "rectify" = layer placement, "restore" = optics matching
 
 
 @dataclass(frozen=True)
@@ -56,8 +46,6 @@ class SwapCoreOptions:
     ratio_sigma_frac: float = 0.02               # smoothing of R_sh, as a fraction of the face width (never below 3 px)
     skin_tone_strength: float = 0.6              # TRUST gain exponent (0 = off)
     skin_tone_max_gain: float = 1.15
-    restoration_blend: float = 0.85
-    detail_gain: float = 0.6                     # share of the FaceSet photograph's missing high-frequency energy re-injected
     match_focus: bool = True
     match_grain: bool = True
     pyramid_levels: int = 4
@@ -66,7 +54,7 @@ class SwapCoreOptions:
 
     def __post_init__(self) -> None:
         resolve_scope(self.swap_scope, self.skull_blend)
-        if not (0 <= self.relight_strength <= 1 and 0 <= self.restoration_blend <= 1 and 0 <= self.detail_gain <= 1
+        if not (0 <= self.relight_strength <= 1
                 and 0 <= self.skin_tone_strength <= 1 and self.skin_tone_max_gain >= 1 and 1 <= self.pyramid_levels <= 6
                 and 0 <= self.forehead_lift <= 1):
             raise ValueError("invalid swap-core options")
@@ -76,10 +64,9 @@ class SwapCoreOptions:
 class FacePacket:
     """Everything the core needs about ONE face in ONE frame. Arrays are in FRAME pixels unless the name says ``crop``."""
     track_id: int
-    swapped_crop: np.ndarray                     # uint8 BGR, the neural swap in its aligned crop (S x S)
+    rendered_crop: np.ndarray                    # uint8 BGR, the rendered true-3D head layer in its ROI canvas (S x S)
     crop_to_frame: np.ndarray                    # 2x3 affine, crop px -> frame px
     target_landmarks: np.ndarray                 # (106, 2) frame px
-    crop_landmarks5: np.ndarray | None = None    # (5, 2) crop px (restorer alignment); None -> restorer skipped
     crop_coverage: np.ndarray | None = None      # float (S, S): where the swap is valid; None -> whole crop
     source_landmarks: np.ndarray | None = None   # (106, 2) in ``source_view`` pixels; None -> geometry step skipped
     source_view: np.ndarray | None = None        # uint8 BGR photograph of the source from the nearest pose
@@ -87,7 +74,9 @@ class FacePacket:
     skin_mask: np.ndarray | None = None          # float (H, W) target skin (parser), frame space
     occluder: np.ndarray | None = None           # float (H, W) hands / glasses / strands in front of the face
     normals: np.ndarray | None = None            # (H, W, 3) mesh normals in frame space; None -> silhouette ellipsoid
-    protect: np.ndarray | None = None            # float (S, S) crop space: eyes / lips the restorer must not rewrite
+    projected: bool = False                     # upstream mesh/projection owns framing and coverage; never rectify it again
+    presence: float = 1.0                       # fade the whole face edit, including silhouette replacement
+    mask_diagnostics: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -187,11 +176,9 @@ class HairDonorReplacer(SilhouetteReplacer):
 
 class Photorealistic3DSwapCore:
     def __init__(self, options: SwapCoreOptions | None = None, *, replacer: SilhouetteReplacer | None = None,
-                 restorer: RestoreFn | None = None, restorer_name: str = "none",
                  calibrator: UnbiasedSkinToneCalibrator | None = None, lighting: SphericalHarmonicsLighting | None = None):
         self.options = options or SwapCoreOptions()
         self.replacer = replacer or HairDonorReplacer()
-        self.restorer, self.restorer_name = restorer, restorer_name
         self.calibrator = calibrator or UnbiasedSkinToneCalibrator()
         self.lighting = lighting or SphericalHarmonicsLighting()
 
@@ -200,6 +187,20 @@ class Photorealistic3DSwapCore:
                      frame_index: int = 0) -> tuple[np.ndarray, FaceReport]:
         """Return ``(frame with this face swapped, report)``. ``frame`` is never modified."""
         _check_frame(frame)
+        crop = np.asarray(packet.rendered_crop)
+        matrix = np.asarray(packet.crop_to_frame, np.float64)
+        if crop.dtype != np.uint8 or crop.ndim != 3 or crop.shape[2] != 3 or min(crop.shape[:2]) < 1:
+            raise DomainError("SWAP_CORE_CROP_INVALID", "The neural swap crop must be nonempty uint8 BGR", 422)
+        if matrix.shape != (2, 3) or not np.isfinite(matrix).all() or abs(np.linalg.det(matrix[:, :2])) < 1e-12:
+            raise DomainError("SWAP_CORE_TRANSFORM_INVALID", "Crop-to-frame transform must be finite and invertible", 422)
+        if packet.crop_coverage is not None:
+            coverage = np.asarray(packet.crop_coverage, np.float32)
+            if coverage.shape != crop.shape[:2] or not np.isfinite(coverage).all() or np.any((coverage < 0) | (coverage > 1)):
+                raise DomainError("SWAP_CORE_COVERAGE_INVALID", "Coverage must be a finite crop-sized probability plane", 422)
+        elif packet.projected:
+            raise DomainError("SWAP_CORE_COVERAGE_REQUIRED", "Projected replacements require rasterized coverage", 422)
+        if not np.isfinite(packet.presence) or not 0 <= packet.presence <= 1:
+            raise DomainError("SWAP_CORE_PRESENCE_INVALID", "Presence must be within 0..1", 422)
         report = FaceReport(packet.track_id)
         height, width = frame.shape[:2]
         began = time.perf_counter()
@@ -234,8 +235,11 @@ class Photorealistic3DSwapCore:
         if occluder is not None:
             alpha = alpha * (1.0 - np.clip(occluder, 0.0, 1.0))
         out_roi = ops.laplacian_pyramid_blend(photo, plate, alpha, self.options.pyramid_levels)
+        if packet.presence < 1.0:
+            out_roi = roi.astype(np.float32) + (out_roi.astype(np.float32) - roi) * packet.presence
         report.blend = {"levels": self.options.pyramid_levels, "alpha_mean": round(float(alpha.mean()), 4),
-                        "alpha_pixels": int((alpha > 0.5).sum()), "occluder_applied": occluder is not None}
+                        "alpha_pixels": int((alpha > 0.5).sum()), "occluder_applied": occluder is not None,
+                        "presence": float(packet.presence), "analysis": packet.mask_diagnostics}
         result = frame.copy()
         result[y0:y1, x0:x1] = out_roi
         report.steps_ms["blend"] = (time.perf_counter() - began) * 1000
@@ -253,7 +257,9 @@ class Photorealistic3DSwapCore:
         if not layout_is_plausible(target):
             raise DomainError("SWAP_CORE_LANDMARKS_INVALID", "Target 106-point layout is not plausible; the face is not swapped", 422)
         frame_axes = ops.head_frame(target)
-        if not plan.replace_silhouette:
+        if packet.projected:
+            reason = "UPSTREAM_PROJECTION_OWNS_GEOMETRY"
+        elif not plan.replace_silhouette:
             reason = "SCOPE_KEEPS_TARGET_SILHOUETTE"
         elif packet.source_landmarks is None or packet.source_view is None:
             reason = "NO_SOURCE_GEOMETRY"
@@ -288,6 +294,13 @@ class Photorealistic3DSwapCore:
         else:
             locked_poly = tgt_poly
         union = np.vstack((tgt_poly, locked_poly))
+        if packet.projected:
+            ys, xs = np.nonzero(np.asarray(packet.crop_coverage) > 0)
+            if len(xs) == 0:
+                raise DomainError("SWAP_CORE_COVERAGE_EMPTY", "Projected replacement has no visible surface", 422)
+            bounds = np.array([[xs.min(), ys.min()], [xs.max() + 1, ys.min()],
+                               [xs.max() + 1, ys.max() + 1], [xs.min(), ys.max() + 1]], np.float64)
+            union = np.vstack((union, ops.apply_affine(packet.crop_to_frame, bounds)))
         margin = opt.roi_margin_frac * frame_axes.width
         x0 = int(max(0, np.floor(union[:, 0].min() - margin)))
         y0 = int(max(0, np.floor(union[:, 1].min() - margin)))
@@ -308,11 +321,17 @@ class Photorealistic3DSwapCore:
             contour_from=target[contour_ids] - origin, contour_to=locked[contour_ids] - origin,
             max_shift_px=float(shift.max()) if len(shift) else 0.0,
             down=frame_axes.down, brow_mid=frame_axes.brow_mid - origin, face_height=frame_axes.height)
-        report.geometry = {"mode": "landmark_silhouette" if enabled else f"skipped:{reason}", "scope": opt.swap_scope,
+        if packet.projected:
+            local = np.asarray(packet.crop_to_frame, np.float64).copy()
+            local[:, 2] -= origin
+            geo.locked_mask = cv2.warpAffine(np.asarray(packet.crop_coverage, np.float32), local, (shape[1], shape[0]),
+                                              flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=0)
+        report.geometry = {"mode": "projected_coverage" if packet.projected else "landmark_silhouette" if enabled else f"skipped:{reason}", "scope": opt.swap_scope,
                            "source_identity_lock": lock, "face_width_px": round(frame_axes.width, 1),
                            "max_contour_shift_px": round(geo.max_shift_px, 2), "roi": [x0, y0, x1, y1],
-                           "skull_source": "faceset_view_106_similarity_aligned" if enabled else "none"}
-        if reason:
+                           "skull_source": "upstream_projection" if packet.projected else
+                                           "faceset_view_106_similarity_aligned" if enabled else "none"}
+        if reason and not packet.projected:
             report.fallbacks.append(f"geometry:{reason}")
         return geo
 
@@ -351,7 +370,7 @@ class Photorealistic3DSwapCore:
         opt = self.options
         h, w = roi.shape[:2]
         x0, y0 = geo.roi[0], geo.roi[1]
-        crop = np.asarray(packet.swapped_crop)
+        crop = np.asarray(packet.rendered_crop)
         if crop.dtype != np.uint8 or crop.ndim != 3 or crop.shape[2] != 3:
             raise DomainError("SWAP_CORE_CROP_INVALID", "The neural swap crop must be uint8 BGR", 422)
         matrix = np.asarray(packet.crop_to_frame, np.float64).copy()
@@ -360,52 +379,17 @@ class Photorealistic3DSwapCore:
         coverage = np.ones(crop.shape[:2], np.float32) if packet.crop_coverage is None else np.asarray(packet.crop_coverage, np.float32)
         valid = cv2.warpAffine(np.clip(coverage, 0, 1), matrix, (w, h), flags=cv2.INTER_LINEAR,
                                borderMode=cv2.BORDER_CONSTANT, borderValue=0)
-        # the neural swap covers the inner face: contour + brows hull, feathered
-        inner_cloud = np.vstack((geo.target_pts[BLOCKS["contour"]], geo.target_pts[BLOCKS["brow_a"]], geo.target_pts[BLOCKS["brow_b"]]))
-        hull = cv2.convexHull(inner_cloud.astype(np.float32))[:, 0, :]
-        feather = max(0.8, opt.feather_frac * geo.face_width)
-        # Nothing the swap writes may leave the (source-locked) head outline: the feather ramps up INSIDE it, so there is no halo.
-        bound = ops.inside_ramp(geo.locked_mask, feather * 1.5)
-        inner_alpha = ops.polygon_mask(hull, (h, w), feather) * valid * bound
-        stack = np.concatenate((swap, inner_alpha[:, :, None]), axis=2)
-        tps = {"applied": False, "reason": "NO_JAW_MOVE"}
-        if geo.enabled and geo.max_shift_px >= 0.75:
-            pinned_ids = np.array([i for name in ("eye_a", "eye_b", "brow_a", "brow_b", "nose", "mouth") for i in BLOCKS[name]])
-            src_pts = np.vstack((geo.contour_from, geo.target_pts[pinned_ids]))
-            dst_pts = np.vstack((geo.contour_to, geo.target_pts[pinned_ids]))
-            map_x, map_y, kept, determinant = ops.tps_flow(src_pts, dst_pts, (h, w))
-            stack = cv2.remap(stack, map_x, map_y, cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE)
-            tps = {"applied": True, "kept_fraction": round(kept, 3), "min_jacobian": round(determinant, 3),
-                   "control_points": int(len(src_pts))}
-        inner, inner_alpha = stack[..., :3], np.clip(stack[..., 3], 0.0, 1.0) * bound
-
-        patch = patch_alpha = None
-        patch_report = {"used": False, "reason": "NO_SOURCE_GEOMETRY" if not geo.enabled else "SCOPE_OR_LOCK_ZERO"}
-        if geo.enabled and geo.lock > 0 and packet.source_view is not None:
-            view = np.asarray(packet.source_view)
-            patch = cv2.warpAffine(view, geo.similarity, (w, h), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE).astype(np.float32)
-            patch_valid = cv2.warpAffine(np.ones(view.shape[:2], np.float32), geo.similarity, (w, h), flags=cv2.INTER_LINEAR,
-                                         borderMode=cv2.BORDER_CONSTANT, borderValue=0)
-            patch_valid = cv2.erode(patch_valid, np.ones((3, 3), np.uint8))
-            if geo.lock < 1.0:           # adaptive skull: the photograph follows the interpolated outline too
-                pin = np.array([i for name in ("eye_a", "eye_b", "nose", "mouth") for i in BLOCKS[name]])
-                ids = np.array(BLOCKS["contour"])
-                f, t = np.vstack((geo.p_src[ids], geo.p_src[pin])), np.vstack((geo.contour_to, geo.p_src[pin]))
-                px, py, *_ = ops.tps_flow(f, t, (h, w))
-                both = np.concatenate((patch, patch_valid[:, :, None]), axis=2)
-                both = cv2.remap(both, px, py, cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE)
-                patch, patch_valid = both[..., :3], np.clip(both[..., 3], 0, 1)
-            outer = bound * patch_valid
-            if structure is not None:
-                # the target's own hair / ears / neck stay on top of the photograph: only the plate may show through there
-                outer = outer * (1.0 - np.clip(cv2.GaussianBlur(structure.astype(np.float32), (0, 0), feather), 0, 1))
-            patch_alpha = np.clip(outer, 0.0, 1.0).astype(np.float32)
-            patch_report = {"used": True, "coverage_px": int((patch_alpha > 0.5).sum()),
-                            "view_scale": round(float(np.sqrt(abs(np.linalg.det(geo.similarity[:, :2])))), 3)}
-            if patch_report["view_scale"] > 1.6:
-                report.fallbacks.append("rectify:SOURCE_VIEW_UPSAMPLED")
-        report.rectify = {"tps": tps, "patch": patch_report, "inner_pixels": int((inner_alpha > 0.5).sum())}
-        return _Layer(inner.astype(np.float32), inner_alpha.astype(np.float32), patch, patch_alpha)
+        if packet.projected:
+            report.rectify = {"tps": {"applied": False, "reason": "UPSTREAM_PROJECTION_OWNS_GEOMETRY"},
+                              "patch": {"used": False, "reason": "UNPROJECTED_PHOTO_FILL_FORBIDDEN"},
+                              "inner_pixels": int((valid > 0.5).sum())}
+            return _Layer(swap, valid, None, None)
+        # The rendered head layer carries its own coverage; there is no landmark thin-plate field and no unprojected
+        # photograph patch (both were 2D / 2.5D screen-space reconstructions of the face).
+        report.rectify = {"tps": {"applied": False, "reason": "REMOVED_2D_SCREEN_SPACE_WARP"},
+                          "patch": {"used": False, "reason": "UNPROJECTED_PHOTO_FILL_FORBIDDEN"},
+                          "inner_pixels": int((valid > 0.5).sum())}
+        return _Layer(swap, valid, None, None)
 
     # ================================================================================================ step 3
     def _relight(self, roi: np.ndarray, layer: _Layer, packet: FacePacket, geo: _Geometry, skin, report: FaceReport
@@ -495,9 +479,12 @@ class Photorealistic3DSwapCore:
             gain = np.clip(a / np.maximum(b, 1.0), 0.8, 1.25).astype(np.float32)
             patch = np.clip(patch * gain, 0, 255)
         info["patch_colour_match_gain"] = [round(float(v), 3) for v in gain]
-        weight = inner_alpha[:, :, None]
-        photo = inner * weight + patch * (1.0 - weight)
-        alpha = np.clip(inner_alpha + (1.0 - inner_alpha) * patch_alpha, 0.0, 1.0)
+        # Straight colour must be normalized by the union alpha. Otherwise the final composite applies inner_alpha twice
+        # wherever patch_alpha is partial/zero, producing a dark or source-border-coloured jaw/forehead seam.
+        patch_weight = (1.0 - inner_alpha) * patch_alpha
+        alpha = np.clip(inner_alpha + patch_weight, 0.0, 1.0)
+        photo = np.divide(inner * inner_alpha[:, :, None] + patch * patch_weight[:, :, None], alpha[:, :, None],
+                          out=inner.copy(), where=alpha[:, :, None] > 0)
         return photo.astype(np.float32), alpha.astype(np.float32)
 
     # ================================================================================================ step 4
@@ -505,50 +492,11 @@ class Photorealistic3DSwapCore:
                  report: FaceReport) -> np.ndarray:
         opt = self.options
         h, w = roi.shape[:2]
-        info: dict = {"restorer": self.restorer_name, "ran": False}
+        info: dict = {"restorer": "none", "ran": False}
         photo_u8 = np.clip(photo, 0, 255).astype(np.uint8)
-        if self.restorer is not None and packet.crop_landmarks5 is not None:
-            crop_size = packet.swapped_crop.shape[0]
-            matrix = np.asarray(packet.crop_to_frame, np.float64).copy()
-            matrix[:, 2] -= (geo.roi[0], geo.roi[1])
-            inverse = ops.invert_affine(matrix)
-            # ROI -> aligned crop shrinks the face when one crop pixel spans more than one ROI pixel (scale > 1)
-            shrinking = float(np.sqrt(abs(np.linalg.det(matrix[:, :2])))) > 1.0
-            aligned = cv2.warpAffine(photo_u8, inverse, (crop_size, crop_size),
-                                     flags=cv2.INTER_AREA if shrinking else cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE)
-            restored = self.restorer(aligned, np.asarray(packet.crop_landmarks5, np.float32))
-            if restored is None:
-                info["reason"] = "RESTORER_DECLINED"
-            else:
-                restored = np.asarray(restored)
-                if restored.dtype != np.uint8 or restored.ndim != 3 or restored.shape[0] != restored.shape[1]:
-                    raise DomainError("SWAP_CORE_RESTORER_INVALID", "Restorer must return a square uint8 BGR image", 503)
-                scale = restored.shape[0] / crop_size
-                back = ops.compose_affine(matrix, np.array([[1 / scale, 0, 0], [0, 1 / scale, 0]], np.float64))
-                restored_roi = cv2.warpAffine(restored, back, (w, h), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE)
-                # Restorers are unreliable on the outermost pixels of their aligned crop (colour specks at the border): fade the restorer's
-                # influence out over the last ~7 % of the crop. The swap itself is unaffected there.
-                margin = max(3, int(round(0.07 * crop_size)))
-                interior = np.zeros((crop_size, crop_size), np.float32)
-                interior[margin:-margin, margin:-margin] = 1.0
-                interior = cv2.GaussianBlur(interior, (0, 0), margin / 2.0)
-                weight = alpha * cv2.warpAffine(interior, matrix, (w, h), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=0)
-                if packet.protect is not None:
-                    protect = cv2.warpAffine(np.clip(np.asarray(packet.protect, np.float32), 0, 1), matrix, (w, h),
-                                             flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=0)
-                    weight = weight * (1.0 - protect)
-                weight = (weight * opt.restoration_blend)[:, :, None]
-                photo = photo * (1.0 - weight) + restored_roi.astype(np.float32) * weight
-                info.update(ran=True, blend=opt.restoration_blend, native_restorer_px=int(restored.shape[0]))
-        elif self.restorer is None:
-            info["reason"] = "NO_RESTORER_CONFIGURED"
-            report.fallbacks.append("restore:NO_RESTORER")
-        else:
-            info["reason"] = "NO_CROP_LANDMARKS5"
-            report.fallbacks.append("restore:NO_LANDMARKS5")
+        info["reason"] = "NO_2D_RESTORATION"   # screen-space GAN restoration was removed; detail lives in the UV albedo
 
         skin_alpha = alpha * (1.0 if skin is None else np.clip(skin, 0, 1))
-        photo = self._inject_detail(photo, skin_alpha, geo, packet, info)
         photo_u8 = np.clip(photo, 0, 255).astype(np.uint8)
         target_plane = ops.luma(roi)
         target_skin = (cv2.erode((geo.target_mask > 0.5).astype(np.uint8), np.ones((5, 5), np.uint8)) > 0)
@@ -567,38 +515,6 @@ class Photorealistic3DSwapCore:
         report.restore = info
         return photo_u8.astype(np.float32)
 
-    def _inject_detail(self, photo: np.ndarray, skin_alpha: np.ndarray, geo: _Geometry, packet: FacePacket, info: dict) -> np.ndarray:
-        """Add the FaceSet photograph's own fine detail where the photographic layer is softer than it. Never exceeds it."""
-        opt = self.options
-        info["detail"] = {"applied": False}
-        if opt.detail_gain <= 0 or not geo.enabled or packet.source_view is None or geo.similarity is None:
-            return photo
-        h, w = photo.shape[:2]
-        scale = float(np.sqrt(abs(np.linalg.det(geo.similarity[:, :2]))))
-        if scale < 0.35:                     # the photograph is far smaller than the face: it holds no detail at this scale
-            info["detail"] = {"applied": False, "reason": "SOURCE_TOO_SMALL"}
-            return photo
-        sigma = max(1.2, 0.0035 * geo.face_width)
-        view = np.asarray(packet.source_view).astype(np.float32)
-        patch = cv2.warpAffine(view, geo.similarity, (w, h), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE)
-        detail = ops.high_pass(patch, sigma)
-        weight = np.clip(skin_alpha, 0, 1)
-        region = weight > 0.6
-        if int(region.sum()) < 128:
-            return photo
-        photo_hf = ops.high_pass(photo, sigma)
-        std_photo = float(np.std(photo_hf[region]))
-        std_source = float(np.std(detail[region]))
-        deficit = max(0.0, (std_source - std_photo) / max(std_source, 1e-6))
-        gain = min(1.0, deficit) * opt.detail_gain
-        if gain <= 0.01:
-            info["detail"] = {"applied": False, "reason": "NO_DEFICIT", "photo_hf": round(std_photo, 2), "source_hf": round(std_source, 2)}
-            return photo
-        info["detail"] = {"applied": True, "gain": round(gain, 3), "photo_hf": round(std_photo, 2), "source_hf": round(std_source, 2)}
-        return np.clip(photo + gain * detail * weight[:, :, None], 0, 255)
-
-
-# ------------------------------------------------------------------------------------------------------------- helpers
 def _check_frame(frame: np.ndarray) -> None:
     if not isinstance(frame, np.ndarray) or frame.dtype != np.uint8 or frame.ndim != 3 or frame.shape[2] != 3:
         raise DomainError("SWAP_CORE_FRAME_INVALID", "Frame must be a uint8 H x W x 3 BGR array", 422)

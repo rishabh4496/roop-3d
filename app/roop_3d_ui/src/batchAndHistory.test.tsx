@@ -155,7 +155,7 @@ describe('BatchMatrixScreen', () => {
     await click(recipeTab!);
     expect(host.textContent).toContain('Strategy D: Recipe Matrix');
     expect(host.textContent).toContain('Natural Photoreal');
-    expect(host.textContent).toContain('High-Fidelity Ultra');
+    expect(host.textContent).toContain('Gaussian Head Avatar');
   });
 
   it('supports automatic video segment splitting toggle and options', async () => {

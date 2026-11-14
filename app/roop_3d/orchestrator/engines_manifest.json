@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "content_version": "2026.11.04-1",
+  "content_version": "2026.11.14-1",
   "engines": [
     {
       "engine_id": "pyav_video_reader",
@@ -33,11 +33,7 @@
       "residency": "none",
       "exclusive_with": [
         "ffmpeg_stream_source",
-        "ffmpeg_stream_writer",
-        "inswapper_batch_stream",
-        "stream_restorer_codeformer",
-        "stream_restorer_gpen",
-        "stream_restorer_ultramax"
+        "ffmpeg_stream_writer"
       ],
       "description": "PyAV decoder; tries CUDA decode, then software, recording the backend used.",
       "fallback": {
@@ -80,16 +76,10 @@
       "residency": "none",
       "exclusive_with": [
         "bisenet_face_parser",
-        "codeformer_reference",
-        "gpen_reference",
         "identity_asset_builder",
-        "inswapper_reference",
         "liveportrait_retarget",
-        "pose_blend_projector",
         "pyav_video_reader",
         "pyav_video_writer",
-        "reenactment_3d",
-        "tps_expression",
         "xseg_visible_face"
       ],
       "description": "FFmpeg pipe decoder for the stream backend; admits only verified CFR media.",
@@ -231,117 +221,41 @@
       }
     },
     {
-      "engine_id": "inswapper_reference",
-      "category": "identity_swapping",
-      "adapter_id": "inswapper_reference",
-      "models": [
-        {
-          "model_id": "4387a15d1f7fd7d8741d6d9d",
-          "role": "identity_swapper"
-        }
-      ],
+      "engine_id": "true3d_head_renderer",
+      "category": "head_rendering",
+      "adapter_id": "true3d_head_renderer",
+      "models": [],
       "inputs": [
         "frame",
         "face_detections",
         "identity_source"
       ],
       "outputs": [
-        "swapped_crop"
+        "rendered_head_layer"
       ],
       "resolution": {
         "min": 64,
         "max": 7680
       },
       "precisions": [
-        "FP32"
+        "FP32",
+        "FP16"
       ],
       "providers": [
-        "CUDAExecutionProvider",
-        "CPUExecutionProvider"
+        "CUDAExecutionProvider"
       ],
       "hardware_tiers": [
-        "cpu",
         "6gb",
         "12gb"
       ],
-      "declared_peak_vram_mib": 1150,
+      "declared_peak_vram_mib": null,
       "residency": "heavy",
-      "exclusive_with": [
-        "ffmpeg_stream_source",
-        "ffmpeg_stream_writer",
-        "inswapper_batch_stream",
-        "stream_restorer_codeformer",
-        "stream_restorer_gpen",
-        "stream_restorer_ultramax"
-      ],
-      "description": "INSwapper 128 on the reference runner. FP32 only.",
+      "exclusive_with": [],
+      "description": "True-3D full-head render: watertight head, perspective K[R|t], Z-buffer, PBR+SSS or 3D Gaussian shading. NOT WIRED.",
       "fallback": {
-        "mode": "degrade_to",
-        "target_engine_id": "inswapper_reference",
-        "reason_codes": [
-          "CUDA_ALLOCATION_ERROR",
-          "CUDA_OOM"
-        ]
-      }
-    },
-    {
-      "engine_id": "inswapper_batch_stream",
-      "category": "identity_swapping",
-      "adapter_id": "inswapper_batch_stream",
-      "models": [
-        {
-          "model_id": "eae68e48eb33ac8870a6f39f",
-          "role": "identity_swapper"
-        }
-      ],
-      "inputs": [
-        "frame",
-        "face_detections",
-        "identity_source"
-      ],
-      "outputs": [
-        "swapped_crop"
-      ],
-      "resolution": {
-        "min": 64,
-        "max": 7680
-      },
-      "precisions": [
-        "FP32"
-      ],
-      "providers": [
-        "CUDAExecutionProvider",
-        "TensorrtExecutionProvider",
-        "CPUExecutionProvider"
-      ],
-      "hardware_tiers": [
-        "cpu",
-        "6gb",
-        "12gb"
-      ],
-      "declared_peak_vram_mib": 1150,
-      "residency": "heavy",
-      "exclusive_with": [
-        "bisenet_face_parser",
-        "codeformer_reference",
-        "gpen_reference",
-        "identity_asset_builder",
-        "inswapper_reference",
-        "liveportrait_retarget",
-        "pose_blend_projector",
-        "pyav_video_reader",
-        "pyav_video_writer",
-        "reenactment_3d",
-        "tps_expression",
-        "xseg_visible_face"
-      ],
-      "description": "Batched INSwapper for the stream backend, single face per frame. FP32 only.",
-      "fallback": {
-        "mode": "degrade_to",
-        "target_engine_id": "inswapper_batch_stream",
-        "reason_codes": [
-          "CUDA_ALLOCATION_ERROR"
-        ]
+        "mode": "none",
+        "target_engine_id": null,
+        "reason_codes": []
       }
     },
     {
@@ -350,12 +264,10 @@
       "adapter_id": "identity_asset_builder",
       "models": [],
       "inputs": [
-        "swapped_crop",
         "face_detections",
         "identity_source"
       ],
       "outputs": [
-        "swapped_crop",
         "identity_asset_3d"
       ],
       "resolution": {
@@ -378,69 +290,13 @@
       "exclusive_with": [
         "ffmpeg_stream_source",
         "ffmpeg_stream_writer",
-        "inswapper_batch_stream",
-        "liveportrait_retarget",
-        "pose_blend_projector",
-        "stream_restorer_codeformer",
-        "stream_restorer_gpen",
-        "stream_restorer_ultramax"
+        "liveportrait_retarget"
       ],
-      "description": "Multi-view identity asset and pose_3d projection. Classical CPU, no neural model.",
+      "description": "Multi-view identity asset on the full-head MakeHuman template. Classical CPU, no neural model.",
       "fallback": {
-        "mode": "degrade_to",
-        "target_engine_id": "inswapper_reference",
-        "reason_codes": [
-          "IDENTITY_ASSET_UNAVAILABLE",
-          "POSE_PROJECTION_REJECTED"
-        ]
-      }
-    },
-    {
-      "engine_id": "pose_blend_projector",
-      "category": "reconstruction_3d",
-      "adapter_id": "pose_blend_projector",
-      "models": [],
-      "inputs": [
-        "swapped_crop",
-        "face_detections"
-      ],
-      "outputs": [
-        "swapped_crop"
-      ],
-      "resolution": {
-        "min": 64,
-        "max": 7680
-      },
-      "precisions": [
-        "FP32"
-      ],
-      "providers": [
-        "CPUNative"
-      ],
-      "hardware_tiers": [
-        "cpu",
-        "6gb",
-        "12gb"
-      ],
-      "declared_peak_vram_mib": null,
-      "residency": "none",
-      "exclusive_with": [
-        "ffmpeg_stream_source",
-        "ffmpeg_stream_writer",
-        "identity_asset_builder",
-        "inswapper_batch_stream",
-        "liveportrait_retarget",
-        "stream_restorer_codeformer",
-        "stream_restorer_gpen",
-        "stream_restorer_ultramax"
-      ],
-      "description": "Mesh-blend projection on an estimated canonical proxy. Classical CPU.",
-      "fallback": {
-        "mode": "degrade_to",
-        "target_engine_id": "inswapper_reference",
-        "reason_codes": [
-          "POSE_PROJECTION_REJECTED"
-        ]
+        "mode": "none",
+        "target_engine_id": null,
+        "reason_codes": []
       }
     },
     {
@@ -470,12 +326,12 @@
         }
       ],
       "inputs": [
-        "swapped_crop",
+        "rendered_head_layer",
         "landmarks_106",
         "face_detections"
       ],
       "outputs": [
-        "swapped_crop"
+        "rendered_head_layer"
       ],
       "resolution": {
         "min": 64,
@@ -498,382 +354,9 @@
       "exclusive_with": [
         "ffmpeg_stream_source",
         "ffmpeg_stream_writer",
-        "identity_asset_builder",
-        "inswapper_batch_stream",
-        "pose_blend_projector",
-        "reenactment_3d",
-        "stream_restorer_codeformer",
-        "stream_restorer_gpen",
-        "stream_restorer_ultramax"
+        "identity_asset_builder"
       ],
       "description": "LivePortrait retargeting; the warp model is CPU-only in current receipts.",
-      "fallback": {
-        "mode": "degrade_to",
-        "target_engine_id": "inswapper_reference",
-        "reason_codes": [
-          "LIVEPORTRAIT_UNAVAILABLE"
-        ]
-      }
-    },
-    {
-      "engine_id": "tps_expression",
-      "category": "expression_transfer",
-      "adapter_id": "tps_expression",
-      "models": [],
-      "inputs": [
-        "swapped_crop",
-        "landmarks_106"
-      ],
-      "outputs": [
-        "swapped_crop"
-      ],
-      "resolution": {
-        "min": 64,
-        "max": 7680
-      },
-      "precisions": [
-        "FP32"
-      ],
-      "providers": [
-        "CPUNative"
-      ],
-      "hardware_tiers": [
-        "cpu",
-        "6gb",
-        "12gb"
-      ],
-      "declared_peak_vram_mib": null,
-      "residency": "none",
-      "exclusive_with": [
-        "ffmpeg_stream_source",
-        "ffmpeg_stream_writer",
-        "inswapper_batch_stream",
-        "stream_restorer_codeformer",
-        "stream_restorer_gpen",
-        "stream_restorer_ultramax"
-      ],
-      "description": "Thin-plate-spline expression warp; re-detects landmarks on the generated crop.",
-      "fallback": {
-        "mode": "degrade_to",
-        "target_engine_id": "inswapper_reference",
-        "reason_codes": [
-          "TPS_LAYOUT_IMPLAUSIBLE"
-        ]
-      }
-    },
-    {
-      "engine_id": "reenactment_3d",
-      "category": "expression_transfer",
-      "adapter_id": "reenactment_3d",
-      "models": [],
-      "inputs": [
-        "swapped_crop",
-        "identity_asset_3d",
-        "landmarks_106"
-      ],
-      "outputs": [
-        "swapped_crop"
-      ],
-      "resolution": {
-        "min": 64,
-        "max": 7680
-      },
-      "precisions": [
-        "FP32"
-      ],
-      "providers": [
-        "CPUNative"
-      ],
-      "hardware_tiers": [
-        "cpu",
-        "6gb",
-        "12gb"
-      ],
-      "declared_peak_vram_mib": null,
-      "residency": "none",
-      "exclusive_with": [
-        "ffmpeg_stream_source",
-        "ffmpeg_stream_writer",
-        "inswapper_batch_stream",
-        "liveportrait_retarget",
-        "stream_restorer_codeformer",
-        "stream_restorer_gpen",
-        "stream_restorer_ultramax"
-      ],
-      "description": "Parametric 3D reenactment of the identity asset, cross-faded with the proven crop.",
-      "fallback": {
-        "mode": "degrade_to",
-        "target_engine_id": "inswapper_reference",
-        "reason_codes": [
-          "REENACTMENT_NOT_ENGAGED"
-        ]
-      }
-    },
-    {
-      "engine_id": "gpen_reference",
-      "category": "restoration",
-      "adapter_id": "gpen_reference",
-      "models": [
-        {
-          "model_id": "6e16549530b5f4a624ca84af",
-          "role": "face_restorer"
-        }
-      ],
-      "inputs": [
-        "swapped_crop",
-        "face_detections"
-      ],
-      "outputs": [
-        "restored_crop"
-      ],
-      "resolution": {
-        "min": 64,
-        "max": 7680
-      },
-      "precisions": [
-        "FP32"
-      ],
-      "providers": [
-        "CUDAExecutionProvider",
-        "CPUExecutionProvider"
-      ],
-      "hardware_tiers": [
-        "cpu",
-        "6gb",
-        "12gb"
-      ],
-      "declared_peak_vram_mib": 1250,
-      "residency": "heavy",
-      "exclusive_with": [
-        "ffmpeg_stream_source",
-        "ffmpeg_stream_writer",
-        "inswapper_batch_stream",
-        "stream_restorer_codeformer",
-        "stream_restorer_gpen",
-        "stream_restorer_ultramax"
-      ],
-      "description": "GPEN-BFR 512 face restoration on the reference runner.",
-      "fallback": {
-        "mode": "none",
-        "target_engine_id": null,
-        "reason_codes": []
-      }
-    },
-    {
-      "engine_id": "codeformer_reference",
-      "category": "restoration",
-      "adapter_id": "codeformer_reference",
-      "models": [
-        {
-          "model_id": "8d400f8c5291e8e875dc3e2f",
-          "role": "face_restorer"
-        }
-      ],
-      "inputs": [
-        "swapped_crop",
-        "face_detections"
-      ],
-      "outputs": [
-        "restored_crop"
-      ],
-      "resolution": {
-        "min": 64,
-        "max": 7680
-      },
-      "precisions": [
-        "FP32"
-      ],
-      "providers": [
-        "CUDAExecutionProvider",
-        "CPUExecutionProvider"
-      ],
-      "hardware_tiers": [
-        "cpu",
-        "6gb",
-        "12gb"
-      ],
-      "declared_peak_vram_mib": 1350,
-      "residency": "heavy",
-      "exclusive_with": [
-        "ffmpeg_stream_source",
-        "ffmpeg_stream_writer",
-        "inswapper_batch_stream",
-        "stream_restorer_codeformer",
-        "stream_restorer_gpen",
-        "stream_restorer_ultramax"
-      ],
-      "description": "CodeFormer 512 face restoration on the reference runner.",
-      "fallback": {
-        "mode": "none",
-        "target_engine_id": null,
-        "reason_codes": []
-      }
-    },
-    {
-      "engine_id": "stream_restorer_gpen",
-      "category": "restoration",
-      "adapter_id": "stream_restorer_gpen",
-      "models": [
-        {
-          "model_id": "6e16549530b5f4a624ca84af",
-          "role": "face_restorer"
-        }
-      ],
-      "inputs": [
-        "swapped_crop",
-        "face_detections"
-      ],
-      "outputs": [
-        "restored_crop"
-      ],
-      "resolution": {
-        "min": 64,
-        "max": 7680
-      },
-      "precisions": [
-        "FP32"
-      ],
-      "providers": [
-        "CUDAExecutionProvider",
-        "TensorrtExecutionProvider",
-        "CPUExecutionProvider"
-      ],
-      "hardware_tiers": [
-        "cpu",
-        "6gb",
-        "12gb"
-      ],
-      "declared_peak_vram_mib": null,
-      "residency": "heavy",
-      "exclusive_with": [
-        "bisenet_face_parser",
-        "codeformer_reference",
-        "gpen_reference",
-        "identity_asset_builder",
-        "inswapper_reference",
-        "liveportrait_retarget",
-        "pose_blend_projector",
-        "pyav_video_reader",
-        "pyav_video_writer",
-        "reenactment_3d",
-        "tps_expression",
-        "xseg_visible_face"
-      ],
-      "description": "Decoupled GPEN restorer pool on the stream backend.",
-      "fallback": {
-        "mode": "none",
-        "target_engine_id": null,
-        "reason_codes": []
-      }
-    },
-    {
-      "engine_id": "stream_restorer_codeformer",
-      "category": "restoration",
-      "adapter_id": "stream_restorer_codeformer",
-      "models": [
-        {
-          "model_id": "8d400f8c5291e8e875dc3e2f",
-          "role": "face_restorer"
-        }
-      ],
-      "inputs": [
-        "swapped_crop",
-        "face_detections"
-      ],
-      "outputs": [
-        "restored_crop"
-      ],
-      "resolution": {
-        "min": 64,
-        "max": 7680
-      },
-      "precisions": [
-        "FP32"
-      ],
-      "providers": [
-        "CUDAExecutionProvider",
-        "TensorrtExecutionProvider",
-        "CPUExecutionProvider"
-      ],
-      "hardware_tiers": [
-        "cpu",
-        "6gb",
-        "12gb"
-      ],
-      "declared_peak_vram_mib": null,
-      "residency": "heavy",
-      "exclusive_with": [
-        "bisenet_face_parser",
-        "codeformer_reference",
-        "gpen_reference",
-        "identity_asset_builder",
-        "inswapper_reference",
-        "liveportrait_retarget",
-        "pose_blend_projector",
-        "pyav_video_reader",
-        "pyav_video_writer",
-        "reenactment_3d",
-        "tps_expression",
-        "xseg_visible_face"
-      ],
-      "description": "Decoupled CodeFormer restorer pool on the stream backend.",
-      "fallback": {
-        "mode": "none",
-        "target_engine_id": null,
-        "reason_codes": []
-      }
-    },
-    {
-      "engine_id": "stream_restorer_ultramax",
-      "category": "restoration",
-      "adapter_id": "stream_restorer_ultramax",
-      "models": [
-        {
-          "model_id": "48d4ecd4d27ed5eca7e93e70",
-          "role": "face_restorer"
-        }
-      ],
-      "inputs": [
-        "swapped_crop",
-        "face_detections"
-      ],
-      "outputs": [
-        "restored_crop"
-      ],
-      "resolution": {
-        "min": 64,
-        "max": 7680
-      },
-      "precisions": [
-        "FP32"
-      ],
-      "providers": [
-        "CUDAExecutionProvider",
-        "TensorrtExecutionProvider",
-        "CPUExecutionProvider"
-      ],
-      "hardware_tiers": [
-        "cpu",
-        "6gb",
-        "12gb"
-      ],
-      "declared_peak_vram_mib": null,
-      "residency": "heavy",
-      "exclusive_with": [
-        "bisenet_face_parser",
-        "codeformer_reference",
-        "gpen_reference",
-        "identity_asset_builder",
-        "inswapper_reference",
-        "liveportrait_retarget",
-        "pose_blend_projector",
-        "pyav_video_reader",
-        "pyav_video_writer",
-        "reenactment_3d",
-        "tps_expression",
-        "xseg_visible_face"
-      ],
-      "description": "UltraMax (codeformer.fp16) restorer pool; bypasses small faces.",
       "fallback": {
         "mode": "none",
         "target_engine_id": null,
@@ -917,11 +400,7 @@
       "residency": "heavy",
       "exclusive_with": [
         "ffmpeg_stream_source",
-        "ffmpeg_stream_writer",
-        "inswapper_batch_stream",
-        "stream_restorer_codeformer",
-        "stream_restorer_gpen",
-        "stream_restorer_ultramax"
+        "ffmpeg_stream_writer"
       ],
       "description": "BiSeNet ResNet-34 face parser; geometric hull mask if the parser fails.",
       "fallback": {
@@ -975,11 +454,7 @@
       "residency": "heavy",
       "exclusive_with": [
         "ffmpeg_stream_source",
-        "ffmpeg_stream_writer",
-        "inswapper_batch_stream",
-        "stream_restorer_codeformer",
-        "stream_restorer_gpen",
-        "stream_restorer_ultramax"
+        "ffmpeg_stream_writer"
       ],
       "description": "Robust occlusion analysis: BiSeNet plus XSeg and face-occluder networks.",
       "fallback": {
@@ -1022,11 +497,7 @@
       "residency": "none",
       "exclusive_with": [
         "ffmpeg_stream_source",
-        "ffmpeg_stream_writer",
-        "inswapper_batch_stream",
-        "stream_restorer_codeformer",
-        "stream_restorer_gpen",
-        "stream_restorer_ultramax"
+        "ffmpeg_stream_writer"
       ],
       "description": "PyAV encoder; smoke-tests NVENC, otherwise libx264, recording nvenc_state.",
       "fallback": {
@@ -1069,16 +540,10 @@
       "residency": "none",
       "exclusive_with": [
         "bisenet_face_parser",
-        "codeformer_reference",
-        "gpen_reference",
         "identity_asset_builder",
-        "inswapper_reference",
         "liveportrait_retarget",
-        "pose_blend_projector",
         "pyav_video_reader",
         "pyav_video_writer",
-        "reenactment_3d",
-        "tps_expression",
         "xseg_visible_face"
       ],
       "description": "FFmpeg segment writer for the stream backend (mp4 only).",

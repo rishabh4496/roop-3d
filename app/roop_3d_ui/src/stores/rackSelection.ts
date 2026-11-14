@@ -1,20 +1,21 @@
 import { createAtomicStore, useStoreSelector } from './atomicStore';
+import { stripRemovedParameters } from '../true3d';
 
 /**
  * Engine & Model Rack choices that are not already part of `WorkstationParameters`.
  *
- * `swapper` is sent as the job's `swapper_model_id` and `detector` mirrors the persisted global `detector_model_id`; both reach the render
- * engine. Choices the engine has no stage or setting for (frame upscaler, landmarker, cranial silhouette, per-person models) are not kept at
- * all: the rack lists them as unsupported instead of remembering a selection that changes nothing.
+ * `detector` mirrors the persisted global `detector_model_id`. The head topology engine, shader mode and camera live in the
+ * workspace parameters. Choices the engine has no stage or setting for are not kept at all. Entries written by earlier
+ * versions (the removed swapper choice, upscaler, landmarker ...) are dropped on load, and removed keys inside saved batch
+ * parameters are stripped.
  */
 export type RackState = {
-  swapper: string | null;
   detector: string;
   /** Parameters the Batch screen merges into every queued job (only fields the user touched). */
   batchParameters: Record<string, unknown>;
 };
 const KEY = 'roop3d-model-rack';
-const DEFAULTS: RackState = { swapper: null, detector: 'scrfd', batchParameters: {} };
+const DEFAULTS: RackState = { detector: 'scrfd', batchParameters: {} };
 
 function load(): RackState {
   try {
@@ -22,11 +23,10 @@ function load(): RackState {
     if (!raw) return DEFAULTS;
     const value = JSON.parse(raw);
     if (!value || typeof value !== 'object') return DEFAULTS;
-    // Only the known keys: entries written by earlier versions (upscaler, landmarker, per-person pins…) are dropped on the next save.
     return {
-      swapper: typeof value.swapper === 'string' ? value.swapper : null,
       detector: typeof value.detector === 'string' ? value.detector : DEFAULTS.detector,
-      batchParameters: value.batchParameters && typeof value.batchParameters === 'object' ? value.batchParameters : {},
+      batchParameters: value.batchParameters && typeof value.batchParameters === 'object' && !Array.isArray(value.batchParameters)
+        ? stripRemovedParameters(value.batchParameters) : {},
     };
   } catch { return DEFAULTS; }
 }

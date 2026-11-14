@@ -160,59 +160,28 @@ describe('viewer rigs', () => {
     expect(morphRig(null).blend).toBe(1);
   });
 
-  it('derives the viewer lighting only while relighting is on, and uses the engine\'s own blend for the morph', () => {
+  it('derives the viewer lighting only while relighting is on, and always previews the full source head (blend 1)', () => {
     expect(viewerLighting(DEFAULT_PARAMETERS)).toBeNull();
     expect(viewerLighting({ ...DEFAULT_PARAMETERS, relight: true, lighting_mode: 'manual', manual_light_yaw: -40, manual_light_pitch: 10, ambient_fill: 0.7 }))
       .toMatchObject({ yaw: -40, pitch: 10, ambient: 0.7, manual: true });
     expect(viewerLighting({ ...DEFAULT_PARAMETERS, relight: true, lighting_mode: 'auto', manual_light_yaw: -40 })).toMatchObject({ yaw: 35, manual: false });
     expect(viewerMorph(DEFAULT_PARAMETERS, false)).toBeNull();
-    expect(viewerMorph({ ...DEFAULT_PARAMETERS, pose_strength: 0.8, hairline_offset_px: -16 }, true)).toEqual({ blend: 0.8, hairline: -0.5 });
-    expect(viewerMorph({ ...DEFAULT_PARAMETERS, pose_mode: 'retarget' }, true)?.blend).toBe(1);
+    expect(viewerMorph({ ...DEFAULT_PARAMETERS, hairline_offset_px: -16 }, true)).toEqual({ blend: 1, hairline: -0.5 });
   });
 });
 
 describe('IdentityMorphPanel', () => {
-  function Harness({ onChange }: { onChange: (value: WorkstationParameters) => void }) {
-    const [parameters, setParameters] = useState<WorkstationParameters>(DEFAULT_PARAMETERS);
-    const [preview, setPreview] = useState(false);
-    return <IdentityMorphPanel parameters={parameters} setParameters={value => { onChange(value); setParameters(value); }} preview={preview} onPreview={setPreview} />;
-  }
-  const change = async (input: HTMLInputElement, value: string) => act(async () => {
-    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, value);
-    input.dispatchEvent(new Event('input', { bubbles: true }));
-  });
-
-  it('writes the engine\'s mesh blend (jaw reshape weight) and no longer carries the hairline slider', async () => {
+  it('is only the viewer overlay toggle: no blend weight and no influence-mode radio remain', async () => {
     Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
-    const seen: WorkstationParameters[] = [];
-    const onChange = vi.fn((value: WorkstationParameters) => { seen.push(value); });
+    const onPreview = vi.fn();
     const host = document.createElement('div'); document.body.append(host); const root = createRoot(host);
     try {
-      await act(async () => root.render(<Harness onChange={onChange} />));
-      const blend = thumb(host, 'Jawline and cranial volume blend');
-      expect(host.querySelector('[aria-label="Forehead and hairline boundary offset"]')).toBeNull();   // moved to the Masking step as "Forehead hairline inset"
-      expect(sliderValue(blend)).toBe(35);
-      await setSlider(blend, 80);
-      expect(seen.at(-1)?.pose_strength).toBeCloseTo(0.8);
-      expect('hairline_offset_px' in seen.at(-1)!).toBe(false);
-      expect(host.querySelector('.ul-slider__readout')?.textContent).toBe('80%');
-    } finally { await act(async () => root.unmount()); host.remove(); }
-  });
-
-  it('switches the 3D influence mode between the neural swap and geometry, and disables the weight in neural mode', async () => {
-    Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
-    const seen: WorkstationParameters[] = [];
-    const host = document.createElement('div'); document.body.append(host); const root = createRoot(host);
-    try {
-      await act(async () => root.render(<IdentityMorphPanel parameters={{ ...DEFAULT_PARAMETERS, pose_mode: 'retarget' }} setParameters={value => seen.push(value)} preview={false} onPreview={() => {}} />));
-      expect(isDisabled(thumb(host, 'Jawline and cranial volume blend'))).toBe(true);
-      const radios = host.querySelectorAll<HTMLButtonElement>('[role="radiogroup"][aria-labelledby="influence-mode-label"] [role="radio"]');
-      expect([...radios].map(item => item.getAttribute('aria-checked'))).toEqual(['true', 'false']);
-      expect(radios[0].textContent).toContain('3D Pose-Guided Neural Swap');
-      await act(async () => radios[1].click());
-      expect(seen.at(-1)?.pose_mode).toBe('mesh_blend');
-      await act(async () => radios[0].click());
-      expect(seen.at(-1)?.pose_mode).toBe('retarget');
+      await act(async () => root.render(<IdentityMorphPanel parameters={DEFAULT_PARAMETERS} setParameters={() => {}} preview={false} onPreview={onPreview} />));
+      expect(host.querySelector('[role="radiogroup"]')).toBeNull();
+      expect(host.querySelector('[aria-label="Jawline and cranial volume blend"]')).toBeNull();
+      expect(host.textContent).not.toMatch(/neural swap|mesh blend|2\.5D/i);
+      await act(async () => host.querySelector<HTMLInputElement>('input[aria-label="Show morph overlay in the 3D viewer"]')!.click());
+      expect(onPreview).toHaveBeenCalledWith(true);
     } finally { await act(async () => root.unmount()); host.remove(); }
   });
 });

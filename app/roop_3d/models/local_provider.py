@@ -73,9 +73,10 @@ class LocalWeightProvider:
     def trusted_path(self, record: ModelRecord) -> Path | None:
         """A physical weight in app/models that matches ``record`` by name, trusted by its own digest.
 
-        Used only when the pinned lookup fails (missing, different export, FP16 variant, renamed file).
+        Used only when the pinned lookup fails (missing, different export, FP16 variant, renamed file). A license-blocked
+        record is never trusted by placement: acknowledgement and local use do not override ``status == "blocked"``.
         """
-        if self.trust is None:
+        if self.trust is None or record.status == "blocked":
             return None
         names = [*record.filenames, record.model_id, getattr(record, "name", "")]
         path = self.trust.locate(names)

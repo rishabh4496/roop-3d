@@ -90,40 +90,6 @@ def main() -> int:
     }
     check(all(ratio < .8 for ratio in reductions.values()), f"Temporal variance was not reduced enough: {reductions}")
 
-    from roop_3d.engine.stage16_pipeline import Stage16Options, Stage16Pipeline
-    from roop_3d.flame_3d_engine import EyeGaze, Face3D, FlameParameters
-    from roop_3d.reconstruction.geometry_types import euler_to_rotation_matrix
-    class SyntheticFlame:
-        def __init__(self): self.raw_psi = []
-        def extract(self, rgb, *, require_gaze=False):
-            if float(np.mean(rgb)) < 100:
-                params = FlameParameters(np.ones(100), np.zeros(50), np.zeros(3), np.eye(3))
-            else:
-                psi = np.full(50, .35, np.float32) + rng.normal(0, .12, 50).astype(np.float32)
-                self.raw_psi.append(psi)
-                params = FlameParameters(np.full(100, 2., np.float32) + rng.normal(0, .1, 100).astype(np.float32),
-                    psi, rng.normal(0, .05, 3).astype(np.float32),
-                    euler_to_rotation_matrix(*rng.normal(0, 1.5, 3)),
-                    gaze=EyeGaze(*rng.normal(0, .08, 4)))
-            return Face3D(params, None)
-    synthetic_flame = SyntheticFlame()
-    class SyntheticSwapper:
-        def swap(self, image, embedding): return type('Swap', (), {'rgb': image.copy(), 'mask': np.ones(image.shape[:2], np.uint8)})()
-    class SyntheticPortrait:
-        def retarget(self, image, driving, **kwargs): return image
-    class ShapePass:
-        def condition(self, image, source, target): return image
-    stage16 = Stage16Pipeline(synthetic_flame, SyntheticSwapper(), SyntheticPortrait(), shape=ShapePass())
-    stage16_psi = []
-    for frame in range(10):
-        source_rgb = np.zeros((256, 256, 3), np.uint8)
-        target_rgb = np.full((256, 256, 3), 150, np.uint8)
-        result = stage16.process(source_rgb, target_rgb, np.zeros(512, np.float32),
-            options=Stage16Options(shape_retention_weight=1), track_id=7, timestamp_seconds=frame / 30)
-        stage16_psi.append(result.flame.psi)
-    coefficient_ratio = variance(stage16_psi) / variance(synthetic_flame.raw_psi)
-    check(coefficient_ratio < .8, f"Stage16 3DMM expression coefficients were not stabilized: {coefficient_ratio}")
-    reductions["stage16_3dmm_expression"] = coefficient_ratio
 
     mask_ema = TemporalMaskEMA(alpha=.65)
     raw_masks, stable_masks = [], []

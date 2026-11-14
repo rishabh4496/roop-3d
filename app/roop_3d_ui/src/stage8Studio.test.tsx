@@ -34,9 +34,10 @@ it('loads durable bank assignments and reloads saved archive cells after fill',a
   expect(fetch.mock.calls.filter(([url])=>url.endsWith('/pose_matrix'))).toHaveLength(2);
  } finally {await act(async()=>root.unmount());host.remove();vi.unstubAllGlobals();}
 });
-it('sends CodeFormer and the identity pair when restoration is animated from zero',()=>{
+it('sends the identity pair, and never a restorer, when a blend is animated',()=>{
  const recipe={method:'slerp' as const,source_face_ids:['alice','bob'],weights:[1,0]};
  const payload=buildLivePayload({request:{target_path:'x',inspection_id:'a'.repeat(32),face_mappings:[{track_id:'track_0000',faceset_id:'alice'}],processing:'local',remote_consent:false,trim_start_seconds:null,trim_end_seconds:null,identity_blend:recipe,parameter_curves:{tracks:{restorer_opacity:[{frame:0,value:0,easing:'linear'},{frame:10,value:1,easing:'linear'}]}}},
- time:1,fps:25,parameters:{...DEFAULT_PARAMETERS,restorer_model:'codeformer',fidelity_weight:.8},restorerAvailable:true});
- expect(payload).toMatchObject({restorer:'codeformer',fidelity_weight:.8,identity_blend:recipe,frame_index:25});
+ time:1,fps:25,parameters:{...DEFAULT_PARAMETERS}});
+ expect(payload).toMatchObject({identity_blend:recipe,frame_index:25});
+ expect(payload).not.toHaveProperty('restorer');
 });
