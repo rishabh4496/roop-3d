@@ -8,6 +8,7 @@ import numpy as np
 from roop_3d.core.errors import DomainError
 from roop_3d.engine.detection import track_policy as tp
 from roop_3d.engine.detection.dense_landmarks import DenseLandmarks, geometric_pose
+from roop_3d.engine.detection.robust_detector import RobustDetector, dense_validator
 from roop_3d.engine.detection.track_policy import TrackPolicy
 from roop_3d.engine.runtime import RuntimeConfig, image_bgr, tensor, session_factory
 from roop_3d.faceset.recognizer import Recognizer
@@ -105,7 +106,7 @@ class FaceTracker:
     def __init__(self, catalog: ModelCatalog | None = None, *, max_tracks: int = 32, max_missed: int = 15,
                  threshold: float = 0.5, config: RuntimeConfig = RuntimeConfig(), detector: Detector | None = None, stabilize: bool = True,
                  policy: TrackPolicy | None = None, low_threshold: float | None = 0.1, low_match_iou: float = 0.4,
-                 scene_cut_detector: SceneCutDetector | None = None):
+                 scene_cut_detector: SceneCutDetector | None = None, recovery: bool = True):
         """``threshold`` is the ByteTrack high-score cut (detections at or above it are associated first, with the
         appearance+overlap cost, and may start tracks). ``low_threshold`` (default 0.1; ``None`` disables the second
         pass) is the lowest detector score still observed: those detections are matched afterwards to the tracks the
@@ -119,7 +120,16 @@ class FaceTracker:
         factory = session_factory(self.catalog, config)
         self.detector, self.recognizer = detector or Detector(self.catalog, factory, model_id=config.detector_model_id, provider=config.provider, precision=config.precision_policy), Recognizer(self.catalog, factory)
         self._owns_detector = detector is None
+        # Tracker continuity: a tracker that built its own real detector wraps it with the staged scale/tile/roll recovery,
+        # entered only while a track is alive and the primary pass found nothing confident (bounded passes per frame).
+        # A caller-supplied RobustDetector keeps its own policy (recovery on every unresolved frame).
+        self._recover_only_with_tracks = False
+        if self._owns_detector and recovery and isinstance(self.detector, Detector):
+            self.detector = RobustDetector(self.detector)
+            self._recover_only_with_tracks = True
         self.dense = DenseLandmarks(self.catalog, config)
+        if isinstance(self.detector, RobustDetector) and self.detector.validator is None:
+            self.detector.validator = dense_validator(self.dense.infer106)
         self.max_tracks, self.max_missed, self.threshold = max_tracks, max_missed, threshold
         self.low_threshold, self.low_match_iou = low_threshold, low_match_iou
         self._tracks: dict[int, tuple[FaceObservation, int, int]] = {}
@@ -148,7 +158,12 @@ class FaceTracker:
         image_bgr(image)
         floor = self.threshold if self.low_threshold is None else self.low_threshold
         if hasattr(self.detector, "detect_scored"):
-            scored, _ = self.detector.detect_scored(image, floor)
+            if isinstance(self.detector, RobustDetector):
+                recover = bool(self._tracks) if self._recover_only_with_tracks else True
+                scored, _ = self.detector.detect_scored(image, floor, recover=recover,
+                                                        max_passes=8 if self._recover_only_with_tracks else None)
+            else:
+                scored, _ = self.detector.detect_scored(image, floor)
             # High-score detections first so the track budget never drops a certain face for a doubtful one.
             scored = sorted(scored, key=lambda item: -float(item[2]))
         else:
@@ -307,8 +322,13 @@ class FaceTracker:
                 identity = int(cluster.track_id.removeprefix("track_"))
                 age = self._tracks.get(identity, (None,0,0))[2] + 1
                 updated[identity] = (face,0,age)
-                output.append(TrackedFace(identity,face,age,self.scene_id,
-                                          confidence=assoc.score, reason="persistent_registry"))
+                ambiguous = assoc.reason == "ambiguous"
+                output.append(TrackedFace(
+                    identity, face, age, self.scene_id,
+                    state=tp.UNCERTAIN if ambiguous else tp.TRACKED,
+                    confidence=assoc.score,
+                    swap_allowed=not ambiguous,
+                    reason=tp.AMBIGUOUS if ambiguous else "persistent_registry"))
         self._tracks = updated
         if not self.stabilize:
             self.frame_index += 1
@@ -597,7 +617,7 @@ class FaceTracker:
         self.stabilizer.reset()
         self.cut_detector.reset()
         if self._owns_detector:
-            self.detector._session = None
+            getattr(self.detector, "base", self.detector)._session = None
         self.recognizer._session = None
         self.dense.release()
         self.released = True

@@ -35,6 +35,8 @@ class Health(Contract):
     standalone: Literal[True] = True
     uptime_seconds: float
     isolation: IsolationStatus
+    # Swap engines whose weights are installed (READY) next to the ones that are genuinely unavailable, with the reason.
+    swap_engines: dict[str, Any] | None = None
 
 
 class ModelSummary(Contract):
@@ -50,6 +52,8 @@ class ModelSummary(Contract):
     tensorrt_mixed_precision: dict[str, Any] = Field(default_factory=dict)
     download_url: str | None = None
     supports_3d_hybrid: bool = False
+    adapter_supported: bool | None = None
+    adapter_unsupported_reason: str | None = None
     local_format: str | None = None
     sha256: str | None = None
     size_bytes: int | None = None

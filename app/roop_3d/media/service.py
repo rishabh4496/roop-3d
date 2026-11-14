@@ -45,7 +45,10 @@ class MediaService:
         # on CUDA (same output, ~10x faster); otherwise, or when CUDA cannot start, the CPU path is used unchanged.
         from roop_3d.engine.runtime import inspection_session_factory
         gpu_factory = inspection_session_factory(catalog, settings)
-        self.detector = Detector(catalog, gpu_factory, model_id=lambda: settings().detector_model_id)
+        # Single-pass detector wrapped by staged scale/tile/roll recovery (frames the primary pass already solves cost nothing extra).
+        from roop_3d.engine.detection.robust_detector import RobustDetector, dense_validator
+        self.base_detector = Detector(catalog, gpu_factory, model_id=lambda: settings().detector_model_id)
+        self.detector = RobustDetector(self.base_detector)
         self.settings = settings
         self._color_cache: dict = {}
         from roop_3d.identity.target_lock import TargetLockStore
@@ -57,6 +60,7 @@ class MediaService:
         from roop_3d.media.face_analysis import FaceAnalyzer
         self.analyzer = FaceAnalyzer(self.detector, Recognizer(catalog, gpu_factory),
                                      LandmarkEngine(root, session_factory=gpu_factory))
+        self.detector.validator = dense_validator(self.analyzer.engine)
         self.frames = VideoFrameService(self.path, self.detector, analyzer=self.analyzer)
 
     def path(self, value: str) -> Path:
@@ -173,6 +177,7 @@ class MediaService:
         records: dict[int, dict] = {}
         samples = decoded = 0
         complete = True
+        stop_reason = ""
         began = time.monotonic()
         detector_record = self.detector.catalog.detector()
         recognizer_record = self.detector.catalog.recognizer()
@@ -204,6 +209,7 @@ class MediaService:
                         if face.track_id not in records:
                             if len(records) >= 64:
                                 complete = False
+                                stop_reason = "the 64-track limit was reached"
                                 break
                             x1, y1, x2, y2 = box.astype(int)
                             crop = cv2.resize(image[y1:max(y1 + 1, y2), x1:max(x1 + 1, x2)], (128, 128))
@@ -220,10 +226,17 @@ class MediaService:
                             item["pose_max"] = np.maximum(item["pose_max"], pose).tolist()
                     if frame.key_frame or index == 0:
                         samples += 1
-                    if (not complete or (not request.full_video and
-                            (decoded >= request.max_decoded_frames or samples >= request.max_samples))
-                            or time.monotonic() - began > request.time_budget_seconds):
-                        complete = False
+                    bound = None
+                    if not complete:
+                        bound = stop_reason
+                    elif not request.full_video and decoded >= request.max_decoded_frames:
+                        bound = f"the {request.max_decoded_frames}-frame decode limit was reached"
+                    elif not request.full_video and samples >= request.max_samples:
+                        bound = f"the {request.max_samples}-keyframe sample limit was reached"
+                    elif time.monotonic() - began > request.time_budget_seconds:
+                        bound = f"the {request.time_budget_seconds:g}-second time budget was exhausted"
+                    if bound is not None:
+                        complete, stop_reason = False, bound
                         break
         finally:
             tracker.release()
@@ -240,8 +253,11 @@ class MediaService:
                                   identity_report_sha256=write_report(self.root, document))
             identity_warnings = ("Identity lock: faces whose identity is uncertain or ambiguous are never swapped.",
                                  "Identity thresholds are uncalibrated heuristics; review the contact sheet before locking.")
-            if not complete:
-                identity_warnings += ("Inspection stopped early; later appearances of a person may be unreviewed.",)
+        coverage_warnings: tuple[str, ...] = ()
+        if not complete:
+            coverage_warnings = (f"Bounded scan: stopped after {decoded} decoded frame(s) because {stop_reason}. Faces that first "
+                                 "appear later are not listed; re-run with full_video=true to traverse the whole video.",)
+        # The bounded-scan coverage warning already states that later appearances are unreviewed.
         result = FaceInspection(inspection_id=inspection_id, target_sha256=digest,
             detector_model_id=detector_record["model_id"], detector_sha256=detector_record["sha256"],
             recognizer_model_id=recognizer_record["model_id"], recognizer_sha256=recognizer_record["sha256"],
@@ -260,6 +276,7 @@ class MediaService:
                 thumbnail_base64=(collector.best_thumbnail(identity) if collector is not None else None) or item["thumbnail"])
                 for identity, item in records.items()),
             warnings=("IoU and ArcFace assignment can still split or merge tracks; review mappings.",
+                      *coverage_warnings,
                       "Yaw and pitch are uncalibrated geometric estimates, not reconstructed 3D pose.",
                       "persistent_id is the integer engine track ID; track_id retains the job mapping label.",
                       *identity_warnings))
@@ -341,7 +358,27 @@ class MediaService:
             yaw, pitch, roll = geometric_pose(points)
             pose3d = as_pose3d((yaw, pitch, roll))
 
-            cluster = registry.clusters[associations[idx].cluster_id]
+            assoc = associations[idx]
+            if assoc.cluster_id is None or assoc.reason == "ambiguous":
+                # Withheld identity: no stable track_id, no persisted track, not selectable as source/target.
+                faces_output.append({
+                    "id": f"uncertain_{frame_index}_{idx}",
+                    "track_id": None,
+                    "frame_index": frame_index,
+                    "timestamp": timestamp,
+                    "bbox": [float(x1 / width), float(y1 / height), float(x2 / width), float(y2 / height)],
+                    "landmarks5": [[float(p[0] / width), float(p[1] / height)] for p in points],
+                    "confidence": 0.98,
+                    "pose": {"yaw": yaw, "pitch": pitch, "roll": roll},
+                    "pose3d": pose3d.model_dump(), "pose_cell": pose_cell(pose3d).name,
+                    "thumbnail_base64": thumb_b64,
+                    "selectable": False,
+                    "identity_state": "uncertain",
+                    "uncertainty_reason": assoc.reason,
+                    "cluster_match": {"score": round(assoc.score, 4), "margin": round(assoc.margin, 4), "reason": assoc.reason},
+                })
+                continue
+            cluster = registry.clusters[assoc.cluster_id]
             if cluster.track_id is None:
                 # Reuse an inspection track only with an observation at this frame.
                 from roop_3d.media.detector import iou

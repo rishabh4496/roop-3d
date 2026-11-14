@@ -113,6 +113,8 @@ def create_app(settings: Settings | None = None, *, repo_root: Path | None = Non
         await run_in_threadpool(register_native_libraries)
         # Keep the local model catalog current before serving requests or starting jobs.
         app.state.model_scan = await run_in_threadpool(catalog.rescan_local)
+        from roop_3d.models.engine_readiness import swap_engine_summary
+        swap_engine_summary(catalog)  # starts the first (hashing) readiness scan in the background so /health has engines
         await run_in_threadpool(jobs.recover_interrupted)
         await run_in_threadpool(queue.recover_on_startup)
         # Stage 18: crash-consistency. Nothing is running yet, so every temp file, half-published output and orphan
@@ -249,9 +251,11 @@ def create_app(settings: Settings | None = None, *, repo_root: Path | None = Non
 
     @app.get("/api/v1/health", response_model=Health)
     def health() -> dict[str, Any]:
+        from roop_3d.models.engine_readiness import swap_engine_summary
         return {"status": "ok", "application": "roop_3d", "version": __version__,
                 "pinokio_app_id": "roop-3d", "standalone": True,
-                "uptime_seconds": max(0.0, time.monotonic() - started), "isolation": isolation_status(root)}
+                "uptime_seconds": max(0.0, time.monotonic() - started), "isolation": isolation_status(root),
+                "swap_engines": swap_engine_summary(app.state.models)}
 
     @app.get("/api/v1/hardware", response_model=Hardware)
     @app.get("/api/v1/system/hardware", response_model=Hardware)

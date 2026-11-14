@@ -168,7 +168,11 @@ class OrtModel:
                 pass
         if config.provider == "CUDAExecutionProvider" and config.precision_policy == "fp16":
             fp16_cache = catalog.root / "roop_3d/.runtime/cache/cuda_fp16"
-            self.path, _ = _cuda_fp16_model_path(self.path, fp16_cache)
+            try:
+                self.path, _ = _cuda_fp16_model_path(self.path, fp16_cache)
+            except Exception as error:
+                # The mixed-precision rewrite is an optimisation: a graph it cannot convert runs as shipped, it never goes offline.
+                log.warning("CUDA FP16 graph conversion failed for %s (%s); using the file as shipped", self.path.name, type(error).__name__)
         self._identity = self._stat()
         options = ort.SessionOptions()
         options.intra_op_num_threads, options.inter_op_num_threads = config.cpu_threads, 1
@@ -202,25 +206,24 @@ class OrtModel:
         self._gpu_memory_limit = (config.gpu_budget_bytes // divisor
                                   if config.provider in ("CUDAExecutionProvider", "TensorrtExecutionProvider") else None)
         if config.provider == "TensorrtExecutionProvider":
-            if "TensorrtExecutionProvider" not in ort.get_available_providers():
-                raise DomainError("PROVIDER_UNAVAILABLE", "Requested TensorRT provider is unavailable", 503)
-            if "CUDAExecutionProvider" not in ort.get_available_providers():
-                raise DomainError("PROVIDER_UNAVAILABLE", "CUDAExecutionProvider is required for TensorRT graph partitions", 503)
+            # A missing TensorRT/CUDA execution provider, a failed engine build or a stale cache no longer takes the model
+            # offline: SessionManager walks TensorRT -> CUDA -> CPU, and the provider that really runs is read back below.
             try:
                 trt_provider = ("tensorrt_mixed" if config.precision_policy == "fp16"
                                 else "TensorrtExecutionProvider")
                 info = SessionManager(fp16=config.precision_policy != 'fp32', hardware_profile=config.hardware_profile,
                     gpu_memory_limit=self._gpu_memory_limit).create(self.path, model_name=name,
-                        providers=(trt_provider, "CUDAExecutionProvider"))
+                        providers=(trt_provider, "CUDAExecutionProvider"), cpu_last_resort=True)
                 self.session = info.session
                 self.provider = self.session.get_providers()[0]
                 if self.provider != "TensorrtExecutionProvider":
-                    self.fallback_reason = "; ".join(info.fallback_errors) or "TensorRT initialization failed; session remained on CUDAExecutionProvider"
+                    self.fallback_reason = "; ".join(info.fallback_errors) or f"TensorRT initialization failed; session runs on {self.provider}"
             except Exception:
-                raise DomainError("MODEL_SESSION_FAILED", "Verified model could not initialize on TensorRT or CUDA", 503) from None
+                raise DomainError("MODEL_SESSION_FAILED", "Verified model could not initialize on TensorRT, CUDA or CPU", 503) from None
+        elif config.provider == "CUDAExecutionProvider" and config.provider not in ort.get_available_providers():
+            self.provider, self.fallback_reason = "CPUExecutionProvider", "CUDAExecutionProvider is not available in this ONNX Runtime build"
+            providers = ["CPUExecutionProvider"]
         elif config.provider == "CUDAExecutionProvider":
-            if config.provider not in ort.get_available_providers():
-                raise DomainError("PROVIDER_UNAVAILABLE", "Requested CUDA provider is unavailable", 503)
             ort.preload_dlls()
             arena = "kNextPowerOfTwo" if config.hardware_profile == "12gb" else "kSameAsRequested"
             cuda_opts = {
@@ -241,10 +244,12 @@ class OrtModel:
             retry_reason = None
             try:
                 self.session = ort.InferenceSession(str(self.path), sess_options=options, providers=providers)
-                if config.provider == "CUDAExecutionProvider":
+                if config.provider == "CUDAExecutionProvider" and self.provider == "CUDAExecutionProvider":
                     self.session.disable_fallback()
             except Exception as error:
-                retry_reason = cuda_fallback_reason(str(error)) if config.provider == "CUDAExecutionProvider" else None
+                retry_reason = ((cuda_fallback_reason(str(error))
+                                 or f"CUDA session initialization failed ({type(error).__name__}); CPU reference selected")
+                                if config.provider == "CUDAExecutionProvider" and self.provider == "CUDAExecutionProvider" else None)
                 if retry_reason is None:
                     raise DomainError("MODEL_SESSION_FAILED", "Verified model could not initialize on the requested provider", 503) from None
             if retry_reason is not None:

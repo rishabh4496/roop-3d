@@ -7,6 +7,7 @@ loaded session; no architecture is allowed to silently assume InSwapper's names.
 """
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
@@ -17,6 +18,9 @@ from roop_3d.core.errors import DomainError
 from roop_3d.engine.runtime import RuntimeConfig
 from roop_3d.engine.volumetric.preprocess import aligned_crop
 from roop_3d.models.catalog import ModelCatalog
+
+
+_LOG = logging.getLogger("roop_3d.swapper")
 
 
 def _shape(node) -> tuple[Any, ...]:
@@ -35,8 +39,8 @@ def _static_dim(value: Any, fallback: int) -> int:
 _VALIDATED_GRAPHS: set[tuple[str, int, int]] = set()
 
 
-def load_local_session(catalog, model_id: str, path: Path, config: RuntimeConfig):
-    """Validate a local graph and load it within the selected hardware profile."""
+def open_local_session(catalog, model_id: str, path: Path, config: RuntimeConfig):
+    """Validate a local graph and load it within the selected hardware profile; returns the ``SessionInfo``."""
     try:
         status = Path(path).stat()
         version = (str(path), status.st_size, status.st_mtime_ns)
@@ -59,12 +63,16 @@ def load_local_session(catalog, model_id: str, path: Path, config: RuntimeConfig
                 f"Local ONNX model graph failed safety/format checks ({type(error).__name__})", 422) from None
         if version is not None:
             _VALIDATED_GRAPHS.add(version)
-    from roop_3d.core.ort_session import CUDA, CPU, TRT, SessionManager
+    from roop_3d.core.ort_session import CUDA, CPU, TRT, ProviderInitializationError, SessionManager
     model_name = path.name
     if config.provider == CUDA and config.precision_policy == "fp16":
         from roop_3d.core.ort_session import _cuda_fp16_model_path
         fp16_cache = catalog.root / "roop_3d/.runtime/cache/cuda_fp16"
-        path, _ = _cuda_fp16_model_path(path, fp16_cache)
+        try:
+            path, _ = _cuda_fp16_model_path(path, fp16_cache)
+        except Exception as error:
+            # The mixed-precision rewrite is an optimisation; a graph it cannot convert still runs as its own dtype.
+            _LOG.warning("[ORT] %s: CUDA FP16 graph conversion failed (%s); using the file as shipped", model_name, type(error).__name__)
     providers = ((TRT, CUDA) if config.provider == TRT else
                  (CUDA,) if config.provider == CUDA else (CPU,))
     if config.provider in (TRT, CUDA):
@@ -74,13 +82,25 @@ def load_local_session(catalog, model_id: str, path: Path, config: RuntimeConfig
     else:
         manager = SessionManager(hardware_profile="6gb", fp16=False)
     try:
+        # A swapper never goes offline because TensorRT cannot build (cache rebuild, missing EP, bad option) or CUDA cannot
+        # place a node: the next provider is tried and the CPU is the logged last resort (``fallback_reason`` in capability()).
         info = manager.create(path, model_name=model_name, providers=providers,
-                              intra_op_threads=config.cpu_threads)
+                              intra_op_threads=config.cpu_threads, cpu_last_resort=True)
+    except ProviderInitializationError as error:
+        # Every provider's failure, in order (type only: ORT messages can carry local paths).
+        attempts = "; ".join(": ".join(entry.split(": ", 2)[:2]) for entry in error.attempts)
+        raise DomainError("MODEL_SESSION_FAILED",
+            f"Local ONNX model could not initialize on the selected provider ({attempts})", 503) from None
     except Exception as error:
         raise DomainError("MODEL_SESSION_FAILED",
             f"Local ONNX model could not initialize on the selected provider ({type(error).__name__})", 503) from None
     catalog.set_vram_loaded(model_id, info.provider in (TRT, CUDA))
-    return info.session
+    return info
+
+
+def load_local_session(catalog, model_id: str, path: Path, config: RuntimeConfig):
+    """The ONNX Runtime session alone; ``open_local_session`` also reports the provider and any fallback taken."""
+    return open_local_session(catalog, model_id, path, config).session
 
 
 class SwapperEngineAdapter:
@@ -105,6 +125,8 @@ class SwapperEngineAdapter:
         self.catalog, self.model_id, self.spec, self.config = catalog, model_id, spec, config
         self.resolution = int(spec["native_resolution"])
         self.path: Path | None = None
+        self.identity: dict[str, Any] | None = None
+        self._session_info = None
         self.model = None
         self.session = session
         self._runner = runner
@@ -123,12 +145,13 @@ class SwapperEngineAdapter:
                     raise
                 record = self._registered_record()
                 if record is None or not record.get("sha256") or not record.get("size_bytes"):
-                    raise DomainError("MODEL_NOT_INSTALLED", "Selected swapper has no installed local ONNX weights", 404) from None
+                    raise DomainError("MODEL_NOT_INSTALLED", catalog.swapper_missing_reason(model_id), 404) from None
                 from roop_3d.engine.runtime import OrtModel
                 self.model = OrtModel(catalog, record["name"], config)
                 self.session = self.model.session
                 self._runner = self.model.run
             else:
+                self.identity = catalog.artifact_identity(self.path, model_id)
                 self._load_unblocked_local(self.path)
         self._inputs = tuple(self.session.get_inputs())
         self._outputs = tuple(self.session.get_outputs())
@@ -148,7 +171,8 @@ class SwapperEngineAdapter:
             record = getattr(self.model, "record", None)
             self._active_key = active_models.activate(
                 "swapper", model_id, path, provider, config.precision_policy,
-                record.get("sha256") if isinstance(record, dict) else None).key
+                record.get("sha256") if isinstance(record, dict) else
+                (self.identity["sha256"] if self.identity else None)).key
 
     def _inspect_dfm(self) -> None:
         names = {node.name for node in self._inputs}
@@ -197,7 +221,8 @@ class SwapperEngineAdapter:
         return None
 
     def _load_unblocked_local(self, path: Path) -> None:
-        self.session = load_local_session(self.catalog, self.model_id, path, self.config)
+        self._session_info = open_local_session(self.catalog, self.model_id, path, self.config)
+        self.session = self._session_info.session
 
     def _image_input_specs(self):
         result = []
@@ -388,30 +413,24 @@ class SwapperEngineAdapter:
         self._binding = None
         self._source_cache.clear()
 
-    def _loaded_file_sha256(self) -> str | None:
-        """Digest of the weight file this adapter loaded directly (no catalog-pinned record), computed once.
-
-        Render manifests record it as the swapper's identity; without it a locally loaded swapper would be missing from them."""
-        if self.path is None:
-            return None
-        cached = getattr(self, "_path_sha256", None)
-        if cached is None:
-            try:
-                from roop_3d.audit.isolation import sha256_file
-                cached = sha256_file(Path(self.path))[1]
-            except (OSError, ValueError):
-                return None
-            self._path_sha256 = cached
-        return cached
-
     def capability(self) -> dict[str, Any]:
         if self.model is not None:
             return {**self.model.capability(), "native_resolution": self.resolution,
                     "identity_mode": self.spec.get("identity_mode", "source_crop")}
         providers = tuple(self.session.get_providers()) if self.session is not None and hasattr(self.session, "get_providers") else ()
         provider = providers[0] if providers else self.config.provider
-        return {"model_id": self.model_id, "sha256": self._loaded_file_sha256(), "artifact_state": "LOCAL_UNVERIFIED" if self.path else "REGISTERED",
+        identity, info = self.identity, self._session_info
+        # Identity comes from the loaded file's own SHA-256 matched against the registry (ModelCatalog.artifact_identity), so
+        # a hash-verified artifact reports VERIFIED_LOCAL however it was located; render manifests record this digest.
+        return {"model_id": self.model_id, "sha256": identity["sha256"] if identity else None,
+                "artifact_state": identity["artifact_state"] if identity else "REGISTERED",
+                "trust_basis": identity["trust_basis"] if identity else None,
+                "registry_model_id": identity["registry_model_id"] if identity else None,
                 "inference_state": "VERIFIED_LOCAL" if self.executions else "UNKNOWN", "provider": provider,
                 "executions": self.executions, "requested_provider": self.config.provider,
-                "fallback_reason": None, "native_resolution": self.resolution,
+                "fallback_reason": "; ".join(info.fallback_errors) if info is not None and info.fallback_errors else None,
+                "provider_order": list(info.requested_providers) if info is not None else [],
+                "io_dtypes": {"inputs": {node.name: _dtype(node).name for node in self._inputs},
+                              "outputs": {node.name: _dtype(node).name for node in self._outputs}},
+                "precision_policy": self.config.precision_policy, "native_resolution": self.resolution,
                 "identity_mode": self.spec.get("identity_mode", "source_crop")}

@@ -243,6 +243,11 @@ def cuda_graphs_enabled() -> bool:
     return os.environ.get("ROOP3D_CUDA_GRAPH", "0") == "1"
 
 
+def _is_cpu_placement_refusal(error: BaseException) -> bool:
+    message = str(error).casefold()
+    return "assigned to the default cpu ep" in message and "fallback to cpu ep has been explicitly disabled" in message
+
+
 def _is_cuda_graph_partition_error(error: BaseException) -> bool:
     message = str(error).casefold()
     return "cuda graph" in message and "assigned" in message and "tensorrt" in message
@@ -261,6 +266,35 @@ _FP32_MODEL_LOCK = threading.Lock()
 _CUDA_FP16_MODEL_LOCK = threading.Lock()
 
 
+def _topologically_ordered(model) -> None:
+    """Stable in-place topological sort of ``model.graph.node``.
+
+    ``convert_float_to_float16(keep_io_types=True)`` appends its boundary Cast nodes after the nodes that consume them. ORT
+    re-sorts on load but ``onnx.checker`` rejects the graph ("Nodes in a graph must be topologically sorted"), which used to
+    make every CUDA FP16 session fail to build (and the swapper go offline) before ORT ever saw the model."""
+    graph = model.graph
+    available = {value.name for value in graph.input} | {value.name for value in graph.initializer} | {""}
+    available |= {value.name for value in graph.sparse_initializer}
+    pending, ordered = list(graph.node), []
+    while pending:
+        later = []
+        for node in pending:
+            if all(name in available for name in node.input):
+                ordered.append(node)
+                available.update(node.output)
+            else:
+                later.append(node)
+        if len(later) == len(pending):          # outer-scope references or a genuinely cyclic graph: leave the rest to ORT
+            ordered.extend(later)
+            break
+        pending = later
+    copies = [type(node)() for node in ordered]
+    for copy, node in zip(copies, ordered):
+        copy.CopyFrom(node)
+    del graph.node[:]
+    graph.node.extend(copies)
+
+
 def _cuda_fp16_model_path(path: Path, cache_path: Path):
     """Build an owned CUDA mixed-precision graph while preserving its external float32 contract."""
     import onnx
@@ -268,6 +302,9 @@ def _cuda_fp16_model_path(path: Path, cache_path: Path):
     from onnxruntime.transformers.float16 import convert_float_to_float16
 
     path = Path(path).resolve(strict=True)
+    if any(token in path.name.casefold() for token in FP32_LOCKED_MODEL_TOKENS):
+        # InSwapper / GPEN / the motion extractor are FP32-locked: the mixed-precision rewrite makes their output NaN.
+        return path, None
     digest = hashlib.sha256()
     with path.open("rb") as stream:
         for chunk in iter(lambda: stream.read(1024 * 1024), b""):
@@ -284,6 +321,7 @@ def _cuda_fp16_model_path(path: Path, cache_path: Path):
         if any(value.data_location == TensorProto.EXTERNAL for value in model.graph.initializer):
             raise ValueError("CUDA FP16 graph conversion does not admit external ONNX data")
         converted = convert_float_to_float16(model, keep_io_types=True)
+        _topologically_ordered(converted)
         onnx.checker.check_model(converted)
         temporary = owned_path(target.with_name(target.name + f".{os.getpid()}.tmp"))
         onnx.save(converted, str(temporary))
@@ -411,7 +449,7 @@ def _static_input_contract(name: str) -> tuple[int, int, bool] | None:
         return 256, 256, False
     if any(token in folded for token in ("realswap_512", "simswap_512")):
         return 512, 512, False
-    if "xseg" in folded:
+    if "xseg" in folded or "occluder" in folded:
         return 256, 256, True
     if "1k3d68" in folded or "2d106det" in folded or "landmark" in folded:
         return 192, 192, True
@@ -446,14 +484,19 @@ def _static_model_path(path: Path, cache_path: Path, name: str):
         if value.name in initializers:
             continue
         dims = value.type.tensor_type.shape.dim
-        if len(dims) == 4 and dims[1].dim_value not in (0, 3):
+        # Channels-last graphs (xseg / face_occluder: [batch, 256, 256, 3]) were skipped here, so their dynamic batch axis
+        # stayed dynamic and TensorRT refused the session ("all the dynamic shape inputs ... profiles") while the CUDA
+        # session was refused for CPU-assigned shape nodes, which left the net with no GPU provider at all.
+        channels_last = len(dims) == 4 and dims[3].dim_value == 3 and dims[1].dim_value not in (0, 3)
+        if len(dims) == 4 and dims[1].dim_value not in (0, 3) and not channels_last:
             continue
         if batch_one and dims and (dims[0].dim_value != 1 or dims[0].HasField("dim_param")):
             dims[0].ClearField("dim_param")
             dims[0].dim_value = 1
             changed = True
         if len(dims) == 4:
-            for dim, size in zip(dims[1:], (3, height, width)):
+            sizes = (height, width, 3) if channels_last else (3, height, width)
+            for dim, size in zip(dims[1:], sizes):
                 if dim.dim_value <= 0 or dim.HasField("dim_param"):
                     dim.ClearField("dim_param")
                     dim.dim_value = size
@@ -513,12 +556,63 @@ def _profiles(nodes, name: str):
     return result
 
 
+class ProviderInitializationError(RuntimeError):
+    """No requested provider could build the session; ``attempts`` keeps every provider's failure, in order."""
+
+    def __init__(self, attempts: tuple[str, ...]):
+        self.attempts = attempts
+        super().__init__("No requested ONNX Runtime provider could initialize: " + " | ".join(attempts))
+
+
 @dataclass(frozen=True)
 class SessionInfo:
     session: object
     provider: str
     requested_providers: tuple[str, ...]
     fallback_errors: tuple[str, ...] = ()
+
+
+_SELECTIONS_LOCK = threading.Lock()
+_SELECTIONS: "dict[str, dict]" = {}
+_DTYPE_NAMES = {"tensor(float)": "float32", "tensor(float16)": "float16", "tensor(double)": "float64",
+                "tensor(int64)": "int64", "tensor(int32)": "int32", "tensor(uint8)": "uint8"}
+
+
+def _record_selection(name: str, path: Path, session, provider: str, order: tuple[str, ...], errors: list[str],
+                      mixed: bool, cpu_last_resort: bool, cpu_partitions: bool = False) -> None:
+    """Remember which provider really built the session for ``name`` and the tensor dtypes it expects.
+
+    The readiness endpoints read this so "TensorRT requested, CUDA running because a TRT build failed" is visible instead of
+    only being a log line, and so the I/O dtype (an FP16-only graph vs a float32-IO graph) is stated for the provider chosen."""
+    try:
+        inputs = [{"name": node.name, "dtype": _DTYPE_NAMES.get(node.type, node.type)} for node in session.get_inputs()]
+        outputs = [{"name": node.name, "dtype": _DTYPE_NAMES.get(node.type, node.type)} for node in session.get_outputs()]
+    except Exception:
+        inputs, outputs = [], []
+    entry = {"model": name, "path": str(path), "provider": provider, "requested_providers": list(order),
+             "fallback_errors": [error[:200] for error in errors], "fell_back": provider != order[0],
+             "cpu_last_resort": cpu_last_resort, "cpu_partitions": cpu_partitions,
+             "mixed_precision": bool(mixed and provider != CPU),
+             "inputs": inputs, "outputs": outputs, "selected_at": time.time()}
+    with _SELECTIONS_LOCK:
+        _SELECTIONS[name.casefold()] = entry
+
+
+def session_selections() -> "dict[str, dict]":
+    """Last provider selection per model name (copy)."""
+    with _SELECTIONS_LOCK:
+        return {key: dict(value) for key, value in _SELECTIONS.items()}
+
+
+def session_selection(*names: str) -> "dict | None":
+    """The most recent selection recorded under any of ``names`` (file name, stem or model id), else ``None``."""
+    with _SELECTIONS_LOCK:
+        for name in names:
+            folded = str(name).casefold()
+            for key in (folded, folded if folded.endswith(".onnx") else folded + ".onnx"):
+                if key in _SELECTIONS:
+                    return dict(_SELECTIONS[key])
+    return None
 
 
 class SessionManager:
@@ -613,7 +707,11 @@ class SessionManager:
         return [(TRT, _string_provider_options(options)), (CUDA, _string_provider_options(cuda_options))]
 
     def create(self, model_path: str | Path, *, model_name: str | None = None,
-               providers: tuple[str, ...] = (TRT, CUDA, CPU), intra_op_threads: int | None = None) -> SessionInfo:
+               providers: tuple[str, ...] = (TRT, CUDA, CPU), intra_op_threads: int | None = None,
+               cpu_last_resort: bool = False) -> SessionInfo:
+        """``cpu_last_resort`` appends the CPU provider after the requested GPU providers: an engine whose TensorRT build and
+        CUDA session both fail (stale/rebuilding TRT cache, missing EP, graph nodes CUDA cannot place) is then served by a
+        logged CPU session instead of going offline. Off by default so strict GPU-only callers still get the error."""
         # Loading CUDA / TensorRT libraries and engines while another thread is mid-inference crashes the process
         # (access violation in the driver), so construction takes the exclusive side of the inference fence.
         from roop_3d.engine.resources import build_fence
@@ -626,7 +724,7 @@ class SessionManager:
                 status = Path(model_path).resolve(strict=True).stat()
                 key = (str(Path(model_path).resolve()), status.st_mtime_ns, status.st_size, model_name, tuple(providers),
                        intra_op_threads or self.intra_op_threads, self.fp16, self.hardware_profile, self.gpu_id,
-                       str(self.cache_path), cuda_graphs_enabled())   # the memory limit is a measured, moving budget: not identity
+                       str(self.cache_path), cuda_graphs_enabled(), cpu_last_resort)   # the memory limit is a measured, moving budget: not identity
             except OSError:
                 pooled = False
             else:
@@ -639,7 +737,7 @@ class SessionManager:
         before = _vram_used_mib() if pooled else None
         with build_fence():
             info = self._create(model_path, model_name=model_name, providers=providers,
-                                intra_op_threads=intra_op_threads)
+                                intra_op_threads=intra_op_threads, cpu_last_resort=cpu_last_resort)
         if pooled and key is not None:
             after = _vram_used_mib()
             with _POOL_LOCK:
@@ -652,7 +750,8 @@ class SessionManager:
         return info
 
     def _create(self, model_path: str | Path, *, model_name: str | None = None,
-                providers: tuple[str, ...] = (TRT, CUDA, CPU), intra_op_threads: int | None = None) -> SessionInfo:
+                providers: tuple[str, ...] = (TRT, CUDA, CPU), intra_op_threads: int | None = None,
+                cpu_last_resort: bool = False) -> SessionInfo:
         from roop_3d.models.native_libraries import register_native_libraries
         register_native_libraries()
         import onnxruntime as ort
@@ -667,6 +766,8 @@ class SessionManager:
         order = tuple(p for p in (TRT, CUDA, CPU) if p in normalized)
         if not order:
             raise ValueError("At least one provider is required")
+        if cpu_last_resort and CPU not in order:
+            order = (*order, CPU)
         errors = []
         for provider in order:
             attempt_started = time.perf_counter()
@@ -685,34 +786,50 @@ class SessionManager:
                     continue
                 session_options = self._session_options(
                     ort, intra_op_threads or self.intra_op_threads, gpu=provider != CPU)
+                strict_gpu = True
                 try:
                     session = ort.InferenceSession(str(session_path), sess_options=session_options,
                                                    providers=provider_options)
                 except Exception as error:
-                    if (provider != TRT or provider_options[0][1].get("trt_cuda_graph_enable", "False").casefold() not in ("1", "true")
+                    if provider == CUDA and cpu_last_resort and _is_cpu_placement_refusal(error):
+                        # Shape/control nodes that CUDA cannot place (xseg, face_occluder, some swappers) made the GPU-only session
+                        # impossible. Keep every compute node on CUDA but let ORT put those host-side nodes on the CPU
+                        # provider, which is far cheaper than moving the whole network to the CPU.
+                        errors.append("CUDAExecutionProvider: GPU-only placement refused (host-side nodes); "
+                                      "retrying with CPU-assigned shape nodes allowed")
+                        session = ort.InferenceSession(
+                            str(session_path), sess_options=self._session_options(ort, intra_op_threads or self.intra_op_threads),
+                            providers=[*provider_options, CPU])
+                        strict_gpu = False
+                    elif (provider != TRT or provider_options[0][1].get("trt_cuda_graph_enable", "False").casefold() not in ("1", "true")
                             or not _is_cuda_graph_partition_error(error)):
                         raise
-                    errors.append("TensorRT CUDA graph capture disabled for a mixed-provider partition")
-                    # Provider entries are (name, options) pairs, except a bare provider name such as the CPU fallback.
-                    retry_options = [(entry[0], dict(entry[1])) if isinstance(entry, tuple) else entry for entry in provider_options]
-                    retry_options[0][1]["trt_cuda_graph_enable"] = "False"
-                    session = ort.InferenceSession(str(session_path), sess_options=session_options,
-                                                   providers=retry_options)
+                    else:
+                        errors.append("TensorRT CUDA graph capture disabled for a mixed-provider partition")
+                        # Provider entries are (name, options) pairs, except a bare provider name such as the CPU fallback.
+                        retry_options = [(entry[0], dict(entry[1])) if isinstance(entry, tuple) else entry for entry in provider_options]
+                        retry_options[0][1]["trt_cuda_graph_enable"] = "False"
+                        session = ort.InferenceSession(str(session_path), sess_options=session_options,
+                                                       providers=retry_options)
                 active = session.get_providers()
                 if not active or active[0] != provider:
                     raise RuntimeError(f"provider activation mismatch: {active}")
                 if provider != CPU:
-                    session.disable_fallback()
+                    if strict_gpu:
+                        session.disable_fallback()
                     session._model_path = str(session_path)
-                _LOG.info("[ORT] %s -> %s in %.1f s%s", name, provider.replace("ExecutionProvider", ""),
-                          time.perf_counter() - attempt_started,
-                          f" (after: {'; '.join(e[:90] for e in errors)})" if errors else "")
+                log_call = _LOG.warning if errors and provider == CPU and order[0] != CPU else _LOG.info
+                log_call("[ORT] %s -> %s in %.1f s%s", name, provider.replace("ExecutionProvider", ""),
+                         time.perf_counter() - attempt_started,
+                         f" (after: {'; '.join(e[:90] for e in errors)})" if errors else "")
+                _record_selection(name, session_path, session, provider, order, errors, mixed_requested, cpu_last_resort,
+                                  cpu_partitions=not strict_gpu)
                 return SessionInfo(session, provider, order, tuple(errors))
             except Exception as error:
                 errors.append(f"{provider}: {type(error).__name__}: {error}")
                 _LOG.warning("[ORT] %s on %s failed after %.1f s: %s", name, provider.replace("ExecutionProvider", ""),
                              time.perf_counter() - attempt_started, str(error).splitlines()[0][:160] if str(error) else type(error).__name__)
-        raise RuntimeError("No requested ONNX Runtime provider could initialize: " + " | ".join(errors))
+        raise ProviderInitializationError(tuple(errors))
 
 
 class GpuIoBinding:

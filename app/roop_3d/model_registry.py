@@ -500,8 +500,36 @@ UNIFIED_NAME_MAP: dict[str, ModelManifestEntry] = {
 }
 
 
+_HASH_CACHE: dict[tuple[str, int, int], str] = {}
+
+
+def _sha256_cached(path: Path) -> str:
+    """Streaming SHA-256, remembered per (path, size, mtime) so repeated readiness polls never re-read a 500 MB weight."""
+    status = path.stat()
+    key = (str(path), status.st_size, status.st_mtime_ns)
+    known = _HASH_CACHE.get(key)
+    if known is None:
+        digest = hashlib.sha256()
+        with path.open("rb") as stream:
+            while block := stream.read(4 * 1024 * 1024):
+                digest.update(block)
+        known = _HASH_CACHE[key] = digest.hexdigest()
+    return known
+
+
 class UnifiedModelRegistry:
-    """Unified declarative model registry and status inspector."""
+    """Unified declarative model registry and status inspector.
+
+    ``root`` is the application root (``<repo>/app``), where the runtime catalog keeps weights in ``root/models``. The
+    ``root/app/models`` spelling is kept for repository-root layouts. Discovery order for a weight is:
+
+    1. ``app/models`` (and the cache folders below), where a file whose bytes match the pinned SHA-256 is
+       ``hash_valid``; a different export of the same network above 1 MiB is **locally trusted** (``trust_basis``
+       ``LOCAL_USE_TRUST``, the explicit app/models placement policy, rights NOT reviewed); a small mismatching file is
+       ``CORRUPT HASH``.
+    2. The read-only sibling ``roop-ultimate`` model folders (``audit/model_sources.json``), accepted **only** when the bytes
+       match the pinned SHA-256. Nothing outside app/models is ever trusted by placement, and nothing is written there.
+    """
 
     def __init__(self, root: Path | None = None):
         self.root = root or application_root()
@@ -510,29 +538,46 @@ class UnifiedModelRegistry:
 
     def get_search_paths(self) -> list[Path]:
         return [
+            self.root / "models",
             self.root / "app/models",
             self.root / "roop_3d/models/cache",
             self.root / ".cache/models",
             self.root / "cache/models",
         ]
 
+    def get_legacy_search_paths(self) -> list[Path]:
+        """Read-only roop-ultimate model folders; empty when the source is not configured or does not exist."""
+        try:
+            from roop_3d.audit.project_paths import legacy_root
+            base = legacy_root(self.root)
+        except Exception:
+            return []
+        return [path for path in (base / ".cache/models", base / "app/models") if path.is_dir()]
+
     def get_trt_cache_paths(self) -> list[Path]:
         return [
+            self.root / "models/.trt_cache",
+            self.root / "models/trt_cache",
             self.root / "app/models/.trt_cache",
             self.root / "app/models/trt_cache",
             self.root / ".cache/trt",
             self.root / "cache/trt",
         ]
 
+    @staticmethod
+    def _candidate(base: Path, entry: ModelManifestEntry) -> Path | None:
+        for name in (entry.name, f"{entry.model_id}.onnx"):
+            path = base / name
+            if path.is_file():
+                return path
+        return None
+
     def resolve_model_file(self, entry: ModelManifestEntry) -> Path | None:
         """Search local candidate paths for the model file."""
         for base in self.get_search_paths():
-            p = base / entry.name
-            if p.is_file():
-                return p
-            p_id = base / f"{entry.model_id}.onnx"
-            if p_id.is_file():
-                return p_id
+            found = self._candidate(base, entry)
+            if found is not None:
+                return found
         return None
 
     def resolve_trt_engine(self, entry: ModelManifestEntry) -> Path | None:
@@ -544,32 +589,60 @@ class UnifiedModelRegistry:
                     return cand
         return None
 
+    def _locate(self, entry: ModelManifestEntry) -> tuple[Path | None, str | None, str | None, str]:
+        """``(path, actual_sha256, trust_basis, state)``; ``state`` is ``valid``, ``trusted``, ``corrupt`` or ``missing``."""
+        from roop_3d.models.local_trust import MIN_TRUST_BYTES
+        expected = entry.expected_sha256.lower()
+        trusted: tuple[Path, str] | None = None
+        corrupt: tuple[Path, str | None] | None = None
+        local_bases = self.get_search_paths()
+        models_root = self.root / "models"
+        for base in (*local_bases, *self.get_legacy_search_paths()):
+            legacy = base not in local_bases
+            path = self._candidate(base, entry)
+            if path is None:
+                continue
+            try:
+                actual = _sha256_cached(path)
+            except OSError:
+                corrupt = corrupt or (path, None)
+                continue
+            if actual.lower() == expected:
+                return path, actual, "REGISTRY_PINNED_SHA256", "valid"
+            if legacy:
+                continue  # roop-ultimate bytes are never trusted by placement
+            direct_child = models_root.is_dir() and path.parent.resolve() == models_root.resolve()
+            if direct_child and not path.is_symlink() and path.stat().st_size > MIN_TRUST_BYTES:
+                trusted = trusted or (path, actual)
+            else:
+                corrupt = corrupt or (path, actual)
+        if trusted is not None:
+            return trusted[0], trusted[1], "LOCAL_USE_TRUST", "trusted"
+        if corrupt is not None:
+            return corrupt[0], corrupt[1], None, "corrupt"
+        return None, None, None, "missing"
+
     def inspect_model_readiness(self, entry: ModelManifestEntry) -> dict[str, Any]:
         """Inspect model presence, hash validity, and TRT engine readiness."""
-        file_path = self.resolve_model_file(entry)
+        file_path, actual_sha256, trust_basis, state = self._locate(entry)
         trt_path = self.resolve_trt_engine(entry)
-
-        if file_path is None:
+        reason = None
+        if state == "missing":
             readiness: ReadinessState = "MISSING"
-            hash_valid = False
-            actual_sha256 = None
+            reason = (f"{entry.name} was not found in app/models (searched {', '.join(str(p) for p in self.get_search_paths()[:2])}) "
+                      "nor, with a matching SHA-256, in the read-only roop-ultimate model folders")
+        elif state == "corrupt":
+            readiness = "CORRUPT HASH"
+            reason = ("The file's bytes do not match the pinned SHA-256 and it is not eligible for local-use trust "
+                      "(under 1 MiB or outside app/models)")
+        elif state == "trusted":
+            # A different export of the same network, placed in app/models on purpose: usable under the local-use policy.
+            readiness = "DOWNLOADED (NEEDS TRT)"
+            reason = "Bytes differ from the pinned artifact; admitted by the app/models local-use trust policy (rights not reviewed)"
+        elif trt_path is not None and trt_path.is_file():
+            readiness = "READY + TRT ENGINE"
         else:
-            # Check file size & SHA-256
-            try:
-                data = file_path.read_bytes()
-                actual_sha256 = hashlib.sha256(data).hexdigest()
-                hash_valid = actual_sha256.lower() == entry.expected_sha256.lower()
-                if not hash_valid:
-                    readiness = "CORRUPT HASH"
-                elif trt_path is not None and trt_path.is_file():
-                    readiness = "READY + TRT ENGINE"
-                else:
-                    readiness = "DOWNLOADED (NEEDS TRT)"
-            except Exception:
-                readiness = "CORRUPT HASH"
-                hash_valid = False
-                actual_sha256 = None
-
+            readiness = "DOWNLOADED (NEEDS TRT)"
         return {
             "model_id": entry.model_id,
             "name": entry.name,
@@ -581,7 +654,9 @@ class UnifiedModelRegistry:
             "expected_size_bytes": entry.expected_size_bytes,
             "expected_sha256": entry.expected_sha256,
             "actual_sha256": actual_sha256,
-            "hash_valid": hash_valid,
+            "hash_valid": state == "valid",
+            "trust_basis": trust_basis,
+            "reason": reason,
             "model_path": str(file_path) if file_path else None,
             "trt_engine_path": str(trt_path) if trt_path else None,
             "description": entry.description,

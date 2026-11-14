@@ -81,17 +81,75 @@ def capabilities(request: Request) -> Capabilities:
         ultramax = weights in available or state.models.weight_available('ultramax', weights)
     except (ValueError, OSError, TypeError, KeyError):
         ultramax = False
+    rows_by_id = {item["id"]: item for item in model_rows}
+    swapper_ready = {item["model_id"]: item for item in state.models.swapper_readiness()}
+
+    def presence_reason(row: dict[str, Any] | None) -> str | None:
+        """Presence/verification facts only; never sufficient to enable a control."""
+        if row is None:
+            return "Not registered in the model registry"
+        row_state = str(row.get("state") or "UNKNOWN")
+        if row.get("blocked") or row_state == "BLOCKED":
+            return "Blocked by model governance"
+        if row.get("category") == "swapper" and row.get("adapter_supported") is False:
+            return str(row.get("adapter_unsupported_reason") or "No compatible swap-engine adapter")
+        if not row.get("installed"):
+            return "Weights are not installed"
+        if row_state not in ("VERIFIED_LOCAL", "VERIFIED_REMOTE"):
+            return f"Weights are present but unverified ({row_state})"
+        return None
+
+    def swapper_reason(row: dict[str, Any]) -> str | None:
+        """Mirror resolve_local_model: registry artifacts need governance READY; app/models files run under local-use policy."""
+        reason = presence_reason(row)
+        if reason is not None:
+            return reason
+        report = swapper_ready.get(row["id"])
+        if report is None:
+            # Local DFM rows have a runtime adapter and explicit app/models trust, but no registry readiness row.
+            if row.get("local_format") == "dfm" and row.get("selectable") is True:
+                return None
+            return "No swap-engine readiness report exists for this model"
+        readiness = str(report.get("readiness"))
+        if readiness in ("READY_REGISTRY_VERIFIED", "LOCAL_UNREVIEWED"):
+            return None
+        artifact = report.get("artifact") or {}
+        if artifact.get("local_use_policy"):
+            return None  # explicit app/models local-use policy, as enforced by resolve_local_model
+        detail = report.get("reason") or "; ".join(report.get("governance_issues") or ()) or "governance gate refused inference"
+        return f"Not eligible for inference ({readiness}): {detail}"
+
+    def governed_reason(model_id: str) -> str | None:
+        """Non-swapper models: presence plus the catalog lifecycle (license, provenance, compatibility, integrity)."""
+        reason = presence_reason(rows_by_id.get(model_id))
+        if reason is not None:
+            return reason
+        spec = state.models._supported_spec(model_id)
+        candidates = [record.model_id for record in state.models._records_for_spec(spec)] if spec else [model_id]
+        refusals: list[str] = []
+        for candidate in candidates or [model_id]:
+            try:
+                result = state.models.lifecycle(candidate)
+            except DomainError as error:
+                refusals.append(str(error))
+                continue
+            if result.get("lifecycle_state") == "READY":
+                return None
+            refusals.append(f"{result.get('lifecycle_state')}: " + "; ".join(result.get("issues") or ()))
+        return "Not eligible for inference (" + (" | ".join(refusals) or "no governance record") + ")"
+
+    swappers = {item["id"]: swapper_reason(item) for item in model_rows if item["category"] == "swapper"}
     options = {
-        "swapper_model_id": {item["id"]: None for item in state.models.public() if item["category"] == "swapper"},
+        "swapper_model_id": swappers,
         "execution_mode": {"swap": None, "volumetric": None if lp else "LivePortrait weights are unavailable", "hybrid": "No verified diffusion loader is configured", "diffusion_vfx": "No verified diffusion loader is configured"},
         "preferred_provider": {"auto": None, "CPUExecutionProvider": None, "CUDAExecutionProvider": None if gpu else "CUDA is unavailable", "TensorrtExecutionProvider": None if trt else "TensorRT requires an NVIDIA GPU, its execution provider and packaged TensorRT libraries"},
         "hardware_profile": {"auto": None, "cpu": None, "6gb": None if gpu else "No CUDA GPU is available", "12gb": None if gpu and hardware.gpus and hardware.gpus[0].total_vram_mib >= MIN_12GB_PROFILE_VRAM_MIB else "A CUDA GPU with at least 10 GB of video memory is required"},
         "precision_policy": {"auto": None, "fp32": None, "fp16": None if mixed_precision else "FP16 mixed precision requires TensorRT or CUDA FP16 support"},
-        "detector_model_id": {key: None for key in ('scrfd', 'retinaface', 'yoloface')},
-        "face_restoration_policy": {"off": None, "auto": None, "gfpgan": None if 'gfpgan_v14' in available else "GFPGAN weights are unavailable",
-            "gpen": None if 'gpen_bfr_512' in available else "GPEN weights are unavailable",
-            "codeformer": None if 'codeformer' in available else "CodeFormer weights are unavailable",
-            "ultramax": None if ultramax else "UltraMax requires an installed model and preprocessing contract"},
+        "detector_model_id": {key: governed_reason(key) for key in ('scrfd', 'retinaface', 'yoloface')},
+        "face_restoration_policy": {"off": None, "auto": None, "gfpgan": governed_reason('gfpgan_v14'),
+            "gpen": governed_reason('gpen_bfr_512'),
+            "codeformer": governed_reason('codeformer'),
+            "ultramax": governed_reason('ultramax') if ultramax else "UltraMax requires an installed model and preprocessing contract"},
         "render_backend": {"auto": None, "reference": None, "stream": None},
         "lip_sync_mode": {"off": None, "wav2lip": None, "wav2lip_gan_fp16": None,
                           "musetalk": "Whisper/VAE engine bundle unavailable", "edtalk": "Pose/emotion engine bundle unavailable"},
@@ -156,6 +214,19 @@ def active_model_readback(request: Request) -> dict[str, Any]:
     """
     from roop_3d.engine import active_models
     return {"selected": _selected_models(request.app.state.settings), "active": active_models.snapshot()}
+
+
+@router.get("/engines/readiness")
+def swap_engine_readiness(request: Request) -> dict[str, Any]:
+    """Every supported swap engine: READY when its weights resolve under the trust policy, else UNAVAILABLE with the reason.
+
+    ``session`` is what ONNX Runtime did the last time the weight was opened (provider chosen, providers fallen back
+    from and why, tensor dtypes); it is null until the engine has been opened once in this process."""
+    from roop_3d.models.engine_readiness import swap_engine_report, summarize
+    rows = swap_engine_report(request.app.state.models)
+    settings = request.app.state.settings
+    return {"selected": _selected_models(settings), "preferred_provider": settings.preferred_provider,
+            "precision_policy": settings.precision_policy, "summary": summarize(rows), "engines": rows}
 
 
 def _selected_models(settings: Settings) -> dict[str, str]:

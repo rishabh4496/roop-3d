@@ -54,16 +54,27 @@ def five_point_plausible(box: np.ndarray, points: np.ndarray) -> tuple[bool, str
     w, h = x2 - x1, y2 - y1
     if min(w, h) < MIN_FACE_PX:
         return False, "face_too_small"
-    if not 0.45 <= w / max(h, 1e-6) <= 1.7:
+    aspect = w / max(h, 1e-6)
+    if not 0.30 <= aspect <= 1.7:
         return False, "box_aspect"
     pad = 0.15
     inside = ((points[:, 0] >= x1 - pad * w) & (points[:, 0] <= x2 + pad * w)
               & (points[:, 1] >= y1 - pad * h) & (points[:, 1] <= y2 + pad * h))
     if not inside.all():
         return False, "landmark_outside_box"
-    eyes_y, nose_y, mouth_y = points[:2, 1].mean(), points[2, 1], points[3:, 1].mean()
-    if not (eyes_y < nose_y < mouth_y):
+    # Order along the face's own eyes->mouth axis, so a rolled head (tilted in the frame) is not rejected by an
+    # image-y test; for an upright face this is the old eyes < nose < mouth check.
+    eyes, nose, mouth = points[:2].mean(axis=0), points[2], points[3:].mean(axis=0)
+    axis = mouth - eyes
+    length = float(np.linalg.norm(axis))
+    if length < 1e-6:
         return False, "vertical_order"
+    t = float(np.dot(nose - eyes, axis) / (length * length))
+    # The eyes->mouth axis may point down or sideways (head rolled up to ~100 deg) but never up: that is mislabelled points.
+    if not 0.0 < t < 1.0 or axis[1] / length < -0.17:
+        return False, "vertical_order"
+    if aspect < 0.45:
+        return True, "narrow_profile"           # strong profiles: valid only when the dense model agrees (see analyze)
     return True, "ok"
 
 
@@ -129,6 +140,8 @@ class FaceAnalyzer:
                     log.warning("106-point landmarks failed: %s", error)
             plausible, why = five_point_plausible(box, kps5)
             agrees, fraction = agrees_with_106(box, kps5, kps106)
+            if why == "narrow_profile" and kps106 is None:
+                plausible, why = False, "narrow_profile_without_dense_model"
             tier = "primary" if score >= primary else "profile_tolerant"
             validity = {"geometry": why, "agrees_with_106": None if np.isnan(fraction) else round(fraction, 3)}
             if tier == "profile_tolerant" and not (plausible and agrees):
