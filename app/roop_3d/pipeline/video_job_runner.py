@@ -452,6 +452,17 @@ class EndToEndVideoJobRunner(MasterPipelineRunner):
                 if signal is not None:
                     raise signal()
 
+            # Whole-timeline pre-pass: the identity tracker runs over the video once so the locked canonical IDs are bound by the
+            # global tracklet consolidation (one person, one ID across turns, occlusions and cuts) before any frame is rendered.
+            if getattr(session, "locked_targets", None) is not None and hasattr(session, "scan_locked_targets"):
+                def scan_progress(scanned: int) -> None:
+                    check()
+                    if scanned % 30 == 0 or scanned == total:
+                        report_progress(JobProgress(frame=min(scanned, total) if total else scanned, total_frames=total,
+                                                    stage="identity_scan"))
+
+                session.scan_locked_targets(prepared.target, on_frame=scan_progress)
+
             report_progress(JobProgress(frame=0, total_frames=total, stage="start"))
             result = stream_video(prepared.target, final, frame_fn, info=info, prefer_nvenc=admission.profile != "cpu",
                                   audio_policy=settings.audio_policy, control=check, progress=on_progress)

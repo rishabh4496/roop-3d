@@ -30,10 +30,11 @@ class GuardVerdict:
 
 class IdentityGuard:
     def __init__(self, signatures: Mapping[int, np.ndarray], groups: Mapping[int, str],
-                 mapped: frozenset[int], *, min_cosine: float = 0.25):
-        if not 0 < min_cosine < 1:
-            raise ValueError("min_cosine must lie in (0, 1)")
+                 mapped: frozenset[int], *, min_cosine: float = 0.25, steep_yaw: float = 40.0, steep_relief: float = 0.15):
+        if not 0 < min_cosine < 1 or not 0 <= steep_relief < min_cosine:
+            raise ValueError("min_cosine must lie in (0, 1) and steep_relief in [0, min_cosine)")
         self.min_cosine, self.mapped, self.groups = min_cosine, frozenset(mapped), dict(groups)
+        self.steep_yaw, self.steep_relief = steep_yaw, steep_relief
         owners, rows = [], []
         for identity, matrix in signatures.items():
             for row in np.asarray(matrix, np.float32).reshape(-1, 512):
@@ -66,7 +67,10 @@ class IdentityGuard:
             return GuardVerdict(False, NO_SIGNATURE, 0.0)
         embedding = np.asarray(tracked.observation.embedding, np.float32)
         own = float((own_rows @ embedding).max())
-        if own < self.min_cosine:
+        # A steep profile/back-turned head has an unreliable ArcFace embedding even for the right person; the binder already
+        # attached this face to the locked ID by whole-track evidence, so the per-frame floor drops (rivals still veto).
+        steep = abs(float(tracked.observation.pose[0])) >= self.steep_yaw
+        if own < (max(0.05, self.min_cosine - self.steep_relief) if steep else self.min_cosine):
             return GuardVerdict(False, SIGNATURE_MISMATCH, own)
         similarity = self._rows @ embedding
         own_group = self.groups.get(identity)

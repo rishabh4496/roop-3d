@@ -10,9 +10,17 @@ direction: a wrong link swaps the wrong person. This policy therefore never *gue
 * a track that disappears (occlusion, exit, scene cut) becomes ``LOST`` and is only
   ``REACQUIRED`` by a strict, margin-checked appearance match followed by a short probation.
 
+Association is two-tier (ByteTrack style) and motion-aware: Kalman-predicted boxes (``motion.py``), IoU/GIoU spatial
+gating, pose-aware ArcFace cosine against an EMA gallery plus per-yaw-bin prototypes, solved by Hungarian assignment. A
+head turning into profile lowers the embedding similarity before the box moves, so while the yaw trajectory is steep or
+changing the continuity cosine floor drops by ``turn_relief`` and the profile is learned as its own prototype. After the
+whole video has been tracked, ``identity/consolidation.py`` merges the tracker IDs that belong to one person (the ``merge_*``
+/ ``veto_*`` / ``artifact_*`` fields below) and numbers them canonically.
+
 Every threshold is a documented heuristic on ArcFace cosine similarity. They are
-recorded in the policy fingerprint so any change invalidates saved identity locks, but
-they have not been calibrated against a labelled benchmark. See docs/IDENTITY_LOCK_STAGE1.md.
+recorded in the policy fingerprint so any change invalidates saved identity locks. The ``merge_*`` / ``veto_*`` values were
+calibrated on the single-subject clips (``tools/verify_stage3 --calibrate``); the online association thresholds were not
+calibrated against a labelled benchmark. See docs/IDENTITY_LOCK_STAGE1.md.
 """
 from __future__ import annotations
 
@@ -59,7 +67,32 @@ class TrackPolicy:
     lost_retention_frames: int = 1800
     min_confidence: float = 0.35
     anchor_limit: int = 6
-    gallery_rate: float = 0.1
+    gallery_rate: float = 0.1          # EMA rate of the identity gallery (strong, unambiguous matches only)
+    bin_rate: float = 0.2              # EMA rate of the pose-binned prototypes
+    # Head turns: a steep or sharply changing yaw lowers embedding similarity before it recovers, so for such frames the
+    # continuity cosine floor drops by ``turn_relief`` as long as the box is spatially continuous with the track.
+    turn_yaw: float = 40.0
+    turn_step: float = 15.0
+    turn_relief: float = 0.15
+    # A track that is not detected stays spatially matchable (Kalman-coasted) for this many frames; afterwards it needs appearance.
+    spatial_bridge_frames: int = 8
+    # Frames a missed track stays alive in the active set before it is parked for appearance-only reacquisition.
+    bridge_frames: int = 90
+    # Global tracklet consolidation (identity/consolidation.py): which tracker IDs are one person. Calibrated with
+    # ``tools.verify_stage3 --calibrate`` on the single-subject clips: pose-matched prototype cosine between *different*
+    # people (different videos, pairs that are visibly the same person excluded) has p50 0.03 and p95 0.15-0.22, p99 <= 0.25
+    # in every yaw bin; the same person scores 0.96 frontal and still 0.45 (median) against the frontal prototype in profile.
+    merge_cosine: float = 0.45         # pose-matched prototype cosine that merges two tracklets on appearance alone (> 1.8x impostor p99)
+    merge_weak_cosine: float = 0.20    # with strict spatial/temporal continuity and nobody else around (impostor p95)
+    merge_turn_cosine: float = 0.05    # same, when one side meets the other in a steep turn (embedding collapses in profile)
+    veto_cosine: float = 0.15          # two well supported frontal prototypes below this are two people, whatever the position
+    continuity_gap_frames: int = 60    # largest hand-over gap bridged by continuity
+    merge_gap_frames: int = 3600       # largest gap bridged by appearance alone
+    min_identity_frames: int = 5       # fewer detections than this is noise, not a person
+    artifact_containment: float = 0.5  # share of a box inside a larger face's box ...
+    artifact_area_ratio: float = 0.35  # ... and no more than this fraction of its area: a part of that face
+    seamless_gap_frames: int = 3       # two IDs meeting within this many frames of one shot ...
+    seamless_iou: float = 0.6          # ... at a box overlapping at least this much are one object whatever the embedding says
 
     def __post_init__(self) -> None:
         cosines = (self.strong_cosine, self.match_cosine, self.continuity_cosine, self.weak_cosine)
@@ -77,8 +110,20 @@ class TrackPolicy:
             raise ValueError("Uncertain/lost limits out of bounds")
         if not 1 <= self.lost_retention_frames <= 100000 or not 1 <= self.anchor_limit <= 16:
             raise ValueError("Retention/anchor limits out of bounds")
-        if not 0 < self.gallery_rate < 1:
-            raise ValueError("Gallery rate must lie in (0, 1)")
+        if not 0 < self.gallery_rate < 1 or not 0 < self.bin_rate < 1:
+            raise ValueError("Gallery/bin rates must lie in (0, 1)")
+        if not 0 < self.turn_yaw <= 90 or not 0 < self.turn_step <= 90 or not 0 <= self.turn_relief < self.continuity_cosine:
+            raise ValueError("Turn thresholds out of bounds")
+        if not 0 <= self.spatial_bridge_frames <= 600 or not 1 <= self.bridge_frames <= 120:
+            raise ValueError("Bridge windows out of bounds")
+        if not -1 < self.merge_turn_cosine <= self.merge_weak_cosine <= self.merge_cosine < 1 or not 0 < self.veto_cosine < 1:
+            raise ValueError("Merge cosines must be ordered turn <= weak <= merge, veto within (0, 1)")
+        if not 0 <= self.continuity_gap_frames <= self.merge_gap_frames <= 100000 or not 1 <= self.min_identity_frames <= 1000:
+            raise ValueError("Merge windows out of bounds")
+        if not 0 < self.artifact_containment <= 1 or not 0 < self.artifact_area_ratio <= 1:
+            raise ValueError("Artifact thresholds must lie in (0, 1]")
+        if not 0 <= self.seamless_gap_frames <= self.continuity_gap_frames or not 0.3 <= self.seamless_iou <= 1:
+            raise ValueError("Seamless hand-over bounds out of range")
 
     def as_dict(self) -> dict[str, Any]:
         return {"version": POLICY_VERSION, **{item.name: getattr(self, item.name) for item in fields(self)}}
@@ -103,7 +148,6 @@ class TrackMemory:
     gallery: np.ndarray
     anchors: list[np.ndarray]
     predicted_box: np.ndarray
-    velocity: np.ndarray = field(default_factory=lambda: np.zeros(4, np.float32))
     missed: int = 0
     age: int = 1
     state: str = TRACKED
@@ -116,6 +160,13 @@ class TrackMemory:
     scene_id: int = 0
     parked_by_cut: bool = False
     lost_at: int | None = None
+    # Pose-binned appearance prototypes: how this person looks at 30-degree yaw steps.
+    bins: dict[int, np.ndarray] = field(default_factory=dict)
+    # Kalman predictors (frame-number time), created by the tracker; ``clock`` is the frame number of the last update.
+    motion: Any = None
+    center: Any = None
+    trajectory: Any = None
+    clock: float = 0.0
 
 
 def unit(vector: np.ndarray) -> np.ndarray:
@@ -123,12 +174,35 @@ def unit(vector: np.ndarray) -> np.ndarray:
     return (vector / norm).astype(np.float32) if norm > 0 else vector.astype(np.float32)
 
 
-def appearance(memory: TrackMemory, embedding: np.ndarray) -> float:
-    """Best cosine against the stable gallery and its diverse anchors (never the last frame)."""
+YAW_BIN_DEGREES = 30.0
+
+
+def yaw_bin(yaw: float) -> int:
+    """Pose bin of a yaw angle: ..., -1 = about -30 deg, 0 = frontal, +1 = about +30 deg, +/-3 = profile."""
+    return int(np.clip(round(float(yaw) / YAW_BIN_DEGREES), -3, 3))
+
+
+def appearance(memory: TrackMemory, embedding: np.ndarray, yaw: float | None = None) -> float:
+    """Best cosine against the stable gallery, its diverse anchors and the pose-binned prototypes (never the last frame).
+
+    A pose-binned prototype only speaks for observations at (or next to) its own yaw: embeddings of *different* people
+    resemble each other far more in profile than in frontal view, so a profile prototype must not vouch for a frontal face.
+    ``yaw=None`` (no pose information) consults every bin."""
     best = float(np.dot(memory.gallery, embedding))
     for anchor in memory.anchors:
         best = max(best, float(np.dot(anchor, embedding)))
+    wanted = None if yaw is None else yaw_bin(yaw)
+    for key, prototype in memory.bins.items():
+        if wanted is None or abs(key - wanted) <= 1:
+            best = max(best, float(np.dot(prototype, embedding)))
     return best
+
+
+def learn_bin(memory: TrackMemory, embedding: np.ndarray, yaw: float, rate: float) -> None:
+    """Fold an observation into the prototype of its yaw bin (EMA; the first sample seeds the bin)."""
+    key = yaw_bin(yaw)
+    current = memory.bins.get(key)
+    memory.bins[key] = unit(embedding.astype(np.float32)) if current is None else unit((1 - rate) * current + rate * embedding)
 
 
 def normalized_landmarks(points: np.ndarray, box: np.ndarray) -> np.ndarray:

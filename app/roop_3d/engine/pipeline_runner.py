@@ -384,7 +384,13 @@ class MasterPipelineRunner:
         policy = TrackPolicy()
         if inspection.tracking_policy_fingerprint != policy.fingerprint():
             raise DomainError("IDENTITY_POLICY_CHANGED", "The tracking policy changed since this inspection; inspect again", 409)
-        return {"track_policy": policy, "detection_threshold": inspection.detection_threshold or 0.5}
+        # The inspection numbered each person once (global tracklet consolidation); the replay's own tracker IDs are re-labelled
+        # with those canonical IDs from the pose-aware signatures stored in the identity report.
+        from roop_3d.identity.locked_target import LockedTargetBinder
+        from roop_3d.identity.report import read_report
+        report = read_report(self.root, inspection.inspection_id, expected_sha256=inspection.identity_report_sha256)
+        return {"track_policy": policy, "detection_threshold": inspection.detection_threshold or 0.5,
+                "locked_targets": LockedTargetBinder.from_report(report, policy)}
 
     def identity_context(self, request, labels_to_ids: Mapping[str, int], settings: Settings):
         """(lock, guard) for a lock-bound job, re-verified against the files on disk right now."""

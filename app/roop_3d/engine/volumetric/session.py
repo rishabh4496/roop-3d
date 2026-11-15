@@ -94,6 +94,7 @@ class ReferencePipeline:
         self._frame_processor = None
         self.last_frame_report = None
         self.selected_ids: frozenset[int] | None = None
+        self.locked_targets = None
         self.sources_by_track: dict[int, FaceSetDocument] = {}
         self.identity_guard = None
         self.prepared = False
@@ -121,7 +122,8 @@ class ReferencePipeline:
 
     def prepare_session(self, source: FaceSetDocument, *, track_ids: set[int] | None = None,
                         sources_by_track: Mapping[int, FaceSetDocument] | None = None,
-                        track_policy=None, detection_threshold: float = 0.5, identity_store=None) -> dict:
+                        track_policy=None, detection_threshold: float = 0.5, identity_store=None,
+                        locked_targets=None) -> dict:
         """Prepare tracking and identity gating; rendering requires the wired true-3D renderer."""
         with self.lock:
             if track_ids is not None and (
@@ -136,6 +138,7 @@ class ReferencePipeline:
                 self.tracker = FaceTracker(self.catalog, config=self.config, threshold=detection_threshold,
                                            policy=track_policy)
                 self.selected_ids = frozenset(track_ids) if track_ids is not None else None
+                self.locked_targets = locked_targets
                 self.sources_by_track = mapped_sources
                 self.default_source = source
                 self.identity_store = identity_store
@@ -166,12 +169,25 @@ class ReferencePipeline:
 
     def set_target_registry(self, registry) -> None:
         self.target_registry = registry
-        if self.tracker is not None:
+        # Locked canonical targets are tracked by the identity tracker; the clustering registry would re-number them.
+        if self.tracker is not None and self.locked_targets is None:
             self.tracker.target_registry = registry
+
+    def _bind_locked_targets(self, faces, fallback_frame: int):
+        """Re-label the tracker's faces with the locked canonical target IDs (see ``identity.locked_target``)."""
+        binder = self.locked_targets
+        if binder is None:
+            return faces
+        return binder.bind(faces, self.angle_frame_index if self.angle_frame_index is not None else fallback_frame)
+
+    def _active_ids(self) -> frozenset[int]:
+        alive = self.tracker.active_ids
+        return frozenset(alive) if self.locked_targets is None else self.locked_targets.canonical_ids(alive)
 
     def _persistent_target_faces(self, faces):
         registry = getattr(self, "target_registry", None)
-        if registry is None or not faces or getattr(self.tracker, "target_registry", None) is registry:
+        if (registry is None or not faces or self.locked_targets is not None
+                or getattr(self.tracker, "target_registry", None) is registry):
             return faces
         from roop_3d.identity.target_lock import FaceRef
         from roop_3d.core.pose import as_pose3d
@@ -196,7 +212,7 @@ class ReferencePipeline:
 
     def _target_reference(self, tracked):
         registry = getattr(self, "target_registry", None)
-        if registry is None:
+        if registry is None or self.locked_targets is not None:
             return None
         from roop_3d.core.pose import as_pose3d
         pose = as_pose3d(tracked.observation.pose)
@@ -247,8 +263,39 @@ class ReferencePipeline:
         if type(frame_index) is not int or frame_index < 0:
             raise ValueError("Angle scan frame index must be a nonnegative integer")
         self.angle_frame_index = frame_index
-        if self.tracker is not None and getattr(self, "target_registry", None) is not None:
-            self.tracker.registry_frame_index = frame_index
+        if self.tracker is not None:
+            self.tracker.frame_number = frame_index
+            if getattr(self, "target_registry", None) is not None:
+                self.tracker.registry_frame_index = frame_index
+
+    def scan_locked_targets(self, video_path, *, hdr_policy: str = "tonemap_sdr", on_frame=None) -> dict[str, int]:
+        """Track the whole timeline once so the locked canonical IDs are bound by the *global* consolidation.
+
+        The tracker runs over every frame, the binder records its tracklets and, at the end, consolidates and matches them to
+        the locked signatures (``LockedTargetBinder.finish_prepass``). Association state is then reset, so the render replays
+        the same tracker deterministically and looks each face up by frame and box. Returns the pre-pass summary."""
+        if not self.prepared or self.tracker is None:
+            raise DomainError("SESSION_NOT_PREPARED", "Prepare a session before scanning target identities", 409)
+        binder = self.locked_targets
+        if binder is None:
+            return {}
+        from roop_3d.media.video_reader import VideoReader
+        frames = VideoReader(video_path, hardware="auto", hdr_policy=hdr_policy).frames()
+        binder.start_prepass()
+        try:
+            for frame_index, decoded in enumerate(frames):
+                if decoded.image is not None:
+                    self.set_frame_timestamp(float(decoded.timestamp.seconds))
+                    self.tracker.frame_number = frame_index
+                    self._bind_locked_targets(self.tracker.process(decoded.image), frame_index)
+                if on_frame is not None:
+                    on_frame(frame_index + 1)
+        finally:
+            frames.close()
+            self.tracker.reset_tracking()
+            self.tracker.frame_number = None
+            binder.finish_prepass()
+        return dict(binder.prepass_summary)
 
     def scan_angle_trajectories(self, video_path, track_ids: set[int], *, fps: float = 30.0,
                                 hdr_policy: str = "tonemap_sdr", min_cutoff: float = 0.15,
@@ -286,6 +333,8 @@ class ReferencePipeline:
         has_landmarks68 = landmark_engine.has_68
         reader = VideoReader(video_path, hardware="auto", hdr_policy=hdr_policy)
         frames = reader.frames()
+        if self.locked_targets is not None:
+            self.locked_targets.start_prepass()
         try:
             window_start, window_end = window if window is not None else (None, None)
             for frame_index, decoded in enumerate(frames):
@@ -305,7 +354,9 @@ class ReferencePipeline:
                                           interpolation=cv2.INTER_AREA)
                               if flow_scale < 1.0 else gray)
                 self.set_frame_timestamp(float(decoded.timestamp.seconds))
-                tracked_faces = self._persistent_target_faces(self.tracker.process(decoded.image))
+                self.tracker.frame_number = frame_index
+                tracked_faces = self._persistent_target_faces(
+                    self._bind_locked_targets(self.tracker.process(decoded.image), frame_index))
                 frame_detections: dict[int, AngleDetection] = {}
                 frame_barriers = set(track_ids) if self.tracker.scene_cut else set()
                 if self.tracker.scene_cut:
@@ -389,7 +440,10 @@ class ReferencePipeline:
         finally:
             frames.close()
             self.tracker.reset_tracking()
+            self.tracker.frame_number = None
             self.angle_frame_index = None
+            if self.locked_targets is not None:
+                self.locked_targets.finish_prepass()
 
         tracer = AngleTrajectoryTracer(min_cutoff=min_cutoff, beta=beta,
                                        derivative_cutoff=derivative_cutoff)
@@ -470,9 +524,10 @@ class ReferencePipeline:
             if tracked is None:
                 self._frame_context = None
                 faces = self.tracker.process(image, include203=False)
-                faces = self._persistent_target_faces(self._apply_angle_trajectories(faces))
+                faces = self._persistent_target_faces(self._apply_angle_trajectories(
+                    self._bind_locked_targets(faces, self.frames_processed)))
                 detection_end = time.perf_counter()
-                tracked = TrackedFrame(faces, bool(self.tracker.scene_cut), frozenset(self.tracker.active_ids),
+                tracked = TrackedFrame(faces, bool(self.tracker.scene_cut), self._active_ids(),
                                        self._frame_time(), (detection_end - began) * 1000)
             else:
                 faces, detection_end = tracked.faces, began + tracked.detection_ms / 1000
@@ -524,11 +579,12 @@ class ReferencePipeline:
             image_bgr(image)
             began = time.perf_counter()
             faces = self.tracker.process(image, include203=False)
-            faces = self._persistent_target_faces(self._apply_angle_trajectories(faces))
+            faces = self._persistent_target_faces(self._apply_angle_trajectories(
+                self._bind_locked_targets(faces, self.frames_tracked)))
             seconds = getattr(self.tracker, "timestamp_seconds", None)
             frame_time = float(seconds) if seconds is not None and np.isfinite(seconds) else self.frames_tracked / 30.0
             self.frames_tracked += 1
-            return TrackedFrame(faces, bool(self.tracker.scene_cut), frozenset(self.tracker.active_ids), frame_time,
+            return TrackedFrame(faces, bool(self.tracker.scene_cut), self._active_ids(), frame_time,
                                 (time.perf_counter() - began) * 1000)
 
     def _detect_landmarks106(self, crop: np.ndarray) -> np.ndarray | None:
@@ -586,6 +642,7 @@ class ReferencePipeline:
             self.selected_ids = None
             self.sources_by_track.clear()
             self.identity_guard = None
+            self.locked_targets = None
             self.prepared = False
             self.last_latency = None
             self.frames_processed = 0

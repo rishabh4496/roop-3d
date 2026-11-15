@@ -4,11 +4,13 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 import cv2
 import numpy as np
+from scipy.optimize import linear_sum_assignment
 
 from roop_3d.core.errors import DomainError
 from roop_3d.engine.detection import track_policy as tp
 from roop_3d.engine.detection.dense_landmarks import DenseLandmarks, geometric_pose
 from roop_3d.engine.detection.robust_detector import RobustDetector, dense_validator
+from roop_3d.engine.detection.motion import CENTER_GATE_CHI2, BoxMotion, CenterMotion3D, PoseTrajectory, giou
 from roop_3d.engine.detection.track_policy import TrackPolicy
 from roop_3d.engine.runtime import RuntimeConfig, image_bgr, tensor, session_factory
 from roop_3d.faceset.recognizer import Recognizer
@@ -56,54 +58,19 @@ class TrackedFace:
 
 
 def optimal_assignment(scores: np.ndarray) -> list[tuple[int, int]]:
-    """Maximum-weight assignment with zero-weight dummy rows/columns (Hungarian)."""
-    rows, columns = scores.shape
-    # Give every real row and column its own unmatched option, even for square
-    # matrices. Otherwise a low-confidence match can displace a stronger one.
-    size = rows + columns
-    if not size:
+    """Maximum-weight one-to-one assignment (Hungarian, ``scipy.optimize.linear_sum_assignment``).
+
+    Only strictly positive scores are admissible pairs: a non-positive entry is the same as "no link", so a weak match can
+    never displace a stronger one and rows/columns may stay unmatched."""
+    if scores.size == 0:
         return []
-    costs = np.zeros((size, size), np.float64)
-    costs[:rows, :columns] = -scores
-    row_potential = np.zeros(size + 1)
-    col_potential = np.zeros(size + 1)
-    owner = np.zeros(size + 1, np.int32)
-    predecessor = np.zeros(size + 1, np.int32)
-    for row in range(1, size + 1):
-        owner[0], column = row, 0
-        minimum = np.full(size + 1, np.inf)
-        visited = np.zeros(size + 1, bool)
-        while True:
-            visited[column] = True
-            current_row = owner[column]
-            delta, next_column = np.inf, 0
-            for candidate in range(1, size + 1):
-                if visited[candidate]:
-                    continue
-                reduced = costs[current_row - 1, candidate - 1] - row_potential[current_row] - col_potential[candidate]
-                if reduced < minimum[candidate]:
-                    minimum[candidate], predecessor[candidate] = reduced, column
-                if minimum[candidate] < delta:
-                    delta, next_column = minimum[candidate], candidate
-            for candidate in range(size + 1):
-                if visited[candidate]:
-                    row_potential[owner[candidate]] += delta
-                    col_potential[candidate] -= delta
-                else:
-                    minimum[candidate] -= delta
-            column = next_column
-            if owner[column] == 0:
-                break
-        while column:
-            previous = predecessor[column]
-            owner[column] = owner[previous]
-            column = previous
-    return [(int(owner[j] - 1), j - 1) for j in range(1, size + 1)
-            if 0 < owner[j] <= rows and j <= columns and scores[owner[j] - 1, j - 1] > 0]
+    gain = np.where(scores > 0, scores, 0.0)
+    rows, columns = linear_sum_assignment(gain, maximize=True)
+    return [(int(row), int(column)) for row, column in zip(rows, columns) if scores[row, column] > 0]
 
 
 class FaceTracker:
-    def __init__(self, catalog: ModelCatalog | None = None, *, max_tracks: int = 32, max_missed: int = 15,
+    def __init__(self, catalog: ModelCatalog | None = None, *, max_tracks: int = 32, max_missed: int | None = None,
                  threshold: float = 0.5, config: RuntimeConfig = RuntimeConfig(), detector: Detector | None = None, stabilize: bool = True,
                  policy: TrackPolicy | None = None, low_threshold: float | None = 0.1, low_match_iou: float = 0.4,
                  scene_cut_detector: SceneCutDetector | None = None, recovery: bool = True):
@@ -112,6 +79,8 @@ class FaceTracker:
         pass) is the lowest detector score still observed: those detections are matched afterwards to the tracks the
         first pass left unmatched by IoU against the track's predicted box only (``>= low_match_iou``), keep that track
         alive through a partial occlusion, and never create a track."""
+        if max_missed is None:                  # the identity-lock tracker bridges detection dropouts for longer
+            max_missed = policy.bridge_frames if policy is not None else 15
         if not 1 <= max_tracks <= 32 or not 0 <= max_missed <= 120 or not 0.1 <= threshold <= 0.99:
             raise ValueError("Invalid tracker bounds")
         if low_threshold is not None and not 0.01 <= low_threshold < threshold or not 0.05 <= low_match_iou <= 0.95:
@@ -153,6 +122,8 @@ class FaceTracker:
         self._policy_frame = -1
         self._small_gray: np.ndarray | None = None
         self._flow_frames: tuple[np.ndarray, np.ndarray, float] | None = None
+        # Real frame number of the image being tracked (set by a caller that samples sparsely); None = count calls.
+        self.frame_number: int | None = None
 
     def observe(self, image: np.ndarray, *, include203: bool = False) -> list[FaceObservation]:
         image_bgr(image)
@@ -392,19 +363,41 @@ class FaceTracker:
         while len(self._lost) > policy.lost_limit:
             del self._lost[min(self._lost, key=lambda key: (self._lost[key].lost_at or 0, key))]
 
-    def _propagate_missed(self) -> None:
-        """Carry the box of tracks that were not detected this frame forward with optical flow."""
+    def _propagate_missed(self, clock: float) -> None:
+        """Carry tracks that were not detected this frame forward: optical flow as a noisy measurement, else Kalman coasting."""
         for memory in self._mem.values():
-            if memory.missed == 0:
+            if memory.missed == 0 or memory.motion is None:
                 continue
             moved = None
             if self._flow_frames is not None:
                 previous, current, scale = self._flow_frames
-                # On the first miss the last seen box is the previous-frame position.
-                base = memory.observation.box if memory.missed == 1 else memory.predicted_box
+                base = memory.motion.predict_box(memory.motion.frame)      # the box the track had on the previous frame
                 moved = tp.propagate_box(previous, current, np.asarray(base, np.float32) * scale)
-            memory.predicted_box = (moved[0] / scale).astype(np.float32) if moved is not None \
-                else (memory.predicted_box + memory.velocity * 0.5).astype(np.float32)
+            if moved is not None:
+                memory.motion.update((moved[0] / scale).astype(np.float32), clock, noise_gain=3.0)
+            else:
+                memory.motion.coast(clock)
+            memory.predicted_box = memory.motion.predict_box(clock + 1)
+
+    def _clock(self) -> float:
+        """Frame number the current association happens at: the caller's real frame index, else the call count."""
+        return float(self.frame_number) if self.frame_number is not None else float(self._policy_frame)
+
+    @staticmethod
+    def _yaw(face: FaceObservation) -> float:
+        yaw = float(face.pose[0])
+        return yaw if np.isfinite(yaw) else 0.0
+
+    @staticmethod
+    def _center(face: FaceObservation) -> np.ndarray | None:
+        return None if face.pose6dof is None else np.asarray(face.pose6dof.t, np.float64)
+
+    @staticmethod
+    def _center_plausible(memory: tp.TrackMemory, center: np.ndarray | None, clock: float) -> bool:
+        """A metric head-centre jump beyond the Kalman gate is not the same head moving, whatever the image overlap says."""
+        if memory.center is None or center is None:
+            return True
+        return memory.center.distance2(center, clock) <= CENTER_GATE_CHI2
 
     def track_states(self) -> dict[int, str]:
         """State of every track the policy still remembers (active or LOST)."""
@@ -435,12 +428,12 @@ class FaceTracker:
         return not rivals or cosine[row, column] - max(rivals) >= self.policy.ambiguity_margin
 
     def _reacquire(self, rows: list[int], observations,
-                   candidates: list[tp.TrackMemory]) -> dict[int, tp.TrackMemory]:
+                   candidates: list[tp.TrackMemory], yaws: list[float]) -> dict[int, tp.TrackMemory]:
         """Strict appearance-only recovery with margins against every other face and track."""
         policy = self.policy
         if not rows or not candidates:
             return {}
-        similarity = np.array([[tp.appearance(track, observations[row].embedding) for track in candidates]
+        similarity = np.array([[tp.appearance(track, observations[row].embedding, yaws[row]) for track in candidates]
                                for row in rows])
         gate = np.where(similarity >= policy.reacquire_cosine, similarity, -1.0)
         accepted: dict[int, tp.TrackMemory] = {}
@@ -448,10 +441,10 @@ class FaceTracker:
             row, track = rows[local_row], candidates[column]
             best = float(similarity[local_row, column])
             rivals = [float(similarity[local_row, other]) for other in range(len(candidates)) if other != column]
-            rivals += [float(tp.appearance(track, observations[other].embedding))
+            rivals += [float(tp.appearance(track, observations[other].embedding, yaws[other]))
                        for other in range(len(observations)) if other != row]
             # A currently visible track that looks equally like this face also makes the link unsafe.
-            rivals += [float(tp.appearance(active, observations[row].embedding))
+            rivals += [float(tp.appearance(active, observations[row].embedding, yaws[row]))
                        for active in self._mem.values() if active.track_id != track.track_id and active.missed == 0]
             if not rivals or best - max(rivals) >= policy.reacquire_margin:
                 accepted[row] = track
@@ -459,27 +452,44 @@ class FaceTracker:
 
     def _assign_policy(self, observations: list[FaceObservation],
                        low: list[FaceObservation] = ()) -> tuple[TrackedFace, ...]:
+        """Two-tier association: Kalman-predicted boxes + GIoU/IoU + pose-aware ArcFace cosine, solved by Hungarian.
+
+        Tier 1 (detections at or above the ByteTrack high threshold) is matched to every live track, including tracks that
+        were not detected on recent frames (coasted by their Kalman filter for ``spatial_bridge_frames``). Tier 2 (low-score
+        detections) continues the tracks tier 1 left over by overlap with the predicted box only, never starts a track and
+        never feeds the appearance bank. Faces nothing explains are reacquired from parked tracks by strict appearance."""
         policy = self.policy
         frame = self._policy_frame = self._policy_frame + 1
+        clock = self._clock()
         ids = sorted(self._mem)
+        for identity in ids:                                   # predicted box of every live track at this frame number
+            memory = self._mem[identity]
+            if memory.motion is not None:
+                memory.predicted_box = memory.motion.predict_box(clock)
         rows, columns = len(observations), len(ids)
         cosine = np.zeros((rows, columns))
         overlap = np.zeros((rows, columns))
         scores = np.full((rows, columns), -1.0)
+        yaws = [self._yaw(face) for face in observations]
         for row, face in enumerate(observations):
             tensor(face.embedding, (512,))
+            center = self._center(face)
             for column, identity in enumerate(ids):
                 memory = self._mem[identity]
-                cosine[row, column] = similarity = tp.appearance(memory, face.embedding)
+                cosine[row, column] = similarity = tp.appearance(memory, face.embedding, yaws[row])
                 overlap[row, column] = shared = iou(face.box, memory.predicted_box)
-                if (similarity >= policy.match_cosine or similarity >= policy.weak_cosine and shared >= 0.4
-                        or shared >= policy.continuity_iou and memory.missed <= 2):
+                reach = (shared >= policy.continuity_iou and memory.missed <= policy.spatial_bridge_frames
+                         and self._center_plausible(memory, center, clock))
+                if similarity >= policy.match_cosine or similarity >= policy.weak_cosine and shared >= 0.4 or reach:
                     layout = tp.landmark_similarity(memory.observation.landmarks5, memory.observation.box,
                                                     face.landmarks5, face.box)
-                    scores[row, column] = max(0.6 * similarity + 0.25 * shared + 0.15 * layout
+                    # Overlap ranks candidates; GIoU still separates non-overlapping ones by how close they are.
+                    proximity = shared if shared > 0 else 0.05 * max(0.0, 1.0 + giou(face.box, memory.predicted_box))
+                    scores[row, column] = max(0.6 * similarity + 0.25 * proximity + 0.15 * layout
                                               - 0.002 * memory.missed, 0.01)
         matches = dict(optimal_assignment(scores))
         results: dict[int, tuple[int, str, float, bool, str | None, tp.TrackMemory]] = {}
+        learn: set[int] = set()
         for row, column in matches.items():
             face, memory = observations[row], self._mem[ids[column]]
             similarity, shared = float(cosine[row, column]), float(overlap[row, column])
@@ -492,14 +502,21 @@ class FaceTracker:
                 memory.needs_discrimination = True
             elif memory.needs_discrimination:
                 memory.needs_discrimination = False
+            turning = memory.trajectory is not None and memory.trajectory.turning(
+                clock, yaws[row], steep=policy.turn_yaw, step=policy.turn_step)
+            relief = policy.turn_relief if turning else 0.0
+            continuous = shared >= policy.continuity_iou and self._center_plausible(memory, self._center(face), clock)
             clean = False
             if ambiguous:
                 state, reason = tp.UNCERTAIN, tp.AMBIGUOUS
             elif similarity >= policy.match_cosine:
                 clean = True
-            elif (similarity >= policy.continuity_cosine and shared >= policy.continuity_iou
+            elif (similarity >= policy.continuity_cosine and continuous
                     and previous_state == tp.TRACKED and memory.hold == 0):
                 clean = True        # profile/angle change: spatial continuity keeps an established lock
+            elif turning and similarity >= policy.continuity_cosine - relief and continuous:
+                clean = True        # a head turning into profile: the embedding dips first, the Kalman-predicted box does not
+                learn.add(row)
             else:
                 state, reason = tp.UNCERTAIN, tp.APPEARANCE_LOW
             allowed = False
@@ -518,55 +535,67 @@ class FaceTracker:
                     memory.uncertain_run = 0
             else:
                 memory.hold, memory.uncertain_run = policy.recovery_frames, memory.uncertain_run + 1
-            if allowed and similarity >= policy.strong_cosine and not ambiguous:
-                memory.gallery = tp.unit((1 - policy.gallery_rate) * memory.gallery + policy.gallery_rate * face.embedding)
-                if (len(memory.anchors) < policy.anchor_limit
-                        and max(float(np.dot(anchor, face.embedding)) for anchor in memory.anchors) < 0.85):
-                    memory.anchors.append(face.embedding.astype(np.float32))
+            if allowed and not ambiguous and (similarity >= policy.strong_cosine or row in learn):
+                if similarity >= policy.strong_cosine:
+                    memory.gallery = tp.unit((1 - policy.gallery_rate) * memory.gallery + policy.gallery_rate * face.embedding)
+                    if (len(memory.anchors) < policy.anchor_limit
+                            and max(float(np.dot(anchor, face.embedding)) for anchor in memory.anchors) < 0.85):
+                        memory.anchors.append(face.embedding.astype(np.float32))
+                tp.learn_bin(memory, face.embedding, yaws[row], policy.bin_rate)
             results[row] = (ids[column], state, score, allowed, reason, memory)
         matched_columns = {ids[column] for column in matches.values()}
         pool = [self._mem[identity] for identity in ids if identity not in matched_columns] + list(self._lost.values())
-        accepted = self._reacquire([row for row in range(rows) if row not in matches], observations, pool)
+        accepted = self._reacquire([row for row in range(rows) if row not in matches], observations, pool, yaws)
         output: list[TrackedFace] = []
         new_mem: dict[int, tp.TrackMemory] = {}
         for row, face in enumerate(observations):
+            center = self._center(face)
             if row in results:
                 identity, state, score, allowed, reason, memory = results[row]
-                delta = (face.box - memory.observation.box) / (memory.missed + 1)
-                memory.velocity = (0.5 * memory.velocity + 0.5 * delta).astype(np.float32)
+                memory.motion.update(face.box, clock)
                 memory.age += 1
             elif row in accepted:
                 memory = accepted[row]
                 identity, state, allowed, reason = memory.track_id, tp.REACQUIRED, False, tp.REACQUIRING
-                score = tp.confidence(tp.appearance(memory, face.embedding), 0.0, policy)
+                score = tp.confidence(tp.appearance(memory, face.embedding, yaws[row]), 0.0, policy)
                 memory.hold, memory.uncertain_run, memory.parked_by_cut = policy.reacquire_frames - 1, 0, False
-                memory.velocity, memory.lost_at, memory.age = np.zeros(4, np.float32), None, memory.age + 1
+                memory.lost_at, memory.age = None, memory.age + 1
+                memory.motion.reset(face.box, clock)
+                memory.center = None
                 self._lost.pop(identity, None)
                 self.stabilizer.forget_track(identity)
             else:
                 identity = self.next_id
                 self.next_id += 1
                 memory = tp.TrackMemory(identity, face, tp.unit(face.embedding.astype(np.float32)),
-                                        [face.embedding.astype(np.float32)], face.box.copy())
+                                        [face.embedding.astype(np.float32)], face.box.copy(),
+                                        bins={tp.yaw_bin(yaws[row]): tp.unit(face.embedding.astype(np.float32))},
+                                        motion=BoxMotion(face.box, clock), trajectory=PoseTrajectory())
                 state, score, allowed, reason = tp.TRACKED, 1.0, True, None
+            if center is not None:
+                if memory.center is None:
+                    memory.center = CenterMotion3D(center, clock)
+                else:
+                    memory.center.update(center, clock)
+            memory.trajectory.add(clock, yaws[row], float(face.pose[1]), float(face.pose[2]))
             if memory.state != state:
                 self._event(memory, state, reason or "")
             memory.state, memory.observation, memory.missed = state, face, 0
-            memory.predicted_box = (face.box + memory.velocity).astype(np.float32)
-            memory.last_frame, memory.scene_id = frame, self.scene_id
+            memory.predicted_box = memory.motion.predict_box(clock + 1)
+            memory.last_frame, memory.scene_id, memory.clock = frame, self.scene_id, clock
             new_mem[identity] = memory
             output.append(TrackedFace(identity, face, memory.age, self.scene_id, state, float(score), allowed, reason))
         # ByteTrack second pass under the identity lock: IoU is not identity evidence, so a low-score hit keeps the track
-        # (id, box, velocity) alive through the occlusion but is never swappable and leaves the lock state untouched.
+        # (id, box, Kalman state) alive through the occlusion but is never swappable and leaves the lock state untouched.
         free = [identity for identity in ids if identity not in new_mem and self._mem[identity].state != tp.LOST]
         for row, column in self._match_low(list(low), [self._mem[identity].predicted_box for identity in free]):
             identity, memory = free[column], self._mem[free[column]]
             face = replace(low[row], embedding=memory.observation.embedding)
             overlap_with_prediction = float(iou(face.box, memory.predicted_box))
-            memory.velocity = (0.5 * memory.velocity + 0.5 * (face.box - memory.observation.box)).astype(np.float32)
+            memory.motion.update(face.box, clock, noise_gain=2.0)       # a partially occluded box is a noisier measurement
             memory.observation, memory.missed = face, 0
-            memory.predicted_box = (face.box + memory.velocity).astype(np.float32)
-            memory.last_frame, memory.age = frame, memory.age + 1
+            memory.predicted_box = memory.motion.predict_box(clock + 1)
+            memory.last_frame, memory.age, memory.clock = frame, memory.age + 1, clock
             new_mem[identity] = memory
             output.append(TrackedFace(identity, face, memory.age, self.scene_id, tp.UNCERTAIN,
                                       tp.confidence(0.0, overlap_with_prediction, policy), False, "LOW_SCORE_CONTINUITY"))
@@ -589,7 +618,7 @@ class FaceTracker:
             victim = max(new_mem, key=lambda key: (new_mem[key].missed, -new_mem[key].last_frame, key))
             self._park(new_mem.pop(victim), tp.EXPIRED)
         self._mem = new_mem
-        self._propagate_missed()
+        self._propagate_missed(clock)
         return self._stabilize(output, self._mem)
 
     @property

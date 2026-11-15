@@ -370,3 +370,55 @@ Production `MediaService.inspect` (adaptive, identity-lock tracker, ArcFace, 2d1
 - **Pre-existing, not caused here** (the two `test_identity_asset_build` failures are identical at `HEAD` in a clean worktree): many `create_app`-fixture tests fail with `NameError: free variable 'app'` / `MODEL_REGISTRY_INVALID`; `test_inspection_gpu`, `test_stage8_studio` and `test_workstation_preview` do not import.
 - **Pose caveat:** the profile counts for s3, s4, s7 are inflated. Those clips contain heads rolled ≥ 90° (lying down); detection and boxes are correct on visual inspection, but the five-point yaw/pitch estimator saturates at ±90° there and does not separate roll. Detection recall is unaffected; the pose bins are a heuristic, not 3D head pose.
 - **Not demonstrated:** none of the 12 clips depicts `harjot` (best-match cosines −0.08 … +0.16), so bank matching was exercised for plumbing and range, not for a positive identification. s4 still yields three tracks (a small persistent box near the ear was reduced, not eliminated). Nothing here renders a frame: `is_wired()` is still false.
+
+## Stage 3 — Persistent cross-frame face tracking and single-ID locking
+
+**Scope:** target tracking, identity consolidation and the binding of the per-frame loop to the locked canonical ID. The renderer is still unwired (`RENDERER_NOT_WIRED`) and the persisted job store is still `JOB_STORE_INVALID`; neither was touched. Design notes: `roop_3d/docs/PERSISTENT_TRACKING_STAGE3.md`.
+
+### Root cause of `Face 2, 3, 4, 5…`
+
+Measured on the 12 clips with the Stage 2 tracker (cached per-frame detections, `tools/stage3_scan.py`): the main subject split whenever (a) the person turned away for longer than the 15-frame bridge (s5: face 0 / face 1, 139-frame gap; s6: 154 frames), (b) the ArcFace embedding changed mode without the head moving (s10, a rolled/rendered head: cosine 0.03 between two tracks whose boxes overlap on consecutive frames), or (c) the detector found parts of the head (s4: an ear/jaw box scoring 0.51-0.61 inside the 2000 px face became `Face 3`, plus stray hits). Online association alone cannot repair (a) or (b) without guessing, so the fix is layered.
+
+### What changed
+
+| Layer | Change |
+|---|---|
+| Online tracker (`engine/detection/face_tracker.py`, new `motion.py`, `track_policy.py`) | ByteTrack high/low tiers kept; association now Kalman-predicted boxes (`BoxMotion`, frame-number time so sparse adaptive scans predict across gaps) + IoU/GIoU + pose-aware ArcFace cosine, solved with `scipy.optimize.linear_sum_assignment` (the hand-written Hungarian is gone). Per track: EMA gallery, anchors, one prototype per 30° yaw bin, a `PoseTrajectory` and a metric 3D-centre Kalman filter (Mahalanobis gate on IoU-only links). A head that is turning (steep or sharply changing yaw) lowers the continuity cosine floor by `turn_relief` while the predicted box is continuous, and the profile is learned as its own bin. Missed tracks coast on a decaying velocity or optical flow for `bridge_frames` (90) instead of the old 15. Frame-number clock: `FaceTracker.frame_number`. |
+| Global consolidation (new `identity/consolidation.py`) | Tracklets are merged once the video is tracked: artifacts (box inside a much larger co-occurring face) and noise (< 5 detections) get no ID; tracklets seen on the same frame or with disagreeing frontal prototypes are cannot-link; links by pose-matched prototype cosine, by continuity (gap ≤ 60 frames, plausible shift/scale, nobody else nearby), by continuity in a steep turn, or by a seamless same-shot hand-over (≤ 3 frames, IoU ≥ 0.6). Union-find, strongest first, never joining co-occurring clusters. Canonical IDs 1, 2, … ordered by trusted-observation count (the main subject is `Face 1`). `MediaService.inspect` runs it after the scan; inspection tracks, the identity report (segments/thumbnails/counters merged) and the lock-visible `persistent_id` are canonical; `FaceTrack.source_track_ids` records which tracker IDs were folded in. |
+| Calibration | `tools.verify_stage3 --calibrate`: pose-matched cosine between different people (different videos, visibly identical subjects excluded) p50 0.03, p95 0.15-0.22, p99 ≤ 0.25 in every yaw bin; same person 0.96 frontal and median 0.45 vs the frontal prototype in profile. Thresholds: `merge_cosine` 0.45, `merge_weak_cosine` 0.20, `merge_turn_cosine` 0.05, `veto_cosine` 0.15 (in `TrackPolicy`, so the policy fingerprint changes and old locks/inspections must be redone). The different-video set contains at least one pair of the same person (cosine 0.91-0.95), so the impostor tail is an estimate, not a labelled benchmark. |
+| Locked binding (new `identity/locked_target.py`, `session.py`, `pipeline_runner.py`, `video_job_runner.py`) | `LockedTargetBinder` re-labels every frame's faces with the locked canonical IDs: (1) a pre-pass table (`ReferencePipeline.scan_locked_targets`, and the existing angle scan) built by consolidating the whole timeline and matching each identity to a locked signature, looked up by frame + box; (2) sticky raw-ID binding; (3) Hungarian embedding fallback with continuity/turn relief and an ambiguity margin. A face no ID claims is never selectable. `tracking_options()` builds the binder from the inspection's identity report; the video job runner runs the pre-pass before rendering; with a binder the clustering registry no longer renumbers tracks. The report signature now holds the consolidated pose-aware prototypes (up to 8 anchors), and `IdentityGuard` lowers its per-frame floor for steep heads (rivals still veto). |
+
+### Verification gate (ran)
+
+```bat
+"roop_3d/.venv/Scripts/python.exe" -B -m roop_3d.tools.verify_stage3 --live
+```
+
+Full production stack on every decoded frame of every `.mp4` in `G:\pinokio\roop-keep\single` (`FaceTracker.process`: detector → recovery → ArcFace → association), then global consolidation, then locked binding re-run with a fresh tracker. Ground-truth proxy for the target on a single-subject clip: on every frame the largest detection scoring ≥ 0.5. Receipt: `roop_3d/.runtime/stage3_verification.json`.
+
+| Video | Total frames | Target detected (≥ 0.5) | Tracked target frames (Face 1) | Unique target IDs | ID switches | Online raw IDs on target / switches (before consolidation) | Locked binding: bound to Face 1 / elsewhere / switches |
+|---|---:|---:|---:|---:|---:|---|---|
+| s.mp4 | 59 | 59 | 59 | 1 | 0 | 1 / 0 | 59 / 0 / 0 |
+| s1.mp4 | 206 | 191 | 191 | 1 | 0 | 1 / 0 | 191 / 0 / 0 |
+| s2.mp4 | 306 | 284 | 284 | 1 | 0 | 1 / 0 | 284 / 0 / 0 |
+| s3.mp4 | 246 | 246 | 246 | 1 | 0 | 1 / 0 | 246 / 0 / 0 |
+| s4.mp4 | 374 | 374 | 374 | 1 | 0 | 1 / 0 | 374 / 0 / 0 |
+| s5.mp4 | 1135 | 946 | 946 | 1 | 0 | **2 / 1** | 946 / 0 / 0 |
+| s6.mp4 | 1335 | 1156 | 1156 | 1 | 0 | **2 / 1** | 1156 / 0 / 0 |
+| s7.mp4 | 600 | 432 | 432 | 1 | 0 | 1 / 0 | 432 / 0 / 0 |
+| s8.mp4 | 569 | 569 | 569 | 1 | 0 | 1 / 0 | 569 / 0 / 0 |
+| s9.mp4 | 381 | 321 | 321 | 1 | 0 | 1 / 0 | 321 / 0 / 0 |
+| s10.mp4 | 381 | 279 | 279 | 1 | 0 | **2 / 1** | 279 / 0 / 0 |
+| s11.mp4 | 181 | 181 | 181 | 1 | 0 | 1 / 0 | 181 / 0 / 0 |
+
+**12/12 pass: one identity per video (`Face 1`), 0 ID switches, every detected target frame carries it.** The online tracker alone still produced two IDs on s5, s6 and s10 (one switch each); consolidation merged them (s5 and s6 by appearance, cosine 0.93 / 0.99 across a 139 / 154-frame turn-away; s10 by the seamless rule across a 1-frame gap). s4's two extra raw tracks (2 stray hits; an ear-box inside the head) received no ID. Frames without a ≥ 0.5 detection (e.g. s5 frames 279-455: the subject faces away, the detector finds only a 0.10 box on hair) are not tracked frames and are not hidden in the totals.
+
+Session-level check (`ReferencePipeline` with a binder from a real adaptive inspection of s5): inspection `track_0001` (one tracker ID), pre-pass `{tracker_ids: 2, identities: 1, matched_to_lock: 1}`, replay through `track_frame`: 997 frames carry `Face 1` (low-score continuation hits included), 0 faces under any other ID, only ID 1 selected.
+
+### Observed checks and limits
+
+- **ran** `tests/test_persistent_tracking.py` (25 new: GIoU, Kalman gap/coast/decay, pose-trajectory turn detection, Hungarian admissibility, head turning to profile keeps one swappable ID, an embedding collapse without a turn is still withheld, sparse frame-number sampling, two people while one turns, profile split / return / stranger / people-together / third person nearby / artifacts / determinism / seamless / shot change, binder relabel / stranger / turn / pre-pass global decision, inspection record + report folding, guard steep floor) and `test_identity_tracker_policy.py` (20, unchanged): pass. `test_persistent_target_registry` was updated for the new session attribute. `npx tsc --noEmit`: clean (`Track.source_track_ids`).
+- Fallback-only binding (a frame the pre-pass missed, strict embedding/continuity only) is reported but not gated: on s6 it leaves 13 frames unbound where a new tracker ID is born at a 90° yaw with cosine 0.20-0.33 to the signature. That is deliberate: impostor cosine in profile (p99 ≈ 0.25) cannot separate people, and the pre-pass covers those frames in the runners.
+- The target proxy and the "ID switch" count are properties of single-subject clips; they say nothing about multi-person crossings, which are covered only by the analytic scenarios in the tests. The consolidation has not been run on a multi-person video.
+- Replay uses the production detections; `--live` runs them fresh. The adaptive production scan (`sampling="adaptive"`) was exercised end to end on s11 and s5 (one canonical `track_0001`), not on all 12 clips.
+- **Pre-existing, not caused here:** `NameError: free variable 'app'` in every `create_app`-fixture test (`server/app.py:90`), `test_d_zero_2d_post_crop_gan_calls` (`ultramax` ids from Stage 1), `test_e2e_video_pipeline` (removed `inswapper_128`). Nothing here renders a frame: `is_wired()` is still false.

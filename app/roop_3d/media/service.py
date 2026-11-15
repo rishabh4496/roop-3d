@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import base64
 from contextlib import closing, contextmanager
+from dataclasses import replace
 from fractions import Fraction
 import json
 import math
@@ -25,6 +26,7 @@ from roop_3d.media.detector import Detector
 from roop_3d.media.frame_service import VideoFrameService
 from roop_3d.engine.detection.face_tracker import FaceTracker
 from roop_3d.engine.detection.track_policy import TrackPolicy
+from roop_3d.identity.consolidation import TrackletRecorder, consolidate
 from roop_3d.identity.report import IdentityReportCollector, write_report
 from roop_3d.color.description import WorkingColor, working_color
 from roop_3d.media.probe import open_media, probe
@@ -60,6 +62,40 @@ def thin_observations(items: list[TrackObservation], limit: int = MAX_TRACK_OBSE
     for key in (lambda o: o.yaw_degrees, lambda o: -o.yaw_degrees, lambda o: o.pitch_degrees, lambda o: -o.pitch_degrees):
         keep.add(max(range(len(items)), key=lambda i: key(items[i])))
     return tuple(items[i] for i in sorted(keep))
+
+
+def merge_track_records(records: dict[int, dict], canonical_of) -> tuple[dict[int, dict], dict[int, tuple[int, ...]]]:
+    """Re-key per-tracker-ID inspection records to canonical IDs (see ``identity.consolidation``).
+
+    Tracker IDs of one person fold into one record (first/last frame, pose range, counts, observations in frame order);
+    IDs the consolidation discarded as noise or face-part artifacts are dropped. Returns the records and, per canonical
+    ID, the tracker IDs it absorbed."""
+    merged: dict[int, dict] = {}
+    sources: dict[int, list[int]] = {}
+    for raw in sorted(records):
+        canonical = canonical_of.get(raw)
+        if canonical is None:
+            continue
+        item = records[raw]
+        sources.setdefault(canonical, []).append(raw)
+        base = merged.get(canonical)
+        if base is None:
+            merged[canonical] = {**item, "pose_min": list(item["pose_min"]), "pose_max": list(item["pose_max"]),
+                                 "observations": list(item["observations"])}
+            continue
+        if item["first"] < base["first"]:
+            for key in ("first", "first_at", "box", "thumbnail", "scene_id"):
+                base[key] = item[key]
+        if item["last"] > base["last"]:
+            base["last"], base["last_at"] = item["last"], item["last_at"]
+        base["count"] += item["count"]
+        base["pose_min"] = np.minimum(base["pose_min"], item["pose_min"]).tolist()
+        base["pose_max"] = np.maximum(base["pose_max"], item["pose_max"]).tolist()
+        base["observations"] += item["observations"]
+    for base in merged.values():
+        base["observations"].sort(key=lambda observation: observation.frame)
+    return merged, {key: tuple(value) for key, value in sources.items()}
+
 
 
 def merge_observation(items: tuple[TrackObservation, ...], new: TrackObservation) -> tuple[TrackObservation, ...]:
@@ -257,6 +293,7 @@ class MediaService:
                               policy=policy, stabilize=not adaptive)
         collector = (IdentityReportCollector(policy, detection_threshold=request.detection_threshold)
                      if policy is not None else None)
+        recorder = TrackletRecorder() if policy is not None else None
         inspection_id = uuid.uuid4().hex
         cuts: list[int] = []
         sampler = None
@@ -274,7 +311,10 @@ class MediaService:
                     if sampler is None or sampler.wants(index):
                         image = frame.image
                         height, width = image.shape[:2]
+                        tracker.frame_number = index
                         tracked = tracker.process(image)
+                        if recorder is not None:
+                            recorder.observe(index, tracked)
                         if tracker.scene_cut and len(cuts) < 64:
                             cuts.append(index)
                         at = max(0.0, float(frame.timestamp.seconds - origin))
@@ -334,8 +374,23 @@ class MediaService:
             raise DomainError("MEDIA_CHANGED", "Video changed during inspection")
         identity_extra: dict = {}
         identity_warnings: tuple[str, ...] = ()
+        consolidation_warnings: tuple[str, ...] = ()
+        sources: dict[int, tuple[int, ...]] = {}
+        events = tracker.events
+        if recorder is not None:
+            # One person, one canonical ID: merge the tracker's IDs across turns, occlusions and cuts; drop artifacts.
+            consolidation = consolidate(recorder.tracklets(), policy)
+            records, sources = merge_track_records(records, consolidation.canonical_of)
+            collector.consolidate(consolidation.canonical_of)
+            collector.adopt_identities(consolidation.identities)
+            events = [replace(event, track_id=canonical) for event in tracker.events
+                      if (canonical := consolidation.canonical(event.track_id)) is not None]
+            consolidation_warnings = (
+                f"Global consolidation: {len(consolidation.canonical_of)} tracker ID(s) -> {consolidation.unique_ids} identit"
+                f"{'y' if consolidation.unique_ids == 1 else 'ies'}; {len(consolidation.suppressed)} discarded as noise or "
+                "face-part artifacts.",)
         if collector is not None:
-            document = collector.finalize(inspection_id=inspection_id, target_sha256=digest, events=tracker.events,
+            document = collector.finalize(inspection_id=inspection_id, target_sha256=digest, events=events,
                                           events_dropped=tracker.events_dropped, scene_cut_frames=cuts,
                                           decoded_frames=decoded, truncated=not complete)
             identity_extra = dict(tracking_policy_fingerprint=policy.fingerprint(),
@@ -359,6 +414,7 @@ class MediaService:
             tracking_method="identity_lock_v1" if collector is not None else "iou_arcface_hungarian",
             scene_cut_frames=tuple(cuts), **identity_extra,
             tracks=tuple(FaceTrack(track_id=f"track_{identity:04d}", persistent_id=identity,
+                source_track_ids=sources.get(identity, ()),
                 scene_id=item["scene_id"], landmark_count=106, first_frame=item["first"], last_frame=item["last"],
                 first_timestamp_seconds=item["first_at"], last_timestamp_seconds=item["last_at"],
                 bounding_box=BoundingBox(**dict(zip(("x1", "y1", "x2", "y2"), item["box"]))),
@@ -369,11 +425,14 @@ class MediaService:
                 sampled_detections=item["count"],
                 observations=thin_observations(item["observations"]),
                 thumbnail_base64=(collector.best_thumbnail(identity) if collector is not None else None) or item["thumbnail"])
-                for identity, item in records.items()),
+                for identity, item in sorted(records.items())),
             warnings=("IoU and ArcFace assignment can still split or merge tracks; review mappings.",
                       *coverage_warnings,
                       "Yaw and pitch are uncalibrated geometric estimates, not reconstructed 3D pose.",
-                      "persistent_id is the integer engine track ID; track_id retains the job mapping label.",
+                      ("persistent_id is the canonical identity number after global tracklet consolidation "
+                       "(Face 1 = the most-observed person); track_id retains the job mapping label." if recorder is not None else
+                       "persistent_id is the integer engine track ID; track_id retains the job mapping label."),
+                      *consolidation_warnings,
                       *identity_warnings))
         atomic_json(self.root, f"roop_3d/.runtime/inspections/{result.inspection_id}.json", result.model_dump(mode="json"))
         return result

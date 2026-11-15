@@ -68,6 +68,7 @@ def test_render_queries_locked_pose_bank_and_uses_persistent_ids():
     lock = store.create('v',0,FaceRef(emb,60,0,0,[0,0,100,100],landmarks3d=np.ones((68,3),np.float32)))
     session = object.__new__(ReferencePipeline)
     session.target_registry = store.registry('v')
+    session.locked_targets = None
     session.angle_frame_index = 10
     session.tracker = SimpleNamespace(frame_index=10)
     face = FaceObservation(np.array([200,0,300,100]),np.zeros((5,2)),np.zeros((106,2)),emb,(60,0,0))

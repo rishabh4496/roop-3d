@@ -11,7 +11,7 @@ import base64
 from collections import Counter
 import hashlib
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Mapping
 
 import cv2
 import numpy as np
@@ -25,7 +25,7 @@ REPORT_VERSION = 1
 MAX_SEGMENTS = 512
 THUMBNAILS_PER_TRACK = 3
 THUMBNAIL_FRAME_GAP = 12
-MAX_SIGNATURE_ANCHORS = 6
+MAX_SIGNATURE_ANCHORS = 8
 
 
 def report_relative(inspection_id: str) -> str:
@@ -92,6 +92,73 @@ class IdentityReportCollector:
             else:
                 record.reasons[face.reason or face.state] += 1
             self._consider_thumbnail(record, frame_index, timestamp, image, face)
+
+    # -- global consolidation --------------------------------------------------------------------
+    def consolidate(self, canonical_of: Mapping[int, int | None]) -> None:
+        """Re-key the per-ID records to canonical IDs: tracker IDs of one person become one track, artifacts disappear.
+
+        Segments are unioned in frame order, counters add up, the biometric centroid is the sum of the parts, anchors and
+        thumbnails keep the most diverse / best examples across all parts."""
+        merged: dict[int, _Track] = {}
+        for raw_id in sorted(self.tracks):
+            canonical = canonical_of.get(raw_id)
+            if canonical is None:
+                continue
+            part = self.tracks[raw_id]
+            target = merged.get(canonical)
+            if target is None:
+                target = merged[canonical] = _Track(canonical, part.first_frame, part.first_time, 0)
+                target.confidence_min = part.confidence_min
+            else:
+                if part.first_frame < target.first_frame:
+                    target.first_frame, target.first_time = part.first_frame, part.first_time
+                target.confidence_min = min(target.confidence_min, part.confidence_min)
+            if part.last_frame >= target.last_frame:
+                target.last_frame, target.last_time = part.last_frame, part.last_time
+            target.segments += [list(segment) for segment in part.segments]
+            target.visible += part.visible
+            target.swappable += part.swappable
+            target.reasons.update(part.reasons)
+            target.states.update(part.states)
+            target.confidence_sum += part.confidence_sum
+            target.centroid += part.centroid
+            target.centroid_count += part.centroid_count
+            target.thumbnails += part.thumbnails
+            target.scenes |= part.scenes
+            for anchor in part.anchors:
+                if len(target.anchors) < MAX_SIGNATURE_ANCHORS and all(
+                        float(np.dot(anchor, other)) < 0.85 for other in target.anchors):
+                    target.anchors.append(anchor)
+        for track in merged.values():
+            ordered = sorted(track.segments, key=lambda segment: segment[0])
+            track.segments = []
+            for start, end, start_time, end_time in ordered:
+                if track.segments and start <= track.segments[-1][1] + 1:
+                    if end > track.segments[-1][1]:
+                        track.segments[-1][1], track.segments[-1][3] = end, end_time
+                elif len(track.segments) >= MAX_SEGMENTS:
+                    track.segments[-1][1], track.segments[-1][3] = end, end_time
+                else:
+                    track.segments.append([start, end, start_time, end_time])
+            kept: list[dict] = []
+            for item in sorted(track.thumbnails, key=lambda entry: -entry["score"]):
+                if len(kept) < THUMBNAILS_PER_TRACK and all(abs(item["frame"] - other["frame"]) >= THUMBNAIL_FRAME_GAP for other in kept):
+                    kept.append(item)
+            track.thumbnails = kept
+        self.tracks = merged
+
+    def adopt_identities(self, identities: Iterable) -> None:
+        """Replace each canonical track's signature by the consolidation's pose-aware one.
+
+        The per-frame learning above only keeps swappable frames, which for a head that turns away are the frontal ones, so a
+        steep profile would never match its own signature. The consolidated identity holds one prototype per yaw bin
+        (frontal first), so the render-time identity guard recognises the same person at every angle."""
+        for identity in identities:
+            record = self.tracks.get(identity.canonical_id)
+            if record is None or identity.centroid is None:
+                continue
+            record.centroid = identity.centroid.astype(np.float64) * max(record.centroid_count, 1)
+            record.anchors = [anchor.astype(np.float32).copy() for anchor in identity.anchors[:MAX_SIGNATURE_ANCHORS]]
 
     @staticmethod
     def _learn_signature(record: _Track, face: TrackedFace) -> None:

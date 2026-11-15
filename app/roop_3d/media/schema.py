@@ -129,6 +129,8 @@ class FaceTrack(Contract):
     sampled_detections: int = Field(ge=1)
     # Real per-sample detections, time-ordered and evenly thinned to MAX_TRACK_OBSERVATIONS (pose extremes always kept).
     observations: tuple[TrackObservation, ...] = ()
+    # Raw tracker IDs the global tracklet consolidation merged into this canonical track (empty before consolidation).
+    source_track_ids: tuple[int, ...] = ()
 
 
 class FaceInspection(Contract):
