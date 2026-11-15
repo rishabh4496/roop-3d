@@ -46,14 +46,11 @@ describe('settings registry', () => {
     expect([SETTING_BY_ID.pyramid_levels.min, SETTING_BY_ID.pyramid_levels.max, SETTING_BY_ID.pyramid_levels.default]).toEqual([4, 6, 4]);
   });
 
-  it('says a control has no effect from the current selection, not from a fixed claim', () => {
-    const xseg = SETTING_BY_ID.xseg_occlusion_strength, bands = SETTING_BY_ID.pyramid_levels;
-    expect(inactiveReason(xseg, DEFAULT_PARAMETERS)).toMatch(/Robust occlusion/);
-    expect(inactiveReason(xseg, { ...DEFAULT_PARAMETERS, occlusion_mode: 'robust' })).toBeNull();
-    expect(inactiveReason(bands, DEFAULT_PARAMETERS)).toBeNull();
-    expect(inactiveReason(bands, { ...DEFAULT_PARAMETERS, blend_mode: 'poisson' })).toMatch(/no pyramid/);
-    expect(inactiveReason(bands, { ...DEFAULT_PARAMETERS, blend_mode: 'frequency_separated' })).toBeNull();
-    expect(inactiveReason(SETTING_BY_ID.feather_px, DEFAULT_PARAMETERS)).toBeNull();
+  it('keeps unsupported legacy manual controls inactive even in saved robust presets', () => {
+    for (const spec of SETTINGS) {
+      expect(inactiveReason(spec, DEFAULT_PARAMETERS)).toMatch(/automatic boundary and lighting/);
+      expect(inactiveReason(spec, { ...DEFAULT_PARAMETERS, occlusion_mode: 'robust' })).toMatch(/not supported/);
+    }
   });
 });
 
@@ -132,7 +129,7 @@ describe('SettingControl', () => {
     expect(host.querySelector<HTMLInputElement>('input[aria-label="XSeg occlusion strength"]')!.disabled).toBe(true);
     expect(host.querySelector<HTMLInputElement>('input[type="range"]')!.disabled).toBe(true);
     expect(host.querySelector<HTMLButtonElement>('.reset-setting')!.disabled).toBe(true);
-    expect(host.querySelector('.tip-warning')!.textContent).toMatch(/Robust occlusion/);
+    expect(host.querySelector('.tip-warning')!.textContent).toMatch(/not supported/);
     await act(async () => root.render(<Harness id="color_strength" start={0.5} disabled reason="The colour model is unavailable"/>));
     expect(host.querySelector('.tip-warning')!.textContent).toBe('The colour model is unavailable');
   });
@@ -158,7 +155,7 @@ describe('3×3 contact sheet', () => {
 
   it('starts from the panel that opened it', () => {
     expect(defaultAxes('masking')).toEqual(['erosion_px', 'feather_px']);
-    expect(defaultAxes('color')).toEqual(['color_strength', 'erosion_px']);            // xseg_occlusion_strength is inactive under standard occlusion, so never pre-selected
+    expect(defaultAxes('color')).toEqual(['erosion_px', 'feather_px']);            // legacy manual controls are inactive; retain the stable fallback axes
     expect(defaultAxes(undefined)).toHaveLength(2);
   });
 

@@ -16,6 +16,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 import identity_world as W  # noqa: E402
 import target_world as TW  # noqa: E402
 
+from roop_3d.reconstruction.geometry_types import PerspectiveCamera
 from roop_3d.reconstruction.multiview_fit import batch_rotations  # noqa: E402
 from roop_3d.relighting_3d import SphericalHarmonicsLighting  # noqa: E402
 from roop_3d.tracking.video_tracker import FrameEvidence  # noqa: E402
@@ -83,7 +84,8 @@ def lit_frame(subject: W.Subject, yaw: float, pitch: float, coefficients: np.nda
     mesh = subject.mesh
     vertices = mesh.vertices.astype(np.float64)
     cam = (vertices - centre_3d) @ rot.T
-    xy = LIT_SCALE * cam[:, :2] + np.array(LIT_CENTRE)
+    camera = PerspectiveCamera.from_scaled_pose(rot, LIT_SCALE, *LIT_CENTRE, center=centre_3d)
+    xy = camera.project(vertices)
     faces = mesh.faces
     normal = np.cross(vertices[faces[:, 1]] - vertices[faces[:, 0]], vertices[faces[:, 2]] - vertices[faces[:, 0]])
     normal /= np.maximum(np.linalg.norm(normal, axis=1, keepdims=True), 1e-12)
@@ -95,7 +97,7 @@ def lit_frame(subject: W.Subject, yaw: float, pitch: float, coefficients: np.nda
     visible = np.where(camera_normal[:, 2] > 0.0)[0]
     for k in visible[np.argsort(cam[faces[visible]][:, :, 2].mean(axis=1))]:
         cv2.fillConvexPoly(image, np.round(xy[faces[k]] * 16).astype(np.int32), tuple(int(c) for c in colours[k]), cv2.LINE_8, 4)
-    p2d = LIT_SCALE * ((subject.true_lm - centre_3d) @ rot.T)[:, :2] + np.array(LIT_CENTRE)
+    p2d = camera.project(subject.true_lm)
     return image, TW.five_points(p2d), TW.landmarks106(p2d)
 
 

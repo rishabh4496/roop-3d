@@ -74,7 +74,7 @@ describe('2D swapper / restorer options are not on the wire', () => {
     const payload = buildLivePayload({ request: { ...request, detector_model_id: 'scrfd' }, time: 1, fps: 25,
       parameters: { ...DEFAULT_PARAMETERS, head_topology_engine: 'FLAME-FullHead-3D' } })!;
     expect(payload).toMatchObject({ detector_model_id: 'scrfd', head_topology_engine: 'FLAME-FullHead-3D' });
-    expect(Object.keys(payload).join(' ')).not.toMatch(/swapper|restorer|restoration|fidelity|ultramax|frontaliz|tps_|pose_mode|render_mode/i);
+    expect(Object.keys(payload).join(' ')).not.toMatch(/swapper|restorer|restoration(?!_weight)|fidelity|ultramax|frontaliz|tps_|pose_mode|render_mode/i);
   });
 });
 

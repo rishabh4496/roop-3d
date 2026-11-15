@@ -58,7 +58,7 @@ describe('payload + filenames', () => {
     expect(payload).toMatchObject({ frame_index: 5, face_mappings: REQUEST.face_mappings,
       mask_base64: 'data:image/png;base64,AA', occlusion: { erosion_px: 0, feather_px: 5 }, bypass: [] });
     // None of the removed 2D / 2.5D controls can be put on the wire any more.
-    expect(Object.keys(payload).join(' ')).not.toMatch(/restorer|restoration|frontalization|fidelity|pose_strength|swapper/);
+    expect(Object.keys(payload).join(' ')).not.toMatch(/restorer|restoration(?!_weight)|frontalization|fidelity|pose_strength|swapper/);
     const bypassed = buildLivePayload({ request: REQUEST, time: 0, fps: 25, parameters: { ...DEFAULT_PARAMETERS, bypass: ['color'] } })!;
     expect(bypassed.bypass).toEqual(['color']);
   });

@@ -110,8 +110,12 @@ class HeadAnchors:
     @classmethod
     def canonical(cls) -> "HeadAnchors":
         mesh = identity_template(2)
-        points = template_landmarks("5pt", mesh)
-        return cls(points, landmark_normals("5pt", mesh), np.array((1.0, 1.0, 1.5, 0.35, 0.35)),
+        from roop_3d.reconstruction.multiview_fit import five_from_68
+        # SCRFD eye centres correspond to the dense eye-ring means, not a nearest
+        # template vertex. Mixing those definitions introduces a persistent pitch bias.
+        points = five_from_68(template_landmarks("68pt", mesh))
+        nearest = np.linalg.norm(mesh.vertices[:, None] - points[None], axis=2).argmin(axis=0)
+        return cls(points, mesh.normals[nearest], np.array((1.0, 1.0, 1.5, 0.35, 0.35)),
                    float(np.linalg.norm(points[0] - points[1])))
 
     def with_points(self, points: np.ndarray) -> "HeadAnchors":
@@ -139,11 +143,11 @@ class FrameEvidence:
 
 @dataclass(frozen=True)
 class CameraPose:
-    """Weak-perspective camera of the head: ``pixel = scale * (R @ X)[:2] + t`` for the model centre at (tx, ty)."""
+    """Perspective pose summary: scale is focal length / centre depth, (tx, ty) locates the head centre."""
     yaw_deg: float                      # standard frame: pitch positive = looking up
     pitch_deg: float
     roll_deg: float
-    scale: float                        # pixels per metre (depth is encoded here, it is not metric)
+    scale: float                        # focal pixels / centre depth in metres
     tx: float
     ty: float
     rotation: np.ndarray                # (3, 3)
@@ -565,11 +569,8 @@ class VideoHeadTracker3D:
         estimate = None
         if self.lighting is not None and ev.image_bgr is not None and self._lighting_countdown <= 0:
             self._lighting_countdown = self.s.lighting_stride
-            shift = camera.scale * (camera.rotation @ self._model_centre)[:2]
-            height, width = ev.image_bgr.shape[:2]
             estimate = self.lighting.estimate(ev.image_bgr, PerspectiveCamera.from_scaled_pose(
-                np.asarray(camera.rotation), camera.scale, camera.tx - float(shift[0]), camera.ty - float(shift[1]),
-                frame_size=(width, height)))
+                np.asarray(camera.rotation), camera.scale, camera.tx, camera.ty, center=self._model_centre))
         self._lighting_countdown -= 1
         if estimate is not None:
             filtered = self.filters.update("lighting", estimate.coefficients.reshape(-1).astype(np.float64), t)

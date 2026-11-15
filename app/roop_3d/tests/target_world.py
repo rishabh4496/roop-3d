@@ -13,6 +13,7 @@ import numpy as np
 
 import identity_world as W
 from roop_3d.core.pose import rotation_from_euler
+from roop_3d.reconstruction.geometry_types import PerspectiveCamera
 
 CANVAS = (400, 400)                  # (h, w)
 SCALE = 1750.0                       # px per metre => inter-ocular distance ~ 110 px
@@ -77,7 +78,8 @@ def frame(performer: Performer, yaw=0.0, pitch=0.0, roll=0.0, *, t: float, noise
     lm3d = expression_3d(s.true_lm, performer.iod_m, **expression)
     rot = rotation_from_euler(yaw, pitch, roll)
     centre = s.true_lm.mean(axis=0)
-    p2d = SCALE * ((lm3d - centre) @ rot.T)[:, :2] + np.array([CANVAS[1] / 2, CANVAS[0] / 2])
+    camera = PerspectiveCamera.from_scaled_pose(rot, SCALE, CANVAS[1] / 2, CANVAS[0] / 2, center=centre)
+    p2d = camera.project(lm3d)
     p2d = p2d + np.random.default_rng(seed).normal(0, noise_px, p2d.shape)
     return dict(landmarks5=five_points(p2d), landmarks106=landmarks106(p2d, performer.swap_eye_blocks), timestamp=t,
                 scene_cut=scene_cut, sharpness=sharpness), dict(yaw=yaw, pitch=pitch, roll=roll, p2d=p2d, **expression)

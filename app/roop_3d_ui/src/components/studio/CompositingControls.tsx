@@ -28,7 +28,7 @@ export default function CompositingControls({ params, onParams }: CompositingCon
       <label className="inspector-field">UV skin restoration <output>{Math.round(restoration * 100)}%</output>
         <input type="range" aria-label="UV skin restoration" min={0} max={100} step={1} value={Math.round(restoration * 100)}
           onChange={event => onParams({ restoration_weight: Number(event.target.value) / 100 })} />
-        <small className="muted">CodeFormer skin-detail blend in the canonical UV atlas, before 3D projection. Zero disables restoration; source identity and low-frequency colour remain preserved.</small>
+        <small className="muted">Skin-detail blend in the canonical UV atlas, before 3D projection. Zero disables restoration; source identity and low-frequency colour remain preserved.</small>
       </label>
     </div>
   );

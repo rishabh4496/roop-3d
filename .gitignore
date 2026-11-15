@@ -52,8 +52,8 @@ cache/
 .cache/
 logs/
 outputs/
-jobs/
-app/jobs/
+/jobs/
+/app/jobs/
 .runtime/
 *.part
 *.log

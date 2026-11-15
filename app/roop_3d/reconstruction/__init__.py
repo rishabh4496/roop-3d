@@ -1,5 +1,5 @@
 """Roop 3D Reconstruction subsystem: 3D geometry contracts, PnP pose estimation,
-2.5D TPS fallback, license-gated FLAME parametric fitting, UV synthesis, and (Stage 3) the
+perspective camera solving, license-gated FLAME parametric fitting, UV synthesis, and the
 multi-view identity-specific asset pipeline: FaceSet quality analysis, multi-view landmark fitting,
 texture atlas with OBSERVED/INTERPOLATED/UNSEEN states, and a persistent content-addressed store.
 """

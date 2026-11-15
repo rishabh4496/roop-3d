@@ -334,13 +334,13 @@ def test_lighting_estimates_are_stable_and_follow_a_real_light_change(actor):
 
 def test_lighting_needs_enough_visible_skin():
     estimator = MeshSHLightingEstimator()
-    from roop_3d.reconstruction.geometry_types import WeakPerspectiveCamera
+    from roop_3d.reconstruction.geometry_types import PerspectiveCamera
     away = np.diag([-1.0, 1.0, -1.0])                                                # yaw 180: the back of the head
-    camera = WeakPerspectiveCamera(rotation=tuple(map(tuple, away)), scale=2000.0, tx=300.0, ty=300.0)
+    camera = PerspectiveCamera.from_scaled_pose(rotation=tuple(map(tuple, away)), scale=2000.0, tx=300.0, ty=300.0)
     assert estimator.estimate(np.full((600, 600, 3), 128, np.uint8), camera) is None
-    assert estimator.estimate(np.full((600, 600, 3), 128, np.uint8), WeakPerspectiveCamera(
+    assert estimator.estimate(np.full((600, 600, 3), 128, np.uint8), PerspectiveCamera.from_scaled_pose(
         rotation=tuple(map(tuple, np.eye(3))), scale=2000.0, tx=300.0, ty=300.0)).samples > 400
-    off_frame = WeakPerspectiveCamera(rotation=tuple(map(tuple, np.eye(3))), scale=2000.0, tx=-5000.0, ty=300.0)
+    off_frame = PerspectiveCamera.from_scaled_pose(rotation=tuple(map(tuple, np.eye(3))), scale=2000.0, tx=-5000.0, ty=300.0)
     assert estimator.estimate(np.full((600, 600, 3), 128, np.uint8), off_frame) is None
     with pytest.raises(ValueError):
         estimator.estimate(np.zeros((10, 10), np.uint8), off_frame)
@@ -614,7 +614,11 @@ def test_an_undetected_change_of_person_inside_a_shot_becomes_an_identity_break_
 def test_the_identity_lock_is_per_shot(actor):
     tracker = VideoHeadTracker3D()
     one = T.run(tracker, actor, T.frontal_script(50), noise=0.15)
-    other = T.performer(seed=11, width=0.20, jaw_drop=0.02)
+    # Change eye width without confounding the pose solver with a 2 cm jaw deformation.
+    other = T.performer(seed=11)
+    for eye in (slice(36, 42), slice(42, 48)):
+        x = other.subject.true_lm[eye, 0]
+        other.subject.true_lm[eye, 0] = x.mean() + 1.25 * (x - x.mean())
     cut = TW.frame(other, t=50 * DT, noise_px=0.15)[0]
     tracker.process(FrameEvidence(50 * DT, cut["landmarks5"], cut["landmarks106"], scene_cut=True))
     two = T.run(tracker, other, T.frontal_script(50), noise=0.15, start=51)
@@ -636,3 +640,11 @@ def test_settings_are_validated():
     for bad in ({"coast_s": 2.0}, {"lock_frames": 1}, {"ipd_m": 0.5}, {"max_abs_yaw_deg": 95}, {"extra": 1}):
         with pytest.raises(ValueError):
             TrackerSettings(**bad)
+
+
+def test_identity_is_not_locked_when_the_generic_head_cannot_fit_the_subject():
+    tracker = VideoHeadTracker3D()
+    outside_model = T.performer(seed=11, width=0.20, jaw_drop=0.02)
+    frames = T.run(tracker, outside_model, T.frontal_script(50), noise=0.15)
+    assert frames[-1][0].identity.state == 'collecting'
+    assert frames[-1][0].identity.rejected > 0

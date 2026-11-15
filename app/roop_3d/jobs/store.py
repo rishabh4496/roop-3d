@@ -6,11 +6,11 @@ import json
 from pathlib import Path
 from typing import Callable
 
-from pydantic import Field
+from pydantic import Field, ValidationError
 
 from roop_3d.core.errors import DomainError
 from roop_3d.core.settings import Contract, Settings
-from roop_3d.core.storage import atomic_json, exclusive, owned
+from roop_3d.core.storage import atomic_bytes, atomic_json, exclusive, owned
 from roop_3d.jobs.schema import (JobFailure, JobOutput, JobProgress, JobRecord, JobRequest,
                                  JobState, now, require_transition)
 from roop_3d.models.diagnostics import JobDiagnostics
@@ -58,7 +58,21 @@ class JobStore:
         if cached is not None and cached[0] == fingerprint:
             return cached[1]
         try:
-            database = JobDatabase.model_validate_json(path.read_text("utf-8"))
+            original = path.read_bytes()
+            try:
+                database = JobDatabase.model_validate_json(original)
+            except ValidationError:
+                from roop_3d.jobs.history_migration import migrate_history
+                migrated = migrate_history(original.decode("utf-8"))
+                if migrated is None:
+                    raise
+                database = JobDatabase.model_validate(migrated)
+                # _load is called under the store lock. Publish only a fully validated migration,
+                # and keep the exact original including unsupported historical measurements.
+                backup = f"roop_3d/.runtime/jobs/state.pre-true3d-{hashlib.sha256(original).hexdigest()}.json"
+                atomic_bytes(self.root, backup, original)
+                self._save(database)
+                fingerprint = self._fingerprint(path)
         except (ValueError, OSError):
             raise DomainError("JOB_STORE_INVALID", "Persisted job data is unreadable; it has been preserved") from None
         self._cache = (fingerprint, database)

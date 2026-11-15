@@ -1,7 +1,7 @@
 """Per-frame second-order spherical-harmonics lighting L_t, fitted on a generic head under the tracked camera.
 
 Method (the photometric_optimization recipe reduced to what is measurable from landmarks alone): the canonical head
-template is posed with the tracked weak-perspective camera, the frame is sampled at the projected vertices that face the
+template is posed with the tracked perspective camera, the frame is sampled at the projected vertices that face the
 camera and are skin (eyes, brows and lips are excluded), and ``photometry.fit_sh`` solves the nine RGB coefficients by
 robust weighted least squares in linear light with the 0.5 diffuse-reflectance prior.
 
@@ -10,7 +10,7 @@ Limits that follow from the method, and that the estimate reports instead of hid
   * there is no cast-shadow or self-occlusion model (the nose casts none here);
   * a single image cannot separate albedo from illumination, hence the reflectance prior.
 Coefficients are in the CAMERA frame (+x right, +y down, +z toward the viewer, BGR order): independent of head pose, which is
-what a compositor needs to relight a pasted face. ``key_direction`` points toward the dominant light in that frame.
+what a compositor needs to relight a rendered head. ``key_direction`` points toward the dominant light in that frame.
 """
 from __future__ import annotations
 
@@ -47,7 +47,14 @@ def _skin_template(subdivisions: int = 2):
     vertices = np.asarray(mesh.vertices, np.float64)
     excluded = vertices[np.asarray(mesh.landmark_vertices["68pt"], np.int64)[list(SKIN_EXCLUDE_LANDMARKS)]]
     distance = np.linalg.norm(vertices[:, None, :] - excluded[None], axis=2).min(axis=1)
-    return vertices, normals, distance > SKIN_EXCLUDE_RADIUS_M
+    facial_landmarks = vertices[np.asarray(mesh.landmark_vertices["68pt"], np.int64)]
+    hull = cv2.convexHull(facial_landmarks[:, :2].astype(np.float32))
+    on_face = np.array([cv2.pointPolygonTest(hull, tuple(map(float, point)), False) >= 0
+                        for point in vertices[:, :2]])
+    # The template now includes the entire cranium and neck. Their projection is
+    # often background or hair, so only its front facial surface can constrain skin lighting.
+    skin = on_face & (normals[:, 2] > MIN_FACING_Z) & (distance > SKIN_EXCLUDE_RADIUS_M)
+    return vertices, normals, skin
 
 
 class MeshSHLightingEstimator:

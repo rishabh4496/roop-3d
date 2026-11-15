@@ -89,7 +89,7 @@ it('captures a rendered final composite and full settings into a snapshot slot',
   } finally { await act(async () => root.unmount()); host.remove(); vi.unstubAllGlobals(); vi.restoreAllMocks(); }
 });
 
-it('offers an explicit, opt-in robust occlusion mode that older requests never carry', async () => {
+it('keeps mandatory semantic protection fixed without offering a manual occlusion mode', async () => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true }); useHistoryStore.getState().reset();
   vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
   vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(() => {});
@@ -98,11 +98,10 @@ it('offers an explicit, opt-in robust occlusion mode that older requests never c
   const host = document.createElement('div'); document.body.append(host); const root = createRoot(host);
   try {
     await act(async () => root.render(<Workstation/>));
-    const select = host.querySelector<HTMLSelectElement>('[aria-label="Occlusion handling"]')!;
-    expect(select.value).toBe('standard');
-    expect(DEFAULT_PARAMETERS.occlusion_mode).toBeUndefined();            // omitted until touched: stored requests keep the standard path
-    await act(async () => { Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')!.set!.call(select, 'robust'); select.dispatchEvent(new Event('change', { bubbles: true })); });
-    expect(latest.occlusion_mode).toBe('robust');
+    expect(host.querySelector('[aria-label="Occlusion handling"]')).toBeNull();
+    expect(host.textContent).toContain('Mandatory BiSeNet + XSeg + face-occluder protection');
+    expect(host.querySelector<HTMLInputElement>('[aria-label="XSeg occlusion strength"]')!.disabled).toBe(true);
+    expect(latest.occlusion_mode).toBeUndefined();
   } finally { await act(async () => root.unmount()); host.remove(); vi.unstubAllGlobals(); vi.restoreAllMocks(); }
 });
 

@@ -464,7 +464,8 @@ class PerspectiveCamera(Contract):
     @classmethod
     def from_scaled_pose(cls, rotation: np.ndarray, scale: float, tx: float, ty: float, *,
                          intrinsics: CameraIntrinsics | None = None,
-                         frame_size: tuple[int, int] | None = None) -> "PerspectiveCamera":
+                         frame_size: tuple[int, int] | None = None,
+                         center: np.ndarray | None = None) -> "PerspectiveCamera":
         """Express an in-plane similarity pose (R in the mesh frame, pixels-per-metre ``scale``, image offset) as K[R|t].
 
         The camera is placed at Z0 = fx / scale so the head centre lands at the same pixel size and offset; unlike the
@@ -487,6 +488,10 @@ class PerspectiveCamera(Contract):
         r_cam = _FLIP_Z @ r_mesh @ _FLIP_Z
         z0 = k.fx / float(scale)
         t = ((float(tx) - k.cx) / float(scale), (float(ty) - k.cy) / float(scale) * (k.fx / k.fy), z0)
+        if center is not None:
+            # The fitted image offset locates the rotation centre, not the mesh origin.
+            # Translate in all three camera axes; an in-plane offset cannot account for its depth.
+            t = np.asarray(t) - r_cam @ _FLIP_Z @ np.asarray(center, np.float64)
         return cls(intrinsics=k, rotation=tuple(tuple(float(x) for x in row) for row in r_cam),
                    translation=tuple(float(x) for x in t))
 

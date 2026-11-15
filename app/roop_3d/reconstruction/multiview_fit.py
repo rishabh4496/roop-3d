@@ -3,13 +3,10 @@
 What this does, precisely
 -------------------------
 Given N observed 2D landmark sets of ONE person (5-point SCRFD landmarks, or 68-point sets when a FaceSet
-carries them) and a coarse head pose per view, it solves a MAP bundle adjustment under a scaled-orthographic
-camera (the projection family already used by ``core.pose.estimate_pose_5pt``):
-
-    unknowns : identity landmark displacement d_j (3-vector per landmark, from the anthropometric template),
-               and per view yaw / pitch / roll / scale / translation
-    data     : (s_i * (R_i (T_j + d_j))_xy + t_i - x_ij) / (s_i * sigma_obs)   (Huber-reweighted)
-    priors   : d_xy / sigma_xy, d_z / sigma_z, (pose - stored pose) / sigma_pose
+carries them) and a coarse head pose per view, it solves a MAP bundle adjustment through a perspective pin-hole camera.
+The unknowns are identity landmark displacements and each view's rotation, centre depth (focal/scale), and image centre.
+Projection divides each camera-space point by its own depth. Huber-weighted reprojection residuals and geometry/pose
+priors constrain the solve; the same camera is used by the UV baker.
 
 The Gauss-Newton Hessian at the optimum gives a real posterior covariance, so the per-landmark depth
 confidence is MEASURED: with one frontal view the depth rows of the Jacobian are ~0, the posterior stays at the
@@ -33,7 +30,9 @@ import numpy as np
 from roop_3d.core.errors import DomainError
 from roop_3d.core.pose import estimate_pose_pnp
 from roop_3d.reconstruction.flame_fitter import huber_weights
-from roop_3d.reconstruction.geometry_types import Mesh3D, PerspectiveCamera
+from roop_3d.reconstruction.geometry_types import DEFAULT_FOCAL_FACTOR, DEFAULT_FOCAL_FRAME, Mesh3D, PerspectiveCamera
+
+FIT_FOCAL_PX = DEFAULT_FOCAL_FACTOR * DEFAULT_FOCAL_FRAME[0]
 
 LAYOUT_5 = "5pt"
 LAYOUT_68 = "68pt"
@@ -176,8 +175,7 @@ class IdentityShapeFit:
         if view.camera is not None:
             return view.camera
         rot = batch_rotations(np.array([[view.yaw, view.pitch, view.roll]]))[0]
-        shift = view.scale * (rot @ self.model_center)[:2]
-        return PerspectiveCamera.from_scaled_pose(rot, view.scale, float(view.tx - shift[0]), float(view.ty - shift[1]))
+        return PerspectiveCamera.from_scaled_pose(rot, view.scale, view.tx, view.ty, center=self.model_center)
 
 
 # --------------------------------------------------------------------------- Levenberg-Marquardt
@@ -253,9 +251,10 @@ class _Problem:
     def predict(self, x: np.ndarray):
         d, vp = self.split(x)
         rot = batch_rotations(vp[:, :3])
-        pts = np.einsum("vab,lb->vla", rot[:, :2, :], self.tc + d)
+        pts = np.einsum("vab,lb->vla", rot, self.tc + d)
         scale = np.exp(vp[:, 3])
-        return scale[:, None, None] * pts + vp[:, None, 4:6], rot, scale
+        depth_factor = 1.0 - scale[:, None] * pts[:, :, 2] / FIT_FOCAL_PX
+        return scale[:, None, None] * pts[:, :, :2] / depth_factor[:, :, None] + vp[:, None, 4:6], rot, scale
 
     def residual(self, x: np.ndarray) -> np.ndarray:
         d, vp = self.split(x)
@@ -275,7 +274,9 @@ class _Problem:
         scale = np.exp(vp[:, 3])
         w = self.sqrt_weight(rot)
         pts = self.tc + d                                            # (L, 3)
-        proj = np.einsum("vab,lb->vla", rot[:, :2, :], pts)          # (V, L, 2), unscaled
+        camera_points = np.einsum("vab,lb->vla", rot, pts)
+        depth_factor = 1.0 - scale[:, None] * camera_points[:, :, 2] / FIT_FOCAL_PX
+        proj = camera_points[:, :, :2] / depth_factor[:, :, None]
         pred = scale[:, None, None] * proj + vp[:, None, 4:6]
         resid = w[:, :, None] * (pred - self.obs) / (scale * SIGMA_OBS_M)[:, None, None]
         drot = []                                                     # dR/d(angle in degrees), central differences
@@ -291,11 +292,16 @@ class _Problem:
             rows = (i * l + lidx)[:, None] * 2 + np.arange(2)[None, :]       # (L, 2)
             cols_d = lidx[:, None] * 3 + np.arange(3)[None, :]                # (L, 3)
             wi = w[i] / SIGMA_OBS_M                                           # (L,)
-            jac[rows[:, :, None], cols_d[:, None, :]] = wi[:, None, None] * rot[i, :2, :][None, :, :]
+            q, den, s = camera_points[i], depth_factor[i], scale[i]
+            projection_derivative = (rot[i, :2, :][None] / den[:, None, None]
+                + (s / FIT_FOCAL_PX) * q[:, :2, None] * rot[i, 2, :][None, None] / den[:, None, None] ** 2)
+            jac[rows[:, :, None], cols_d[:, None, :]] = wi[:, None, None] * projection_derivative
             base = l * 3 + i * 6
             for k in range(3):
-                jac[rows, base + k] = wi[:, None] * np.einsum("ab,lb->la", drot[k][i, :2, :], pts)
-            jac[rows, base + 3] = wi[:, None] * proj[i] - resid[i]
+                dq = np.einsum("ab,lb->la", drot[k][i], pts)
+                jac[rows, base + k] = wi[:, None] * (dq[:, :2] / den[:, None]
+                    + (s / FIT_FOCAL_PX) * q[:, :2] * dq[:, 2, None] / den[:, None] ** 2)
+            jac[rows, base + 3] = wi[:, None] * q[:, :2] / den[:, None] ** 2 - resid[i]
             jac[rows[:, 0], base + 4] = w[i] / (scale[i] * SIGMA_OBS_M)
             jac[rows[:, 1], base + 5] = w[i] / (scale[i] * SIGMA_OBS_M)
         r1 = n_data + l * 2
@@ -527,7 +533,7 @@ def estimate_pose_from_landmarks(points: np.ndarray) -> tuple[float, float, floa
 # --------------------------------------------------------------------------- pose against KNOWN geometry
 @dataclass
 class ViewPoseFit:
-    """Camera (weak-perspective) of ONE frame against fixed identity geometry. Standard-frame angles in degrees."""
+    """Perspective pose of ONE frame against fixed identity geometry. Standard-frame angles in degrees."""
     yaw: float
     pitch: float
     roll: float
@@ -541,8 +547,7 @@ class ViewPoseFit:
 
     def camera(self) -> PerspectiveCamera:
         rot = batch_rotations(np.array([[self.yaw, self.pitch, self.roll]]))[0]
-        shift = self.scale * (rot @ self.center)[:2]
-        return PerspectiveCamera.from_scaled_pose(rot, float(self.scale), float(self.tx - shift[0]), float(self.ty - shift[1]))
+        return PerspectiveCamera.from_scaled_pose(rot, float(self.scale), self.tx, self.ty, center=self.center)
 
 
 def solve_view_pose(

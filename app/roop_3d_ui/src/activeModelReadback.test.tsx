@@ -107,6 +107,6 @@ describe('model ids travel with every preview payload', () => {
     const payload = buildLivePayload({ request, time: 1, fps: 25,
       parameters: { ...DEFAULT_PARAMETERS, head_topology_engine: 'FLAME-FullHead-3D', shader_mode: '3D-Gaussian-Head-Avatar' } })!;
     expect(payload).toMatchObject({ detector_model_id: 'yoloface', head_topology_engine: 'FLAME-FullHead-3D', shader_mode: '3D-Gaussian-Head-Avatar' });
-    expect(Object.keys(payload).join(' ')).not.toMatch(/swapper|restorer|restoration|fidelity|ultramax/i);
+    expect(Object.keys(payload).join(' ')).not.toMatch(/swapper|restorer|restoration(?!_weight)|fidelity|ultramax/i);
   });
 });

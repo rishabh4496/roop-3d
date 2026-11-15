@@ -163,7 +163,7 @@ class MediaService:
         from roop_3d.faceset_loader import LandmarkEngine
         from roop_3d.media.face_analysis import FaceAnalyzer
         self.analyzer = FaceAnalyzer(self.detector, Recognizer(catalog, gpu_factory),
-                                     LandmarkEngine(root, session_factory=gpu_factory))
+                                     LandmarkEngine(root, session_factory=gpu_factory, catalog=catalog))
         self.detector.validator = dense_validator(self.analyzer.engine)
         self.frames = VideoFrameService(self.path, self.detector, analyzer=self.analyzer)
 

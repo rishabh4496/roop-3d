@@ -7,6 +7,8 @@ landmarks into inter-ocular-normalised expression deltas, ``NeutralCalibrator`` 
 """
 from __future__ import annotations
 
+from roop_3d.reconstruction.landmark_layout import group
+
 from collections import deque
 from dataclasses import dataclass, field
 import math
@@ -191,7 +193,9 @@ class NeutralCalibrator:
 def params_from_measure(m: ExpressionMeasure, base: np.ndarray) -> ExpressionParams:
     b = dict(zip(ExpressionMeasure.NAMES, base))
     def blink(opening: float, ref: float) -> float:
-        return float(np.clip((1.0 - opening / max(ref, 1e-6)) / 0.6, 0.0, 1.0)) if ref > 0.01 else 0.0
+        # A few percent of eye-height variation is landmark noise, not a blink.
+        # Preserve the full-closure endpoint while removing that neutral dead band.
+        return float(np.clip((1.0 - opening / max(ref, 1e-6) - 0.03) / 0.57, 0.0, 1.0)) if ref > 0.01 else 0.0
     return ExpressionParams(
         mouth_open=max(0.0, m.mouth_open - b["mouth_open"]), mouth_width=m.mouth_width - b["mouth_width"],
         smile=m.smile - b["smile"], blink_a=blink(m.eye_h_a, b["eye_h_a"]), blink_b=blink(m.eye_h_b, b["eye_h_b"]),

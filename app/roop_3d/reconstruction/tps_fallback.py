@@ -1,4 +1,6 @@
-"""Dependency-free 3D canonical landmark PnP solver and 2.5D Thin-Plate-Spline / Delaunay mesh warper.
+"""Dependency-free 3D canonical landmark PnP pose solver.
+
+The former Thin-Plate-Spline / Delaunay mesh warper has been removed.
 
 This module guarantees 3D pose visualization for the Stage 14 Three.js viewport and
 geometric alignment for Stage 09 even when restricted FLAME weights are not installed.
