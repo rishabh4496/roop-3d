@@ -2,10 +2,11 @@
 
 What one frame yields, and where each quantity honestly comes from (nothing is filled in when it was not measured):
 
-  camera pose (6 DoF)  yaw/pitch/roll + scale + 2-D translation of a weak-perspective camera, solved from the 5-point
-                       landmarks against the canonical head (or the actor-personalised anchors from SceneTrackerAdaptation).
-                       Depth is the scale, not metric. A supplied FLAME rotation is deliberately NOT used: no FLAME weights
-                       are installed, so its axis convention cannot be verified against this project's frame.
+  camera pose (6 DoF)  yaw/pitch/roll, focal-length-over-centre-depth scale and image-centre translation of a perspective pin-hole
+                       camera, solved from the 5-point landmarks against the canonical head (or actor-personalised anchors).
+                       Depth is inferred under the assumed focal/template scale, not an independent physical measurement. A supplied
+                       FLAME rotation is deliberately NOT used: no FLAME weights are installed, so its axis convention cannot be
+                       verified against this project's frame.
   shape (beta_target)  locked per shot by robust weighted-median pooling (``identity_lock``): the supplied FLAME beta when an
                        encoder provides one, otherwise facial proportions measured from the landmarks (reported as such).
   jaw (theta_jaw)      the supplied FLAME jaw opening, otherwise a landmark proxy: lip drop divided by the jaw lever arm.

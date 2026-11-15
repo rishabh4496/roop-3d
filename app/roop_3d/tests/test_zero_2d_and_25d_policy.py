@@ -60,7 +60,7 @@ _SWAP_MODELS = (r"inswapper|reswapper|simswap|blendswap|uniface|hyperswap|realsw
                 r"|ghost[_\- ]?(?:\d+|unet|swap\w*|net|face)")
 SWAP_MODEL_RE = re.compile(_SWAP_MODELS, re.I)
 SWAP_WORD_RE = re.compile(r"swapper|dfm_morph|\.dfm\b|^ghost$", re.I)               # identifiers / schema keys only
-GAN_NAME_RE = re.compile(r"codeformer|gfpgan|gpen|ultramax|restoreformer|styleganex|restore_aligned|restore_hires"
+GAN_NAME_RE = re.compile(r"codeformer|gfpgan|gpen|ultramax(?!_uv\b)|restoreformer|styleganex|restore_aligned|restore_hires"
                          r"|restore_in_crop_space|hires_handoff|decoupledrestorer|onnxfacerestorer", re.I)
 GAN_OPTION_RE = re.compile(r"restorer_model|face_restoration_policy|restoration_blend|fidelity_weight", re.I)
 CAMERA_25D_RE = re.compile(r"weak[_\- ]?perspective|orthographic|scaled[_\- ]?ortho|orthographicpose|project_model5"
@@ -70,10 +70,16 @@ GEOM_25D_RE = re.compile(r"3ddfa[_\- ]?v?2|warp_delaunay|piecewise_affine|build_
                          r"|(?<![0-9a-z])2[_.]?5[_.]?d(?![a-z0-9])|frontal[_\- ]?strip|jaw_fit|pose_frontalization", re.I)
 
 # Where a neural detailer may legitimately live: UV-texture builders only.
-UV_BUILDER_RE = re.compile(r"(^|/)(uv_[a-z0-9_]+|uv_baker)\.py$")
+UV_BUILDER_RE = re.compile(r"(^|/)(uv_[a-z0-9_]+|uv_baker|stage4_head|stage4_skin)\.py$")
 FRAME_ARG_RE = re.compile(r"frame|crop|aligned|portrait|swapped|face_img|bgr|roi|patch|target|photo|image(?!_?atlas)", re.I)
 UV_ARG_RE = re.compile(r"uv|atlas|texel|albedo", re.I)
 GAN_CALL_RE = re.compile(r"codeformer|gfpgan|gpen|ultramax|restoreformer|restore_aligned|restore_hires|restore_in_crop|restorer", re.I)
+ALLOWED_UV_HELPER_CALLS: dict[tuple[str, str, str], str] = {
+    ("reconstruction/stage4_head.py", "VolumetricHeadRenderer.__init__", "_install_default_restorer"):
+        "Installs the canonical UV restorer before projection; it does not restore a target-frame crop.",
+    ("reconstruction/stage4_head.py", "VolumetricHeadRenderer.set_texture_restorer", "restorer"):
+        "Invokes the injected canonical-UV restorer on the base atlas with the fitted mesh and valid-texel mask.",
+}
 
 ALIGN_MARKER_RE = re.compile(r"estimateaffine|similarity|umeyama|align|registration|template|arcface|ffhq|kps|5pt|five"
                              r"|crop_matrix|inverse|invert|\binv\b|paste|replacement|crop_to_frame|frame_to_crop|swap", re.I)
@@ -102,7 +108,6 @@ ALLOWED_WARP_AFFINE: dict[tuple[str, str], str] = {
     ("faceset_synthesizer.py", "register_uv"): "Offline FaceSet UV map registration from generated portrait; operates in canonical UV space, never on video frames.",
     ("engine/volumetric/preprocess.py", "aligned_crop"): "ArcFace-template 128x128 aligned crop for feature extractor network input; never composited or pasted back.",
     ("reconstruction/full_head.py", "FullHeadEngine.process"): "FullHeadEngine detail extraction crops a target ROI patch from the frame for comparison; does not paste into video frames.",
-    ("engine/edit_plan.py", "*"): "Transforms occluder plane masks into target frame coordinates; does not paste face crops.",
     ("compositor/boundary_fusion.py", "*"): "Transforms anatomical boundary masks for multi-band fusion; no 2D swapper pasting.",
     ("compositor/robust_fusion.py", "*"): "Transforms robust occlusion masks for boundary fusion; no 2D swapper pasting.",
     ("media/vfx.py", "*"): "Transforms 3D geometry pass buffers (normal, depth, lighting) for VFX export; no 2D swapper pasting.",
@@ -310,6 +315,41 @@ def tokens_of(tree: ast.AST):
             yield ("idstr" if IDLIKE_RE.match(text) else "prose"), text, line
 
 
+def _retired_history_literals(module: Module) -> set[tuple[int, str]]:
+    """Legacy option names in migration frozensets are data keys, not active render identifiers."""
+    if module.rel != "jobs/history_migration.py":
+        return set()
+    literals: set[tuple[int, str]] = set()
+    for statement in module.tree.body:
+        if isinstance(statement, ast.Assign):
+            targets, value = statement.targets, statement.value
+        elif isinstance(statement, ast.AnnAssign):
+            targets, value = [statement.target], statement.value
+        else:
+            continue
+        if value is None or not any(isinstance(target, ast.Name) and target.id.startswith("RETIRED_") for target in targets):
+            continue
+        literals.update((node.lineno, node.value) for node in ast.walk(value)
+                        if isinstance(node, ast.Constant) and isinstance(node.value, str))
+    return literals
+
+def _uv_component_literals(module: Module) -> set[tuple[int, str]]:
+    """UV model names in their role-tagged component map are not screen-space restorers."""
+    if module.rel != "models/pure3d.py":
+        return set()
+    literals: set[tuple[int, str]] = set()
+    for statement in module.tree.body:
+        if not isinstance(statement, ast.Assign) or not any(
+                isinstance(target, ast.Name) and target.id == "_WEIGHT_COMPONENTS" for target in statement.targets):
+            continue
+        if not isinstance(statement.value, ast.Dict):
+            continue
+        for key, value in zip(statement.value.keys, statement.value.values):
+            if isinstance(key, ast.Constant) and key.value == "uv_enhancer":
+                literals.update((node.lineno, node.value) for node in ast.walk(value)
+                                if isinstance(node, ast.Constant) and isinstance(node.value, str))
+    return literals
+
 def _clip(text: str, n: int = 80) -> str:
     text = " ".join(text.split())
     return text if len(text) <= n else text[: n - 1] + "…"
@@ -322,7 +362,12 @@ def scan_tokens(module: Module, rule: str, patterns: dict[str, tuple[re.Pattern,
     if skip_uv and UV_BUILDER_RE.search(module.rel):
         return found
     seen: set[tuple[int, str, str]] = set()
+    excluded_literals = _retired_history_literals(module)
+    if rule == "d":
+        excluded_literals |= _uv_component_literals(module)
     for kind, text, line in tokens_of(module.tree):
+        if (line, text) in excluded_literals:
+            continue
         for label, (regex, kinds) in patterns.items():
             if kind in kinds and regex.search(text):
                 key = (line, label, text)
@@ -476,6 +521,8 @@ def check_gan_calls(module: Module) -> list[Violation]:
     found: list[Violation] = []
     in_uv = bool(UV_BUILDER_RE.search(module.rel))
     for site in call_sites(module):
+        if (module.rel, site.qualname, _callee_name(site.call)) in ALLOWED_UV_HELPER_CALLS:
+            continue
         callee = _callee_text(site.call)
         if not GAN_CALL_RE.search(callee):
             continue
@@ -520,9 +567,28 @@ def catalog_json_files() -> list[Path]:
 def scan_json_text(path: Path, rule: str, regexes: dict[str, re.Pattern]) -> list[Violation]:
     found: list[Violation] = []
     rel = _repo_rel(path)
+    uv_terms: set[str] = set()
+    if rule == "d":
+        try:
+            catalog = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            catalog = None
+        models = catalog.get("models", []) if isinstance(catalog, dict) else []
+        for model in models if isinstance(models, list) else []:
+            if not isinstance(model, dict) or model.get("role") != "uv_enhancer" and model.get("category") != "uv_enhancer":
+                continue
+            for key in ("id", "model_id", "name", "aliases", "filenames"):
+                value = model.get(key)
+                if isinstance(value, str):
+                    uv_terms.add(value)
+                elif isinstance(value, list):
+                    uv_terms.update(item for item in value if isinstance(item, str))
     for number, text in enumerate(path.read_text(encoding="utf-8", errors="replace").splitlines(), 1):
+        scan_text = text
+        for term in sorted(uv_terms, key=len, reverse=True):
+            scan_text = re.sub(re.escape(term), "", scan_text, flags=re.I)
         for label, regex in regexes.items():
-            m = regex.search(text)
+            m = regex.search(scan_text)
             if m:
                 found.append(Violation(rule, rel, number, f"{label}: {_clip(text.strip(), 90)!r}"))
                 break
@@ -657,6 +723,16 @@ def test_allow_lists_have_reasons_and_are_not_stale() -> None:
             sites = [s for s in call_sites(module) if _callee_name(s.call) in call_names]
             if not any(qual in {"*", s.qualname} for s in sites):
                 problems.append(f"{rel}::{qual}: stale allow-list entry (no matching call site any more)")
+    for (rel, qual, callee), reason in ALLOWED_UV_HELPER_CALLS.items():
+        if len(reason.strip()) < 25:
+            problems.append(f"{rel}::{qual}::{callee}: allow-list entry needs a real reason")
+            continue
+        module = by_rel.get(rel)
+        if module is None or not UV_BUILDER_RE.search(rel):
+            problems.append(f"{rel}::{qual}::{callee}: UV helper is not in a live UV builder")
+            continue
+        if not any(site.qualname == qual and _callee_name(site.call) == callee for site in call_sites(module)):
+            problems.append(f"{rel}::{qual}::{callee}: stale UV helper allow-list entry")
     assert not problems, "\n".join(problems)
 
 

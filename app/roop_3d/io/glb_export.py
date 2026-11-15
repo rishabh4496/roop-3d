@@ -139,33 +139,54 @@ class HeadTrack:
 
     @classmethod
     def from_tracked_frames(cls, frames: Sequence[Any], *, name: str = "head_track") -> "HeadTrack":
-        """Build a track from ``tracking.video_tracker.TrackedHeadFrame`` items (duck-typed: ``timestamp``, ``frame_index``,
-        ``confidence``, ``camera.rotation`` / ``tx`` / ``ty`` / ``scale``). Frames without a camera pose are skipped.
+        """Build a track from frames carrying a measured perspective ``pose_6dof`` record.
 
-        The tracker's camera is weak-perspective: ``pixel = scale * (R X)[:2] + t``. Rotation (3 DoF) and the in-plane position
-        (2 DoF) are exact; depth is *not* metric, so the Z translation is left at 0 and the per-key ``scale`` (pixels per
-        metre, which encodes distance) is kept in ``extras`` instead of being faked into a translation. Translation is relative to
-        the first tracked frame."""
-        kept = [f for f in frames if getattr(f, "camera", None) is not None]
-        if not kept:
-            raise _fail("GLB_TRACK_EMPTY", "No frame carries a camera pose, so there is no head track to export")
-        t0 = float(kept[0].timestamp)
-        times = np.array([float(f.timestamp) - t0 for f in kept], np.float64)
+        Frames without both an accepted tracked camera and a measured 6-DoF pose are skipped. No in-plane or scale-only pose is
+        promoted to a 3-D translation.
+        """
+        tracked = [f for f in frames if getattr(f, "camera", None) is not None]
+        if not tracked:
+            raise _fail("GLB_TRACK_EMPTY", "No frame carries an accepted camera pose, so there is no head track to export")
+        records: list[tuple[Any, np.ndarray, np.ndarray, str, float | None]] = []
+        for frame in tracked:
+            pose = getattr(frame, "pose_6dof", None)
+            if pose is None:
+                continue
+            try:
+                if not isinstance(pose, Mapping):
+                    raise TypeError("pose_6dof is not a mapping")
+                translation = np.asarray([pose["tx_m"], pose["ty_m"], pose["tz_m"]], np.float64)
+                quat = np.asarray(pose["quat"], np.float64)
+                source = pose["source"]
+                rms = float(pose["reproj_rms_px"]) if pose.get("reproj_rms_px") is not None else None
+            except (KeyError, TypeError, ValueError, OverflowError) as error:
+                raise _fail("GLB_TRACK_POSE_INVALID", f"Frame {getattr(frame, 'frame_index', '?')} has an incomplete pose_6dof record") from error
+            norm = float(np.linalg.norm(quat)) if quat.shape == (4,) else 0.0
+            if (translation.shape != (3,) or not np.isfinite(translation).all() or translation[2] <= 0
+                    or not np.isfinite(quat).all() or not math.isfinite(norm) or norm <= 1e-8
+                    or not isinstance(source, str) or not source.strip()
+                    or (rms is not None and (not math.isfinite(rms) or rms < 0))):
+                raise _fail("GLB_TRACK_POSE_INVALID", f"Frame {getattr(frame, 'frame_index', '?')} has an invalid pose_6dof record")
+            records.append((frame, translation, quat / norm, source, rms))
+        if not records:
+            raise _fail("GLB_TRACK_POSE_REQUIRED", "Tracked frames have no measured 6-DoF pose; a planar approximation is not exported")
+        t0 = float(records[0][0].timestamp)
+        times = np.array([float(record[0].timestamp) - t0 for record in records], np.float64)
         keep = np.concatenate([[True], np.diff(times) > 1e-9])                       # glTF needs strictly increasing times
-        kept, times = [f for f, ok in zip(kept, keep) if ok], times[keep]
-        xy = np.array([[f.camera.tx / f.camera.scale, -f.camera.ty / f.camera.scale] for f in kept], np.float64)
-        xy -= xy[0]
-        trans = np.zeros((len(kept), 3), np.float32)
-        trans[:, :2] = xy
-        flip = np.diag([1.0, -1.0, 1.0])
-        quats = _continuous([_matrix_to_xyzw(flip @ np.asarray(f.camera.rotation, np.float64) @ flip) for f in kept])
+        records, times = [record for record, ok in zip(records, keep) if ok], times[keep]
+        positions = np.stack([record[1] for record in records])
+        positions -= positions[0]
+        positions[:, 1] *= -1.0                                                       # OpenCV camera Y-down -> glTF Y-up
+        trans = positions.astype(np.float32)
+        quats = _continuous([np.array([-q[1], q[2], -q[3], q[0]], np.float64) for _, _, q, _, _ in records])
         extras = {
-            "source": "VideoHeadTracker3D camera",
-            "dof": "rotation (3) + in-plane translation (2) measured; depth not metric (translation z = 0)",
-            "translation_origin": "first tracked frame",
-            "scale_px_per_m": [round(float(f.camera.scale), 4) for f in kept],
-            "frame_index": [int(f.frame_index) for f in kept],
-            "confidence": [round(float(f.confidence), 4) for f in kept],
+            "source": "VideoHeadTracker3D measured perspective pose_6dof",
+            "dof": "rotation (3) + translation (3) measured by perspective PnP; depth is retained",
+            "translation_origin": "first measured tracked frame",
+            "pose_source": [record[3] for record in records],
+            "pose_reproj_rms_px": [round(record[4], 4) if record[4] is not None else None for record in records],
+            "frame_index": [int(record[0].frame_index) for record in records],
+            "confidence": [round(float(record[0].confidence), 4) for record in records],
         }
         return cls(times, trans, quats, None, name, extras)
 

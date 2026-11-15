@@ -217,17 +217,22 @@ def test_morph_targets_weights_and_names():
 # ------------------------------------------------------------------------------------------------- head track
 def fake_frames(count: int = 5, seed: int = 0):
     rotations = Rotation.random(count, random_state=seed)
-    frames = [SimpleNamespace(timestamp=10.0 + i / 25, frame_index=100 + i, confidence=0.9,
-                              camera=SimpleNamespace(rotation=rotations[i].as_matrix(), tx=500.0 + 3 * i, ty=300.0 - 2 * i, scale=2000.0))
-              for i in range(count)]
-    frames.insert(2, SimpleNamespace(timestamp=10.05, frame_index=999, confidence=0.0, camera=None))      # tracker lost the face
+    frames = []
+    for i, rotation in enumerate(rotations):
+        x, y, z, w = rotation.as_quat()
+        pose = {"tx_m": 0.1 + i * 0.0015, "ty_m": 0.2 - i * 0.001, "tz_m": 0.9 + i * 0.01,
+                "quat": [w, x, y, z], "source": "pnp_dense", "reproj_rms_px": 0.5}
+        frames.append(SimpleNamespace(timestamp=10.0 + i / 25, frame_index=100 + i, confidence=0.9,
+                                      camera=SimpleNamespace(rotation=rotation.as_matrix(), tx=500.0 + 3 * i,
+                                                            ty=300.0 - 2 * i, scale=2000.0), pose_6dof=pose))
+    frames.insert(2, SimpleNamespace(timestamp=10.05, frame_index=999, confidence=0.0, camera=None, pose_6dof=None))
     return frames, rotations
 
 
 def test_head_track_becomes_a_glTF_animation_with_the_right_maths():
     frames, rotations = fake_frames()
     track = HeadTrack.from_tracked_frames(frames)
-    assert len(track.times) == 5 and track.times[0] == 0.0, "frames without a camera are skipped; times start at 0"
+    assert len(track.times) == 5 and track.times[0] == 0.0, "frames without a camera pose are skipped; times start at 0"
     doc, binary = parse_glb(GLBBinarySerializer().serialize(grid_mesh(), frame="mesh", track=track))
     animation = doc["animations"][0]
     assert {c["target"]["path"] for c in animation["channels"]} == {"translation", "rotation"}
@@ -238,19 +243,39 @@ def test_head_track_becomes_a_glTF_animation_with_the_right_maths():
     quats = read_accessor(doc, binary, animation["samplers"][1]["output"])
     assert np.allclose(np.linalg.norm(quats, axis=1), 1.0, atol=1e-6)
     translations = read_accessor(doc, binary, animation["samplers"][0]["output"])
-    assert np.allclose(translations[0], 0) and np.allclose(translations[1], [3 / 2000, 2 / 2000, 0], atol=1e-7), "y is flipped to y-up; z is unknown"
-    # The rotated glTF-frame point must equal the y-flip of the tracker's mesh-frame rotation of the mesh-frame point.
+    assert np.allclose(translations[0], [0.0, 0.0, 0.0])
+    assert np.allclose(translations[1], [0.0015, 0.001, 0.01], atol=1e-7), "PnP translation includes real depth motion"
     flip = np.diag([1.0, -1.0, 1.0])
-    point_mesh = np.array([0.03, -0.05, 0.08])
-    for q, rotation in zip(quats, rotations):
-        assert np.allclose(Rotation.from_quat(q).as_matrix() @ (flip @ point_mesh), flip @ (rotation.as_matrix() @ point_mesh), atol=1e-6)
-    assert animation["extras"]["scale_px_per_m"] == [2000.0] * 5 and "depth not metric" in animation["extras"]["dof"]
+    for quat, rotation in zip(quats, rotations):
+        assert np.allclose(Rotation.from_quat(quat).as_matrix(), flip @ rotation.as_matrix() @ flip, atol=1e-6)
+    assert animation["extras"]["pose_source"] == ["pnp_dense"] * 5
+    assert "scale_px_per_m" not in animation["extras"]
+
+
+def test_head_track_rejects_tracked_frames_without_a_measured_6dof_pose():
+    frame = SimpleNamespace(timestamp=1.0, frame_index=0, confidence=1.0,
+                            camera=SimpleNamespace(rotation=np.eye(3), tx=0.0, ty=0.0, scale=1000.0))
+    with pytest.raises(DomainError) as err:
+        HeadTrack.from_tracked_frames([frame])
+    assert err.value.code == "GLB_TRACK_POSE_REQUIRED"
+
+
+def test_head_track_rejects_invalid_measured_translation():
+    frame = SimpleNamespace(timestamp=1.0, frame_index=0, confidence=1.0,
+                            camera=SimpleNamespace(rotation=np.eye(3), tx=0.0, ty=0.0, scale=1000.0),
+                            pose_6dof={"tx_m": float("nan"), "ty_m": 0.0, "tz_m": 1.0, "quat": [1.0, 0.0, 0.0, 0.0]})
+    with pytest.raises(DomainError) as err:
+        HeadTrack.from_tracked_frames([frame])
+    assert err.value.code == "GLB_TRACK_POSE_INVALID"
 
 
 def test_track_quaternions_stay_in_one_hemisphere_and_times_must_increase():
+    rotations = [Rotation.from_euler("y", 178 + 2 * i, degrees=True) for i in range(4)]
     near_pi = [SimpleNamespace(timestamp=i / 30, frame_index=i, confidence=1.0,
-                               camera=SimpleNamespace(rotation=Rotation.from_euler("y", 178 + 2 * i, degrees=True).as_matrix(),
-                                                      tx=0.0, ty=0.0, scale=1000.0)) for i in range(4)]
+                               camera=SimpleNamespace(rotation=rotation.as_matrix(), tx=0.0, ty=0.0, scale=1000.0),
+                               pose_6dof={"tx_m": 0.0, "ty_m": 0.0, "tz_m": 1.0,
+                                          "quat": [rotation.as_quat()[3], *rotation.as_quat()[:3]], "source": "pnp_dense"})
+               for i, rotation in enumerate(rotations)]
     quats = HeadTrack.from_tracked_frames(near_pi).rotations
     assert all(float(quats[i] @ quats[i - 1]) > 0 for i in range(1, len(quats)))
     bad = HeadTrack(np.array([0.0, 0.0]), np.zeros((2, 3)), np.tile([0, 0, 0, 1.0], (2, 1)))

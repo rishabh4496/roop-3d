@@ -605,8 +605,8 @@ def parametric_block(asset: IdentityAsset) -> dict[str, Any]:
     """Disentangled identity-shape / expression / camera-pose / albedo description of a built asset.
 
     Only quantities the builder actually fitted are reported. Anything it does not have is ``value: null`` with a
-    ``reason`` — never zeros: there is no FLAME/learned expression basis here and the bundle adjustment is weak-perspective,
-    so ``expression_beta`` and the metric translation ``t`` are honestly unavailable."""
+    ``reason`` -- never zeros: there is no FLAME/learned expression basis and the perspective fit uses an assumed focal prior
+    without physical camera calibration, so ``expression_beta`` and a physically calibrated translation ``t`` are unavailable."""
     m = asset.manifest
     alpha = m.shape.get("makehuman_shape_coefficients")
     names = m.shape.get("makehuman_shape_names")

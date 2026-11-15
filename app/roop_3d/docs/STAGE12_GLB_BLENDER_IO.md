@@ -39,10 +39,12 @@ Same query as `/mesh` (`template`, `topology`, six slider values, `albedo_prior`
 
 ## Head track (library level)
 
-`HeadTrack.from_tracked_frames(frames)` turns `tracking.video_tracker.TrackedHeadFrame`s into a glTF animation on the head node
-(translation, rotation and optionally morph weights). The tracker's camera is weak-perspective, so rotation (3 DoF) and in-plane position
-(2 DoF) are exact, but **depth is not metric**: translation Z is 0 and the per-key `scale` (px/m) is stored in the animation `extras`.
-The track is not served by any route yet because nothing persists tracker output (see the Stage 4 head-tracking note: not wired into the job runner).
+`HeadTrack.from_tracked_frames(frames)` exports a glTF animation only from frames with an accepted tracker camera and measured
+perspective `pose_6dof` (`tx_m`, `ty_m`, `tz_m`, `quat`). It carries all three translation axes, converts the measured quaternion
+to glTF coordinates, and records translation relative to the first measured frame. Frames lacking a full pose are skipped; if no
+measured pose remains it raises `GLB_TRACK_POSE_REQUIRED`. Malformed pose values raise `GLB_TRACK_POSE_INVALID`; there is no
+scale-only or planar translation fallback. PnP depth uses the canonical head-size/focal prior and is not a calibrated subject scale.
+This remains library-level: no route persists tracker output or serves the animation yet.
 
 ## Blender bridge and GPL isolation
 

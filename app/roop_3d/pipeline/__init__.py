@@ -6,12 +6,12 @@ Imports are lazy so ``import roop_3d.pipeline`` costs nothing (the server only p
     from roop_3d.pipeline.photorealistic_swap_core import Photorealistic3DSwapCore
     from roop_3d.pipeline.video_job_runner import EndToEndVideoJobRunner
 
-The FFmpeg path preserves mesh/projection coverage, presence fades and upstream enhancement from the session. Standard
-replacements still use 106-point similarity/TPS geometry and a heuristic forehead, not a fitted 3D reconstruction.
-Semantic parsing and every configured visible-face network are required; unavailable or invalid models fail the job
-with structured diagnostics rather than silently dropping occlusion. Parser trust uncertainty is retained in reports.
-MakeHuman's legacy identity-asset rig is distinct from the native BFM/FLAME backbone and is not substituted for it.
-The compositor normalizes layered alpha and restores zero-alpha background pixels after multiband reconstruction.
+The FFmpeg runner refuses work until ``true3d_renderer.is_wired()`` and ``true3d_guard`` admit the full-head path. Its compositor
+accepts only a perspective mesh raster with full-frame coverage, normals and semantic masks; the bounded image-space ROI is a
+compositing optimization, not a face warp. ``pipeline.image_ops`` supplies image/mask and multiband-compositing primitives;
+there is no 106-point similarity/TPS replacement fallback. Semantic parsing and configured visible-face networks are mandatory;
+missing or invalid models fail with structured diagnostics. MakeHuman's legacy identity-asset rig remains distinct from the
+native BFM/FLAME backbone and is not substituted for it. The compositor restores zero-alpha scene pixels after reconstruction.
 """
 from __future__ import annotations
 
