@@ -194,7 +194,6 @@ describe('Engine & Model Rack', () => {
     }
     expect(host.querySelector('[data-testid="landmarker-note"]')!.textContent).toContain('not selectable');
     expect(host.querySelector('[data-testid="fusion-pointer"]')!.textContent).toContain('step 2');   // workspace: strength and blending live in the Masking step
-    expect(host.querySelector('[data-testid="robust-networks"]')!.textContent).toContain('xseg_3.onnx');
   });
 
   it('sends the chosen detector with jobs', async () => {
@@ -204,14 +203,6 @@ describe('Engine & Model Rack', () => {
     expect(rackStore.get().detector).toBe('retinaface');
   });
 
-  it('drives the live parameters: XSeg and feather', async () => {
-    const { onParams } = await mountRack();
-    await click(host.querySelector('input[aria-label="XSeg occluder"]'));
-    expect(onParams).toHaveBeenLastCalledWith({ occlusion_mode: 'robust' });
-    await click(host.querySelector('input[aria-label="Face box feather"]'));
-    expect(onParams).toHaveBeenLastCalledWith({ feather_px: 0 });
-    expect((host.querySelector('input[aria-label="BiSeNet semantic parser"]') as HTMLInputElement).disabled).toBe(true);
-  });
 
   it('saves provider / precision globally and disables combinations the engine reports unavailable', async () => {
     const { onSaveConfig } = await mountRack();
@@ -232,16 +223,6 @@ describe('Engine & Model Rack', () => {
     expect(host.textContent).toContain('No verified TensorRT build adapter');
   });
 
-  it('puts occlusion strength and seam blending in the Batch rack, with Frequency-separated blocked under Robust occlusion', async () => {
-    const onParams = vi.fn();
-    await render(<EngineModelRack variant="batch" params={{ occlusion_mode: 'robust' }} onParams={onParams} config={config} caps={caps} />);
-    expect(host.querySelector('[data-testid="compositing-controls"]')).toBeTruthy();
-    expect((host.querySelector('input[aria-label="XSeg occlusion strength"]') as HTMLInputElement).disabled).toBe(false);
-    const frequency = [...host.querySelectorAll<HTMLOptionElement>('select[aria-label="Seam blending"] option')].find(item => item.value === 'frequency_separated')!;
-    expect(frequency.disabled).toBe(true);
-    await click(host.querySelector('input[aria-label="XSeg occluder"]'));
-    expect(onParams).toHaveBeenLastCalledWith({ occlusion_mode: 'standard' });
-  });
 });
 
 describe('Models & Engines Manager', () => {

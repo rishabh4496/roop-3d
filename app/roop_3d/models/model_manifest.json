@@ -1358,7 +1358,7 @@
       "role_evidence": "Filename/family heuristic from Stage 00; not adapter execution proof",
       "upstream_url": null,
       "filenames": [
-        "face_occluder.onnx"
+        "occluder.onnx"
       ],
       "expected_sha256": "ad9bfb90510790711a429935f846eaba2dcf2935d9afc2bda7349f5bfb92a104",
       "byte_size": 70324403,
@@ -1436,7 +1436,7 @@
       "serialization_format": "ONNX",
       "security_status": "UNKNOWN",
       "weight_filenames": [
-        "face_occluder.onnx"
+        "occluder.onnx"
       ],
       "base_model_license_id": "UNKNOWN",
       "base_model_license_url": null,

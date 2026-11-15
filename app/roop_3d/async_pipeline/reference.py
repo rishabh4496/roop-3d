@@ -1,8 +1,8 @@
 """The four per-frame stages of the reference render, shared by the job runner and the benchmark.
 
     Stage 1  track      detection, landmarks, 6DoF pose, track association           (tracker only)
-    Stage 2  swap       identity swap, LivePortrait retarget, 3D mesh / pose blend   (swapper / portrait / rasteriser)
-    Stage 3  composite  restoration, semantic masks, LAB colour match, Laplacian blend (compositor)
+    Stage 2  swap       full-head render per track: MakeHuman fit, UV texture, perspective Z-buffer + SH lighting (`lock`)
+    Stage 3  composite  BiSeNet + XSeg + occluder masks, manual keep-target masks, skin-only LAB match, Laplacian blend
     Stage 4  write      checkpoint the finished frame (PNG sequence; the muxer reads it back)
 
 Each stage owns disjoint mutable session state, which is what makes it legal to run them on separate threads with a
@@ -89,14 +89,17 @@ class ReferenceStages:
         item.meta["result"] = result
 
     def composite(self, item: Item):
-        session = self.session
+        session, edit_plan = self.session, self.edit_plan
         decoded, result, parameters = item.meta["decoded"], item.meta["result"], item.meta["parameters"]
         if self.export and self.export.passes:
             raise DomainError("TRUE3D_RENDER_PASSES_UNAVAILABLE",
-                              "Requested render passes require the unwired full-head 3D renderer", 503)
-        options = parameters
+                              "Render-pass export (alpha, occluder, uv, normal, depth, relit) is not implemented "
+                              "for the volumetric MakeHuman renderer", 503)
+        if edit_plan is not None and getattr(edit_plan, "has_masks", False):
+            # Manual keep-target masks are frame-space planes: they join the compositor as each replacement's occluder.
+            result = edit_plan.with_occluders(decoded.image, result, decoded.index)
         output = session.composite_frame(
-            decoded.image, result, options=options,
+            decoded.image, result, options=parameters,
             **({"frame_index": item.meta["frame_index"]} if self.staged else {}),
             timestamp_seconds=float(decoded.timestamp.seconds))
         report = getattr(session, "last_frame_report", None)

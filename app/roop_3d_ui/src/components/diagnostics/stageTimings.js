@@ -3,7 +3,7 @@ export const FLAME_STAGES = [
   { id: 'decode', label: 'Decode', hw: 'NVDEC / software decoder', color: '#38bdf8' },
   { id: 'detection', label: 'Detection', hw: 'Face detector + tracker', color: '#818cf8' },
   { id: 'head_pose', label: '3D Pose & Mesh', hw: 'Head pose solve, perspective camera, full-head mesh fit', color: '#a78bfa' },
-  { id: 'head_render', label: '3D Head Render', hw: 'PBR subsurface scattering / Gaussian head avatar', color: '#f43f5e' },
+  { id: 'head_render', label: '3D Head Render', hw: 'MakeHuman perspective Z-buffer + SH illumination', color: '#f43f5e' },
   { id: 'masking', label: 'Masking', hw: 'Face parser, matte, occluders, colour fusion', color: '#fb923c' },
   { id: 'encode', label: 'Encode', hw: 'Frame write / video encoder', color: '#06b6d4' },
 ];

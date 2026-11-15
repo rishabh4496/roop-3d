@@ -18,7 +18,7 @@ from roop_3d.models.registry import ModelRecord
 from roop_3d.server.contracts import (Capabilities, ModelAvailability, ModelSummary,
                                      ModelDownloadRequest, ModelLicenseNotice)
 from roop_3d.server.diagnostics import BenchmarkRequest, PreFlightLintRequest
-from roop_3d.server.true3d import renderer_status, shader_options, topology_options
+from roop_3d.server.true3d import camera_mode_reasons, renderer_status, shader_options, topology_options
 from roop_3d.server.ws import EVENT_ADAPTER, event_stream
 
 router = APIRouter(prefix="/api/v1")
@@ -113,7 +113,7 @@ def capabilities(request: Request) -> Capabilities:
         "head_topology_engine": {row["id"]: (None if row["available"] else row["reason"]) for row in topology_rows},
         "shader_mode": {row["id"]: row["reason"] for row in shader_rows},
         "camera_projection": {"perspective": None},
-        "camera_mode": {"auto": None, "manual": None},
+        "camera_mode": camera_mode_reasons(),
         "preferred_provider": {
             "auto": None, "CPUExecutionProvider": None, "CUDAExecutionProvider": None if gpu else "CUDA is unavailable",
             "DmlExecutionProvider": (None if "DmlExecutionProvider" in (hardware.advertised_providers or [])

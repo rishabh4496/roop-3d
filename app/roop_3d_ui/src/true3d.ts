@@ -21,11 +21,11 @@ export const TOPOLOGY_LABELS: Record<HeadTopologyEngine, string> = {
   'MakeHuman-CC0-Craniofacial-3D': 'MakeHuman CC0 craniofacial (3D)',
 };
 export const SHADER_LABELS: Record<ShaderMode, string> = {
-  '3D-PBR-Subsurface-Scattering + Neural-Deferred-UV': 'PBR subsurface scattering + neural deferred UV',
-  '3D-Gaussian-Head-Avatar': '3D Gaussian head avatar',
+  '3D-PBR-Subsurface-Scattering + Neural-Deferred-UV': 'Perspective SH diffuse lighting + UV skin detail',
+  '3D-Gaussian-Head-Avatar': '3D Gaussian head avatar (not implemented)',
 };
 
-/** Perspective pin-hole intrinsics. `auto` asks the renderer's dynamic focal-length solver; `manual` fixes the focal length. */
+/** Perspective pin-hole intrinsics. `auto` uses an assumed 35 mm-equivalent lens; manual intrinsics are not implemented. */
 export interface CameraIntrinsics {
   mode: 'auto' | 'manual';
   /** Perspective only: the type admits no orthographic or weak-perspective value. */
@@ -40,7 +40,7 @@ export interface CameraIntrinsics {
 
 export const FOV_RANGE_DEG: readonly [number, number] = [5, 170];
 export const FOCAL_RANGE_PX: readonly [number, number] = [50, 100000];
-export const AUTO_PRIOR_FOV_DEG = 55;
+export const AUTO_PRIOR_FOV_DEG = 54.4;
 
 export const DEFAULT_CAMERA: CameraIntrinsics = { mode: 'auto', projection: 'perspective', focal_unit: 'fov_deg' };
 
@@ -126,13 +126,15 @@ export function useTrue3DOptions() {
   return { ...state, retry: () => setState(value => ({ ...value, error: '', attempt: value.attempt + 1 })) };
 }
 
-/** Pin-hole matrix a camera defines for a frame size (display only; the server solver owns `auto`). */
+/** Pin-hole display matrix; auto matches the renderer's assumed 35 mm-equivalent lens. */
 export function resolveIntrinsics(camera: CameraIntrinsics, width: number, height: number) {
   const manual = camera.mode === 'manual';
   const fov = manual
     ? (camera.focal_unit === 'px' && finite(camera.focal_length_px) ? 2 * Math.atan(width / (2 * camera.focal_length_px)) * 180 / Math.PI : camera.fov_deg ?? AUTO_PRIOR_FOV_DEG)
-    : AUTO_PRIOR_FOV_DEG;
-  const fx = manual && camera.focal_unit === 'px' && finite(camera.focal_length_px) ? camera.focal_length_px : width / (2 * Math.tan(fov * Math.PI / 360));
+    : 2 * Math.atan(width / (2 * (35 / 36) * Math.max(width, height))) * 180 / Math.PI;
+  const fx = manual
+    ? (camera.focal_unit === 'px' && finite(camera.focal_length_px) ? camera.focal_length_px : width / (2 * Math.tan(fov * Math.PI / 360)))
+    : (35 / 36) * Math.max(width, height);
   const [cx, cy] = camera.principal_point ?? [0.5, 0.5];
   return { fx, fy: fx, cx: cx * width, cy: cy * height, horizontalFovDeg: fov, estimated: !manual };
 }

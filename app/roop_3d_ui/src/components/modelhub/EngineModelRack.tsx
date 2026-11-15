@@ -8,7 +8,6 @@ import { setRack, useRack } from '../../stores/rackSelection';
 import ModelSelect, { StatusPill, type RackOption } from './ModelSelect';
 import ActiveModelBadge from './ActiveModelBadge';
 import CompositingControls from '../studio/CompositingControls';
-import { occlusionModePatch } from '../studio/compositing';
 import ComponentDiagnostics from './ComponentDiagnostics';
 
 type Params = Partial<WorkstationParameters>;
@@ -49,10 +48,7 @@ function CatalogPill({ modelId }: { modelId: string }) {
 /** Best status among the registered artifacts with this file name, most usable first. */
 const STATUS_RANK: readonly ModelStatus[] = ['ready', 'trt', 'disk', 'download', 'locate', 'blocked'];
 
-/**
- * Status of a registry artifact by file name. The robust occluder loads `xseg_3.onnx` and `face_occluder.onnx`, which are not catalog ids
- * (the `xseg` row is the older `xseg.onnx`), so the file name is what says whether the networks it will run are there.
- */
+/** Resolve readiness of the exact artifacts required by the volumetric mask. */
 function FilePill({ file }: { file: string }) {
   const { models, loaded } = useModelCatalog();
   if (!loaded) return null;
@@ -73,7 +69,7 @@ export default function EngineModelRack({ params, onParams, config, caps, onSave
     if (Object.entries(patch).every(([key, value]) => config[key] === value)) return;
     onSaveConfig({ ...config, ...patch });
   };
-  const robust = params.occlusion_mode === 'robust';
+  const renderer = caps?.workstation.renderer;
 
   const provider = typeof config?.preferred_provider === 'string' ? config.preferred_provider : 'auto';
   const configuredPrecision = typeof config?.precision_policy === 'string' ? config.precision_policy : 'auto';
@@ -117,8 +113,8 @@ export default function EngineModelRack({ params, onParams, config, caps, onSave
       <ActiveModelBadge selected={{ detector: detectorValue, head: params.head_topology_engine, shader: params.shader_mode }} />
       <ComponentDiagnostics />
       <section className="rack-section" aria-label="3D head reconstruction" data-testid="rack-true3d">
-        <h4>3D head reconstruction <Wiring live={false} /></h4>
-        <small className="muted" data-testid="render-mode-hint">The true-3D full-head renderer is not wired; render jobs fail closed.</small>
+        <h4>3D head reconstruction <Wiring live={renderer?.wired === true} /></h4>
+        <small className="muted" data-testid="render-mode-hint">{renderer?.wired ? 'Perspective MakeHuman mesh rendering with SH lighting. Connected does not certify visual quality.' : renderer?.message ?? 'Renderer readiness is unavailable; consult component diagnostics.'}</small>
         <True3DControls params={params} onParams={onParams} compact={variant === 'batch'} />
       </section>
 
@@ -131,14 +127,14 @@ export default function EngineModelRack({ params, onParams, config, caps, onSave
       <section className="rack-section" aria-label="Mask and occlusion engines">
         <h4>Mask &amp; occlusion engines</h4>
         <div className="rack-checks">
-          <label className="inspector-toggle"><input type="checkbox" aria-label="XSeg occluder" checked={robust} onChange={event => onParams(occlusionModePatch(params, event.target.checked ? 'robust' : 'standard'))} /> XSeg occluder <Wiring live /></label>
-          <div className="rack-engine-files" data-testid="robust-networks"><small className="muted">Robust occlusion runs</small> <FilePill file="xseg_3.onnx" /> <FilePill file="face_occluder.onnx" /></div>
+          <label className="inspector-toggle"><input type="checkbox" aria-label="XSeg occluder" checked disabled readOnly /> XSeg occluder <small className="muted">required on every rendered face</small></label>
+          <div className="rack-engine-files" data-testid="robust-networks"><small className="muted">Mandatory occlusion networks</small> <FilePill file="xseg.onnx" /> <FilePill file="occluder.onnx" /></div>
           <label className="inspector-toggle"><input type="checkbox" aria-label="BiSeNet semantic parser" checked disabled readOnly /> BiSeNet semantic parser (skin, brows, eyes, mouth, hair) <CatalogPill modelId="bisenet" /> <small className="muted">always on: the base face matte</small></label>
-          <label className="inspector-toggle"><input type="checkbox" aria-label="Face box feather" checked={(params.feather_px ?? 5) > 0} onChange={event => onParams({ feather_px: event.target.checked ? 5 : 0 })} /> Face box feather <Wiring live /></label>
+          <label className="inspector-toggle"><input type="checkbox" aria-label="Face box feather" checked disabled readOnly /> Mesh-boundary feather <small className="muted">fixed multi-scale 5 px</small></label>
         </div>
         {variant === 'batch'
           ? <CompositingControls params={params} onParams={onParams} />
-          : <small className="muted" data-testid="fusion-pointer">XSeg occlusion strength and seam blending are set in step 2 · Masking &amp; occlusion.</small>}
+          : <small className="muted" data-testid="fusion-pointer">Mandatory protection, multiband blending and UV restoration weight are shown in step 2 · Masking &amp; occlusion.</small>}
       </section>
 
       <section className="rack-section" aria-label="Execution provider and precision">

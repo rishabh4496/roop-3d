@@ -46,12 +46,60 @@ class MakeHumanHeadModel(FLAMEModel):
     """Linear parametric head: ``V = V0 + S @ beta + E @ psi`` (beta: identity, psi: expression, ~[-1, 1] slider units)."""
 
     def __init__(self, arrays: dict[str, np.ndarray]):
-        base = Mesh3D(arrays["vertices"], arrays["faces"], uvs=arrays["uvs"], face_uvs=arrays["face_uvs"])
-        super().__init__(base_mesh=base, landmark_indices=arrays["landmark_indices"],
-                         shape_basis=arrays["shape_basis"], expr_basis=arrays["expr_basis"])
-        self.shape_names = [str(n) for n in arrays["shape_names"]]
-        self.expr_names = [str(n) for n in arrays["expr_names"]]
-        self.landmark_names = [str(n) for n in arrays["landmark_names"]]
+        required = {"vertices", "faces", "uvs", "face_uvs", "landmark_indices",
+                    "shape_basis", "expr_basis", "shape_names", "expr_names", "landmark_names"}
+        missing = required.difference(arrays)
+        if missing:
+            raise DomainError("MAKEHUMAN_ASSET_INVALID", "Missing MakeHuman arrays: " + ", ".join(sorted(missing)), 422)
+        try:
+            vertices = np.asarray(arrays["vertices"], np.float32)
+            shape_basis = np.asarray(arrays["shape_basis"], np.float32)
+            expr_basis = np.asarray(arrays["expr_basis"], np.float32)
+            faces_raw = np.asarray(arrays["faces"])
+            face_uvs_raw = np.asarray(arrays["face_uvs"])
+            landmarks_raw = np.asarray(arrays["landmark_indices"])
+            shape_names = np.asarray(arrays["shape_names"])
+            expr_names = np.asarray(arrays["expr_names"])
+            landmark_names = np.asarray(arrays["landmark_names"])
+            for name, indices in (("faces", faces_raw), ("face_uvs", face_uvs_raw), ("landmark_indices", landmarks_raw)):
+                if (not np.issubdtype(indices.dtype, np.number) or not np.isfinite(indices).all()
+                        or not np.equal(indices, np.floor(indices)).all()):
+                    raise DomainError("MAKEHUMAN_ASSET_INVALID", f"MakeHuman {name} must contain finite integer indices", 422)
+            uvs = np.asarray(arrays["uvs"], np.float32)
+            if (vertices.ndim != 2 or vertices.shape[1] != 3
+                    or faces_raw.ndim != 2 or faces_raw.shape[1] != 3 or faces_raw.size == 0
+                    or faces_raw.min() < 0 or faces_raw.max() >= len(vertices)
+                    or face_uvs_raw.shape != faces_raw.shape
+                    or uvs.ndim != 2 or uvs.shape[1] != 2 or not np.isfinite(uvs).all()
+                    or np.any(face_uvs_raw < 0) or np.any(face_uvs_raw >= len(uvs))
+                    or landmarks_raw.shape != (5,) or np.any(landmarks_raw < 0)
+                    or np.any(landmarks_raw >= len(vertices))):
+                raise DomainError("MAKEHUMAN_ASSET_INVALID", "MakeHuman face, UV or landmark indices are out of bounds", 422)
+            faces = faces_raw.astype(np.int32)
+            face_uvs = face_uvs_raw.astype(np.int32)
+            landmarks = landmarks_raw.astype(np.int64)
+        except DomainError:
+            raise
+        except (TypeError, ValueError, OverflowError) as error:
+            raise DomainError("MAKEHUMAN_ASSET_INVALID", f"MakeHuman tensors have invalid numeric storage: {error}", 422) from error
+        if (vertices.ndim != 2 or vertices.shape[1] != 3
+                or shape_basis.ndim != 3 or shape_basis.shape[:2] != vertices.shape
+                or expr_basis.ndim != 3 or expr_basis.shape[:2] != vertices.shape
+                or landmarks.shape != (5,) or np.any(landmarks < 0) or np.any(landmarks >= len(vertices))
+                or shape_names.ndim != 1 or len(shape_names) != shape_basis.shape[2]
+                or expr_names.ndim != 1 or len(expr_names) != expr_basis.shape[2]
+                or landmark_names.ndim != 1 or len(landmark_names) != 5
+                or not all(np.isfinite(value).all() for value in (vertices, shape_basis, expr_basis))):
+            raise DomainError("MAKEHUMAN_ASSET_INVALID", "MakeHuman geometry, morph bases or landmarks are inconsistent", 422)
+        try:
+            base = Mesh3D(vertices, faces, uvs=uvs, face_uvs=face_uvs)
+        except (TypeError, ValueError, OverflowError) as error:
+            raise DomainError("MAKEHUMAN_ASSET_INVALID", f"MakeHuman mesh tensors are inconsistent: {error}", 422) from error
+        super().__init__(base_mesh=base, landmark_indices=landmarks,
+                         shape_basis=shape_basis, expr_basis=expr_basis)
+        self.shape_names = [str(n) for n in shape_names]
+        self.expr_names = [str(n) for n in expr_names]
+        self.landmark_names = [str(n) for n in landmark_names]
         self.model_id = MODEL_ID
 
     @classmethod
@@ -64,14 +112,23 @@ class MakeHumanHeadModel(FLAMEModel):
                     f"{target} not found. Build it (downloads ~130 small CC0 files, hash-verified): "
                     "python -m roop_3d.reconstruction.makehuman_build", 404)
             target = build_asset()
-        with np.load(target, allow_pickle=False) as data:
-            arrays = {k: data[k] for k in data.files}
+        try:
+            with np.load(target, allow_pickle=False) as data:
+                arrays = {k: data[k] for k in data.files}
+        except (OSError, ValueError, KeyError) as error:
+            raise DomainError("MAKEHUMAN_ASSET_INVALID", f"{target} is not a readable MakeHuman asset: {error}", 422) from error
         if verify:
             sidecar = target.with_name(target.name + ".json")
-            if sidecar.exists():
+            if not sidecar.is_file():
+                raise DomainError("MAKEHUMAN_ASSET_MANIFEST_MISSING",
+                                  f"{target} has no recorded asset digest", 422)
+            try:
                 expected = json.loads(sidecar.read_text("utf-8")).get("asset_digest")
-                if expected != asset_digest(arrays):
-                    raise DomainError("MAKEHUMAN_ASSET_CORRUPT", f"{target} does not match its recorded digest", 422)
+            except (OSError, ValueError, AttributeError) as error:
+                raise DomainError("MAKEHUMAN_ASSET_CORRUPT",
+                                  f"{target} has an unreadable digest sidecar: {error}", 422) from error
+            if not isinstance(expected, str) or expected != asset_digest(arrays):
+                raise DomainError("MAKEHUMAN_ASSET_CORRUPT", f"{target} does not match its recorded asset digest", 422)
         return cls(arrays)
 
     def forward(self, shape_params: np.ndarray, expr_params: np.ndarray, jaw_pose: np.ndarray | None = None) -> np.ndarray:

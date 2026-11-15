@@ -6,7 +6,8 @@
     GET  /api/target/preview_seq    consecutive rendered frames (JSON manifest of per-frame URLs)
 
 Every render request passes through the true-3D full-head renderer (see ``server/true3d.py``). While that renderer is not wired,
-an uncached frame answers HTTP 503 ``RENDERER_NOT_WIRED``; no alternate image-swap path is accepted.
+an uncached frame answers HTTP 503 ``RENDERER_NOT_WIRED``; a head topology, shader or camera it does not implement is a structured
+422; no alternate image-swap path is accepted.
 
 (``/api/<x>`` is served from ``/api/v1/<x>`` by the alias middleware.)
 
@@ -95,6 +96,8 @@ class LivePreviewPayload(Contract):
     head_topology_engine: HeadTopologyEngine | None = None
     shader_mode: ShaderMode | None = None
     camera: CameraIntrinsicsSpec | None = None
+    # Canonical-UV skin-detail restoration weight of the head texture (None = the workstation default 0.35, 0 disables it).
+    restoration_weight: float | None = Field(default=None, ge=0, le=1)
     engine_id: str = Field(default="reference_onnx", pattern=r"^[a-z0-9][a-z0-9_]{0,95}$")
     detector_model_id: Literal['scrfd', 'retinaface', 'yoloface'] | None = None
     # media + frame
@@ -199,19 +202,37 @@ class LivePreviewPayload(Contract):
         return True3DSettings(**values)
 
     def unsupported(self) -> list[str]:
-        """Fields without an active pixel-producing control."""
-        items = []
-        if self.xseg_occlusion_strength is not None and self.occlusion_mode != "robust":
-            items.append("xseg_occlusion_strength")
-        if self.pyramid_levels is not None and (self.blend_mode or "multi_band") not in ("multi_band", "frequency_separated"):
-            items.append("pyramid_levels")
+        """Controls sent with a value the full-frame 3D compositor does not implement: they change no pixel, and are reported."""
+        items = [name for name in ("relight_strength", "specular_sheen", "shadow_preservation", "lighting_mode",
+                                   "manual_light_yaw", "manual_light_pitch", "ambient_fill", "occlusion_threshold",
+                                   "hairline_offset_px", "xseg_occlusion_strength", "neck_protection", "hair_matting",
+                                   "preserve_ears_glasses", "jaw_feather_px", "skin_texture_retention")
+                 if getattr(self, name) is not None]
+        fields = type(self).model_fields
+        if self.relight:
+            items.append("relight")
+        if self.occlusion_mode == "robust":
+            items.append("occlusion_mode")
+        if self.blend_mode not in (None, "multi_band"):
+            items.append("blend_mode")
+        if self.color_strength != fields["color_strength"].default:
+            items.append("color_strength")
+        if self.color_method != fields["color_method"].default:
+            items.append("color_method")
+        if self.bypass:
+            items.append("bypass")
+        if self.occlusion.erosion_px:
+            items.append("erosion_px")
         return items
 
     def config_digest(self) -> dict[str, Any]:
-        """Everything that changes the pixels, nothing that selects the frame."""
+        """Everything that changes the pixels, nothing that selects the frame. Opt-in controls left unset are omitted, so earlier
+        cache keys stay valid; a control that was set always joins the key."""
         value = self.model_dump(mode="json", exclude={"frame_index", "timestamp"})
-        for key in ("identity_lock_id", "ambient_fill", "hairline_offset_px", "occlusion_threshold", *PROTECTION_FIELDS, *FUSION_FIELDS):
-                value.pop(key)
+        for key in ("identity_lock_id", "ambient_fill", "hairline_offset_px", "occlusion_threshold", "restoration_weight",
+                    *PROTECTION_FIELDS, *FUSION_FIELDS):
+            if value.get(key) is None:
+                value.pop(key, None)
         if value.get("mask_base64"):
             value["mask_base64"] = hashlib.sha256(value["mask_base64"].encode()).hexdigest()
         return value
@@ -434,9 +455,13 @@ class LivePreviewService:
             if hit is not None:
                 outcomes[index] = FrameOutcome(index, "ready", hit, cached=True)
         missing = [index for index in indices if index not in outcomes]
-        if missing and renderer_module() is None:
+        renderer = renderer_module() if missing else None
+        if missing and renderer is None:
             # Honest readiness: with no connected true-3D renderer an uncached frame cannot exist. Say so (503) instead of queueing.
             raise DomainError(NOT_WIRED_CODE, NOT_WIRED_MESSAGE, 503)
+        if missing:
+            # 422 before any media is decoded: a head topology, shader or camera the renderer does not implement.
+            renderer.validate_true3d(payload.true3d())
         if missing:
             stage = self.busy_stage()  # in-memory reads only: answers without loading a model or decoding media
             if stage:
@@ -554,6 +579,8 @@ class LivePreviewService:
                 values[name] = getattr(payload, name)
         if payload.occlusion_mode is not None:
             values['occlusion_mode'] = payload.occlusion_mode
+        if payload.restoration_weight is not None:
+            values['restoration_weight'] = payload.restoration_weight
         # True-3D settings travel in the workstation parameters when the shared contract declares them (core/workstation.py is
         # Owner A); a field it does not declare yet is reported in `unsupported`, never dropped silently.
         pending = forward_to(WorkstationParameters, values, payload.true3d())
@@ -612,25 +639,12 @@ class LivePreviewService:
 
     @staticmethod
     def _applied(payload: LivePreviewPayload) -> list[str]:
-        applied = ["color_strength", "mask_erosion_px", "mask_feather_px"]
-        applied += [name for name in ("head_topology_engine", "shader_mode", "camera") if getattr(payload, name) is not None]
+        """The controls that changed pixels in the full-frame 3D path; the rest of what was sent is in ``unsupported``."""
+        applied = ["mask_feather_px"]
+        applied += [name for name in ("head_topology_engine", "shader_mode", "camera", "pyramid_levels", "restoration_weight")
+                    if getattr(payload, name) is not None]
         if payload.mask_base64 or payload.mask_strokes:
             applied.append("custom_mask")
-        if payload.relight_strength is not None:
-            applied.append("relight_strength")
-        if payload.occlusion_threshold is not None:
-            applied.append("occlusion_threshold")
-        inert = payload.unsupported()
-        applied += [name for name in FUSION_FIELDS if getattr(payload, name) is not None and name not in inert]
-        if payload.specular_sheen is not None:
-            applied.append("specular_sheen")
-        if payload.shadow_preservation is not None:
-            applied.append("shadow_preservation")
-        if payload.lighting_mode is not None:
-            applied.append("lighting_mode")
-            applied.append("custom_mask")
-        if payload.resolved_sources()[1] is not None:
-            applied.append(f"identity_blend:{payload.resolved_sources()[1].method}")
         return applied
 
     def _running_stage(self) -> str | None:

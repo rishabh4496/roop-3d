@@ -92,11 +92,11 @@ export default function True3DControls({ params, onParams, compact = false }: Tr
           {(['auto', 'manual'] as const).map(mode => (
             <button key={mode} type="button" role="radio" aria-checked={camera.mode === mode} className={`mode-card ${camera.mode === mode ? 'active' : ''}`}
               onClick={() => setCamera(mode === 'auto' ? { mode } : { mode, focal_unit: camera.focal_unit, fov_deg: camera.fov_deg ?? AUTO_PRIOR_FOV_DEG })}>
-              <b>{mode === 'auto' ? 'Auto (dynamic solver)' : 'Manual'}</b>
+              <b>{mode === 'auto' ? 'Auto (35 mm lens prior)' : 'Manual (not implemented)'}</b>
             </button>
           ))}
         </div>
-        {!manual && <small className="muted">The renderer solves the focal length per shot from the head's perspective foreshortening, starting from a {AUTO_PRIOR_FOV_DEG}° field of view.</small>}
+        {!manual && <small className="muted">The renderer assumes a 35 mm-equivalent lens with the principal point at the image centre. Focal length is not measured.</small>}
         {manual && <>
           <label className="inspector-field">Focal length unit
             <select aria-label="Focal length unit" value={camera.focal_unit} onChange={event => {

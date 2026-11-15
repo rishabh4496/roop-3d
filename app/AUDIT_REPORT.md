@@ -422,3 +422,116 @@ Session-level check (`ReferencePipeline` with a binder from a real adaptive insp
 - The target proxy and the "ID switch" count are properties of single-subject clips; they say nothing about multi-person crossings, which are covered only by the analytic scenarios in the tests. The consolidation has not been run on a multi-person video.
 - Replay uses the production detections; `--live` runs them fresh. The adaptive production scan (`sampling="adaptive"`) was exercised end to end on s11 and s5 (one canonical `track_0001`), not on all 12 clips.
 - **Pre-existing, not caused here:** `NameError: free variable 'app'` in every `create_app`-fixture test (`server/app.py:90`), `test_d_zero_2d_post_crop_gan_calls` (`ultramax` ids from Stage 1), `test_e2e_video_pipeline` (removed `inswapper_128`). Nothing here renders a frame: `is_wired()` is still false.
+
+## Stage 4 — Volumetric full-head rendering and protected compositing
+
+**Status: real rendering path connected; visual acceptance NOT passed.** The
+technical checks below do not establish invisible seams, anatomically accurate
+subject-specific eyes/ears, or complete visible-forehead coverage at every angle.
+
+### Implemented path
+
+- `reconstruction/stage4_head.py` fits the verified MakeHuman CC0 volumetric head:
+  4,289 source vertices / 8,524 triangles, 4,481 rendering vertices after UV seam
+  splitting. Shared source shape and dense-68 surface bundle adjustment feed
+  perspective target PnP, expression deformation and temporal pose filtering.
+  The projection ROI follows the projected full mesh, not a detector crop.
+  Actual fitted-mesh and camera guards run; failed dense pose produces diagnostics,
+  not a substitute affine face.
+- All five `harjot` views contribute to a 1,024-square UV atlas through semantic
+  visibility and perspective depth tests. Hard-winner multiband stitching,
+  measured source-registration confidence, symmetry and harmonic completion keep
+  generated texels distinct from observations. Three source views have trusted
+  dense-68 measurements; the two steep-profile sources retain five-point fits.
+- `rendering/cpu_perspective_raster.py` performs perspective-correct Z-buffer
+  rasterization with depth and surface normals. Target skin samples fit diffuse
+  spherical-harmonic lighting. This is not PBR/SSS, FLAME or a Gaussian avatar;
+  the retained legacy shader wire identifier is labelled as SH diffuse.
+- Every rendered face executes BiSeNet (ImageNet normalization), `xseg.onnx` and
+  `occluder.onnx`. Face/ear support excludes predicted hair, glasses, background,
+  neck and external occluders. Bounded distance-transform morphology, inward
+  multi-scale feathering and four-level Laplacian blending are followed by
+  exact restoration of zero-alpha target pixels, preventing coarse-band leakage.
+- Skin-only local LAB/Reinhard matching and measured detail/grain finishing run
+  inside the protected region. Real registered CodeFormer runs on a canonical
+  perspective UV view, and reprojects only its skin-detail delta to the atlas.
+  `restoration_weight` is configurable in `[0,1]`, default `0.35`; zero explicitly
+  disables restoration. It never restores a pasted target crop.
+- Jobs, workstation previews and live sessions share the renderer and compositor.
+  Library FaceSet resolution and source landmark enrichment are connected.
+  The app-factory closure `NameError` noted in Stage 3 is repaired.
+  CUDA arenas reserve model-specific shares of the admitted hardware profile,
+  including automatic GPU selection; the old 1/32 default could not execute
+  CodeFormer or the mask networks reliably.
+- The rack now reports backend renderer readiness rather than hardcoding
+  “not wired”. Mandatory masking and fixed fusion are read-only; canonical UV
+  restoration has an active blend slider. Unsupported manual colour, mask,
+  camera and fusion controls are not presented as working Stage 4 adjustments.
+
+### Observed verification
+
+From `app/`:
+
+```bat
+"roop_3d/.venv/Scripts/python.exe" -B -m roop_3d.tools.verify_stage4 --provider CUDAExecutionProvider --profile 6gb
+```
+
+Real decoded frames from `G:\pinokio\roop-keep\single`, fresh target landmarks,
+all five renderer/compositor stages, and the real `harjot` FaceSet:
+
+| Diagnostic | Video / frame | Solved yaw | Dense reprojection RMS | Forbidden pixels changed |
+|---|---|---:|---:|---:|
+| Frontal | s7.mp4 / 316 | -1.31° | 3.46 px | 0 |
+| Three-quarter | s7.mp4 / 274 | -45.01° | 3.88 px | 0 |
+| Profile | s7.mp4 / 531 | -80.00° | 3.21 px | 0 |
+
+Four-panel strips: `roop_3d/outputs/stage4/frontal_comparison.png`,
+`three_quarter_comparison.png`, `profile_comparison.png`.
+Receipt: `roop_3d/.runtime/stage4_verification.json`.
+These checks establish nonplanar geometry, perspective depth/normal buffers,
+real execution and unchanged pixels classified as forbidden—not parser accuracy
+against hand-labelled ground truth or perceptual quality.
+
+- Actual loopback-host TestClient request to `/api/v1/workstation/preview`:
+  HTTP 200 using the explicit 6 GB CUDA/FP32 profile, library `harjot`, and a fresh
+  current-policy inspection of s11. A nondefault requested weight `0.2` is reported
+  as applied in `canonical_full_head_uv`. Receipt:
+  `roop_3d/.runtime/stage4_api_verification.json`; image:
+  `roop_3d/outputs/stage4/api_preview.jpg`. This exercised the API without server
+  lifespan; it does not certify normal Pinokio startup or a full video job.
+- Focused Python geometry/raster/guard checks: 77 passed, one GPU-specific test
+  deselected. Subsequent guard/calibration/visibility checks: 16 passed, one
+  deselected. `test_3d_relighting.py` could not collect because it imports the
+  absent `tests.test_workstation_preview`.
+- Frontend typecheck passed; the three affected rack/studio control test files
+  passed (37 tests). Obsolete optional-mask/fusion wiring assertions were removed,
+  not rewritten to certify an unsupported render mode.
+- Actual browser surface inspected: mandatory XSeg checked/read-only, fixed
+  multiband controls, active UV restoration slider. The browser had no running
+  backend service; connected rendering was exercised through TestClient instead.
+
+### Failed visual acceptance and remaining authority limits
+
+The final strips were visually inspected. Eye/upper-lid ghosting, coarse skin
+texture and ear/temple transition artifacts remain visible, including in the raw
+3D raster. **Zero visible seams and photorealistic full-head fidelity are not
+verified; Stage 4 must not be marked accepted.**
+
+The supplied MakeHuman head has no independent eyeballs. Ear shape and anatomy
+above the measured brow landmarks retain template priors, not measured
+subject-specific 3D authority. Source camera registration still has approximately
+5–10 px dense residuals. The selected profile's opaque forehead-region metric is
+zero; the existing masks/region correspondences do not prove complete exposed
+forehead coverage. Manual camera calibration is not implemented: the current
+perspective camera uses a documented 35 mm / 36 mm-sensor prior.
+
+The full-head UV footprint (including scalp/neck geometry that must never be
+swapped) is about 8.9% observed, 6.6% symmetry-completed and 84.5% harmonic-filled.
+Those percentages are not visible-face coverage and completion is not recovered
+identity detail. The five photographs and current landmarks do not establish
+subject-specific ocular/ear depth or unseen skin detail. No geometry or
+ground-truth landmarks were invented to claim otherwise.
+
+The 12 GB, TensorRT and CPU-only paths are not certified by these runs. A
+CUDA-arena-failure recovery attempt hit an ORT CodeFormer CPU graph-fusion error;
+the repaired CUDA path executed without that recovery.

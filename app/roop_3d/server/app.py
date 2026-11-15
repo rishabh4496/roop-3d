@@ -87,7 +87,9 @@ def create_app(settings: Settings | None = None, *, repo_root: Path | None = Non
     from roop_3d.queue_manager import QueueManager
     queue = QueueManager(root, events.publish)
     engine_gate = EngineGate()
-    catalog = ModelCatalog(cache_root=root, search_paths=lambda: app.state.settings.model_search_paths)
+    app = None
+    catalog = ModelCatalog(cache_root=root,
+                           search_paths=lambda: (app.state.settings if app is not None else settings).model_search_paths)
     from roop_3d.models.downloads import ModelDownloadManager
     from roop_3d.models.hub import ModelHubService
     model_downloads = ModelDownloadManager(catalog)

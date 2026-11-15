@@ -146,12 +146,17 @@ class OrtModel:
         self.session = None
         divisor = {
             "scrfd_2.5g_kps.onnx": 32, "scrfd_10g_bnkps.onnx": 16, "det_10g.onnx": 16,
-            "w600k_r50.onnx": 16, "bisenet_resnet_34.onnx": 16, "face_parser.onnx": 16,
-            "1k3d68.onnx": 16, "2d106det.onnx": 32, "landmark_203.onnx": 32,
-        }.get(name, 32)
-        self._gpu_memory_limit = (config.gpu_budget_bytes // divisor
-                                  if config.provider in (CUDA, TRT) else None)
-        self._open_session(provider_chain(config.provider))
+            "w600k_r50.onnx": 16, "bisenet_resnet_34.onnx": 12, "face_parser.onnx": 12,
+            "1k3d68.onnx": 12, "2d106det.onnx": 32, "landmark_203.onnx": 32,
+            "xseg.onnx": 12, "xseg_3.onnx": 12, "face_occluder.onnx": 12, "occluder.onnx": 12,
+        }.get(name, 4 if self.record.get("role") == "uv_enhancer" else 32)
+        # The canonical 512px CodeFormer forward needs more than the old 1/32
+        # arena (which could not even hold its weights). Keep a bounded share of
+        # the admitted profile, including the parser/occluder working tensors.
+        providers = provider_chain(config.provider)
+        gpu_budget = config.gpu_budget_bytes if any(p in (CUDA, TRT) for p in providers) else 0
+        self._gpu_memory_limit = gpu_budget // divisor if gpu_budget > 0 else None
+        self._open_session(providers)
         catalog.verify(self.record)
         self._check_graph()
         self._io_binder = GpuIoBinding(self.session)

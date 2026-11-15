@@ -19,7 +19,6 @@ import ContactSheetModal, { type Patch } from './components/workstation/ContactS
 import { applySweepPatch } from './components/workstation/sweepPatch';
 import SettingControl from './components/controls/SettingControl';
 import { PANELS, inactiveReason, settingValue, settingsOf, type PanelId } from './components/controls/settingsRegistry';
-import { BLEND_MODES, blendModeOf, frequencyBlockedReason, occlusionModePatch } from './components/studio/compositing';
 import FaceContextMenu, { type FaceMenuTarget, type TargetAction, type TargetActionExtra } from './components/canvas/FaceContextMenu';
 import { useTargetLock } from './components/canvas/useTargetLock';
 import { faceColor } from './utils/faceIdentity';
@@ -29,7 +28,7 @@ import { faceFlags, faceKey, togglePoseLock, toggleSoloFace } from './components
 import { facePose } from './components/canvas/poseHud';
 import { calculateLetterbox, mapBoxToPixels } from './utils/letterbox';
 import { leftToRightRank } from './utils/poseCells';
-import { DEFAULT_PARAMETERS, PIPELINE_NODES, nodeBuffer, pipelineNode, type BlendMode, type WorkstationParameters } from './components/workstation/pipeline';
+import { DEFAULT_PARAMETERS, PIPELINE_NODES, nodeBuffer, pipelineNode, type WorkstationParameters } from './components/workstation/pipeline';
 import { DockArea, DockPanel, LayoutToolbar } from './components/workstation/WorkspaceLayouts';
 import { FloatingPreviewMedia, pipStore, useFloatingPreview } from './components/workstation/FloatingPreview';
 import { LiveTime } from './components/workstation/LiveTime';
@@ -1068,17 +1067,8 @@ export function VideoViewport({
           <fieldset key={panel} className={`parameter-panel panel-${panel}`}>
             <legend>{PANELS[panel].title}</legend>
             <p className="muted panel-hint">{PANELS[panel].hint}</p>
-            {panel === 'masking' && <label className="numeric-control">Occlusion handling<select aria-label="Occlusion handling" value={parameters.occlusion_mode ?? 'standard'} onChange={event => setParameters({ ...parameters, ...occlusionModePatch(parameters, event.target.value as 'standard' | 'robust') })}><option value="standard">Standard (parser + landmark hull)</option><option value="robust">Robust (hands, hair, glasses, props, face depth order)</option></select></label>}
-            {panel === 'masking' && <label className="numeric-control">Seam blend mode<select aria-label="Seam blend mode" value={blendModeOf(parameters)} onChange={event => setParameters({ ...parameters, blend_mode: event.target.value as BlendMode })}>
-              {BLEND_MODES.map(item => <option key={item.id} value={item.id} disabled={item.id === 'frequency_separated' && !!frequencyBlockedReason(parameters)} title={item.hint}>{item.label}</option>)}
-            </select></label>}
-            {panel === 'color' && <>
-              <label className="numeric-control">Color transfer<select aria-label="Color transfer" value={parameters.color_method ?? 'lab'} onChange={event => setParameters({ ...parameters, color_method: event.target.value as 'lab' | 'reinhard_lab' | 'histogram' })}>
-                <option value="lab">LAB mean/std</option><option value="reinhard_lab">Reinhard LAB</option><option value="histogram">Masked histogram</option>
-              </select></label>
-              <label className="numeric-control"><input aria-label="3D SH relighting" type="checkbox" checked={parameters.relight ?? false}
-                onChange={event => setParameters({ ...parameters, relight: event.target.checked })}/> 3D SH relighting</label>
-            </>}
+            {panel === 'masking' && <p className="muted">Mandatory BiSeNet + XSeg + face-occluder protection; four-level multiband blending. Manual occlusion and fusion modes are not supported.</p>}
+            {panel === 'color' && <p className="muted">Automatic skin-only local LAB matching and surface-normal SH illumination. Manual colour and lighting modes are not supported.</p>}
             {settingsOf(panel).map(spec => {
               const inert = inactiveReason(spec, effectiveParameters);
               return <SettingControl key={spec.id} spec={spec}

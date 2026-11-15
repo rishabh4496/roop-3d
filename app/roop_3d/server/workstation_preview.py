@@ -1,8 +1,9 @@
 """On-demand, bounded true-3D head previews; no sessions or weights at API boot.
 
-The 2D swap / 2.5D projection / screen-space restoration preview path was removed. A preview is produced only by the connected
-true-3D full-head renderer (``roop_3d.pipeline.true3d_renderer``, see ``server/true3d.py``). While no renderer is wired,
-``POST /workstation/preview`` answers HTTP 503 ``RENDERER_NOT_WIRED`` ("3D renderer not wired"): nothing is faked or substituted.
+A preview is produced only by the connected true-3D full-head renderer (``roop_3d.pipeline.true3d_renderer``, see
+``server/true3d.py``): the same ``ReferencePipeline`` path as a render job (tracking replayed to the playhead, MakeHuman head
+render, semantic composite), never a substitute. While no renderer is wired ``POST /workstation/preview`` answers HTTP 503
+``RENDERER_NOT_WIRED`` ("3D renderer not wired"); an option the renderer does not implement is a structured 422.
 """
 from __future__ import annotations
 
@@ -27,8 +28,9 @@ from roop_3d.jobs.schema import JobRequest
 from roop_3d.server.true3d import NOT_WIRED_CODE, NOT_WIRED_MESSAGE, True3DSettings, require_renderer
 
 router = APIRouter(prefix='/api/v1/workstation')
-#: Numeric parameters a sweep may vary. Only controls that exist on the true-3D path are listed.
-AxisParameter = Literal['feather_px', 'color_strength', 'relight_strength', 'specular_sheen']
+#: Numeric parameters a sweep may vary: the ones that change pixels of the full-frame 3D compositor (mask feather width and
+#: Laplacian blend bands). Controls the compositor does not implement (colour match, relighting, specular sheen) are not offered.
+AxisParameter = Literal['feather_px', 'pyramid_levels']
 
 
 class SweepAxis(Contract):
@@ -88,6 +90,10 @@ def preview_preroll() -> int:
         return 6
 
 
+def _pack(image: Any) -> Any:
+    return encode(image) if isinstance(image, np.ndarray) else image
+
+
 class PreviewService:
     MAX_FRAMES = 1200
     TIME_BUDGET = 120
@@ -104,8 +110,11 @@ class PreviewService:
         Inference is a gate "preview" section: it is refused immediately (EngineBusy, 503) while a job, TensorRT compile or
         Start-button model re-bind owns the engine, and the owner in turn waits for this call to finish before it tears down or
         re-binds models. Without a wired renderer this raises ``RENDERER_NOT_WIRED`` (503) before touching any engine.
+        The preview runs inside ``pooled_sessions()``: the models it builds stay warm for the next preview, and the gate owner
+        evicts them the moment a job or a re-bind needs the engine.
         """
         renderer = require_renderer()
+        from roop_3d.core.ort_session import pooled_sessions
         from roop_3d.engine.registry import EngineRegistry
         EngineRegistry().validate(value.request.engine_id)
         gate = getattr(self.state, 'engine_gate', None)
@@ -113,14 +122,17 @@ class PreviewService:
             raise DomainError('PREVIEW_BUSY', 'Another preview is running; try again shortly', 409)
         try:
             with gate.preview_section() if gate is not None else nullcontext():
-                result = renderer.render_preview(self.state, value, cancel, raw=raw, final_only=final_only)
+                with pooled_sessions():
+                    result = renderer.render_preview(self.state, value, cancel, raw=raw, final_only=final_only)
         finally:
             self.lock.release()
         if not isinstance(result, dict) or 'buffers' not in result:
             raise DomainError('PREVIEW_RENDERER_CONTRACT', 'The 3D renderer returned no buffers', 500)
         if not raw:
-            result = {**result, 'buffers': {key: encode(image) if isinstance(image, np.ndarray) else image
-                                            for key, image in result['buffers'].items()}}
+            # The renderer packs its own buffers; an ndarray it left raw is packed here so the response is always JSON.
+            result = {**result, 'buffers': {key: _pack(image) for key, image in result['buffers'].items()}}
+            if 'cells' in result:
+                result['cells'] = [{**cell, 'image': _pack(cell['image'])} for cell in result['cells']]
         result.setdefault('true3d', value.true3d.model_dump(mode='json'))
         return result
 

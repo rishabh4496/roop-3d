@@ -5,8 +5,8 @@ import type { WorkstationParameters } from '../workstation/pipeline';
 import { loadIdentityMesh, type MeshSource } from '../../utils/glbMesh';
 
 /**
- * 3D topology preview and track stabilization controls. The preview is an inspection asset;
- * the render service remains unavailable until its full-head renderer is wired.
+ * 3D topology inspection and track stabilization controls.
+ * Inspection-only shape sliders do not alter the render engine's fitted head.
  */
 
 // ---------------------------------------------------------------------------------------------------- smoothing <-> One-Euro cutoff
@@ -126,7 +126,7 @@ function TopologySemantic({ facesetId, onMesh }: {
           {mesh.source === 'glb' ? `Loaded as binary glTF${mesh.bytes ? ` (${(mesh.bytes / 1024).toFixed(0)} KB)` : ''}` : `Loaded as JSON${mesh.fallbackReason ? ` (GLB unavailable: ${mesh.fallbackReason})` : ''}`}
         </small>)}
       <small className="muted" data-testid="semantic-limits">Forehead height and temple width are not offered: the engine has no landmarks above the brows or at the temples, and head width is held fixed.</small>
-      <small className="muted">Previews the MakeHuman full-head asset for inspection. Rendering remains unavailable until the 3D renderer is wired.</small>
+      <small className="muted">Inspection mesh only. The renderer separately fits the FaceSet and target landmarks; these shape sliders do not alter rendered frames.</small>
     </div>
   );
 }
@@ -140,10 +140,8 @@ export interface WorkstationControls3DProps {
   config?: Config | null; onSaveConfig?: (value: Config) => void;
 }
 
-export default function WorkstationControls3D({ parameters, setParameters, facesetId, onMesh, config, onSaveConfig }: WorkstationControls3DProps) {
+export default function WorkstationControls3D({ facesetId, onMesh, config, onSaveConfig }: WorkstationControls3DProps) {
   const [topologyOpen, setTopologyOpen] = useState(false);
-  const colour = parameters.color_strength;
-  const colourBypassed = parameters.bypass.includes('color');
 
   const cutoff = typeof config?.temporal_min_cutoff === 'number' ? config.temporal_min_cutoff : DEFAULT_MIN_CUTOFF;
   const [smoothing, setSmoothing] = useState(() => cutoffToSmoothing(cutoff));
@@ -171,15 +169,8 @@ export default function WorkstationControls3D({ parameters, setParameters, faces
       </details>
 
       <details className="inspector-subsection" data-testid="tone-section">
-        <summary>Skin tone vs. ambient light<small>colour-transfer weight</small></summary>
-        <label className="inspector-field">Skin-tone preservation ↔ ambient adaptation <output aria-live="off">{Math.round(colour * 100)}% ambient</output>
-          <input type="range" aria-label="Skin tone preservation versus ambient adaptation" min={0} max={100} step={1} value={Math.round(colour * 100)}
-            aria-valuetext={`${Math.round(colour * 100)} percent adapted to the scene, ${100 - Math.round(colour * 100)} percent source skin tone kept`}
-            onChange={event => setParameters({ ...parameters, color_strength: Number(event.target.value) / 100 })} />
-          <span className="protection-scale" aria-hidden="true"><small>0 keep source tone</small><small>100 match scene</small></span>
-        </label>
-        {colourBypassed && <small className="identity-warn">Colour matching is bypassed in the render settings, so this slider has no effect until it is switched on again.</small>}
-        <small className="muted">This is the swap's Lab colour-transfer weight, an original calibration, not the TRUST network (not installed).</small>
+        <summary>Skin tone vs. ambient light<small>automatic scene matching</small></summary>
+        <p className="muted">Skin-only local LAB matching and surface-normal SH lighting run automatically. Manual colour-transfer strength and bypass are not supported by the volumetric renderer.</p>
       </details>
 
 

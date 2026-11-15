@@ -1,15 +1,15 @@
 import { type CameraIntrinsics, type HeadTopologyEngine, type ShaderMode } from '../../true3d';
 /** Seam fusion of the rendered head into the frame (engine default `multi_band`: a four-band Laplacian pyramid). */
 export type BlendMode = 'feather' | 'multi_band' | 'poisson' | 'frequency_separated';
-/** Pyramid bands only exist in the multi-band and frequency-separated fusions (an unset mode is the multi-band default). */
-export const bandedBlend = (mode: BlendMode | undefined): boolean => !mode || mode === 'multi_band' || mode === 'frequency_separated';
 export type WorkstationParameters = {
   feather_px: number; color_strength: number;
+  /** CodeFormer skin-detail blend in canonical UV space before 3D projection (default 0.35). */
+  restoration_weight?: number;
   erosion_px?: number; bypass: 'color'[];
   color_method?: 'lab' | 'reinhard_lab' | 'histogram' | 'ycbcr' | 'oklab' | 'oklab_wasserstein';
   /** 3D head topology engine. Omitted until the user picks one (server default: MakeHuman CC0 craniofacial). */
   head_topology_engine?: HeadTopologyEngine;
-  /** 3D photorealistic shader mode. Omitted until the user picks one (server default: PBR subsurface scattering + neural deferred UV). */
+  /** 3D shader selection. The implemented default is perspective SH diffuse lighting. */
   shader_mode?: ShaderMode;
   /** Perspective camera intrinsics: the dynamic focal-length solver (`auto`) or a fixed focal length / field of view (`manual`). */
   camera?: CameraIntrinsics;
@@ -64,13 +64,13 @@ export const DEFAULT_PARAMETERS: WorkstationParameters = {
   manual_light_pitch: 25,
 };
 /**
- * The parameters a request carries. A control the current selection cannot act on stays out of it: the XSeg vote and the pyramid bands do
- * nothing outside Robust occlusion / the banded fusions. The workspace keeps the value, so switching back finds it again.
+ * Saved-project wire normalization for legacy modes. The volumetric renderer uses
+ * mandatory protection and fixed fusion; these legacy knobs are read-only in its UI.
  */
 export function wireParameters<T extends Partial<WorkstationParameters>>(parameters: T): T {
   const next: Partial<WorkstationParameters> = { ...parameters };
   if (next.occlusion_mode !== 'robust') delete next.xseg_occlusion_strength;
-  if (!bandedBlend(next.blend_mode)) delete next.pyramid_levels;
+  if (next.blend_mode === 'feather' || next.blend_mode === 'poisson') delete next.pyramid_levels;
   return next as T;
 }
 
@@ -79,7 +79,7 @@ const WORKSTATION_PARAMETER_KEYS = new Set<keyof WorkstationParameters>([
   'occlusion_mode', 'xseg_occlusion_strength', 'blend_mode', 'pyramid_levels', 'relight', 'relight_strength',
   'occlusion_threshold', 'specular_sheen', 'shadow_preservation', 'lighting_mode', 'manual_light_yaw',
   'manual_light_pitch', 'ambient_fill', 'hairline_offset_px', 'neck_protection', 'hair_matting', 'preserve_ears_glasses',
-  'jaw_feather_px', 'skin_texture_retention', 'sensor_shutter_angle', 'grain_match_strength',
+  'jaw_feather_px', 'skin_texture_retention', 'sensor_shutter_angle', 'grain_match_strength', 'restoration_weight',
 ]);
 
 /** Restore persisted parameters only when every key belongs to the current full-head contract. */
@@ -102,8 +102,8 @@ export const PIPELINE_NODES: PipelineNode[] = [
   { id: 'pose', label: '6DoF Head Pose & Mesh', short: '6DoF Head & Pose', buffer: 'pose', latencyKeys: ['tracking_ms'], note: 'Landmarks, yaw/pitch/roll and the fitted full-head mesh under the perspective camera' },
   { id: 'uv', label: 'Head UV Atlas', short: 'UV Atlas', buffer: 'source', latencyKeys: ['projection_ms'], note: "The source view the head's UV atlas is baked from" },
   { id: 'lighting', label: 'SH 3D Relighting & Normals', short: 'SH Relight & Normals', buffer: 'sh_lighting', note: 'Spherical Harmonics scene illumination transfer and shadow mask. Use the Normals chip for the RGB surface-normal map' },
-  { id: 'head', label: '3D Head Render', short: '3D Head', buffer: 'final', latencyKeys: ['render_ms'], note: 'The shaded full-head render (PBR subsurface scattering or Gaussian head avatar) before masking and grading' },
-  { id: 'matte', label: 'XSeg + Hair Occlusion Matte', short: 'XSeg + Hair Matte', buffer: 'matte', note: 'Black-and-white blend mask. XSeg and the hair/occluder matte are in it when Occlusion handling is set to Robust' },
+  { id: 'head', label: '3D Head Render', short: '3D Head', buffer: 'final', latencyKeys: ['render_ms'], note: 'Full-head perspective raster with scene-fitted SH illumination, semantic masking and grading' },
+  { id: 'matte', label: 'XSeg + Hair Occlusion Matte', short: 'XSeg + Hair Matte', buffer: 'matte', note: 'Hair-excluding BiSeNet, XSeg and occluder masks intersect the projected mesh on every rendered frame' },
   { id: 'color', label: 'Colour Match & Grade', short: 'Colour Match', buffer: 'color', optional: true, note: 'The head after colour transfer to the target frame. Bypass it to see the raw render colour' },
   { id: 'final', label: 'Final Composite', short: 'Final Composite', buffer: 'final', latencyKeys: ['total_ms'], note: 'The composite exactly as a render would write it' },
 ];

@@ -18,6 +18,8 @@ class WorkstationParameters(Contract):
     color_method: Literal['lab', 'reinhard_lab', 'histogram', 'ycbcr', 'oklab', 'oklab_wasserstein'] = 'lab'
     feather_px: float = Field(default=5, ge=0, le=64)
     color_strength: float = Field(default=0.65, ge=0, le=1)
+    # CodeFormer detail is restored in canonical UV space before 3D projection.
+    restoration_weight: float = Field(default=0.35, ge=0, le=1)
     erosion_px: float = Field(default=0, ge=-32, le=32)
     bypass: tuple[Literal['color'], ...] = Field(default=(), max_length=1)
     # Stage 15: blend in linear light. 'auto' follows the source's actual transfer (see composite_options).
@@ -76,7 +78,7 @@ class WorkstationParameters(Contract):
     @model_serializer(mode='wrap')
     def compatible_serialization(self, handler):
         value = handler(self)
-        for field in ('color_method', 'erosion_px', 'head_topology_engine', 'shader_mode', 'camera_intrinsics', 'occlusion_mode', 'strand_matte', 'linear_light', 'blend_transfer', 'ambient_fill', 'hairline_offset_px', 'occlusion_threshold', 'sensor_shutter_angle', 'grain_match_strength') + PROTECTION_FIELDS + FUSION_FIELDS:
+        for field in ('color_method', 'erosion_px', 'head_topology_engine', 'shader_mode', 'camera_intrinsics', 'occlusion_mode', 'strand_matte', 'linear_light', 'blend_transfer', 'ambient_fill', 'hairline_offset_px', 'occlusion_threshold', 'sensor_shutter_angle', 'grain_match_strength', 'restoration_weight') + PROTECTION_FIELDS + FUSION_FIELDS:
             if field not in self.model_fields_set:
                 value.pop(field, None)
         return value

@@ -87,7 +87,11 @@ class IntrinsicTextureDecomposer:
         luminance = linear @ np.array([0.114, 0.587, 0.299], np.float32)
         log_luminance = np.log(np.maximum(luminance, 1e-4))
         sigma = max(1.0, min(height, width) * self.shading_sigma_fraction)
-        log_shading = cv2.GaussianBlur(log_luminance, (0, 0), sigmaX=sigma, sigmaY=sigma)
+        # Missing UV observations are not black reflectance or shadow evidence.
+        support = valid.astype(np.float32)
+        normalizer = cv2.GaussianBlur(support, (0, 0), sigmaX=sigma, sigmaY=sigma)
+        log_shading = cv2.GaussianBlur(log_luminance * support, (0, 0), sigmaX=sigma, sigmaY=sigma)
+        log_shading /= np.maximum(normalizer, 1e-6)
         center = float(np.median(log_shading[valid]))
         shading = np.exp(log_shading - center).astype(np.float32)
         intrinsic_luma = luminance / np.maximum(shading, 1e-4)
@@ -106,6 +110,10 @@ class IntrinsicTextureDecomposer:
         ratio = intrinsic_luma / np.maximum(luminance, 1e-5)
         reflectance = np.clip(linear * ratio[..., None], 0.0, 1.0)
         reflectance_luma = reflectance @ np.array([0.114, 0.587, 0.299], np.float32)
+        # Extend only the filtering working buffer; output support and observation
+        # confidence stay unchanged. Empty islands must not darken pyramid bands.
+        if not valid.all():
+            reflectance_luma = cv2.inpaint(reflectance_luma, (~valid).astype(np.uint8), 3, cv2.INPAINT_NS)
         bands, coarse = self._laplacian_pyramid(reflectance_luma)
 
         # Reconstruct with all observed bands. Fine detail survives intact;

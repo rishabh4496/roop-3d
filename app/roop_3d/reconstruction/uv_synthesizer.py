@@ -151,10 +151,11 @@ class UVSynthesizer:
         # Precompute rasterized 3D surface positions and normals in UV space
         self._rasterize_uv_geometry()
 
-    def _intrinsic_texture(self, texture: np.ndarray):
+    def _intrinsic_texture(self, texture: np.ndarray, valid_mask=None):
         if self.intrinsic_texture_decomposer is None:
             return texture, None, None
-        decomposition = self.intrinsic_texture_decomposer.canonicalize(texture, self.face_texel_mask)
+        support = self.face_texel_mask if valid_mask is None else self.face_texel_mask & np.asarray(valid_mask, bool)
+        decomposition = self.intrinsic_texture_decomposer.canonicalize(texture, support)
         return (decomposition.albedo_bgr, decomposition.displacement_uv_m,
                 decomposition.laplacian_bands)
 
@@ -353,7 +354,8 @@ class UVSynthesizer:
         n_obs = int(np.sum(confidence_mask == int(ConfidenceState.OBSERVED)))
         n_interp = int(np.sum(confidence_mask == int(ConfidenceState.INTERPOLATED)))
         n_unseen = total_face - n_obs - n_interp
-        texture_map, displacement, laplacian_bands = self._intrinsic_texture(texture_map)
+        texture_map, displacement, laplacian_bands = self._intrinsic_texture(
+            texture_map, confidence_mask != int(ConfidenceState.UNSEEN))
 
         return UVSynthesisResult(
             texture_map=texture_map,
@@ -386,29 +388,24 @@ class UVSynthesizer:
         the edge of the mask (where the photo shows hair, neck or background) carry little weight."""
         if self.visibility_backend == "gpu":
             return self._visible_on_gpu(camera, texel_xy)
+        from roop_3d.rendering.cpu_perspective_raster import rasterize_layer
         verts = self.mesh.vertices.astype(np.float64)
-        vxy, vdepth = camera.project(verts), -camera.depth(verts)       # larger = closer for the painter's pass below
-        centroids = verts[self.mesh.faces].mean(axis=1)
-        face_n = camera.view_cosine(centroids, self.mesh.compute_face_normals())
-        front = np.where(face_n > 0.0)[0]
-        if len(front) == 0:
-            return np.zeros(len(texel_depth), dtype=bool), np.zeros(len(texel_depth))
-        tri = self.mesh.faces[front]
-        lo, hi = vxy[tri].reshape(-1, 2).min(axis=0), vxy[tri].reshape(-1, 2).max(axis=0)
-        extent = float(max(hi[0] - lo[0], hi[1] - lo[1], 1.0))
-        bs = float(np.clip(512.0 / extent, 0.25, 1.0))
-        size = (int(math.ceil((hi[1] - lo[1]) * bs)) + 4, int(math.ceil((hi[0] - lo[0]) * bs)) + 4)
-        zbuf = np.full(size, -np.inf, dtype=np.float32)
-        order = np.argsort(vdepth[tri].mean(axis=1))          # far first, near paints over
-        poly_xy = (vxy[tri] - lo) * bs + 2.0
-        for k in order:
-            cv2.fillConvexPoly(zbuf, np.round(poly_xy[k]).astype(np.int32), float(vdepth[tri[k]].mean()))
-        bx = np.clip(np.round((texel_xy[:, 0] - lo[0]) * bs + 2.0).astype(np.int64), 0, size[1] - 1)
-        by = np.clip(np.round((texel_xy[:, 1] - lo[1]) * bs + 2.0).astype(np.int64), 0, size[0] - 1)
-        visible = texel_depth >= zbuf[by, bx] - self.DEPTH_TOLERANCE_M
-        footprint = np.isfinite(zbuf).astype(np.uint8)
-        distance = cv2.distanceTransform(footprint, cv2.DIST_L2, 3) / bs      # image pixels
-        feather = np.clip(distance[by, bx] / max(self.SILHOUETTE_FEATHER * extent, 1.0), 0.0, 1.0)
+        pixels = camera.project(verts)
+        size = (camera.intrinsics.height, camera.intrinsics.width)
+        # Reflecting viewer-facing Z into OpenCV camera space reverses winding.
+        triangles = self.mesh.faces[:, ::-1] if camera.mesh_z_toward_viewer else self.mesh.faces
+        buffers = rasterize_layer(
+            np.zeros((2, 2, 3), np.uint8), np.ones((2, 2), np.float32),
+            pixels, camera.camera_points(verts), np.zeros((len(verts), 2), np.float32),
+            triangles, camera.rotate_normals(self.mesh.normals), size, roi=None)
+        xx, yy = np.rint(texel_xy).astype(np.int64).T
+        inside = (xx >= 0) & (xx < size[1]) & (yy >= 0) & (yy < size[0])
+        xx, yy = np.clip(xx, 0, size[1] - 1), np.clip(yy, 0, size[0] - 1)
+        depth = buffers.depth[yy, xx]
+        visible = inside & np.isfinite(depth) & (np.abs(-texel_depth - depth) <= 0.0015)
+        distance = cv2.distanceTransform((buffers.coverage > 0).astype(np.uint8), cv2.DIST_L2, 3)
+        extent = max(float(np.ptp(pixels, axis=0).max()), 1.0)
+        feather = np.clip(distance[yy, xx] / max(self.SILHOUETTE_FEATHER * extent, 1.0), 0.0, 1.0)
         return visible, feather
 
     def _visible_on_gpu(self, camera, texel_xy):
@@ -586,7 +583,8 @@ class UVSynthesizer:
         total_face = max(int(self.face_texel_mask.sum()), 1)
         n_obs = int((state == int(ConfidenceState.OBSERVED)).sum())
         n_interp = int((state == int(ConfidenceState.INTERPOLATED)).sum())
-        texture, displacement, laplacian_bands = self._intrinsic_texture(texture)
+        texture, displacement, laplacian_bands = self._intrinsic_texture(
+            texture, state != int(ConfidenceState.UNSEEN))
         return UVSynthesisResult(
             texture_map=texture, confidence_mask=state,
             observed_ratio=n_obs / total_face, interpolated_ratio=n_interp / total_face,

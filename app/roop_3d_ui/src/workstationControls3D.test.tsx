@@ -58,19 +58,6 @@ beforeEach(() => {
 });
 afterEach(() => { act(() => root.unmount()); host.remove(); vi.useRealTimers(); });
 
-describe('skin tone vs ambient adaptation', () => {
-  it('drives only the colour-transfer weight', async () => {
-    await mount();
-    await change(slider(host, 'Skin tone preservation versus ambient adaptation'), '20');
-    expect(latest.parameters.color_strength).toBeCloseTo(0.2);
-    expect({ ...latest.parameters, color_strength: DEFAULT_PARAMETERS.color_strength }).toEqual(DEFAULT_PARAMETERS);
-  });
-  it('says so when colour matching is bypassed, and never claims to be the TRUST network', async () => {
-    await mount();
-    expect(host.textContent).toMatch(/not the TRUST network/);
-    expect(host.textContent).not.toMatch(/bypassed/);
-  });
-});
 
 describe('the controls panel exposes only controls the 3D pipeline has a stage for', () => {
   it('shows scene adaptation disabled with the reason, no lip-sync control, and sends neither in the preview request', async () => {

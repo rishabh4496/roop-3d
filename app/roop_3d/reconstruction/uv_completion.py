@@ -175,6 +175,7 @@ def complete_texture(texture: np.ndarray, observed: np.ndarray, footprint: np.nd
     if symmetry_known.shape != footprint.shape:
         raise ValueError("symmetry_source must match the UV footprint shape")
     n_sym = 0
+    n_sym_rejected = 0
     if symmetry_known.any() and missing.any():
         ys, xs = np.nonzero(missing)
         q = positions[ys, xs].astype(np.float64).copy()
@@ -182,11 +183,25 @@ def complete_texture(texture: np.ndarray, observed: np.ndarray, footprint: np.nd
         ky, kx = np.nonzero(symmetry_known)
         idx, dist = nearest_texels(q, positions[ky, kx].astype(np.float64))
         ok = (idx >= 0) & (dist <= symmetry_max_mm / 1000.0)
+        n_rejected = 0
+        if ok.any():
+            # The opposite side was photographed under different light: a donor that is much brighter or darker than the
+            # smooth continuation of the directly observed neighbourhood would paste that lighting onto this side.
+            donor = texture[ky[idx[ok]], kx[idx[ok]]].astype(np.float32)
+            expected = _harmonic_extend(tex, known)[ys[ok], xs[ok]]
+            donor_luma = donor @ np.array((0.114, 0.587, 0.299), np.float32)
+            expected_luma = expected @ np.array((0.114, 0.587, 0.299), np.float32)
+            ratio = (donor_luma + 6.0) / (expected_luma + 6.0)
+            consistent = (ratio > 0.82) & (ratio < 1.22)
+            candidates = np.flatnonzero(ok)
+            ok[candidates[~consistent]] = False
+            n_rejected = int((~consistent).sum())
         if ok.any():
             src_y, src_x = ky[idx[ok]], kx[idx[ok]]
             tex[ys[ok], xs[ok]] = texture[src_y, src_x]
             source[ys[ok], xs[ok]] = 2
             n_sym = int(ok.sum())
+        n_sym_rejected = n_rejected
     placed = source == 1
     placed |= source == 2
 
@@ -230,6 +245,7 @@ def complete_texture(texture: np.ndarray, observed: np.ndarray, footprint: np.nd
     bgra = np.dstack([padded, alpha_channel])
     total = max(int(footprint.sum()), 1)
     stats = {"observed_ratio": float(known.sum() / total), "symmetry_ratio": float(n_sym / total),
+             "symmetry_donors_rejected_for_lighting_mismatch": int(n_sym_rejected),
              "harmonic_ratio": float(n_harm / total), "skin_tone_bgr": [float(x) for x in tone]}
     return CompletionResult(texture=bgra, source=source, stats=stats)
 
@@ -277,14 +293,17 @@ class FullHeadUVCompleter:
     """
 
     def __init__(self, *, poisson_seams: bool = True, symmetry_max_mm: float = 5.0,
-                 tone_decay_px: float = 60.0, feather_px: float = 6.0) -> None:
+                 tone_decay_px: float = 60.0, feather_px: float = 6.0, min_fragment_texels: int = 0) -> None:
         if (not np.isfinite((symmetry_max_mm, tone_decay_px, feather_px)).all()
-                or symmetry_max_mm <= 0 or tone_decay_px <= 0 or feather_px < 0):
+                or symmetry_max_mm <= 0 or tone_decay_px <= 0 or feather_px < 0 or min_fragment_texels < 0):
             raise ValueError("UV completion distances must be positive")
         self.poisson_seams = bool(poisson_seams)
         self.symmetry_max_mm = float(symmetry_max_mm)
         self.tone_decay_px = float(tone_decay_px)
         self.feather_px = float(feather_px)
+        # Isolated observed fragments (an ear sliver, a lash fleck) have no neighbours to validate their colour and would
+        # seed the harmonic extension with an unrepresentative value: they are not trusted as observations.
+        self.min_fragment_texels = int(min_fragment_texels)
 
     @staticmethod
     def _skin_donors(texture: np.ndarray, observed: np.ndarray) -> np.ndarray:
@@ -325,6 +344,16 @@ class FullHeadUVCompleter:
             raise ValueError("Expected finite view layers (N,H,W,3), weights (N,H,W), and matching UV geometry")
         weights = np.where(support[None], weights, 0.0)
         observed = weights.max(axis=0) > 0
+        fragments_removed = 0
+        if self.min_fragment_texels > 0 and observed.any():
+            count, labels, stats, _ = cv2.connectedComponentsWithStats((observed & support).astype(np.uint8), connectivity=8)
+            small = np.zeros(count, bool)
+            small[1:] = stats[1:, cv2.CC_STAT_AREA] < self.min_fragment_texels
+            drop = small[labels]
+            fragments_removed = int(drop.sum())
+            if fragments_removed:
+                weights = np.where(drop[None], 0.0, weights)
+                observed &= ~drop
         if not observed.any():
             raise ValueError("At least one observed UV texel is required")
         stitched, stitch_stats = self.stitch(colors, weights, support)
@@ -334,5 +363,6 @@ class FullHeadUVCompleter:
             symmetry_max_mm=self.symmetry_max_mm, tone_decay_px=self.tone_decay_px,
             feather_px=self.feather_px, far_field=far_field, symmetry_source=symmetry_source)
         result.stats.update({**stitch_stats, "skin_symmetry_donors": int(symmetry_source.sum()),
+                             "fragment_texels_not_trusted": fragments_removed,
                              "completion_pipeline": "multiband+poisson+skin_symmetry+harmonic"})
         return result

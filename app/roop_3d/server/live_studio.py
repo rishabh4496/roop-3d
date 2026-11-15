@@ -1,7 +1,10 @@
 """Local camera studio. Host-frame egress is measured and never advertised as zero-copy.
 
-Frames are rendered by the true-3D full-head renderer only (``server/true3d.py``). Starting the studio without a wired renderer
-answers HTTP 503 ``RENDERER_NOT_WIRED`` ("3D renderer not wired"); there is no fallback face swap.
+Frames are rendered by the true-3D full-head renderer only (``server/true3d.py``): every tracked face is replaced by the
+MakeHuman head rendered through a perspective Z-buffer and composited through the semantic matte. Starting the studio without a
+wired renderer answers HTTP 503 ``RENDERER_NOT_WIRED`` ("3D renderer not wired"); a head, shader or camera the renderer does not
+implement is a structured 422. A frame whose face cannot be fitted passes through unchanged and is counted in the status
+(``render.faces_skipped``), never hidden; there is no fallback face swap.
 """
 from __future__ import annotations
 
@@ -39,6 +42,8 @@ class StudioConfig(Contract):
     head_topology_engine: HeadTopologyEngine | None = None
     shader_mode: ShaderMode | None = None
     camera: CameraIntrinsicsSpec | None = None
+    # Canonical-UV skin-detail restoration weight of the head texture; None = the workstation default (0.35), 0 disables it.
+    restoration_weight: float | None = Field(default=None, ge=0, le=1)
 
     def true3d(self) -> True3DSettings:
         values = {name: getattr(self, name) for name in ("head_topology_engine", "shader_mode", "camera") if getattr(self, name) is not None}
@@ -55,28 +60,34 @@ class LiveStudio:
         self.error = None
         self.frames = 0
         self.latencies = deque(maxlen=300)
+        self._session = None          # the renderer's live session of the current / last run (its counters stay readable)
 
     def snapshot(self):
         with self._lock:
             samples = list(self.latencies)
-            return {"state": self._status, "error": self.error, "frames": self.frames,
-                    "capture_to_publish_p95_ms": float(np.percentile(samples, 95)) if samples else None,
-                    "latency_target_ms": 35, "end_to_end_verified": False, "zero_copy": False,
-                    "transport": "host BGR; browser JPEG upload",
-                    "virtual_camera_available": importlib.util.find_spec("pyvirtualcam") is not None,
-                    "screen_available": importlib.util.find_spec("mss") is not None,
-                    "spout_available": sys.platform == "win32" and importlib.util.find_spec("SpoutGL") is not None,
-                    "ndi_available": False, "renderer": renderer_status()}
+            session = self._session
+            status = {"state": self._status, "error": self.error, "frames": self.frames,
+                      "capture_to_publish_p95_ms": float(np.percentile(samples, 95)) if samples else None,
+                      "latency_target_ms": 35, "end_to_end_verified": False, "zero_copy": False,
+                      "transport": "host BGR; browser JPEG upload",
+                      "virtual_camera_available": importlib.util.find_spec("pyvirtualcam") is not None,
+                      "screen_available": importlib.util.find_spec("mss") is not None,
+                      "spout_available": sys.platform == "win32" and importlib.util.find_spec("SpoutGL") is not None,
+                      "ndi_available": False, "renderer": renderer_status()}
+        # What the renderer did with the frames: faces rendered, faces skipped (passed through unchanged) and why.
+        status["render"] = session.stats() if session is not None else None
+        return status
 
     def start(self, config):
-        require_renderer()   # 503 RENDERER_NOT_WIRED: the studio never starts a capture loop it cannot render
+        renderer = require_renderer()   # 503 RENDERER_NOT_WIRED: the studio never starts a capture loop it cannot render
+        renderer.validate_true3d(config.true3d())   # 422: a head, shader or camera the renderer does not implement
         with self._lock:
             if self._thread is not None and self._thread.is_alive():
                 raise DomainError("STUDIO_RUNNING", "Stop the current live studio before starting another", 409)
             if self.state.engine_gate.busy_reason():
                 raise DomainError("STUDIO_ENGINE_BUSY", "Render or model compilation owns the engine", 409)
             self._stop.clear()
-            self._status, self.error, self.frames = "starting", None, 0
+            self._status, self.error, self.frames, self._session = "starting", None, 0, None
             self.latencies.clear()
             self._thread = threading.Thread(target=self._run, args=(config,), name="roop3d-live-studio", daemon=True)
             self._thread.start()
@@ -105,10 +116,13 @@ class LiveStudio:
             with ExitStack() as stack:
                 # Hold the preview lease through cleanup: model rebinds wait until this session stops.
                 stack.enter_context(self.state.engine_gate.preview_section())
-                # The connected true-3D renderer owns the session: it reconstructs the source head once and renders it per frame.
+                # The connected true-3D renderer owns the session: it reads the FaceSet, prepares the pipeline on the admitted
+                # profile and renders every tracked head per frame. Its cleanup releases the pipeline and the FaceSet reader.
                 renderer = require_renderer()
                 session = renderer.open_live_session(self.state, config, config.true3d(), admission)
                 stack.callback(session.close)
+                with self._lock:
+                    self._session = session
                 if config.input == "webcam":
                     if config.backend in ("dshow", "msmf") and sys.platform != "win32" or config.backend == "v4l2" and not sys.platform.startswith("linux"):
                         raise DomainError("STUDIO_BACKEND", "Capture backend does not match this operating system", 422)
@@ -162,7 +176,8 @@ class LiveStudio:
                     self._stop.wait(max(0, 1 / config.fps - (time.perf_counter() - began)))
         except Exception as error:
             with self._lock:
-                self.error = str(error)[:400]
+                self.error = (f"{error.code}: {error.message}" if isinstance(error, DomainError)
+                              else f"{type(error).__name__}: {error}")[:400]
                 self._status = "error"
         finally:
             if admission is not None:

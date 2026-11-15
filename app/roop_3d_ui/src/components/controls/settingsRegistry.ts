@@ -1,5 +1,4 @@
 import type { WorkstationParameters } from '../workstation/pipeline';
-import { pyramidInactiveReason, xsegInactiveReason } from '../studio/compositing';
 
 export type PanelId = 'masking' | 'color';
 export type SettingId = 'erosion_px' | 'feather_px' | 'xseg_occlusion_strength' | 'pyramid_levels' | 'color_strength';
@@ -47,15 +46,9 @@ export function settingValue(spec: SettingSpec, parameters: WorkstationParameter
   return (parameters as unknown as Record<string, number | undefined>)[spec.id] ?? spec.default;
 }
 
-/**
- * Why a setting changes nothing for these parameters right now, or null when it acts. It follows the occlusion mode and seam blend; the engine accepts the other values but ignores them, so the controls are disabled with the reason instead.
- */
-export function inactiveReason(spec: SettingSpec, parameters: WorkstationParameters): string | null {
-  switch (spec.id) {
-    case 'xseg_occlusion_strength': return xsegInactiveReason(parameters);
-    case 'pyramid_levels': return pyramidInactiveReason(parameters);
-    default: return null;
-  }
+/** Legacy manual settings are not implemented by the volumetric renderer. */
+export function inactiveReason(_spec: SettingSpec, _parameters: WorkstationParameters): string {
+  return 'Stage 4 uses automatic boundary and lighting calibration; this manual adjustment is not supported.';
 }
 
 /** "0.25–0.60" or "-2–4 px" */

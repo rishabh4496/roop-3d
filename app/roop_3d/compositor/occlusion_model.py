@@ -12,8 +12,6 @@ process has actually executed the graph.
 """
 from __future__ import annotations
 
-import json
-from pathlib import Path
 
 import cv2
 import numpy as np
@@ -21,25 +19,8 @@ import numpy as np
 from roop_3d.core.errors import DomainError
 
 NET_SIZE = 256
-SUPPORTED_NETS = ("xseg_3.onnx", "xseg.onnx", "face_occluder.onnx")
+SUPPORTED_NETS = ("xseg_3.onnx", "xseg.onnx", "face_occluder.onnx", "occluder.onnx")
 DEFAULT_VISIBLE_NET = "xseg_3.onnx"
-MODEL_MANIFEST = Path(__file__).resolve().parents[1] / "models" / "model_manifest.json"
-
-
-def manifest_model_id(model_name: str, manifest_path: Path = MODEL_MANIFEST) -> str:
-    """Model id the manifest assigns to ``model_name`` (first record of that name), or an explicit named error.
-
-    The default network used to be referenced by file name only; a name the manifest does not know can neither be
-    hash-verified nor licensed, so it fails here with ``VISIBLE_FACE_MODEL_NOT_IN_MANIFEST`` instead of deep in the loader.
-    """
-    try:
-        records = json.loads(Path(manifest_path).read_text(encoding="utf-8")).get("models", [])
-    except (OSError, ValueError) as error:
-        raise DomainError("MODEL_MANIFEST_UNREADABLE", f"Model manifest cannot be read: {error}", 503) from error
-    for record in records:
-        if record.get("name") == model_name and record.get("model_id"):
-            return str(record["model_id"])
-    raise DomainError("VISIBLE_FACE_MODEL_NOT_IN_MANIFEST", f"{model_name} has no entry in the model manifest", 404)
 
 
 class VisibleFaceNet:
@@ -62,8 +43,25 @@ class VisibleFaceNet:
     def _load(self):
         if self.model is None:
             from roop_3d.engine.runtime import OrtModel
-            self.manifest_id = manifest_model_id(self.model_name)
-            self.model = OrtModel(self.catalog, self.model_name, self.config)
+            record, _ = self.catalog.resolve_named_artifact(self.model_name)
+            self.manifest_id = record.model_id
+            model = OrtModel(self.catalog, self.model_name, self.config)
+            try:
+                inputs = tuple(model.session.get_inputs())
+                if len(inputs) != 1:
+                    raise DomainError("VISIBLE_FACE_GRAPH_UNSUPPORTED", "Visible-face graph must have exactly one image input", 503)
+                image = inputs[0]
+                expected = (1, NET_SIZE, NET_SIZE, 3)
+                if (image.type not in ("tensor(float)", "tensor(float16)") or len(image.shape) != 4
+                        or any(isinstance(actual, int) and actual > 0 and actual != wanted
+                               for actual, wanted in zip(image.shape, expected))):
+                    raise DomainError("VISIBLE_FACE_GRAPH_UNSUPPORTED",
+                                      f"Expected NHWC 1x256x256x3 float image, got {image.type} {image.shape}", 503)
+                self._input = image
+            except Exception:
+                model.release()
+                raise
+            self.model = model
         return self.model
 
     def available(self) -> bool:
@@ -87,12 +85,13 @@ class VisibleFaceNet:
             source = source[:, :, ::-1]
         tensor = np.ascontiguousarray(source.astype(np.float32)[None] / 255.0)
         model = self._load()
-        outputs = model.run({model.session.get_inputs()[0].name: tensor})
+        dtype = np.float16 if self._input.type == "tensor(float16)" else np.float32
+        outputs = model.run({self._input.name: tensor.astype(dtype, copy=False)})
         for value in outputs.values():
             array = np.asarray(value, dtype=np.float32)
-            if array.ndim == 4 and array.shape[0] == 1 and array.shape[1:3] == (NET_SIZE, NET_SIZE) and array.shape[3] == 1:
-                if not np.isfinite(array).all():
-                    raise DomainError("VISIBLE_FACE_OUTPUT_INVALID", "Network returned non-finite values", 503)
+            if array.shape == (1, NET_SIZE, NET_SIZE, 1):
+                if not np.isfinite(array).all() or np.any((array < -1e-4) | (array > 1.0001)):
+                    raise DomainError("VISIBLE_FACE_OUTPUT_INVALID", "Network must return finite probabilities in 0..1", 503)
                 self.inference_verified = True
                 visible = np.clip(array[0, ..., 0], 0.0, 1.0)
                 return cv2.resize(visible, (width, height), interpolation=cv2.INTER_LINEAR)

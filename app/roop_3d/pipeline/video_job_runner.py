@@ -373,7 +373,8 @@ class EndToEndVideoJobRunner(MasterPipelineRunner):
         from roop_3d.pipeline.photorealistic_swap_core import SwapCoreOptions
         parameters = record.request.parameters_at(0)
         return SwapCoreOptions(feather_px=parameters.feather_px,
-                               pyramid_levels=max(1, min(6, parameters.pyramid_levels)))
+                               pyramid_levels=max(1, min(6, parameters.pyramid_levels)),
+                               restoration_weight=parameters.restoration_weight)
 
     # ---- the render loop --------------------------------------------------------------------------------------------
     def run_prepared(self, record: JobRecord, admission, *, prepared: PreparedPipeline, control, mark_running, report_progress) -> JobOutput:
@@ -402,6 +403,7 @@ class EndToEndVideoJobRunner(MasterPipelineRunner):
             if signal is not None:
                 raise signal()
             session.prepare_session(base_source, track_ids=numeric_ids, sources_by_track=prepared.sources_by_track,
+                                    restoration_weight=parameters.restoration_weight,
                                     **(prepared.tracking or {}))
             if hasattr(session, "set_target_registry") and hasattr(self.media, "target_locks"):
                 session.set_target_registry(self.media.target_locks.registry(request.target_path))

@@ -109,13 +109,21 @@ def _arrays(path: str) -> dict[str, np.ndarray]:
     first_copy = {int(orig): i for i, orig in reversed(list(enumerate(unique[:, 0])))}   # lowest new index per original vertex
     landmarks = np.array([first_copy[int(i)] for i in model.landmark_indices], dtype=np.int64)
     return {"vertices": new_verts, "faces": new_faces, "uvs": uvs, "landmarks": landmarks,
-            "shape_basis": model.shape_basis[unique[:, 0]] * np.array([1., 1., -1.])[None, :, None]}
+            "base_vertex_indices": unique[:, 0].astype(np.int32),
+            "shape_basis": model.shape_basis[unique[:, 0]] * np.array([1., 1., -1.])[None, :, None],
+            "expression_basis": model.expr_basis[unique[:, 0]] * np.array([1., 1., -1.])[None, :, None]}
 
 
-def shape_basis() -> np.ndarray:
+def shape_basis(path: Path | str | None = None) -> np.ndarray:
     """CC0 identity morphs in exactly the seam-split template vertex ordering."""
-    target = DEFAULT_ASSET_DIR / ASSET_NAME
+    target = Path(path) if path else DEFAULT_ASSET_DIR / ASSET_NAME
     return _cached(str(target.resolve()), target.stat().st_mtime_ns)["shape_basis"].copy()
+
+
+def expression_basis(path: Path | str | None = None) -> np.ndarray:
+    """CC0 expression morphs in exactly the seam-split template vertex ordering."""
+    target = Path(path) if path else DEFAULT_ASSET_DIR / ASSET_NAME
+    return _cached(str(target.resolve()), target.stat().st_mtime_ns)["expression_basis"].copy()
 
 
 @lru_cache(maxsize=2)
@@ -133,9 +141,10 @@ def makehuman_template(path: Path | str | None = None) -> Mesh3D:
             "(downloads ~130 small CC0 files from a pinned commit, SHA-256 verified)", 404)
     a = _cached(str(target.resolve()), target.stat().st_mtime_ns)
     mesh = Mesh3D(a["vertices"].copy(), a["faces"].copy(), uvs=a["uvs"].copy())
+    mesh.base_vertex_indices = a["base_vertex_indices"].copy()
     mesh.landmark_vertices = {"5pt": a["landmarks"].copy()}      # consumed by multiview_fit.template_landmarks / landmark_normals
-    from roop_3d.reconstruction.makehuman_landmarks import landmark_68_vertices
-    mesh.landmark_vertices["68pt"] = landmark_68_vertices(mesh)   # derived correspondence (see makehuman_landmarks)
+    from roop_3d.reconstruction.makehuman_landmarks import correspondence
+    mesh.landmark_vertices["68pt"] = correspondence(mesh)[0]
     mesh.template_kind = TEMPLATE_KIND
     return mesh
 
@@ -144,6 +153,7 @@ def template_hash(path: Path | str | None = None) -> str:
     """Content hash of the template geometry, topology and UVs (part of the identity-asset build key)."""
     mesh = makehuman_template(path)
     h = hashlib.sha256(TEMPLATE_VERSION.encode())
-    for arr in (mesh.vertices, mesh.faces, mesh.uvs, mesh.landmark_vertices["5pt"], mesh.landmark_vertices["68pt"], shape_basis()):
+    for arr in (mesh.vertices, mesh.faces, mesh.uvs, mesh.landmark_vertices["5pt"],
+                mesh.landmark_vertices["68pt"], shape_basis(path), expression_basis(path)):
         h.update(str(arr.dtype).encode() + str(arr.shape).encode() + np.ascontiguousarray(arr).tobytes())
     return h.hexdigest()

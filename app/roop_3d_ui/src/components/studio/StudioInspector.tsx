@@ -17,7 +17,6 @@ import HairNeckProtection from './HairNeckProtection';
 import HeadModelBackbone from './HeadModelBackbone';
 import WorkstationControls3D from './WorkstationControls3D';
 import CompositingControls from './CompositingControls';
-import { occlusionModePatch } from './compositing';
 import { shLightOf, withManualLight, type ViewportTools } from '../three/viewportTools';
 
 const PoseGeometryViewer = lazy(() => import('../../ThreeViewport').then(module => ({ default: module.PoseGeometryViewer })));
@@ -74,7 +73,6 @@ export default function StudioInspector({ caps, config, onSaveConfig, track, she
   const engines = useEngines();
   const cluster = useFaceSelectionStore(state => (track ? state.targetClusters.find(item => item.id === track.track_id) ?? null : null));
   const sheetTrack = track ? sheet?.tracks.find(item => item.track_id === track.track_id) : undefined;
-  const robust = parameters.occlusion_mode === 'robust';
   const set = (patch: Partial<WorkstationParameters>) => setParameters({ ...parameters, ...patch });
   const [morphPreview, setMorphPreview] = useState(false);
   const lighting = useMemo(() => viewerLighting(parameters), [parameters]);
@@ -114,10 +112,10 @@ export default function StudioInspector({ caps, config, onSaveConfig, track, she
         <section className="workflow-step" aria-labelledby="step-mask" data-testid="step-mask">
           <h3 id="step-mask"><span className="step-no">2</span>Masking &amp; occlusion</h3>
           <label className="inspector-toggle"><input type="checkbox" checked disabled readOnly />Face parser (BiSeNet) <small className="muted">always on: the base face matte</small></label>
-          <label className="inspector-toggle"><input type="checkbox" aria-label="XSeg mask and smart occluder" checked={robust} onChange={event => set(occlusionModePatch(parameters, event.target.checked ? 'robust' : 'standard'))} />
-            XSeg mask + Smart Occluder <small className="muted">keeps hands, glasses, hair and microphones in front of the face</small></label>
-          <label className="inspector-field">Mask feather / blur <output>{(parameters.feather_px ?? 0).toFixed(0)} px</output>
-            <input type="range" aria-label="Mask feather" min={0} max={32} step={1} value={parameters.feather_px ?? 0} onChange={event => set({ feather_px: Number(event.target.value) })} /></label>
+          <label className="inspector-toggle"><input type="checkbox" aria-label="XSeg mask and smart occluder" checked disabled readOnly />
+            XSeg mask + Smart Occluder <small className="muted">mandatory hair, glasses and foreground protection</small></label>
+          <label className="inspector-field">Mask feather / blur <output>5 px · automatic</output>
+            <input type="range" aria-label="Mask feather" min={0} max={32} value={5} disabled readOnly /></label>
           <CompositingControls params={parameters} onParams={set} />
           <HairNeckProtection parameters={parameters} setParameters={setParameters} />
         </section>

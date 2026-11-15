@@ -92,9 +92,8 @@ class ReferenceSurfaceRasterizer:
             z = np.divide(1, reciprocal, out=np.full_like(reciprocal, np.inf), where=reciprocal > 0)
             ys, xs = slice(lo[1], hi[1]+1), slice(lo[0], hi[0]+1)
             keep = (bary.min(-1) >= -1e-6) & (z < depth[ys, xs])
-            value = (weights @ attributes[triangle]) * z[..., None]
             depth[ys, xs][keep] = z[keep]
-            output[ys, xs][keep] = value[keep]
+            output[ys, xs][keep] = (weights[keep] @ attributes[triangle]) * z[keep, None]
         return SurfaceBuffer(output, depth, np.isfinite(depth))
 
     def release(self):

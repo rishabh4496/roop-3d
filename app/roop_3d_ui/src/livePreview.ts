@@ -45,6 +45,7 @@ export function buildLivePayload({ request, time, fps, parameters, maskBase64, s
     mask_base64: maskAtFrame(maskBase64 || request.mask_base64, request.mask_keyframes, Math.max(0, Math.round(time * fps))) || undefined,
     identity_blend: request.identity_blend ?? undefined,
     color_strength: parameters.color_strength,
+    restoration_weight: parameters.restoration_weight,
     color_method: parameters.color_method ?? 'lab',
     // Opt-in controls: only sent once touched, so earlier previews keep their cache keys.
     hairline_offset_px: parameters.hairline_offset_px || undefined,

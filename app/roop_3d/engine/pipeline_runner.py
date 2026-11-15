@@ -354,15 +354,8 @@ class MasterPipelineRunner:
         return value
 
     def _faceset_path(self, faceset_id: str) -> Path:
-        if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", faceset_id):
-            raise DomainError("FACESET_ID_INVALID", "FaceSet identifier is invalid", 422)
-        candidates = (f"roop_3d/outputs/facesets/{faceset_id}.fsz",
-                     f"roop_3d/.runtime/facesets/{faceset_id}.fsz")
-        for relative in candidates:
-            path = safe_path(self.root, relative)
-            if path.is_file():
-                return path
-        raise DomainError("FACESET_ARCHIVE_NOT_FOUND", "Mapped FaceSet archive is unavailable in owned storage", 404)
+        from roop_3d.faceset.locator import resolve_faceset
+        return resolve_faceset(self.root, faceset_id).archive
 
     def lock_store(self, settings: Settings):
         from roop_3d.identity.lock import LockEnvironment, LockStore
@@ -406,6 +399,8 @@ class MasterPipelineRunner:
     def _prepare_inputs(self, record: JobRecord, settings: Settings
                         ) -> tuple[Path, str, int | None, dict[int, FaceSetDocument], dict[str, int], list[str]]:
         request = record.request
+        from roop_3d.pipeline.true3d_renderer import validate_job_request
+        validate_job_request(request)
         target = self.media.path(request.target_path)
         digest = sha256_file(target)[1]
         inspection_path = safe_path(self.root, f"roop_3d/.runtime/inspections/{request.inspection_id}.json")
@@ -683,6 +678,7 @@ class MasterPipelineRunner:
                 raise signal()
             session.prepare_session(base_source, track_ids=numeric_ids,
                                     sources_by_track=source_by_track,
+                                    restoration_weight=record.request.parameters_at(0).restoration_weight,
                                     **(prepared.tracking or {}))
             if hasattr(session, 'set_target_registry') and hasattr(self.media, 'target_locks'):
                 session.set_target_registry(self.media.target_locks.registry(record.request.target_path))

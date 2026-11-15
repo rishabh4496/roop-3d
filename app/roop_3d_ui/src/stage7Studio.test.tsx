@@ -262,10 +262,6 @@ describe('StudioInspector', () => {
     expect([...drawer.querySelectorAll('.advanced-body > details')].every(item => (item as HTMLDetailsElement).open)).toBe(true);
     expect((host.querySelector('[data-testid="morph-section"]') as HTMLDetailsElement).open).toBe(true);
     expect(host.querySelector('[data-testid="footer-slot"]')).toBeTruthy();
-    // Step 2: XSeg + Smart Occluder is the compositor's robust mode; BiSeNet is the always-on base matte.
-    const toggle = host.querySelector('input[aria-label="XSeg mask and smart occluder"]') as HTMLInputElement;
-    await act(async () => toggle.click());
-    expect(parameters.occlusion_mode).toBe('robust');
   });
 
   it('a failed 3D options request shows the reason and retries on request (no endless skeleton)', async () => {

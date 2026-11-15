@@ -1,9 +1,7 @@
-"""Session lifecycle: tracking -> identity gate -> true-3D head render (NOT YET WIRED).
+"""Session lifecycle: tracking -> identity gate -> volumetric MakeHuman rendering.
 
-The 2D identity swapper, 5-point crop-paste, canonical-strip pose blend, 2D TPS expression warp and the reenactment
-painter's renderer were removed. ``ReferencePipeline`` still owns detection, landmarks, tracking, the identity gate, angle
-trajectories and compositing of a rendered head layer; ``infer_frame`` raises ``True3DRendererUnavailable`` for any face that
-would have to be rendered, instead of silently falling back to a 2D / 2.5D path.
+Every replacement is a perspective Z-buffered full-frame head layer. Semantic
+occlusion and blending follow rendering; no planar replacement path exists.
 """
 from __future__ import annotations
 
@@ -18,7 +16,7 @@ import numpy as np
 
 from roop_3d.core.errors import DomainError
 from roop_3d.core.settings import Settings
-from roop_3d.core.true3d_guard import True3DRendererUnavailable, require_true3d_renderer
+from roop_3d.core.true3d_guard import require_true3d_renderer
 from roop_3d.engine.detection.face_tracker import FaceObservation, FaceTracker, TrackedFace
 from roop_3d.engine.runtime import RuntimeConfig, image_bgr
 from roop_3d.engine.volumetric.angle_diagnostics import AngleDiagnostics
@@ -112,6 +110,8 @@ class ReferencePipeline:
         self.neural_face = None          # the dense-correspondence swap engine was removed; always None
         self.full_head_engines = {}
         self.head_landmarks = None
+        self.restoration_weight = 0.35
+        self.texture_size = 1024
         self.angle_trajectories: dict[int, tuple[Any, ...]] = {}
         self.angle_frame_index: int | None = None
         self.pose_hysteresis_degrees = Settings.model_fields["pose_hysteresis_degrees"].default
@@ -123,9 +123,14 @@ class ReferencePipeline:
     def prepare_session(self, source: FaceSetDocument, *, track_ids: set[int] | None = None,
                         sources_by_track: Mapping[int, FaceSetDocument] | None = None,
                         track_policy=None, detection_threshold: float = 0.5, identity_store=None,
-                        locked_targets=None) -> dict:
+                        locked_targets=None, restoration_weight: float = 0.35,
+                        texture_size: int = 1024) -> dict:
         """Prepare tracking and identity gating; rendering requires the wired true-3D renderer."""
         with self.lock:
+            if not np.isfinite(restoration_weight) or not 0 <= restoration_weight <= 1:
+                raise ValueError("restoration_weight must be within 0..1")
+            if type(texture_size) is not int or not 64 <= texture_size <= 4096:
+                raise ValueError("texture_size must be an integer within 64..4096")
             if track_ids is not None and (
                     len(track_ids) > 32 or any(type(i) is not int or i < 0 for i in track_ids)):
                 raise ValueError("Invalid session selection/policy")
@@ -142,6 +147,8 @@ class ReferencePipeline:
                 self.sources_by_track = mapped_sources
                 self.default_source = source
                 self.identity_store = identity_store
+                self.restoration_weight = float(restoration_weight)
+                self.texture_size = texture_size
                 self.prepared = True
                 return self.capability()
             except BaseException:
@@ -534,7 +541,7 @@ class ReferencePipeline:
             self._frame_context = tracked
             scene_cut, active_ids = tracked.scene_cut, tracked.active_ids
             for track_id in set(self.full_head_engines) - set(active_ids):
-                self.full_head_engines.pop(track_id).rasterizer.release()
+                self.full_head_engines.pop(track_id).release()
             if scene_cut:
                 self._roll_latched.clear()
                 self._presence.reset()
@@ -557,15 +564,19 @@ class ReferencePipeline:
                                                  face.state, verdict.similarity))
                         continue
                 renderable.append(face)
+            replacements = []
+            render_began = time.perf_counter()
             if renderable:
                 require_true3d_renderer(f"render {len(renderable)} tracked face(s)")
-                raise True3DRendererUnavailable(
-                    "3D renderer not wired: FullHeadEngine rendering is not connected to ReferencePipeline.infer_frame",
-                    {"track_ids": [face.track_id for face in renderable]})
+                from roop_3d.pipeline.true3d_renderer import render_frame
+                for face in renderable:
+                    replacements.append(render_frame(self, image, face, timestamp=tracked.frame_time,
+                                                     scene_cut=scene_cut))
             ended = time.perf_counter()
             self.frames_processed += 1
-            self.last_latency = StageLatency((detection_end - began) * 1000, 0.0, 0.0, (ended - began) * 1000, 0.0)
-            return FrameResult(faces, (), self.last_latency, scene_cut, tuple(withheld))
+            self.last_latency = StageLatency(tracked.detection_ms, (ended - render_began) * 1000,
+                                             0.0, (ended - began) * 1000, 0.0)
+            return FrameResult(faces, tuple(replacements), self.last_latency, scene_cut, tuple(withheld))
 
     def track_frame(self, image: np.ndarray) -> TrackedFrame:
         """Stage 1: detection, landmarks, pose and track association for one frame (no render work).
@@ -602,7 +613,8 @@ class ReferencePipeline:
                 "profile": self.config.hardware_profile,
                 "selected_track_ids": sorted(self.selected_ids) if self.selected_ids is not None else None,
                 "dense_landmarks": (68, 106, 203),
-                "full_head": {"active": False, "renderer": "not_wired"},
+                "full_head": {"active": bool(self.full_head_engines), "renderer": "makehuman_perspective_sh",
+                              "restoration_weight": self.restoration_weight, "texture_size": self.texture_size},
                 "compositor": {"architecture": "full_frame_true3d_only", "wired": wired}}
 
     def composite_frame(self, image: np.ndarray, result: FrameResult, *,
@@ -621,6 +633,7 @@ class ReferencePipeline:
             core_options = SwapCoreOptions(
                 feather_px=float(getattr(options, "feather_px", 5.0)),
                 pyramid_levels=int(getattr(options, "pyramid_levels", 4)),
+                restoration_weight=self.restoration_weight,
             )
             self._frame_processor.core.options = core_options
             index = max(0, self.frames_processed - 1) if frame_index is None else frame_index
@@ -648,7 +661,7 @@ class ReferencePipeline:
             self.frames_processed = 0
             self.default_source, self.identity_store = None, None
             for engine in self.full_head_engines.values():
-                engine.rasterizer.release()
+                engine.release()
             self.full_head_engines.clear()
             self.head_landmarks = None
             self.angle_trajectories.clear()

@@ -152,7 +152,7 @@ class GuardPolicy:
     eyeball_radius_m: tuple[float, float] = (0.007, 0.020)
     eyeball_separation_m: tuple[float, float] = (0.040, 0.090)
     min_oral_vertices: int = 24
-    perspective_shaders: tuple[str, ...] = ("pbr", "gaussian")
+    perspective_shaders: tuple[str, ...] = ("pbr", "gaussian", "spherical_harmonics")
 
 
 DEFAULT_POLICY = GuardPolicy()
@@ -533,7 +533,7 @@ class True3DArchitectureGuard:
 
     # -- (c) rasterizer / shader --------------------------------------------
     def validate_render_config(self, config) -> RenderConfigReport:
-        """Perspective, Z-buffered rasterization with PBR+SSS or 3D Gaussian shading; nothing screen-space / affine."""
+        """Perspective, Z-buffered rasterization with 3D surface shading; nothing screen-space or affine."""
         data = _config_dict(config)
         projection = str(data.get("projection", data.get("camera_projection", ""))).strip().lower()
         rasterizer = str(data.get("rasterizer", data.get("rasterization", ""))).strip().lower()
@@ -554,8 +554,9 @@ class True3DArchitectureGuard:
             raise RenderConfigError("rasterizer must be a Z-buffered (depth-tested) 3D rasterizer", "RENDER_CONFIG_RASTERIZER")
         pbr_sss = "pbr" in shader and ("subsurface" in shader or "sss" in shader)
         gaussian = "gaussian" in shader
-        if not (pbr_sss or gaussian):
-            raise RenderConfigError("shader must be PBR with subsurface scattering, or 3D Gaussian head shading",
+        spherical_harmonics = shader in ("spherical_harmonics", "perspective_sh_lambertian")
+        if not (pbr_sss or gaussian or spherical_harmonics):
+            raise RenderConfigError("shader must be spherical-harmonics diffuse, PBR with subsurface scattering, or 3D Gaussian",
                                     "RENDER_CONFIG_SHADER", {"shader": shader})
         return report
 
@@ -579,7 +580,8 @@ class True3DArchitectureGuard:
         return {"required_regions": list(REQUIRED_REGIONS), "required_parts": list(REQUIRED_PARTS),
                 "watertight": "every edge shared by exactly two consistently wound faces",
                 "min_vertices": p.min_vertices, "camera": "full 3x3 K + rigid SE(3) [R|t], positive depth for all vertices",
-                "projection": "perspective", "rasterizer": "Z-buffer", "shaders": ["PBR + subsurface scattering", "3D Gaussian"],
+                "projection": "perspective", "rasterizer": "Z-buffer",
+                "shaders": ["Spherical harmonics diffuse", "PBR + subsurface scattering", "3D Gaussian"],
                 "banned": sorted(BANNED_PROJECTIONS)}
 
 

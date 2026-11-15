@@ -15,19 +15,19 @@ export const BUILTIN_RECIPES = [
   {
     id: 'photoreal_natural',
     name: 'Natural Photoreal',
-    description: 'MakeHuman CC0 head, PBR subsurface scattering, auto camera, 2 px mask feather.',
+    description: 'MakeHuman CC0 head, perspective SH lighting, assumed 35 mm lens, 2 px mask feather.',
     parameters: { head_topology_engine: 'MakeHuman-CC0-Craniofacial-3D', shader_mode: PBR, camera: { mode: 'auto', projection: 'perspective', focal_unit: 'fov_deg' }, feather_px: 2, erosion_px: 2 }
   },
   {
     id: 'flame_full_head',
     name: 'FLAME Full Head',
-    description: 'FLAME full-head topology with PBR subsurface scattering, 3 px mask feather and erosion.',
+    description: 'FLAME full-head topology is not implemented by the connected renderer.',
     parameters: { head_topology_engine: 'FLAME-FullHead-3D', shader_mode: PBR, feather_px: 3, erosion_px: 3 }
   },
   {
     id: 'gaussian_avatar',
     name: 'Gaussian Head Avatar',
-    description: 'MakeHuman CC0 head shaded as a 3D Gaussian head avatar, 4 px mask feather.',
+    description: 'Gaussian head avatars are not implemented by the connected renderer.',
     parameters: { head_topology_engine: 'MakeHuman-CC0-Craniofacial-3D', shader_mode: '3D-Gaussian-Head-Avatar', feather_px: 4, erosion_px: 2 }
   },
   {
@@ -924,8 +924,8 @@ export default function BatchMatrixScreen({
                   <label>
                     <span>3D Photorealistic Shader Mode:</span>
                     <select style={{ width: '100%', marginTop: '4px' }} value={newRecipeShader} onChange={e => setNewRecipeShader(e.target.value)}>
-                      <option value={PBR}>PBR subsurface scattering + neural deferred UV</option>
-                      <option value="3D-Gaussian-Head-Avatar">3D Gaussian head avatar</option>
+                      <option value={PBR}>Perspective SH diffuse lighting + UV skin detail</option>
+                      <option value="3D-Gaussian-Head-Avatar" disabled>3D Gaussian head avatar — not implemented</option>
                     </select>
                   </label>
                 </div>

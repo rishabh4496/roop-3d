@@ -1,7 +1,7 @@
 """Full-frame adapter between volumetric reconstruction, semantic parsing, and mesh compositing.
 
-Only full-frame mesh rasters and frame-space masks cross this boundary. Cropped replacement images and affine paste-back
-are not accepted. The current ReferencePipeline fails closed because its true-3D renderer is not wired.
+Only full-frame mesh rasters and frame-space masks cross this seam. Expanded
+face ROIs are used solely for semantic inference, never for replacement placement.
 """
 from __future__ import annotations
 
@@ -9,9 +9,13 @@ from dataclasses import dataclass, field
 import json
 import logging
 import time
+import cv2
 import numpy as np
 
-from roop_3d.compositor.masks import INCLUDED_SKIN_FACE_CLASSES, STRICT_FORBIDDEN_CLASSES, BisenetFaceParser
+from roop_3d.compositor.matte import refine_occluder
+from roop_3d.compositor.masks import BisenetFaceParser
+from roop_3d.compositor.occlusion_model import VisibleFaceNet
+from roop_3d.compositor.stage4 import semantic_face_masks
 from roop_3d.core.errors import DomainError
 from roop_3d.core.true3d_guard import FRAME_PIPELINE_STAGES, True3DFramePipelineError, require_true3d_frame_pipeline
 from roop_3d.pipeline.photorealistic_swap_core import FacePacket, FaceReport, Photorealistic3DSwapCore
@@ -48,6 +52,8 @@ class SessionFrameProcessor:
     def __init__(self, session, core: Photorealistic3DSwapCore):
         self.session, self.core = session, core
         self.parser = None
+        self.visible_nets: tuple[VisibleFaceNet, ...] = ()
+        self.last_packet: FacePacket | None = None
         self.frames = 0
         self.totals: dict[str, float] = {}
         self.faces_swapped = 0
@@ -75,6 +81,8 @@ class SessionFrameProcessor:
     def process_result(self, frame: np.ndarray, result, frame_index: int) -> tuple[np.ndarray, FrameReport]:
         """Composite only renderer results carrying a full-frame raster and semantic masks."""
         began = time.perf_counter()
+        self.last_packet = None
+        self.core.last_alpha = None
         report = FrameReport(frame_index, scene_cut=bool(result.scene_cut))
         report.stage_ms["detection"] = float(result.latency.detection_ms)
         report.stage_ms["head_render"] = float(result.latency.swap_ms + result.latency.retarget_ms)
@@ -120,6 +128,8 @@ class SessionFrameProcessor:
         return {stage: round(total / max(self.frames, 1), 3) for stage, total in self.totals.items()}
 
     def _packet(self, frame: np.ndarray, replacement) -> tuple[FacePacket, float]:
+        self.last_packet = None
+        self.core.last_alpha = None
         if not replacement.full_head:
             raise True3DFramePipelineError(
                 "Renderer output is not attested as a complete 3D head",
@@ -127,35 +137,100 @@ class SessionFrameProcessor:
             )
         require_true3d_frame_pipeline(replacement.pipeline_stages, through=FRAME_PIPELINE_STAGES[2])
         began = time.perf_counter()
+        shape = frame.shape[:2]
+        coverage = _mask_plane(replacement.coverage, shape, "coverage")
+        mesh_skin = _mask_plane(replacement.skin_mask, shape, "renderer skin")
+        mesh_hair = _mask_plane(replacement.hair_mask, shape, "renderer hair")
+        ys, xs = np.nonzero(coverage > 0)
+        if not len(xs):
+            raise DomainError("TRUE3D_SEMANTIC_MASK_EMPTY", "The head raster has no covered pixels to parse", 422)
+        width, height = int(xs.max() - xs.min() + 1), int(ys.max() - ys.min() + 1)
+        # A square contextual ROI preserves the parser's facial scale/aspect and
+        # includes the complete forehead, jaw and both visible ears.
+        side = int(np.ceil(max(width, height) * 1.25))
+        cx, cy = 0.5 * (float(xs.min()) + float(xs.max())), 0.5 * (float(ys.min()) + float(ys.max()))
+        left, top = int(np.floor(cx - side / 2)), int(np.floor(cy - side / 2))
+        right, bottom = left + side, top + side
+        x0, y0 = max(0, left), max(0, top)
+        x1, y1 = min(shape[1], right), min(shape[0], bottom)
+        roi = np.s_[y0:y1, x0:x1]
+        crop = frame[roi]
+        # Keep a square inference field even when a head crosses the image edge.
+        # Off-frame padding is discarded before any full-frame mask is produced.
+        padded = cv2.copyMakeBorder(crop, y0 - top, bottom - y1, x0 - left, right - x1,
+                                    cv2.BORDER_CONSTANT, value=(0, 0, 0))
+        visible_roi = np.s_[y0 - top:y1 - top, x0 - left:x1 - left]
         if self.parser is None:
-            self.parser = BisenetFaceParser(self.session.catalog, self.session.config)
+            self.parser = BisenetFaceParser(self.session.catalog, self.session.config, normalization="imagenet")
+        if not self.visible_nets:
+            self.visible_nets = tuple(VisibleFaceNet(self.session.catalog, self.session.config, model_name=name)
+                                      for name in ("xseg.onnx", "occluder.onnx"))
         try:
-            probabilities = np.asarray(self.parser.predict(frame), np.float32)
+            probabilities = np.asarray(self.parser.predict(padded), np.float32)
+            if probabilities.shape[:2] != padded.shape[:2]:
+                raise DomainError("TRUE3D_SEMANTIC_MASK_INVALID", "Semantic parser output must match its face ROI", 503)
+            face, forbidden, skin_only, ears = semantic_face_masks(probabilities[visible_roi])
+            visible = [net.predict(padded)[visible_roi] for net in self.visible_nets]
+        except DomainError:
+            # Preserve missing weights, graph, hash and license diagnostic codes.
+            raise
         except Exception as error:
             raise DomainError("TRUE3D_SEMANTIC_PARSER_FAILED",
-                              f"Full-frame semantic parser failed: {type(error).__name__}", 503) from error
-        if (probabilities.ndim != 3 or probabilities.shape[:2] != frame.shape[:2]
-                or probabilities.shape[2] <= max((*INCLUDED_SKIN_FACE_CLASSES, *STRICT_FORBIDDEN_CLASSES))
-                or not np.isfinite(probabilities).all()):
-            raise DomainError("TRUE3D_SEMANTIC_MASK_INVALID",
-                              "Semantic probabilities must be finite full-frame class planes", 422)
-        skin = np.clip(np.sum(probabilities[..., INCLUDED_SKIN_FACE_CLASSES], axis=-1), 0.0, 1.0)
-        hair = np.clip(np.sum(probabilities[..., STRICT_FORBIDDEN_CLASSES], axis=-1), 0.0, 1.0)
+                              f"Face ROI masking failed: {type(error).__name__}: {error}", 503) from error
+        for plane in visible:
+            _mask_plane(plane, crop.shape[:2], "visible-face network")
+        neural_visible = np.minimum(visible[0], visible[1])
+        # Visible-face networks were trained with a face-only silhouette. The
+        # explicitly labelled ears are anatomical skin, not foreground objects;
+        # retain them while keeping all parser/external occluders authoritative.
+        neural_visible = np.where(ears, 1.0, neural_visible).astype(np.float32)
+        ramp = np.clip((neural_visible - 0.08) / 0.52, 0, 1)
+        network_occluder = 1.0 - ramp * ramp * (3.0 - 2.0 * ramp)
+        network_occluder = np.maximum(
+            network_occluder, refine_occluder(network_occluder, crop, radius=2, contrast=1.5))
+        network_occluder[neural_visible <= 0.08] = 1.0
+        skin = np.zeros(shape, np.float32)
+        hair = np.ones(shape, np.float32)
+        occluder = np.ones(shape, np.float32)
+        photometric_skin = np.zeros(shape, np.float32)
+        skin[roi] = np.where(coverage[roi] > 0, np.minimum(face, mesh_skin[roi]), 0.0)
+        hair[roi] = np.maximum(forbidden, mesh_hair[roi])
+        occluder[roi] = network_occluder
+        photometric_skin[roi] = skin_only
+        if replacement.occluder is not None:
+            occluder = np.maximum(occluder, _mask_plane(replacement.occluder, shape, "renderer occluder"))
         stages = (*replacement.pipeline_stages, FRAME_PIPELINE_STAGES[3])
         require_true3d_frame_pipeline(stages, through=FRAME_PIPELINE_STAGES[3])
         packet = FacePacket(
             track_id=replacement.track_id,
             rendered_frame=np.asarray(replacement.rendered_frame),
-            coverage=np.asarray(replacement.coverage, np.float32),
+            coverage=coverage,
             skin_mask=skin,
             hair_mask=hair,
             normals=np.asarray(replacement.normals, np.float32),
             pipeline_stages=stages,
-            occluder=None if replacement.occluder is None else np.asarray(replacement.occluder, np.float32),
-            mask_diagnostics={"tier": "bisenet_full_frame", "hair_exclusion": True},
+            occluder=occluder,
+            mask_diagnostics={
+                "tier": "bisenet_face_roi_xseg_and_occluder", "roi": [x0, y0, x1, y1],
+                "hair_exclusion": True, "background_exclusion": True, "ears_included": True,
+                "parser_normalization": "imagenet", "neural_models": [net.capability() for net in self.visible_nets],
+                "ear_pixels": int(ears.sum()), "_skin_only_mask": photometric_skin,
+            },
         )
+        self.last_packet = packet
         return packet, (time.perf_counter() - began) * 1000
     def release(self) -> None:
         if self.parser is not None:
             self.parser.release()
             self.parser = None
+        for net in self.visible_nets:
+            net.release()
+        self.visible_nets = ()
+        self.last_packet = None
+
+
+def _mask_plane(value, shape: tuple[int, int], name: str) -> np.ndarray:
+    plane = np.asarray(value, np.float32)
+    if plane.shape != shape or not np.isfinite(plane).all() or np.any((plane < 0) | (plane > 1)):
+        raise DomainError("TRUE3D_SEMANTIC_MASK_INVALID", f"{name} must be a finite matching plane in 0..1", 422)
+    return plane
