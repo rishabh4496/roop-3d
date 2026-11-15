@@ -295,7 +295,7 @@ class VideoFrameService:
         return data, out_w, out_h
 
     # ------------------------------------------------------------------ faces
-    def analyzed_faces(self, value: str, result: FrameResult, threshold: float = 0.5):
+    def analyzed_faces(self, value: str, result: FrameResult, threshold: float = 0.4):
         """Cached ``FaceAnalyzer`` output (left to right) for one decoded frame; None when no analyzer is configured."""
         if self.analyzer is None:
             return None
@@ -311,7 +311,7 @@ class VideoFrameService:
             _lru_put(self._detections, key, faces, limit_entries=DETECTION_CACHE_ENTRIES)
         return faces
 
-    def faces(self, value: str, result: FrameResult, threshold: float = 0.5, detail: str = "basic") -> list[dict]:
+    def faces(self, value: str, result: FrameResult, threshold: float = 0.4, detail: str = "basic") -> list[dict]:
         """Every face of the frame, left to right: native-pixel box, 5-point landmarks, pose and confidence.
 
         With a ``FaceAnalyzer`` (production) each face also carries ``detection_tier`` / ``landmark_validity`` and, with

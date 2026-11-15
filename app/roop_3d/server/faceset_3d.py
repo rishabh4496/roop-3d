@@ -6,6 +6,8 @@ import re
 import threading
 from typing import Any
 
+import numpy as np
+
 from fastapi import APIRouter, Query, Request
 from pydantic import Field, model_validator
 from starlette.concurrency import run_in_threadpool
@@ -14,6 +16,7 @@ from roop_3d.audit.isolation import safe_path
 from roop_3d.core.errors import DomainError
 from roop_3d.core.settings import Contract
 from roop_3d.faceset.faceset_reader import FaceSetReader
+from roop_3d.faceset.locator import resolve_faceset
 from roop_3d.faceset_loader import LandmarkEngine, enrich_document
 from roop_3d.reconstruction.faceset_3d import reconstruct_faceset
 
@@ -44,13 +47,8 @@ class Reconstruct3DRequest(Contract):
 def _read_archive(request: Request, faceset_id: str | None = None, faceset_path: str | None = None):
     root = request.app.state.root
     if faceset_id:
-        if not _ID.fullmatch(faceset_id):
-            raise DomainError("FACESET_ID_INVALID", "FaceSet id is invalid", 422)
-        if not safe_path(root, f"roop_3d/.runtime/facesets/{faceset_id}.json").is_file():
-            raise DomainError("FACESET_NOT_FOUND", "FaceSet is not loaded", 404)
-        choices = [safe_path(root, f"roop_3d/{base}/facesets/{faceset_id}.fsz")
-                   for base in ("outputs", ".runtime")]
-        archive = next((path for path in choices if path.is_file()), None)
+        resolved = resolve_faceset(root, faceset_id)
+        faceset_id, archive = resolved.faceset_id, resolved.archive
     elif faceset_path:
         relative = faceset_path.replace("\\", "/")
         if not relative.startswith(("facesets/", "roop_3d/outputs/facesets/", "roop_3d/.runtime/facesets/")):
@@ -152,3 +150,38 @@ def reconstruction_backbones():
     """Which 3D head-model backbones are installed (read-only; nothing is loaded). Drives the Inspector's backbone dropdown."""
     from roop_3d.reconstruction.backbone_status import backbone_status
     return backbone_status()
+
+
+def _loaded_bank(request: Request, faceset_id: str):
+    document = _read_archive(request, faceset_id=faceset_id)
+    engine = getattr(request.app.state, "landmark_engine", None)
+    if engine is None:
+        engine = request.app.state.landmark_engine = LandmarkEngine(request.app.state.root)
+    loaded = enrich_document(document, engine)
+    if loaded.bank is None:
+        raise DomainError("FACESET_NO_USABLE_VIEW", "; ".join(loaded.notes) or "No usable reference view", 422)
+    return loaded
+
+
+@router.get("/facesets/{faceset_id}/reference-bank")
+async def reference_bank(faceset_id: str, request: Request):
+    """Quality-scored multi-angle references of a FaceSet (catalogued or ``app/facesets/<id>.fsz``): centroid norm, every
+    view's embedding quality + pose, rejected views with reasons, and the UV view order."""
+    loaded = await run_in_threadpool(_loaded_bank, request, faceset_id)
+    return {**loaded.bank.summary(), "archive_format": loaded.document.archive_format, "notes": loaded.notes}
+
+
+class BankMatchRequest(Contract):
+    embedding: list[float] = Field(min_length=512, max_length=512)
+    yaw: float | None = Field(default=None, ge=-180, le=180)
+    pitch: float | None = Field(default=None, ge=-90, le=90)
+
+
+@router.post("/facesets/{faceset_id}/reference-bank/match")
+async def reference_bank_match(faceset_id: str, value: BankMatchRequest, request: Request):
+    """Identity score of a target face (512-D ArcFace embedding, optional standard-frame head pose) against the bank."""
+    loaded = await run_in_threadpool(_loaded_bank, request, faceset_id)
+    try:
+        return loaded.bank.similarity(np.asarray(value.embedding, np.float32), value.yaw, value.pitch)
+    except ValueError as error:
+        raise DomainError("EMBEDDING_INVALID", str(error), 422) from None

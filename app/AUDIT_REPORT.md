@@ -304,3 +304,69 @@ Test image: actual `0.png` in `app/facesets/harjot.fsz`. Each row executed its r
 - No packages, model weights, FaceSets, or sibling-application files were changed. No new download was needed: all required inputs were present.
 - **Production blockers remain:** `RENDERER_NOT_WIRED` and persisted `JOB_STORE_INVALID`. A passing component canary does not make an unwired render engine selectable.
 - Real missing-DirectML -> CPU detector canary: **passed**, nine finite output tensors; exact DirectML-unavailable diagnostic retained without marking the CPU-loaded component unavailable.
+
+## Stage 2 — Target face detection, multi-angle recall and the `harjot` reference bank
+
+**Scope:** target scanning, detector calibration, UI/API binding, FaceSet loading and the multi-angle reference bank. The renderer is still unwired (`RENDERER_NOT_WIRED`) and the persisted job store is still `JOB_STORE_INVALID`; neither was touched.
+
+### Root causes found and repaired
+
+| Defect | Evidence | Repair |
+|---|---|---|
+| Default inspection looked only at the head of the file | `InspectRequest` defaults (32 keyframes / 30 s budget) stopped after ~2 s at ~0.5 s per analysed frame | `sampling="adaptive"` is the default: one decode pass over the **whole** timeline (`media/adaptive_sampling.py`). Stride relaxes 1,2,4… to 0.25 s (face present) / 0.5 s (none); a cut, a track appearing or vanishing, a ≥8° pose jump, motion or rescale, or any head past 30° yaw / 22° pitch collapses it (steep frames ≤2 apart). A measured cost per sample stretches the stride so the sweep ends inside the time budget instead of truncating. `every_frame` + `full_video` remain the exhaustive legacy scan. |
+| UI invented its detections | `populateFromInspection` replicated one first-seen box, five fixed-fraction landmark dots and `confidence: 0.95` across the track, with ids `track_frame` that could collide when `sampled_detections` exceeded the frame span | `FaceTrack.observations` carries real per-sample box, 5 landmarks, pose and score (≤400 per track, evenly thinned, pose extremes kept). The store builds faces from them; a scan saved before this change shows one real box at its first frame and nothing invented. |
+| Frame-lock ids were another id domain | `/media/detect-frame-faces` numbered clusters by registry order and took the first same-digest JSON in directory order | The route takes the workstation's `inspection_id` (404 if unknown, newest scan otherwise) and gives a found face the track whose own nearest observation (≤0.5 s, IoU ≥0.4) it overlaps; real detector scores replace the constant `0.98`; frame size comes from the decoded frame (rotation-safe). |
+| Detector operating point too strict for turned heads | `PRIMARY=0.5` | `det_thresh` calibrated to **0.40** (inspection, frame detection, tracker, FaceSet reader 0.35). Scores in [0.40, 0.50) must pass roll-invariant five-point geometry and the independent 2d106 landmark agreement, so the lower cut does not admit clutter; ≥0.50 stands as before. |
+| Recovery ran only when no face passed | one 0.5 face suppressed it for the whole frame | The tracker passes the number of live tracks as `expected`; a missing one triggers recovery even when another face passed. New `magnify` stage (640 px windows at 1×/1.5×/2×) joins zoom-out, coarse tiles and ±30/60/90° rotation. Box NMS now also drops nested/partial duplicates (ear-sized box ≥60 % inside a ≥4× larger head). |
+| Frontal-leaning landmark vetoes | narrow profiles needed a dense model; sub-threshold profiles were vetoed by 2d106, which is itself unreliable on steep profiles; box aspect ≥0.30 | Aspect floor 0.25; a primary-score profile needs no dense model; a tolerant-band face with valid geometry survives when it scores ≥0.35 even if 2d106 disagrees. No yaw/pitch rejection exists in the scan path. |
+| `harjot` not loadable by id | `app/facesets/harjot.fsz` has no `.runtime/facesets/harjot.json`; `/faceset/reconstruct-3d` and the identity-asset routes demanded a catalog manifest | `faceset/locator.py` resolves catalog id → library archive by stem → unique catalog name; used by the reconstruct and identity-asset routes. The job-lock resolver (`identity/lock.py`) was not changed. |
+| Reference quality was a whole-image Laplacian × 0.7 + constant 0.95 detector confidence | `harjot` views 0 and 4 scored 0.5015 / 0.5041, one rounding from the `≥0.5` aggregation cut | Reader uses the multi-scale detector, keeps the dominant face, records the **real** score and face-region sharpness; cached v1 metadata is versioned (`CACHE_VERSION=2`) so old numbers are never reused. |
+| A configured detector that is not installed | `.runtime/config.json` selected `retinaface`; no `retinaface_*.onnx` exists, so every scan answered 409 `MODEL_INCOMPATIBLE` | Local (git-ignored) config set to `scrfd`, which resolves to the installed `det_10g.onnx`. The UI still lists all three detectors regardless of availability. |
+
+### `harjot` reference bank (`faceset/reference_bank.py`)
+
+`load_faceset` now builds a `ReferenceBank` for every set. Each view gets a measured quality (detector confidence, face sharpness, face size, landmark trust with PnP reprojection error, exposure of the face region). Views with fabricated landmarks, or an embedding below the 0.30 identity-link cosine, are excluded with a reason. The identity centroid is the unit-length quality-weighted mean of the rest. `bank.apply()` writes centroid, medoid and per-view quality into the `FaceSetDocument` that the identity-asset builder reads (`server/identity_assets.load_document`). `bank.uv_views()` orders views by pose coverage for UV reconstruction. `bank.similarity(embedding, yaw, pitch)` scores a target against the centroid **and** the references nearest its pose; it is used by `scan_missing_angles` and exposed at `GET /api/v1/facesets/{id}/reference-bank` and `POST …/reference-bank/match`.
+
+| `harjot` view | yaw | pitch | roll | quality | cosine to centroid | landmarks |
+|---|---:|---:|---:|---:|---:|---|
+| 2 | −0.7 | +5.5 | −2.3 | 0.800 | 0.886 | 1k3d68 + 2d106 |
+| 1 | +30.8 | +0.8 | −2.6 | 0.796 | 0.914 | 1k3d68 + 2d106 |
+| 3 | −35.5 | −0.6 | −2.9 | 0.791 | 0.908 | 1k3d68 + 2d106 |
+| 0 | +85.8 | −10.3 | +5.1 | 0.664 | 0.833 | archive 5-point |
+| 4 | −85.4 | −9.7 | −2.1 | 0.646 | 0.809 | archive 5-point |
+
+5 of 5 usable, none rejected, `|centroid| = 1.0`, UV view order `[2, 0, 4, 3, 1]`. Pitch span is still only 15.85° (no up/down views): the bank reports coverage, it cannot create vertical views.
+
+### Verification gate (ran)
+
+```bat
+"roop_3d/.venv/Scripts/python.exe" -B -m roop_3d.tools.verify_stage2
+```
+
+Production `MediaService.inspect` (adaptive, identity-lock tracker, ArcFace, 2d106) on every `.mp4` in `G:\pinokio\roop-keep\single`, plus the production FaceSet loader. Receipt: `app/roop_3d/.runtime/stage2_verification.json`. Yaw bins use the existing 5-point geometric estimate: frontal \|yaw\| < 25°, 3/4 25–55°, profile ≥ 55°.
+
+| Video | Frames analysed / decoded | Detections | Tracks | Frontal | 3/4 | Profile | Time |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| s.mp4 | 49 / 59 | 49 | 1 | 43 | 6 | 0 | 9.6 s |
+| s1.mp4 | 99 / 206 | 95 | 1 | 95 | 0 | 0 | 29.9 s |
+| s2.mp4 | 189 / 306 | 189 | 1 | 184 | 5 | 0 | 44.7 s |
+| s3.mp4 | 220 / 246 | 220 | 1 | 3 | 8 | 209 | 47.2 s |
+| s4.mp4 | 286 / 374 | 296 | 3 | 9 | 124 | 163 | 104.8 s |
+| s5.mp4 | 576 / 1135 | 556 | 2 | 330 | 56 | 170 | 158.5 s |
+| s6.mp4 | 738 / 1335 | 480 | 2 | 295 | 41 | 144 | 190.6 s |
+| s7.mp4 | 348 / 600 | 320 | 1 | 84 | 55 | 181 | 83.3 s |
+| s8.mp4 | 144 / 569 | 144 | 1 | 139 | 5 | 0 | 46.0 s |
+| s9.mp4 | 188 / 381 | 176 | 2 | 93 | 20 | 63 | 42.8 s |
+| s10.mp4 | 212 / 381 | 199 | 2 | 119 | 22 | 58 | 53.8 s |
+| s11.mp4 | 113 / 181 | 113 | 1 | 113 | 0 | 0 | 21.9 s |
+
+**12 videos, 2,837 real detections, 0 failed (none truncated, none without a detection); `harjot` bank OK.** Tracks start at t = 0 and extend into the clip (e.g. s6 0–53.2 s).
+
+### Observed checks and limits
+
+- **ran** `test_stage2_target_scan.py` (15 new tests: sampler coverage / turn densification / budget stretch, observation thinning, id binding, magnified-window recovery in native pixels, expected-count recovery, band vetting, nested-box dedupe, reference-bank centroid / rejection / pose-matched scoring, library locator) and `test_robust_detection.py`: all pass. Three `test_robust_detection` contracts that pinned the 0.5 operating point, the old pass count and the 0.30 aspect floor were updated; two legacy bounded-scan tests were pinned to `sampling="every_frame"`.
+- **ran** a real `create_app` + `TestClient` smoke (lifespan skipped because of `JOB_STORE_INVALID`): `reference-bank` 200, `match` 200, `/faceset/reconstruct-3d` by id `harjot` 200, `inspect-faces` 200 with observations, `detect-frame-faces` bound to the scan's `track_0000` with a real confidence, unknown `inspection_id` 404.
+- **ran** `npx tsc --noEmit`, `npx eslint .`, `npx vitest run` in `app/roop_3d_ui`: clean, 89 files / 870 tests; the store test now asserts real observations and the no-observation fallback.
+- **Pre-existing, not caused here** (the two `test_identity_asset_build` failures are identical at `HEAD` in a clean worktree): many `create_app`-fixture tests fail with `NameError: free variable 'app'` / `MODEL_REGISTRY_INVALID`; `test_inspection_gpu`, `test_stage8_studio` and `test_workstation_preview` do not import.
+- **Pose caveat:** the profile counts for s3, s4, s7 are inflated. Those clips contain heads rolled ≥ 90° (lying down); detection and boxes are correct on visual inspection, but the five-point yaw/pitch estimator saturates at ±90° there and does not separate roll. Detection recall is unaffected; the pose bins are a heuristic, not 3D head pose.
+- **Not demonstrated:** none of the 12 clips depicts `harjot` (best-match cosines −0.08 … +0.16), so bank matching was exercised for plumbing and range, not for a positive identification. s4 still yields three tracks (a small persistent box near the ear was reduced, not eliminated). Nothing here renders a frame: `is_wired()` is still false.

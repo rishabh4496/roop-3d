@@ -169,6 +169,10 @@ function clusteredState(faces: DetectedFace[], threshold: number, clusters: Targ
   return { detectedFaces: faces.map(face => ({ ...face, clusterId: face.selectable === false ? '' : ids.get(face.id) ?? face.clusterId })), targetClusters };
 }
 
+/** The scan the workstation currently holds: frame-face requests bind their results to ITS tracks. */
+let activeInspectionId: string | null = null;
+export const getActiveInspectionId = (): string | null => activeInspectionId;
+
 let state: FaceSelectionStoreState = {
   poseFocus: null,
   detectedFaces: [],
@@ -314,6 +318,7 @@ let state: FaceSelectionStoreState = {
     probe?: Probe | null,
     existingAssignments: Record<string, string> = {}
   ) => {
+    activeInspectionId = inspection?.inspection_id ?? null;
     if (!inspection || !inspection.tracks || inspection.tracks.length === 0) {
       state = {
         ...state,
@@ -329,63 +334,50 @@ let state: FaceSelectionStoreState = {
     }
 
     const faces: DetectedFace[] = [];
-    const fps = probe?.fps_rational ? evalRational(probe.fps_rational) : 30;
 
     for (const track of inspection.tracks) {
-      const box = track.bounding_box;
-      // Normalized [0..1] bbox. If bounding_box is in pixels, normalize using probe width/height
-      let bboxNorm: [number, number, number, number] = [0.3, 0.2, 0.7, 0.6];
-      if (box && probe && probe.width > 0 && probe.height > 0) {
-        if (box.x2 <= 1.0 && box.y2 <= 1.0) {
-          bboxNorm = [box.x1, box.y1, box.x2, box.y2];
-        } else {
-          bboxNorm = [
-            box.x1 / probe.width,
-            box.y1 / probe.height,
-            box.x2 / probe.width,
-            box.y2 / probe.height,
-          ];
-        }
-      }
-
-      // 5-point ArcFace landmark dots derived inside the bbox
-      const [bx1, by1, bx2, by2] = bboxNorm;
-      const bw = bx2 - bx1;
-      const bh = by2 - by1;
-      const landmarks5: [number, number][] = [
-        [bx1 + bw * 0.35, by1 + bh * 0.38], // left eye
-        [bx1 + bw * 0.65, by1 + bh * 0.38], // right eye
-        [bx1 + bw * 0.50, by1 + bh * 0.58], // nose tip
-        [bx1 + bw * 0.38, by1 + bh * 0.75], // left mouth
-        [bx1 + bw * 0.62, by1 + bh * 0.75], // right mouth
-      ];
-
-      const yawAvg = track.pose_range.yaw_degrees ? (track.pose_range.yaw_degrees[0] + track.pose_range.yaw_degrees[1]) / 2 : 0;
-      const pitchAvg = track.pose_range.pitch_degrees ? (track.pose_range.pitch_degrees[0] + track.pose_range.pitch_degrees[1]) / 2 : 0;
-      const rollAvg = track.pose_range.roll_degrees ? (track.pose_range.roll_degrees[0] + track.pose_range.roll_degrees[1]) / 2 : 0;
-
       const thumb = track.thumbnail_base64 ? `data:${track.thumbnail_mime || 'image/jpeg'};base64,${track.thumbnail_base64}` : undefined;
+      const mean = (range: [number, number] | null | undefined) => range ? (range[0] + range[1]) / 2 : 0;
+      const trackPose = { yaw: mean(track.pose_range.yaw_degrees), pitch: mean(track.pose_range.pitch_degrees), roll: mean(track.pose_range.roll_degrees) };
 
-      // Sample detections across the track duration
-      const sampleCount = Math.max(1, track.sampled_detections ?? Math.min(10, track.last_frame - track.first_frame + 1));
-      const frameStep = (track.last_frame - track.first_frame) / Math.max(1, sampleCount - 1);
-      const timeStep = (track.last_timestamp_seconds - track.first_timestamp_seconds) / Math.max(1, sampleCount - 1);
-
-      for (let s = 0; s < sampleCount; s++) {
-        const frameIndex = Math.round(track.first_frame + s * frameStep);
-        const timestamp = track.first_timestamp_seconds + s * timeStep;
+      // Every face is a detection the scan really made in that frame: its own box, landmarks, pose and score. Ids are
+      // unique per (track, frame), so a selection can never resolve to another sample of the same track.
+      const seen = new Set<number>();
+      for (const observation of track.observations ?? []) {
+        if (seen.has(observation.frame)) continue;
+        seen.add(observation.frame);
         faces.push({
-          id: `${track.track_id}_${frameIndex}`,
-          frameIndex,
-          timestamp,
-          bbox: bboxNorm,
-          landmarks5,
+          id: `${track.track_id}_${observation.frame}`,
+          frameIndex: observation.frame,
+          timestamp: observation.timestamp_seconds,
+          bbox: observation.bbox,
+          landmarks5: observation.landmarks5.length === 5 ? observation.landmarks5 : undefined,
           clusterId: track.track_id,
-          pose: { yaw: yawAvg, pitch: pitchAvg, roll: rollAvg },
-          confidence: 0.95,
+          pose: { yaw: observation.yaw_degrees, pitch: observation.pitch_degrees, roll: observation.roll_degrees },
+          confidence: observation.confidence,
           thumbnailUrl: thumb,
         });
       }
+      if (seen.size > 0) continue;
+
+      // A scan saved before observations existed knows one real box: where the track first appeared. It is shown at that
+      // frame only; nothing is interpolated, no landmarks or confidence are invented.
+      const box = track.bounding_box;
+      if (!box) continue;
+      const pixels = box.x2 > 1.0 || box.y2 > 1.0;
+      if (pixels && !(probe && probe.width > 0 && probe.height > 0)) continue;
+      const bbox: [number, number, number, number] = pixels && probe
+        ? [box.x1 / probe.width, box.y1 / probe.height, box.x2 / probe.width, box.y2 / probe.height]
+        : [box.x1, box.y1, box.x2, box.y2];
+      faces.push({
+        id: `${track.track_id}_${track.first_frame}`,
+        frameIndex: track.first_frame,
+        timestamp: track.first_timestamp_seconds,
+        bbox,
+        clusterId: track.track_id,
+        pose: trackPose,
+        thumbnailUrl: thumb,
+      });
     }
 
     const validTrackIds = new Set(inspection.tracks.map(item => item.track_id));
@@ -479,6 +471,7 @@ let state: FaceSelectionStoreState = {
   },
 
   reset: () => {
+    activeInspectionId = null;
     state = {
       ...state,
       poseFocus: null,
@@ -525,15 +518,6 @@ export function hydrateFaceSegments(segments: any[]) {
     return segment ? { ...face, clusterId: segment.cluster_id } : face;
   });
   restoreFaceEdit({ ...base, detectedFaces: faces, targetClusters: clusters, assignments: Object.fromEntries(segments.filter(item => item.role === 'swap' && item.faceset_id).map(item => [item.cluster_id, item.faceset_id])) });
-}
-
-function evalRational(r: string): number {
-  if (r.includes('/')) {
-    const [num, den] = r.split('/').map(Number);
-    return den ? num / den : 30;
-  }
-  const parsed = parseFloat(r);
-  return isNaN(parsed) ? 30 : parsed;
 }
 
 export function useFaceSelectionStore<T = FaceSelectionStoreState>(

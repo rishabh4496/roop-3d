@@ -189,7 +189,7 @@ def run_render(arguments: argparse.Namespace, out: Output, root: Path) -> int:
             return fail("MEDIA_UPLOAD_FAILED", uploaded.text[:300])
         scan = {"path": uploaded.json()["path"], "identity_lock": True}
         if arguments.full_scan:
-            scan.update(full_video=True, time_budget_seconds=900)
+            scan.update(sampling="adaptive", time_budget_seconds=900)
         inspection = client.post("/api/v1/media/inspect-faces", json=scan)
         if inspection.status_code != 200:
             return fail("INSPECTION_FAILED", inspection.text[:300])

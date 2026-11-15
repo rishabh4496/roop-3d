@@ -55,10 +55,12 @@ and publishes the video and manifest before the worker records success.
 * Import a local `.fsz` in **Identity**, import a video in **Target**, inspect, select a target track,
   and assign the FaceSet. Import waits for the service's upload capability rather than silently
   ignoring a file during startup.
-* The workstation requests `full_video: true` from the existing media inspector, with a 900-second
-  time budget. It traverses to EOF instead of stopping at the legacy keyframe/decoded-frame sampling
-  caps. Legacy callers retain their old bounded defaults. Time/identity limits still produce an
-  explicit truncated report; the UI never treats that result as a complete inventory.
+* The workstation requests `sampling: "adaptive"` from the media inspector, with a 900-second time
+  budget. The sampler sweeps the whole timeline (sparse while a scene is stable, every frame around
+  cuts, track changes and pose turns) and stretches its stride, rather than stopping early, when the
+  budget would be overrun. `sampling: "every_frame"` is the exhaustive legacy scan (`full_video`
+  removes its keyframe/decoded-frame caps). Time/identity limits still produce an explicit truncated
+  report; the UI never treats that result as a complete inventory.
 * The existing coverage panel and explicit 3D asset build/view controls remain authoritative.
   The inspector selects the existing reference engine and standard / pose / reenactment modes.
   The frame preview now carries the identity lock and motion strength as well as the existing
@@ -91,7 +93,7 @@ and publishes the video and manifest before the worker records success.
 
 | Contract | Behaviour |
 | --- | --- |
-| `POST /api/v1/media/inspect-faces` | Optional `full_video`; skips legacy frame/keyframe caps, retains time/identity/storage bounds |
+| `POST /api/v1/media/inspect-faces` | `sampling` = `adaptive` (default, whole-timeline) or `every_frame`; `full_video` only lifts the `every_frame` caps; each track carries real per-sample `observations` |
 | `POST /api/v1/projects` | Existing create contract; accepts optional typed `preview` state |
 | `PUT /api/v1/projects/{id}` | Save current project; requires its last `revision`; conflict is HTTP 409 |
 | `POST /api/v1/projects/{id}/jobs` | Queue the saved request with `Idempotency-Key`, project ID and effective settings |

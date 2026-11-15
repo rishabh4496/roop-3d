@@ -160,8 +160,11 @@ class FaceTracker:
         if hasattr(self.detector, "detect_scored"):
             if isinstance(self.detector, RobustDetector):
                 recover = bool(self._tracks) if self._recover_only_with_tracks else True
-                scored, _ = self.detector.detect_scored(image, floor, recover=recover,
-                                                        max_passes=8 if self._recover_only_with_tracks else None)
+                # Tracks seen on the previous frame should still be here: a missing one triggers the scale/tile/roll stages even
+                # when another face passed, so a head that turned to 3/4 or profile is searched for instead of dropped.
+                expected = sum(1 for _, missed, _ in self._tracks.values() if missed == 0)
+                scored, _ = self.detector.detect_scored(image, floor, recover=recover, expected=expected,
+                                                        max_passes=12 if self._recover_only_with_tracks else None)
             else:
                 scored, _ = self.detector.detect_scored(image, floor)
             # High-score detections first so the track budget never drops a certain face for a doubtful one.

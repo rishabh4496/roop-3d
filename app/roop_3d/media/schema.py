@@ -11,12 +11,17 @@ class MediaRequest(Contract):
 
 
 class InspectRequest(MediaRequest):
-    # Opt-in complete traversal: legacy calls retain their frame/keyframe budgets.
+    # ``adaptive`` (default) sweeps the WHOLE timeline: sparse while the scene is stable, every frame around cuts, track
+    # changes and pose turns (see media/adaptive_sampling.py). The frame/keyframe caps below do not apply to it; the time
+    # budget does, by stretching the stride rather than stopping early. ``every_frame`` is the exhaustive legacy scan.
+    sampling: Literal["adaptive", "every_frame"] = "adaptive"
+    # every_frame only: opt-in complete traversal. Legacy calls retain their frame/keyframe budgets.
     # Time, image-size, track-count and report-storage bounds still apply.
     full_video: bool = False
     max_samples: int = Field(default=32, ge=1, le=128, strict=True)
     max_decoded_frames: int = Field(default=10000, ge=1, le=10000, strict=True)
-    detection_threshold: float = Field(default=0.5, ge=0.1, le=0.99)
+    # SCRFD det_thresh, calibrated 0.35-0.45: 0.5 loses 3/4 and tilted faces.
+    detection_threshold: float = Field(default=0.4, ge=0.1, le=0.99)
     # Opt in to the identity-lock tracker (track states, confidence, strict reacquisition) and the
     # identity report. Off keeps the original inspection behaviour and response bit-for-bit.
     identity_lock: bool = False
@@ -96,6 +101,18 @@ class PoseRange(Contract):
     yaw_pitch_state: Literal["UNKNOWN", "CANDIDATE"] = "UNKNOWN"
 
 
+class TrackObservation(Contract):
+    """One sampled detection of a track: where the face really was in that frame (nothing interpolated)."""
+    frame: int = Field(ge=0)
+    timestamp_seconds: float = Field(ge=0)
+    bbox: tuple[float, float, float, float]                       # x1, y1, x2, y2 normalised to the frame
+    landmarks5: tuple[tuple[float, float], ...] = ()              # normalised eye, eye, nose, mouth, mouth
+    yaw_degrees: float
+    pitch_degrees: float
+    roll_degrees: float
+    confidence: float = Field(ge=0, le=1)
+
+
 class FaceTrack(Contract):
     track_id: str = Field(pattern=r"^track_[0-9]{4}$")
     persistent_id: int | None = Field(default=None, ge=0)
@@ -110,6 +127,8 @@ class FaceTrack(Contract):
     thumbnail_base64: str
     thumbnail_mime: Literal["image/jpeg"] = "image/jpeg"
     sampled_detections: int = Field(ge=1)
+    # Real per-sample detections, time-ordered and evenly thinned to MAX_TRACK_OBSERVATIONS (pose extremes always kept).
+    observations: tuple[TrackObservation, ...] = ()
 
 
 class FaceInspection(Contract):

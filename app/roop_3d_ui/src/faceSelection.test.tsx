@@ -142,6 +142,10 @@ describe('useFaceSelectionStore state architecture and clustering', () => {
           },
           bounding_box: { x1: 0.2, y1: 0.2, x2: 0.6, y2: 0.6 },
           sampled_detections: 4,
+          observations: [0, 20, 40, 60].map((frame, index) => ({
+            frame, timestamp_seconds: frame / 30, bbox: [0.2 + index * 0.05, 0.2, 0.6 + index * 0.05, 0.6] as [number, number, number, number],
+            landmarks5: [[0.3, 0.3], [0.5, 0.3], [0.4, 0.4], [0.33, 0.5], [0.47, 0.5]] as [number, number][],
+            yaw_degrees: -5 + index * 3, pitch_degrees: 1, roll_degrees: 0, confidence: 0.6 + index / 10 })),
         },
       ],
       warnings: [],
@@ -160,13 +164,36 @@ describe('useFaceSelectionStore state architecture and clustering', () => {
     useFaceSelectionStore.getState().populateFromInspection(inspection, probe, { track_0000: 'alice' });
 
     const state = useFaceSelectionStore.getState();
-    expect(state.detectedFaces.length).toBeGreaterThanOrEqual(4);
+    expect(state.detectedFaces.map(face => face.frameIndex)).toEqual([0, 20, 40, 60]);
+    expect(new Set(state.detectedFaces.map(face => face.id)).size).toBe(4);
+    expect(state.detectedFaces[2].bbox[0]).toBeCloseTo(0.3);      // each face is its own measured box, not the first-seen one
+    expect(state.detectedFaces[0].bbox[0]).toBeCloseTo(0.2);
+    expect(state.detectedFaces[3].pose.yaw).toBe(4);
+    expect(state.detectedFaces[3].confidence).toBeCloseTo(0.9);
+    expect(state.detectedFaces[1].landmarks5).toHaveLength(5);
     expect(state.targetClusters).toHaveLength(1);
     expect(state.targetClusters[0].id).toBe('track_0000');
     expect(state.assignments['track_0000']).toBe('alice');
     expect(state.targetClusters[0].sourceFaceId).toBe('alice');
-    expect(state.targetClusters[0].avgPose.yaw).toBe(0); // (-5 + 5) / 2
-    expect(state.targetClusters[0].avgPose.pitch).toBe(1); // (-2 + 4) / 2
+    expect(state.targetClusters[0].avgPose.yaw).toBeCloseTo(-0.5);   // mean of the four measured yaws (-5, -2, 1, 4)
+    expect(state.targetClusters[0].avgPose.pitch).toBe(1);
+  });
+
+  it('shows a scan saved without observations as one real box, with nothing invented', () => {
+    useFaceSelectionStore.getState().reset();
+    useFaceSelectionStore.getState().populateFromInspection({
+      inspection_id: 'f'.repeat(32), target_sha256: 'c'.repeat(64), warnings: [], truncated: false,
+      tracks: [{ track_id: 'track_0003', first_frame: 12, last_frame: 90, first_timestamp_seconds: 0.4, last_timestamp_seconds: 3,
+        thumbnail_base64: 'dGVzdA==', thumbnail_mime: 'image/jpeg', landmark_count: 5,
+        pose_range: { yaw_degrees: [-30, 10], pitch_degrees: null, roll_degrees: null, method: 'five_point_geometric_estimate' },
+        bounding_box: { x1: 192, y1: 108, x2: 576, y2: 432 }, sampled_detections: 40 }],
+    }, { width: 1920, height: 1080, duration_seconds: 3, fps_rational: '30/1', declared_frame_count: 90, audio_tracks: [] });
+    const faces = useFaceSelectionStore.getState().detectedFaces;
+    expect(faces).toHaveLength(1);
+    expect(faces[0].frameIndex).toBe(12);
+    expect(faces[0].bbox).toEqual([0.1, 0.1, 0.3, 0.4]);
+    expect(faces[0].landmarks5).toBeUndefined();
+    expect(faces[0].confidence).toBeUndefined();
   });
 
   it('keeps target faces selectable between sparse samples, within the inspected track', () => {

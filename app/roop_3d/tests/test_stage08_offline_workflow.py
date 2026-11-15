@@ -191,7 +191,8 @@ def test_full_inspection_reuses_tracker_to_eof_without_legacy_sampling_caps(tmp_
         def release(self): pass
     app, _, payload = _fixture(tmp_path, count=8)
     monkeypatch.setattr(service, "FaceTracker", Tracker)
-    request = {"path": payload["target_path"], "identity_lock": True, "max_samples": 1, "max_decoded_frames": 1}
+    request = {"path": payload["target_path"], "identity_lock": True, "max_samples": 1, "max_decoded_frames": 1,
+               "sampling": "every_frame"}
     bounded = app.state.media.inspect(InspectRequest.model_validate(request))
     full = app.state.media.inspect(InspectRequest.model_validate({**request, "full_video": True}))
     assert bounded.decoded_frames == 1 and bounded.truncated

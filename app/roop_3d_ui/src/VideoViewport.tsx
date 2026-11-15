@@ -5,7 +5,7 @@ import type { MaskKeyframe } from './utils/maskRanges';
 import { mediaURL, postLivePreview } from './api';
 import { PreviewURL } from './state';
 import type { Coverage, FaceSet, Probe, Inspection, FrameFaceDetectionResponse } from './contracts';
-import { useFaceSelectionStore } from './useFaceSelectionStore';
+import { getActiveInspectionId, useFaceSelectionStore } from './useFaceSelectionStore';
 import FaceOverlayCanvas from './components/canvas/FaceOverlayCanvas';
 import FaceSelectionTray from './components/tray/FaceSelectionTray';
 import WorkstationCanvas from './components/canvas/WorkstationCanvas';
@@ -168,9 +168,11 @@ export function VideoViewport({
     setDetectingFaces(true);
     setDetectionNotice('');
     try {
+      const inspectionId = getActiveInspectionId();
       const res = await post<FrameFaceDetectionResponse>('/media/detect-frame-faces', {
         path: target,
         timestamp: time,
+        ...(inspectionId ? { inspection_id: inspectionId } : {}),
       });
       if (res && res.faces && res.faces.length > 0) {
         useFaceSelectionStore.getState().addFrameDetectedFaces(res.faces, true);
@@ -299,7 +301,8 @@ export function VideoViewport({
       const locked = await targetLock.lockFace(match.face.face_index);
       if (!locked) return;
       // The frame's own presentation time (minus a hair, so rounding can never select the next frame).
-      const result = await post<FrameFaceDetectionResponse>('/media/detect-frame-faces', { path: target, timestamp: Math.max(0, meta.timestamp_sec - 0.0005) });
+      const inspectionId = getActiveInspectionId();
+      const result = await post<FrameFaceDetectionResponse>('/media/detect-frame-faces', { path: target, timestamp: Math.max(0, meta.timestamp_sec - 0.0005), ...(inspectionId ? { inspection_id: inspectionId } : {}) });
       const server = bestOverlap(match.face, result?.faces ?? []);
       if (!server) { noticeLater('That face could not be locked: it was not found again in this frame.'); return; }
       store.addFrameDetectedFaces(result.faces, false);

@@ -48,7 +48,7 @@ def media_frame(request: Request, path: Annotated[str, Query(min_length=1, max_l
                 frame_index: Annotated[int | None, Query(ge=0, le=100_000_000)] = None,
                 timestamp: Annotated[float | None, Query(ge=0, le=86400)] = None,
                 detect_faces: bool = False,
-                threshold: Annotated[float, Query(ge=0.1, le=0.99)] = 0.5,
+                threshold: Annotated[float, Query(ge=0.1, le=0.99)] = 0.4,
                 max_size: Annotated[int, Query(ge=64, le=4096)] = 1280,
                 quality: Annotated[int, Query(ge=30, le=95)] = 82,
                 format: Annotated[str, Query(pattern="^(jpeg|json)$")] = "jpeg") -> Response:

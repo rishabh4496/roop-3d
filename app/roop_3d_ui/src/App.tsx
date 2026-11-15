@@ -480,7 +480,7 @@ export default function App() {
   const importAsset = (file: File | undefined) => { if (file) importAssets([file]); };
   const inspect = () => void run('Inspecting target faces', async () => {
     const result = await post<Inspection>('/media/inspect-faces', { path: target, identity_lock: true,
-      full_video: true, time_budget_seconds: 900 });
+      sampling: 'adaptive', time_budget_seconds: 900 });
     setInspection(result); setIdentityLock(null); setAssigned({}); setSelectedTrack(result.tracks[0]?.track_id ?? '');
     useFaceSelectionStore.getState().populateFromInspection(result, probe, {});
     if (!result.tracks.length) setNotice('No faces were detected. Try a clearer target frame or another clip.');

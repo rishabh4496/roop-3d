@@ -592,13 +592,15 @@ class FrameFaceDetectionRequest(Contract):
     path: str = Field(min_length=1, max_length=1024)
     timestamp: float | None = Field(default=None, ge=0, le=86400)
     frame_index: int | None = Field(default=None, ge=0, le=10_000_000)   # converted to a timestamp, so any index of a long video works
-    threshold: float = Field(default=0.5, ge=0.1, le=0.99)
+    threshold: float = Field(default=0.4, ge=0.1, le=0.99)
+    # The scan the workstation holds: found faces are bound to ITS tracks (same id domain), never to another scan of the video.
+    inspection_id: str | None = Field(default=None, pattern=r"^[0-9a-f]{32}$")
 
 
 @router.post("/media/detect-frame-faces")
 def detect_frame_faces(value: FrameFaceDetectionRequest, request: Request) -> dict:
     return request.app.state.media.detect_frame_faces(
-        value.path, value.timestamp, value.frame_index, value.threshold
+        value.path, value.timestamp, value.frame_index, value.threshold, value.inspection_id
     )
 
 

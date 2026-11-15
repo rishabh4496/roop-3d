@@ -66,23 +66,23 @@ class BakeAtlasRequest(Contract):
 
 
 def _archive(request: Request, faceset_id: str):
-    if not _FACESET_ID.fullmatch(faceset_id):
-        raise DomainError("FACESET_ID_INVALID", "FaceSet ID is invalid", 422)
-    root = request.app.state.root
-    if not owned(root, f"roop_3d/.runtime/facesets/{faceset_id}.json").is_file():
-        raise DomainError("FACESET_NOT_FOUND", "FaceSet is not loaded", 404)
-    paths = [owned(root, f"roop_3d/{base}/facesets/{faceset_id}.fsz") for base in ("outputs", ".runtime")]
-    archive = next((path for path in paths if path.is_file()), None)
-    if archive is None:
-        raise DomainError("FACESET_ARCHIVE_NOT_FOUND", "FaceSet archive is missing", 404)
-    return archive
+    from roop_3d.faceset.locator import resolve_faceset
+    return resolve_faceset(request.app.state.root, faceset_id).archive
 
 
 def load_document(request: Request, faceset_id: str):
-    """The validated FaceSetDocument, read exactly as the existing views/coverage routes read it."""
+    """The validated FaceSetDocument: the archive read as before, then scored by the multi-angle reference bank.
+
+    The returned document carries the bank's identity centroid and measured per-view quality (rejected views score 0), so
+    the identity asset and its UV texture are built from the same scored references the target matcher uses."""
+    from roop_3d.faceset_loader import LandmarkEngine, enrich_document
     archive = _archive(request, faceset_id)
     root = request.app.state.root
-    return FaceSetReader(request.app.state.models, cache_root=root / "roop_3d/.runtime/cache").read(archive, faceset_id=faceset_id)
+    document = FaceSetReader(request.app.state.models, cache_root=root / "roop_3d/.runtime/cache").read(archive, faceset_id=faceset_id)
+    engine = getattr(request.app.state, "landmark_engine", None)
+    if engine is None:
+        engine = request.app.state.landmark_engine = LandmarkEngine(root)
+    return enrich_document(document, engine).document
 
 
 def _settings(template: str = "makehuman"):

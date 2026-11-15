@@ -50,7 +50,7 @@ test('offline production UI: local imports → identity/asset → preview → pr
     const inspected = page.waitForResponse(r => r.url().endsWith('/media/inspect-faces'));
     await page.getByRole('button', { name: 'Inspect target faces' }).click();
     const inspection = await (await inspected).json();
-    expect((await inspected).request().postDataJSON().full_video).toBe(true);
+    expect((await inspected).request().postDataJSON().sampling).toBe('adaptive');
     expect(inspection.tracks.length).toBeGreaterThan(0);
     expect(inspection.truncated).toBe(false);
     const trackId = inspection.tracks[0].track_id;

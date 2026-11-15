@@ -38,9 +38,47 @@ from roop_3d.faceset.schemas import (
 )
 from roop_3d.faceset.validator import ArchiveValidator
 from roop_3d.media.detector import Detector
+from roop_3d.engine.detection.robust_detector import RobustDetector
 from roop_3d.models.catalog import ModelCatalog
 
 
+def build_pose_bins(views: "list[FaceView] | tuple[FaceView, ...]") -> dict[str, PoseBinSummary]:
+    bins: dict[str, list[int]] = {}
+    for view in views:
+        bins.setdefault(view.pose_bin, []).append(view.index)
+
+    by_index = {view.index: view for view in views}
+    summaries: dict[str, PoseBinSummary] = {}
+    for bin_name, members in bins.items():
+        yaw_bin, pitch_bin = bin_name.split("_")
+        member_views = [by_index[i] for i in members]
+        # Select representative: highest quality score
+        rep_view = max(member_views, key=lambda v: (v.quality.score, -abs(v.yaw)))
+
+        # Average embedding in this pose bin
+        embs = [np.array(v.embedding, dtype=np.float32) for v in member_views]
+        avg_emb = np.mean(embs, axis=0)
+        norm = float(np.linalg.norm(avg_emb))
+        if norm > 1e-9:
+            avg_emb /= norm
+
+        summaries[bin_name] = PoseBinSummary(
+            yaw_bin=yaw_bin,
+            pitch_bin=pitch_bin,
+            members=tuple(members),
+            support=len(members),
+            representative_index=rep_view.index,
+            embedding=tuple(float(x) for x in avg_emb),
+        )
+    return summaries
+
+
+# Bump when the extraction rules change: cached v1 metadata from an older rule set is recomputed, never reused.
+CACHE_VERSION = 2
+FACE_DET_THRESHOLD = 0.35         # SCRFD det_thresh for reference photos (0.35-0.45 calibrated band)
+FACE_SHARPNESS_SIDE = 256
+FACE_SHARPNESS_REF = 300.0        # Laplacian variance of the 256 px face that counts as fully sharp
+FACE_SIZE_REF_PX = 160.0          # face side (px) from which size no longer limits quality
 class FaceSetReader:
     """Safely normalizes legacy V1/V2 .fsz archives into immutable FaceSetDocuments."""
 
@@ -52,9 +90,11 @@ class FaceSetReader:
         self._recognizer: Recognizer | None = None
 
     @property
-    def detector(self) -> Detector:
+    def detector(self) -> RobustDetector:
+        """Multi-scale, pose-tolerant detector (same calibration as target inspection): a profile or 3/4 reference photo
+        that the single 640 px pass scores low is recovered instead of silently becoming a fabricated-landmark view."""
         if self._detector is None:
-            self._detector = Detector(self.catalog)
+            self._detector = RobustDetector(Detector(self.catalog))
         return self._detector
 
     @property
@@ -265,7 +305,7 @@ class FaceSetReader:
         if cache_file.exists():
             try:
                 cached_data = json.loads(cache_file.read_text("utf-8"))
-                if cached_data.get("source_sha256") == sha256:
+                if cached_data.get("source_sha256") == sha256 and cached_data.get("cache_version") == CACHE_VERSION:
                     return self._load_cached_document(archive, cached_data, faceset_id, sha256, "legacy_v1")
             except Exception:
                 pass  # On cache failure, fall through to recompute lazily
@@ -369,17 +409,16 @@ class FaceSetReader:
 
     def _extract_face_view(self, img: np.ndarray, img_bytes: bytes, index: int) -> FaceView:
         h, w = img.shape[:2]
-        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        lap_var = float(cv2.Laplacian(gray, cv2.CV_64F).var())
-        sharpness = float(min(1.0, lap_var / 500.0))
 
-        # Detect face with local SCRFD
-        detections, _ = self.detector.detect(img, threshold=0.5)
+        # Detect the face (multi-scale, down to the tolerant threshold) and keep the dominant one: the highest
+        # score x area, not merely the first row of the list.
+        detections, _ = self.detector.detect_scored(img, FACE_DET_THRESHOLD)
 
         fabricated_landmarks = False
         if detections:
-            box, landmarks = detections[0]
-            det_conf = 0.95
+            box, landmarks, det_conf = max(
+                detections, key=lambda d: float(d[2]) * max(float(d[0][2] - d[0][0]) * float(d[0][3] - d[0][1]), 1.0))
+            det_conf = float(min(1.0, max(0.0, det_conf)))
             x1, y1, x2, y2 = float(box[0]), float(box[1]), float(box[2]), float(box[3])
             lm_pts = tuple((float(pt[0]), float(pt[1])) for pt in landmarks)
 
@@ -389,22 +428,32 @@ class FaceSetReader:
             # Recognizer embedding using aligned face
             emb = self.recognizer.embed(img, landmarks)
         else:
-            # Fallback for crops where detector finds 0 faces
-            det_conf = 0.5
+            # Nothing detected: the whole crop is embedded, the landmarks are stand-ins and flagged untrusted, and the
+            # detector confidence is 0 so the view scores low and the reference bank excludes it.
+            det_conf = 0.0
             x1, y1, x2, y2 = 0.0, 0.0, float(w), float(h)
             lm_pts = ((w * 0.3, h * 0.4), (w * 0.7, h * 0.4), (w * 0.5, h * 0.55), (w * 0.35, h * 0.75), (w * 0.65, h * 0.75))
             roll, yaw, pitch = 0.0, 0.0, 0.0
             emb = self.recognizer.embed(img, None)
             fabricated_landmarks = True
 
-        score = float(round(0.7 * sharpness + 0.3 * det_conf, 4))
+        # Sharpness of the FACE (resampled to a fixed side so image size does not change it), not of the whole photograph.
+        face = img[max(0, int(y1)):max(int(y1) + 1, int(y2)), max(0, int(x1)):max(int(x1) + 1, int(x2))]
+        gray = cv2.cvtColor(cv2.resize(face, (FACE_SHARPNESS_SIDE, FACE_SHARPNESS_SIDE), interpolation=cv2.INTER_AREA),
+                            cv2.COLOR_BGR2GRAY)
+        lap_var = float(cv2.Laplacian(gray, cv2.CV_64F).var())
+        sharpness = float(min(1.0, lap_var / FACE_SHARPNESS_REF))
+        face_pixels = float(max(1, (x2 - x1) * (y2 - y1)))
+        size = float(min(1.0, math.sqrt(face_pixels) / FACE_SIZE_REF_PX))
+
+        score = float(round(0.5 * sharpness + 0.3 * det_conf + 0.2 * size, 4))
         quality = QualityMetrics(
             sharpness=round(sharpness, 4),
             detector_confidence=round(det_conf, 4),
             score=score,
             laplacian_variance=round(lap_var, 2),
             blur=round(1.0 - sharpness, 4),
-            face_pixels=float(max(1, (x2 - x1) * (y2 - y1))),
+            face_pixels=face_pixels,
         )
 
         pose_bin, _, _ = classify_pose_bin(yaw, pitch)
@@ -459,38 +508,13 @@ class FaceSetReader:
         return mean_vec, medoid_vec
 
     def _build_pose_bins(self, views: list[FaceView]) -> dict[str, PoseBinSummary]:
-        bins: dict[str, list[int]] = {}
-        for view in views:
-            bins.setdefault(view.pose_bin, []).append(view.index)
-
-        summaries: dict[str, PoseBinSummary] = {}
-        for bin_name, members in bins.items():
-            yaw_bin, pitch_bin = bin_name.split("_")
-            member_views = [views[i] for i in members]
-            # Select representative: highest quality score
-            rep_view = max(member_views, key=lambda v: (v.quality.score, -abs(v.yaw)))
-
-            # Average embedding in this pose bin
-            embs = [np.array(v.embedding, dtype=np.float32) for v in member_views]
-            avg_emb = np.mean(embs, axis=0)
-            norm = float(np.linalg.norm(avg_emb))
-            if norm > 1e-9:
-                avg_emb /= norm
-
-            summaries[bin_name] = PoseBinSummary(
-                yaw_bin=yaw_bin,
-                pitch_bin=pitch_bin,
-                members=tuple(members),
-                support=len(members),
-                representative_index=rep_view.index,
-                embedding=tuple(float(x) for x in avg_emb),
-            )
-        return summaries
+        return build_pose_bins(views)
 
     def _cache_document_metadata(self, cache_dir: Path, doc: FaceSetDocument) -> None:
         try:
             cache_dir.mkdir(parents=True, exist_ok=True)
             data = {
+                "cache_version": CACHE_VERSION,
                 "faceset_id": doc.faceset_id,
                 "source_sha256": doc.source_sha256,
                 "archive_format": doc.archive_format,

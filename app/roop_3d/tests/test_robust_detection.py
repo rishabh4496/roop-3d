@@ -132,7 +132,8 @@ def test_empty_frame_has_bounded_recovery_cost_and_budget_is_honoured():
     base = FakeDetector()
     detector = RobustDetector(base)
     found, _ = detector.detect_scored(canvas(640, 480), 0.3)
-    assert found == [] and len(base.calls) == 1 + 3 + 6                    # primary + zoom-out + rotations (no tiles: small frame)
+    # primary + zoom-out (3) + magnified windows (1.5x: 2x2, 2x: 3x2) + rotations (6); no coarse tiles on a small frame
+    assert found == [] and len(base.calls) == 1 + 3 + 10 + 6
     base.calls.clear()
     detector.detect_scored(canvas(640, 480), 0.3, max_passes=2)
     assert len(base.calls) == 1 + 2
@@ -194,7 +195,7 @@ def test_geometry_ok_is_roll_invariant_but_rejects_mislabelled_and_degenerate_po
     collapsed = GOOD.copy()
     collapsed[3:, 1] = collapsed[:2, 1].mean()
     assert not geometry_ok(BOX, collapsed)
-    assert not geometry_ok(np.array([100.0, 100.0, 120.0, 220.0]), GOOD)               # aspect < 0.30
+    assert not geometry_ok(np.array([100.0, 100.0, 120.0, 220.0]), GOOD)               # aspect < 0.25
 
 
 def test_five_point_plausible_accepts_rolled_heads_and_narrow_profiles_but_not_mislabelled_points():
@@ -202,10 +203,10 @@ def test_five_point_plausible_accepts_rolled_heads_and_narrow_profiles_but_not_m
     assert five_point_plausible(BOX, GOOD[::-1])[0] is False
     tilted = rolled(GOOD, 45)
     assert five_point_plausible(np.array([70.0, 80.0, 230.0, 250.0]), tilted)[0] is True   # was rejected by the image-y order test
-    profile_box = np.array([120.0, 100.0, 156.0, 220.0])                              # aspect 0.30
+    profile_box = np.array([120.0, 100.0, 156.0, 220.0])                              # aspect 0.30 (steep profile: kept)
     profile = np.array([[140, 140], [146, 140], [152, 165], [138, 190], [145, 190]], float)
     assert five_point_plausible(profile_box, profile) == (True, "narrow_profile")
-    assert five_point_plausible(np.array([120.0, 100.0, 150.0, 220.0]), profile)[1] == "box_aspect"   # below 0.30
+    assert five_point_plausible(np.array([120.0, 100.0, 144.0, 220.0]), profile)[1] == "box_aspect"   # 0.20: below 0.25
 
 
 class DenseEngine:
@@ -235,13 +236,25 @@ def test_narrow_profile_is_kept_only_when_the_dense_landmarks_agree():
     profile = np.array([[140, 140], [148, 140], [152, 165], [138, 190], [146, 190]], float)
     dense = np.vstack([profile + 0.5, np.random.default_rng(0).uniform(120, 160, (101, 2))])
     image = np.zeros((300, 300, 3), np.uint8)
-    agree = FaceAnalyzer(ScriptedDetector(profile_box, profile, 0.40), None, DenseEngine(dense))
+    # 0.33 sits in the tolerant band [0.30, 0.35): too low to stand on its score, so the dense landmarks must vouch for it.
+    agree = FaceAnalyzer(ScriptedDetector(profile_box, profile, 0.33), None, DenseEngine(dense))
     faces = agree.analyze(image, thumbnails=False)
     assert len(faces) == 1 and faces[0].tier == "profile_tolerant" and faces[0].validity["geometry"] == "narrow_profile"
-    disagree = FaceAnalyzer(ScriptedDetector(profile_box, profile, 0.40), None, DenseEngine(np.full((106, 2), 900.0)))
+    disagree = FaceAnalyzer(ScriptedDetector(profile_box, profile, 0.33), None, DenseEngine(np.full((106, 2), 900.0)))
     assert disagree.analyze(image, thumbnails=False) == []
-    without_model = FaceAnalyzer(ScriptedDetector(profile_box, profile, 0.40), None, None)
+    without_model = FaceAnalyzer(ScriptedDetector(profile_box, profile, 0.33), None, None)
     assert without_model.analyze(image, thumbnails=False) == []                       # no dense model: nothing is invented
+
+
+def test_a_steep_profile_is_not_vetoed_by_the_unreliable_dense_model_when_its_score_is_calibrated_high_enough():
+    profile_box = np.array([120.0, 100.0, 160.0, 220.0])
+    profile = np.array([[140, 140], [148, 140], [152, 165], [138, 190], [146, 190]], float)
+    image = np.zeros((300, 300, 3), np.uint8)
+    far_dense = DenseEngine(np.full((106, 2), 900.0))             # the 106 model fails on a steep profile
+    tolerant = FaceAnalyzer(ScriptedDetector(profile_box, profile, 0.37), None, far_dense).analyze(image, thumbnails=False)
+    assert len(tolerant) == 1 and tolerant[0].tier == "profile_tolerant" and tolerant[0].validity["valid"] is True
+    primary = FaceAnalyzer(ScriptedDetector(profile_box, profile, 0.45), None, None).analyze(image, thumbnails=False)
+    assert len(primary) == 1 and primary[0].tier == "primary"      # a primary-score profile needs no dense model at all
 
 
 def test_dense_validator_uses_agreement_and_accepts_when_the_model_is_missing():

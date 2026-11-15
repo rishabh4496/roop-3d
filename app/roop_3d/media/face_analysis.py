@@ -1,10 +1,11 @@
 """Pose-aware frame face analysis (Stage 12): adaptive detection + embedding + dense landmarks for every face of a frame.
 
-One SCRFD pass is run at the tolerant threshold (default 0.30). Detections at or above the primary threshold (0.50) are
-kept as they are (``detection_tier="primary"``). Those in [0.30, 0.50) are *profile-tolerant* candidates: SCRFD scores
-steep profiles low, so they are accepted only when their landmarks are valid - the five points must be geometrically
-plausible AND agree with the independent 106-point landmark model (>= 4 of 5 within 12 % of the box side of a 106 point).
-Nothing below the primary threshold survives on score alone.
+One SCRFD pass is run at the tolerant threshold (default 0.30). Detections at or above the primary threshold (0.40,
+calibrated within 0.35-0.45) are kept as they are (``detection_tier="primary"``) whatever their yaw or pitch. Those in
+[0.30, 0.40) are *profile-tolerant* candidates: SCRFD scores steep profiles low, so they are accepted only when their
+five landmarks are geometrically plausible AND either agree with the independent 106-point model (>= 4 of 5 within 12 %
+of the box side of a 106 point) or score at least ``DENSE_FREE_SCORE`` (the 106 model is itself unreliable on a steep
+profile, so a strong score with valid geometry must not be vetoed by it).  Nothing below the tolerant threshold survives.
 
 Every kept face gets: a 512-D L2-normalised ArcFace embedding, the 5-point landmarks, 106-point landmarks and 68-point 3D
 landmarks when those local ONNX models exist (reported as null, with a reason, otherwise), head pose, and a small JPEG
@@ -26,8 +27,9 @@ from roop_3d.faceset_loader import LandmarkEngine, _consistent_with_5pt
 
 log = logging.getLogger("roop3d.face_analysis")
 
-PRIMARY_THRESHOLD = 0.50
+PRIMARY_THRESHOLD = 0.40
 TOLERANT_THRESHOLD = 0.30
+DENSE_FREE_SCORE = 0.35
 MAX_FACES = 32
 MIN_FACE_PX = 24.0
 
@@ -55,7 +57,7 @@ def five_point_plausible(box: np.ndarray, points: np.ndarray) -> tuple[bool, str
     if min(w, h) < MIN_FACE_PX:
         return False, "face_too_small"
     aspect = w / max(h, 1e-6)
-    if not 0.30 <= aspect <= 1.7:
+    if not 0.25 <= aspect <= 1.7:
         return False, "box_aspect"
     pad = 0.15
     inside = ((points[:, 0] >= x1 - pad * w) & (points[:, 0] <= x2 + pad * w)
@@ -140,15 +142,16 @@ class FaceAnalyzer:
                     log.warning("106-point landmarks failed: %s", error)
             plausible, why = five_point_plausible(box, kps5)
             agrees, fraction = agrees_with_106(box, kps5, kps106)
-            if why == "narrow_profile" and kps106 is None:
+            if why == "narrow_profile" and kps106 is None and score < primary:
                 plausible, why = False, "narrow_profile_without_dense_model"
             tier = "primary" if score >= primary else "profile_tolerant"
             validity = {"geometry": why, "agrees_with_106": None if np.isnan(fraction) else round(fraction, 3)}
-            if tier == "profile_tolerant" and not (plausible and agrees):
+            accepted = plausible and (agrees or score >= DENSE_FREE_SCORE)
+            if tier == "profile_tolerant" and not accepted:
                 continue
             if tier == "primary" and not plausible and why in ("face_too_small",):
                 continue
-            validity["valid"] = bool(plausible and agrees)
+            validity["valid"] = bool(accepted)
             kps68, status = None, "unavailable"
             if self.engine is not None and self.engine.has_68:
                 try:

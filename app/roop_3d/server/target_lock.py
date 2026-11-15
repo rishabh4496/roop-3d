@@ -112,7 +112,7 @@ class FaceSelector(Contract):
     frame_index: int = Field(ge=0, le=100_000_000)
     face_index: int | None = Field(default=None, ge=0, le=31)
     point: list[float] | None = Field(default=None, min_length=2, max_length=2)       # native-frame pixels
-    threshold: float = Field(default=0.5, ge=0.1, le=0.99)
+    threshold: float = Field(default=0.4, ge=0.1, le=0.99)
 
     @model_validator(mode="after")
     def one_selector(self):
@@ -132,7 +132,7 @@ class AddAngle(Contract):
     frame_index: int = Field(ge=0, le=100_000_000)
     face_index: int | None = Field(default=None, ge=0, le=31)
     point: list[float] | None = Field(default=None, min_length=2, max_length=2)
-    threshold: float = Field(default=0.5, ge=0.1, le=0.99)
+    threshold: float = Field(default=0.4, ge=0.1, le=0.99)
     force: bool = False
 
     @model_validator(mode="after")

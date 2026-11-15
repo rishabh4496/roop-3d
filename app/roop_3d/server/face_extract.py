@@ -379,6 +379,9 @@ def scan_missing_angles(service, value):
     _, archive = service._resolve_faceset(value.faceset_id)
     reader = FaceSetReader(service.state.models, cache_root=service.state.root / 'roop_3d/.runtime/cache')
     document = reader.read(archive, faceset_id=value.faceset_id)
+    # A turned head sits far from the frontal mean even for the right person: judge it against the references nearest its pose.
+    from roop_3d.faceset_loader import LandmarkEngine, enrich_document
+    bank = enrich_document(document, getattr(service.state, 'landmark_engine', None) or LandmarkEngine(service.state.root)).bank
     occupied = {pose_cell((v.yaw,v.pitch,v.roll)).name for v in document.views}
     added, sampled, complete, reason = [], 0, False, 'end_of_video'
     started=time.monotonic()
@@ -399,12 +402,15 @@ def scan_missing_angles(service, value):
             if sampled >= value.max_frames or time.monotonic()-started >= value.time_budget_seconds:
                 reason='scan_budget';break
             sampled+=1
-            detections, _ = service._detector().detect(image, .5)
+            detections, _ = service._detector().detect(image, .4)
             for index, (_, points) in enumerate(sorted(detections, key=lambda item: float(item[0][0]))):
-                cell = pose_cell(estimate_pose_pnp(points)).name
+                pose = estimate_pose_pnp(points)
+                cell = pose_cell(pose).name
                 if cell in occupied: continue
                 embedding = service._recognizer().embed(image, np.asarray(points,np.float32))
                 similarity = float(_unit(embedding) @ _unit(np.asarray(document.canonical_embedding)))
+                if bank is not None:
+                    similarity = max(similarity, bank.similarity(embedding, pose.yaw, pose.pitch)['score'])
                 if similarity < CLUSTER_MATCH_SIMILARITY: continue
                 sample=ExtractRequest(target_media_path=value.target_media_path,frame_index=frame,face_index=index,
                                       destination='active_faceset',faceset_name=value.faceset_id)

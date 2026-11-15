@@ -73,7 +73,7 @@ def test_preview_selectors_are_bounded_and_finite(video) -> None:
 def test_real_local_scrfd_inference_no_faces_is_not_a_stub(video) -> None:
     service, path = video
     require_governed_model(service.detector.catalog, service.detector.catalog.detector()["model_id"])
-    result = service.inspect(InspectRequest(path=path, max_samples=2))
+    result = service.inspect(InspectRequest(path=path, max_samples=2, sampling="every_frame"))
     assert result.tracks == ()
     assert result.sampled_frames == 2 and result.truncated
     assert len(result.detector_sha256) == 64

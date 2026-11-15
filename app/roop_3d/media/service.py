@@ -30,11 +30,79 @@ from roop_3d.color.description import WorkingColor, working_color
 from roop_3d.media.probe import open_media, probe
 from roop_3d.media.timestamps import Timestamp
 from roop_3d.media.video_reader import VideoReader
+from roop_3d.media.adaptive_sampling import AdaptiveSampler, FaceSnapshot
 from roop_3d.media.schema import (AudioTrack, BoundingBox, FaceInspection, FaceTrack, InspectRequest, MediaProbe, PoseRange,
-                                  SubtitleTrack)
+                                  SubtitleTrack, TrackObservation)
 from roop_3d.models.catalog import ModelCatalog
 
 VIDEO_SUFFIXES = {".mp4", ".mov", ".mkv", ".avi", ".webm", ".m4v", ".ts"}
+MAX_TRACK_OBSERVATIONS = 400
+
+
+def _observation(frame: int, at: float, box, points, pose, score: float, width: int, height: int) -> TrackObservation:
+    """A sampled detection normalised to the frame, clamped so the contract (and the UI overlay) never sees off-frame values."""
+    def unit(value: float, extent: int) -> float:
+        return float(min(1.0, max(0.0, value / extent)))
+    x1, y1, x2, y2 = (float(v) for v in box)
+    bbox = (unit(x1, width), unit(y1, height), max(unit(x2, width), unit(x1, width)), max(unit(y2, height), unit(y1, height)))
+    return TrackObservation(
+        frame=frame, timestamp_seconds=at, bbox=bbox,
+        landmarks5=tuple((unit(float(p[0]), width), unit(float(p[1]), height)) for p in np.asarray(points).reshape(-1, 2)[:5]),
+        yaw_degrees=float(pose[0]), pitch_degrees=float(pose[1]), roll_degrees=float(pose[2]),
+        confidence=float(min(1.0, max(0.0, score))))
+
+
+def thin_observations(items: list[TrackObservation], limit: int = MAX_TRACK_OBSERVATIONS) -> tuple[TrackObservation, ...]:
+    """At most ``limit`` observations: evenly spread over time, always keeping the pose extremes (turns must stay visible)."""
+    if len(items) <= limit:
+        return tuple(items)
+    keep = {round(i * (len(items) - 1) / (limit - 1)) for i in range(limit)}
+    for key in (lambda o: o.yaw_degrees, lambda o: -o.yaw_degrees, lambda o: o.pitch_degrees, lambda o: -o.pitch_degrees):
+        keep.add(max(range(len(items)), key=lambda i: key(items[i])))
+    return tuple(items[i] for i in sorted(keep))
+
+
+def merge_observation(items: tuple[TrackObservation, ...], new: TrackObservation) -> tuple[TrackObservation, ...]:
+    """``new`` replaces any sample of the same frame, keeping the list time-ordered and bounded."""
+    merged = [item for item in items if item.frame != new.frame] + [new]
+    return thin_observations(sorted(merged, key=lambda item: item.frame))
+
+
+def bbox_norm_of(box, width: int, height: int) -> tuple[float, float, float, float]:
+    return (float(box[0]) / width, float(box[1]) / height, float(box[2]) / width, float(box[3]) / height)
+
+
+def resolve_inspection_track(tracks, frame_index: int, box_norm, fps: float, *, min_iou: float = 0.4) -> str | None:
+    """The inspection track whose own sampled detection nearest to ``frame_index`` overlaps ``box_norm``.
+
+    One id domain: a face found while scrubbing keeps the track id the scan gave the same person at that moment instead of
+    a registry-local ``track_NNNN`` that merely collides by number. Only detections within half a second count, and only an
+    unambiguous best overlap wins; tracks that carry no observations (older scans) fall back to their first-seen box."""
+    window = max(3, round(fps * 0.5))
+    best: tuple[float, str] | None = None
+    for track in tracks:
+        samples = [o for o in track.observations if abs(o.frame - frame_index) <= window]
+        if samples:
+            nearest = min(abs(o.frame - frame_index) for o in samples)
+            candidates = [o.bbox for o in samples if abs(o.frame - frame_index) == nearest]
+        elif track.first_frame == frame_index:
+            box = track.bounding_box
+            candidates = [(box.x1, box.y1, box.x2, box.y2)]
+        else:
+            continue
+        for candidate in candidates:
+            score = _iou(box_norm, candidate)
+            if score >= min_iou and (best is None or score > best[0]):
+                best = (score, track.track_id)
+    return best[1] if best else None
+
+
+def _iou(a, b) -> float:
+    width, height = min(a[2], b[2]) - max(a[0], b[0]), min(a[3], b[3]) - max(a[1], b[1])
+    if width <= 0 or height <= 0:
+        return 0.0
+    inter = width * height
+    return inter / max((a[2] - a[0]) * (a[3] - a[1]) + (b[2] - b[0]) * (b[3] - b[1]) - inter, 1e-12)
 
 
 class MediaService:
@@ -175,19 +243,27 @@ class MediaService:
         path = self.path(request.path)
         _, digest = sha256_file(path)
         records: dict[int, dict] = {}
-        samples = decoded = 0
+        samples = decoded = analysed = 0
         complete = True
         stop_reason = ""
         began = time.monotonic()
         detector_record = self.detector.catalog.detector()
         recognizer_record = self.detector.catalog.recognizer()
         policy = TrackPolicy() if request.identity_lock else None
+        adaptive = request.sampling == "adaptive"
+        # Adaptive inspection analyses sparse frames, so the tracker's temporal filters (which assume consecutive frames)
+        # are off: every serialized observation is the detector's own measurement, not a smoothed prediction.
         tracker = FaceTracker(self.detector.catalog, threshold=request.detection_threshold, detector=self.detector,
-                              policy=policy)
+                              policy=policy, stabilize=not adaptive)
         collector = (IdentityReportCollector(policy, detection_threshold=request.detection_threshold)
                      if policy is not None else None)
         inspection_id = uuid.uuid4().hex
         cuts: list[int] = []
+        sampler = None
+        if adaptive:
+            info = self.probe(request.path)
+            total = info.declared_frame_count or (round(info.duration_seconds * info.fps) if info.duration_seconds and info.fps else None)
+            sampler = AdaptiveSampler(info.fps or 30.0, total)
         with self.open(request.path) as container:
             stream = container.streams.video[0]
             origin = (stream.start_time or 0) * Fraction(stream.time_base)
@@ -195,43 +271,57 @@ class MediaService:
             with closing(VideoReader(path).frames()) as frames:
                 for index, frame in enumerate(frames):
                     decoded = index + 1
-                    image = frame.image
-                    tracked = tracker.process(image)
-                    if tracker.scene_cut and len(cuts) < 64:
-                        cuts.append(index)
-                    at = max(0.0, float(frame.timestamp.seconds - origin))
-                    if collector is not None:
-                        collector.observe(index, at, image, tracked)
-                    for face in tracked:
-                        observation = face.observation
-                        box = observation.box
-                        yaw, pitch, roll = pose = as_legacy_triplet(observation.pose)
-                        if face.track_id not in records:
-                            if len(records) >= 64:
-                                complete = False
-                                stop_reason = "the 64-track limit was reached"
-                                break
-                            x1, y1, x2, y2 = box.astype(int)
-                            crop = cv2.resize(image[y1:max(y1 + 1, y2), x1:max(x1 + 1, x2)], (128, 128))
-                            success, jpg = cv2.imencode(".jpg", crop)
-                            if not success:
-                                raise DomainError("PREVIEW_ENCODE_FAILED", "Face thumbnail could not be encoded", 422)
-                            records[face.track_id] = dict(first=index, last=index, first_at=at, last_at=at,
-                                box=box, pose_min=[yaw, pitch, roll], pose_max=[yaw, pitch, roll], count=1,
-                                scene_id=face.scene_id, thumbnail=base64.b64encode(jpg).decode("ascii"))
-                        else:
-                            item = records[face.track_id]
-                            item.update(last=index, last_at=at, count=item["count"] + 1)
-                            item["pose_min"] = np.minimum(item["pose_min"], pose).tolist()
-                            item["pose_max"] = np.maximum(item["pose_max"], pose).tolist()
-                    if frame.key_frame or index == 0:
+                    if sampler is None or sampler.wants(index):
+                        image = frame.image
+                        height, width = image.shape[:2]
+                        tracked = tracker.process(image)
+                        if tracker.scene_cut and len(cuts) < 64:
+                            cuts.append(index)
+                        at = max(0.0, float(frame.timestamp.seconds - origin))
+                        if collector is not None:
+                            collector.observe(index, at, image, tracked)
+                        snapshots = []
+                        for face in tracked:
+                            observation = face.observation
+                            box = observation.box
+                            yaw, pitch, roll = pose = as_legacy_triplet(observation.pose)
+                            if face.track_id not in records:
+                                if len(records) >= 64:
+                                    complete = False
+                                    stop_reason = "the 64-track limit was reached"
+                                    break
+                                x1, y1, x2, y2 = box.astype(int)
+                                crop = cv2.resize(image[y1:max(y1 + 1, y2), x1:max(x1 + 1, x2)], (128, 128))
+                                success, jpg = cv2.imencode(".jpg", crop)
+                                if not success:
+                                    raise DomainError("PREVIEW_ENCODE_FAILED", "Face thumbnail could not be encoded", 422)
+                                records[face.track_id] = dict(first=index, last=index, first_at=at, last_at=at,
+                                    box=box, pose_min=[yaw, pitch, roll], pose_max=[yaw, pitch, roll], count=1,
+                                    scene_id=face.scene_id, thumbnail=base64.b64encode(jpg).decode("ascii"),
+                                    observations=[])
+                            else:
+                                item = records[face.track_id]
+                                item.update(last=index, last_at=at, count=item["count"] + 1)
+                                item["pose_min"] = np.minimum(item["pose_min"], pose).tolist()
+                                item["pose_max"] = np.maximum(item["pose_max"], pose).tolist()
+                            records[face.track_id]["observations"].append(
+                                _observation(index, at, box, observation.landmarks5, pose, observation.score, width, height))
+                            snapshots.append(FaceSnapshot(
+                                face.track_id, float(yaw), float(pitch), float(roll),
+                                float((box[0] + box[2]) / 2 / width), float((box[1] + box[3]) / 2 / height),
+                                float(max(box[2] - box[0], box[3] - box[1]) / max(width, height))))
+                        analysed += 1
+                        if sampler is not None:
+                            sampler.update(index, tuple(snapshots), scene_cut=bool(tracker.scene_cut),
+                                           elapsed=time.monotonic() - began, budget=request.time_budget_seconds)
+                    if not adaptive and (frame.key_frame or index == 0):
                         samples += 1
                     bound = None
                     if not complete:
                         bound = stop_reason
-                    elif not request.full_video and decoded >= request.max_decoded_frames:
+                    elif not adaptive and not request.full_video and decoded >= request.max_decoded_frames:
                         bound = f"the {request.max_decoded_frames}-frame decode limit was reached"
-                    elif not request.full_video and samples >= request.max_samples:
+                    elif not adaptive and not request.full_video and samples >= request.max_samples:
                         bound = f"the {request.max_samples}-keyframe sample limit was reached"
                     elif time.monotonic() - began > request.time_budget_seconds:
                         bound = f"the {request.time_budget_seconds:g}-second time budget was exhausted"
@@ -256,12 +346,16 @@ class MediaService:
         coverage_warnings: tuple[str, ...] = ()
         if not complete:
             coverage_warnings = (f"Bounded scan: stopped after {decoded} decoded frame(s) because {stop_reason}. Faces that first "
-                                 "appear later are not listed; re-run with full_video=true to traverse the whole video.",)
+                                 "appear later are not listed; re-run with a larger time budget to traverse the whole video.",)
+        elif adaptive:
+            why = ", ".join(f"{name} x{count}" for name, count in sorted(sampler.reasons.items())) or "stable scene"
+            coverage_warnings = (f"Adaptive scan analysed {analysed} of {decoded} decoded frame(s) across the whole video "
+                                 f"(dense around: {why}).",)
         # The bounded-scan coverage warning already states that later appearances are unreviewed.
         result = FaceInspection(inspection_id=inspection_id, target_sha256=digest,
             detector_model_id=detector_record["model_id"], detector_sha256=detector_record["sha256"],
             recognizer_model_id=recognizer_record["model_id"], recognizer_sha256=recognizer_record["sha256"],
-            decoded_frames=decoded, sampled_frames=samples, truncated=not complete,
+            decoded_frames=decoded, sampled_frames=analysed if adaptive else samples, truncated=not complete,
             tracking_method="identity_lock_v1" if collector is not None else "iou_arcface_hungarian",
             scene_cut_frames=tuple(cuts), **identity_extra,
             tracks=tuple(FaceTrack(track_id=f"track_{identity:04d}", persistent_id=identity,
@@ -273,6 +367,7 @@ class MediaService:
                     roll_degrees=(item["pose_min"][2], item["pose_max"][2]),
                     method="five_point_geometric_estimate", yaw_pitch_state="CANDIDATE"),
                 sampled_detections=item["count"],
+                observations=thin_observations(item["observations"]),
                 thumbnail_base64=(collector.best_thumbnail(identity) if collector is not None else None) or item["thumbnail"])
                 for identity, item in records.items()),
             warnings=("IoU and ArcFace assignment can still split or merge tracks; review mappings.",
@@ -284,19 +379,18 @@ class MediaService:
         return result
 
     def detect_frame_faces(self, value: str, timestamp: float | None = None,
-                           frame_index: int | None = None, threshold: float = 0.5) -> dict:
+                           frame_index: int | None = None, threshold: float = 0.4,
+                           inspection_id: str | None = None) -> dict:
         with self._face_edit_lock:
-            return self._detect_frame_faces(value, timestamp, frame_index, threshold)
+            return self._detect_frame_faces(value, timestamp, frame_index, threshold, inspection_id)
 
     def _detect_frame_faces(self, value: str, timestamp: float | None,
-                            frame_index: int | None, threshold: float) -> dict:
+                            frame_index: int | None, threshold: float, inspection_id: str | None = None) -> dict:
         path = self.path(value)
         _, digest = sha256_file(path)
 
         info = self.probe(value)
         fps = info.fps or 30.0
-        width = info.width
-        height = info.height
 
         if timestamp is None and frame_index is None:
             timestamp = 0.0
@@ -307,7 +401,10 @@ class MediaService:
             timestamp = float(frame_index / fps)
 
         image = self.frame(value, timestamp, None)
-        retained, detector_record = self.detector.detect(image, threshold=threshold)
+        scored, detector_record = self.detector.detect_scored(image, threshold)
+        retained = [(box, points) for box, points, _ in scored]
+        scores = [float(score) for _, _, score in scored]
+        height, width = image.shape[:2]          # the decoded (rotation-corrected) frame, not the container's coded size
         recognizer_record = self.detector.catalog.recognizer()
 
         from roop_3d.engine.detection.dense_landmarks import geometric_pose
@@ -315,8 +412,13 @@ class MediaService:
         inspections_dir = safe_path(self.root, "roop_3d/.runtime/inspections")
         inspections_dir.mkdir(parents=True, exist_ok=True)
 
+        # The inspection the caller is working in (its id is the one the UI holds); without one, the newest scan of this
+        # exact video. Never an arbitrary directory-order match: a stale scan would receive the new tracks.
         existing_inspection = None
-        for insp_path in inspections_dir.glob("*.json"):
+        candidates = sorted(inspections_dir.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
+        if inspection_id:
+            candidates = [p for p in candidates if p.stem == inspection_id]
+        for insp_path in candidates:
             try:
                 insp_data = json.loads(insp_path.read_text("utf-8"))
                 if insp_data.get("target_sha256") == digest:
@@ -324,6 +426,8 @@ class MediaService:
                     break
             except Exception:
                 continue
+        if inspection_id and existing_inspection is None:
+            raise DomainError("INSPECTION_NOT_FOUND", "The requested inspection does not exist for this video", 404)
 
         if not retained:
             return {
@@ -368,7 +472,7 @@ class MediaService:
                     "timestamp": timestamp,
                     "bbox": [float(x1 / width), float(y1 / height), float(x2 / width), float(y2 / height)],
                     "landmarks5": [[float(p[0] / width), float(p[1] / height)] for p in points],
-                    "confidence": 0.98,
+                    "confidence": round(min(1.0, max(0.0, scores[idx])), 4),
                     "pose": {"yaw": yaw, "pitch": pitch, "roll": roll},
                     "pose3d": pose3d.model_dump(), "pose_cell": pose_cell(pose3d).name,
                     "thumbnail_base64": thumb_b64,
@@ -381,11 +485,9 @@ class MediaService:
             cluster = registry.clusters[assoc.cluster_id]
             if cluster.track_id is None:
                 # Reuse an inspection track only with an observation at this frame.
-                from roop_3d.media.detector import iou
-                exact = [t for t in new_tracks if t.first_frame == frame_index and iou(
-                    np.array([t.bounding_box.x1, t.bounding_box.y1, t.bounding_box.x2, t.bounding_box.y2]), box) >= .6]
-                cluster.track_id = exact[0].track_id if len(exact) == 1 else f'track_{next_track:04d}'
-                if not exact:
+                match = resolve_inspection_track(new_tracks, frame_index, bbox_norm_of(box, width, height), fps)
+                cluster.track_id = match or f'track_{next_track:04d}'
+                if match is None:
                     next_track += 1
             track_id = cluster.track_id
             existing = next((t for t in new_tracks if t.track_id == track_id), None)
@@ -399,12 +501,13 @@ class MediaService:
                 "timestamp": timestamp,
                 "bbox": bbox_norm,
                 "landmarks5": landmarks5_norm,
-                "confidence": 0.98,
+                "confidence": round(min(1.0, max(0.0, scores[idx])), 4),
                 "pose": {"yaw": yaw, "pitch": pitch, "roll": roll},   # legacy frame (pitch + = down), kept for existing clients
                 "pose3d": pose3d.model_dump(), "pose_cell": pose_cell(pose3d).name,   # standard frame (pitch + = up)
                 "thumbnail_base64": thumb_b64,
             }
             faces_output.append(face_item)
+            observation = _observation(frame_index, timestamp, box, points, (yaw, pitch, roll), scores[idx], width, height)
 
             track_obj = FaceTrack(
                 track_id=track_id,
@@ -425,6 +528,7 @@ class MediaService:
                 ),
                 thumbnail_base64=thumb_b64,
                 sampled_detections=1,
+                observations=(observation,),
             )
             if existing is None:
                 new_tracks.append(track_obj)
@@ -442,6 +546,7 @@ class MediaService:
                     'first_timestamp_seconds': min(existing.first_timestamp_seconds, timestamp),
                     'last_timestamp_seconds': max(existing.last_timestamp_seconds, timestamp),
                     'sampled_detections': len(cluster.seen), 'pose_range': pose_range,
+                    'observations': merge_observation(existing.observations, observation),
                 })
 
         inspection_id = existing_inspection.inspection_id if existing_inspection else uuid.uuid4().hex

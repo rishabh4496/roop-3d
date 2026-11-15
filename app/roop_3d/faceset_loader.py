@@ -32,6 +32,7 @@ import numpy as np
 from roop_3d.core.errors import DomainError
 from roop_3d.core.pose import PoseCell, pose_cell
 from roop_3d.faceset.faceset_reader import FaceSetReader
+from roop_3d.faceset.reference_bank import ReferenceBank, build_reference_bank
 from roop_3d.faceset.schemas import FaceSetDocument, FaceView
 from roop_3d.reconstruction.faceset_3d import PITCH_BINS, TOTAL_BINS, YAW_BINS, _pose, pose_bin
 from roop_3d.reconstruction.multiview_fit import five_from_68
@@ -250,6 +251,7 @@ class LoadedFaceSet:
     pose_matrix: dict[tuple[int, int, int], list[int]]   # (yaw, pitch, roll) cell -> view indices
     landmark_models: dict[str, bool]
     notes: list[str] = field(default_factory=list)
+    bank: ReferenceBank | None = None            # quality-scored multi-angle references; None when no view is usable (see notes)
 
     @property
     def sphere_coverage_count(self) -> int:
@@ -263,7 +265,8 @@ class LoadedFaceSet:
                 "samples": [s.summary() for s in self.samples], "sphere_total_bins": TOTAL_BINS,
                 "sphere_grid": [YAW_BINS, PITCH_BINS], "sphere_coverage_count": self.sphere_coverage_count,
                 "sphere_bins": {str(k): v for k, v in sorted(self.sphere_bins.items())},
-                "pose_matrix_3x3_roll": cells, "landmark_models": self.landmark_models, "notes": self.notes}
+                "pose_matrix_3x3_roll": cells, "landmark_models": self.landmark_models, "notes": self.notes,
+                "reference_bank": self.bank.summary() if self.bank is not None else None}
 
 
 def aligned_crop_512(image_bgr: np.ndarray, landmarks5: np.ndarray) -> np.ndarray:
@@ -353,8 +356,17 @@ def build_loaded(document: FaceSetDocument, engine: LandmarkEngine | None) -> Lo
         notes.append(f"{len(samples) - dense} of {len(samples)} views kept 5-point landmarks (dense fit missing or "
                      "inconsistent with the detector landmarks).")
     enriched = document.model_copy(update={"views": tuple(views)})
+    bank = None
+    try:
+        bank = build_reference_bank(enriched, samples)
+        enriched = bank.apply(enriched)          # centroid + measured per-view quality reach every asset builder
+        if bank.rejected:
+            notes.append("Reference bank excluded " + "; ".join(
+                f"view {r['view_index']} ({r['reason']})" for r in bank.rejected) + ".")
+    except DomainError as error:
+        notes.append(f"Reference bank unavailable: {error.message}")
     return LoadedFaceSet(document=enriched, samples=samples, sphere_bins=bins, pose_matrix=matrix,
-                         landmark_models=models, notes=notes)
+                         landmark_models=models, notes=notes, bank=bank)
 
 
 # --------------------------------------------------------------------------- entry points
